@@ -39,6 +39,13 @@ async fn main() {
 
 async fn game_loop(mut cmds: mpsc::UnboundedReceiver<Cmd>) {
     let mut game = Game::new(Tuning::default());
+    // Shorter matches for playtesting.
+    if let Ok(v) = env::var("SCORE_LIMIT") {
+        game.score_limit = v.parse().expect("SCORE_LIMIT must be a kill count");
+    }
+    if let Ok(v) = env::var("MATCH_SECONDS") {
+        game.match_seconds = v.parse().expect("MATCH_SECONDS must be seconds");
+    }
     let mut outboxes: Vec<(u8, Outbox)> = Vec::new();
     let mut interval = time::interval(Duration::from_secs_f32(DT));
     loop {

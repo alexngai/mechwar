@@ -73,15 +73,15 @@ impl WasmNetClient {
         mech_state(&self.0.mech)
     }
 
-    /// Ten floats per remote mech: id, feet xyz, yaw, pitch, health, boosting, hovering, bot.
+    /// Eleven floats per remote mech: id, team, feet xyz, yaw, pitch, health, boosting, hovering, bot.
     pub fn remotes(&self, now: f64) -> Vec<f32> {
         let b = |v: bool| if v { 1.0 } else { 0.0 };
         self.0
             .remotes(now)
             .iter()
             .flat_map(|p| {
-                let m = &p.mech;
-                [f32::from(p.id), m.pos.x, m.pos.y, m.pos.z, m.yaw, m.pitch, m.health, b(m.boosting), b(m.hovering), b(p.bot)]
+                let v = &p.view;
+                [f32::from(p.id), f32::from(p.team), v.pos.x, v.pos.y, v.pos.z, v.yaw, v.pitch, v.health, b(v.boosting), b(v.hovering), b(p.bot)]
             })
             .collect()
     }
@@ -100,9 +100,10 @@ impl WasmNetClient {
             .collect()
     }
 
-    /// id (-1 until welcomed), kills, deaths, ping ms, last correction m, full (0/1).
+    /// id (-1 until welcomed), kills, deaths, ping ms, last correction m, full (0/1), team,
+    /// team 0 score, team 1 score, seconds left, ended (0/1), winner (-1 for none or a draw).
     pub fn hud(&self) -> Vec<f32> {
-        let c = &self.0;
+        let (c, s) = (&self.0, &self.0.state);
         vec![
             c.id.map_or(-1.0, f32::from),
             f32::from(c.kills),
@@ -110,6 +111,12 @@ impl WasmNetClient {
             c.ping_ms as f32,
             c.correction,
             if c.full { 1.0 } else { 0.0 },
+            f32::from(c.team),
+            f32::from(s.scores[0]),
+            f32::from(s.scores[1]),
+            f32::from(s.seconds_left),
+            if s.ended { 1.0 } else { 0.0 },
+            s.winner.map_or(-1.0, f32::from),
         ]
     }
 }

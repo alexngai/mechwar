@@ -66,6 +66,9 @@ for (const x of [-0.8, 0.8]) {
 }
 const torso = box(2.8, 1.6, 2.4, hull);
 torso.position.y = 3.6;
+torso.name = 'torso';
+// Online hull colors: team 0 blue, team 1 red.
+const teamHull = [0x4f6f8f, 0x8f4f4a].map((color) => new THREE.MeshLambertMaterial({ color, flatShading: true }));
 const canopy = box(1.4, 0.6, 0.6, 0x223040, 0x1a3a50);
 canopy.position.set(0, 4.0, -1.3);
 const thruster = box(1.2, 0.8, 0.3, 0xffa040, 0xff7a20);
@@ -89,17 +92,18 @@ scene.add(mech);
 const tracer = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineBasicMaterial({ color: 0xfff0a0 }));
 const impact = box(0.5, 0.5, 0.5, 0xfff0a0, 0xffd060);
 tracer.frustumCulled = false; // setFromPoints doesn't refresh the bounding sphere
-const remoteTracer = tracer.clone();
-remoteTracer.geometry = tracer.geometry.clone();
-scene.add(tracer, impact, remoteTracer);
-let flashUntil = 0, remoteFlashUntil = 0, hitUntil = 0, remoteShot = null, message = '', messageUntil = 0, vsBot = false;
+scene.add(tracer, impact);
+let flashUntil = 0, hitUntil = 0, message = '', messageUntil = 0;
 
-// Other players: a clone of the placeholder mech per id.
+// Other players: a clone of the placeholder mech per id, each with its own tracer.
 const remotes = new Map();
 const remoteMech = (id) => {
   if (!remotes.has(id)) {
     const g = mech.clone();
-    scene.add(g);
+    const shotTracer = tracer.clone();
+    shotTracer.geometry = tracer.geometry.clone();
+    g.userData = { tracer: shotTracer, shotEnd: new THREE.Vector3(), flashUntil: 0, team: -1 };
+    scene.add(g, shotTracer);
     remotes.set(id, g);
   }
   return remotes.get(id);
@@ -152,7 +156,7 @@ gui.add({ copy: () => navigator.clipboard.writeText(JSON.stringify(tuning, null,
 
 // --- HUD -------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
-const hud = { status: $('status'), net: $('net'), fuel: $('fuel'), heat: $('heat'), dodge: $('dodge'), hp: $('hp'), crosshair: $('crosshair') };
+const hud = { status: $('status'), net: $('net'), score: $('score'), banner: $('banner'), fuel: $('fuel'), heat: $('heat'), dodge: $('dodge'), hp: $('hp'), crosshair: $('crosshair') };
 
 // --- Fixed-step sim, interpolated render ----------------------------------
 let prev = game.state(), curr = prev, acc = 0, last = performance.now();
@@ -192,13 +196,17 @@ function frame(now) {
   tracer.visible = impact.visible = now < flashUntil;
 
   if (net) {
+    const [myId, , , , , , myTeam] = net.hud();
+    torso.material = teamHull[myTeam];
     const r = net.remotes(now), seen = new Set();
-    vsBot = false;
-    for (let i = 0; i < r.length; i += 10) {
-      const [id, x, y, z, ryaw, rpitch, health, boosting, hovering, isBot] = r.subarray(i, i + 10);
-      if (isBot) vsBot = true;
+    for (let i = 0; i < r.length; i += 11) {
+      const [id, team, x, y, z, ryaw, rpitch, health, boosting, hovering] = r.subarray(i, i + 11);
       const g = remoteMech(id);
       seen.add(id);
+      if (g.userData.team !== team) {
+        g.getObjectByName('torso').material = teamHull[team];
+        g.userData.team = team;
+      }
       g.position.set(x, y, z);
       g.rotation.y = ryaw;
       g.scale.setScalar(scale);
@@ -206,13 +214,16 @@ function frame(now) {
       g.getObjectByName('thruster').visible = !!(boosting || hovering);
       g.visible = health > 0;
     }
-    for (const [id, g] of remotes) if (!seen.has(id)) { scene.remove(g); remotes.delete(id); }
+    for (const [id, g] of remotes) if (!seen.has(id)) { scene.remove(g, g.userData.tracer); remotes.delete(id); }
 
-    const [myId] = net.hud();
     const ev = net.take_events();
     for (let i = 0; i < ev.length; i += 6) {
       const [kind, a, b, x, y, z] = ev.subarray(i, i + 6);
-      if (kind === 0 && a !== myId) { remoteShot = { id: a, end: new THREE.Vector3(x, y, z) }; remoteFlashUntil = now + 60; }
+      if (kind === 0 && remotes.has(a)) {
+        const shooter = remotes.get(a).userData;
+        shooter.shotEnd.set(x, y, z);
+        shooter.flashUntil = now + 60;
+      }
       if (kind === 0 && a === myId && b >= 0) hitUntil = now + 150;
       if (kind === 1 && (a === myId || b === myId)) { message = a === myId ? 'ENEMY DESTROYED' : 'DESTROYED'; messageUntil = now + 2500; }
     }
@@ -226,9 +237,10 @@ function frame(now) {
   if (camera.fov !== T('fov')) { camera.fov = T('fov'); camera.updateProjectionMatrix(); }
   scene.updateMatrixWorld();
   if (tracer.visible) tracer.geometry.setFromPoints([gunTip.getWorldPosition(new THREE.Vector3()), impact.position]);
-  remoteTracer.visible = now < remoteFlashUntil && remotes.has(remoteShot?.id);
-  if (remoteTracer.visible) {
-    remoteTracer.geometry.setFromPoints([remotes.get(remoteShot.id).getObjectByName('gunTip').getWorldPosition(from), remoteShot.end]);
+  for (const g of remotes.values()) {
+    const { tracer: shotTracer, shotEnd, flashUntil: until } = g.userData;
+    shotTracer.visible = g.visible && now < until;
+    if (shotTracer.visible) shotTracer.geometry.setFromPoints([g.getObjectByName('gunTip').getWorldPosition(from), shotEnd]);
   }
 
   // Crosshair marks where the eye ray lands, so chase-cam parallax stays honest.
@@ -246,9 +258,12 @@ function frame(now) {
   hud.hp.style.width = `${(100 * curr[S.HEALTH]) / T('health_max')}%`;
   hud.crosshair.classList.toggle('hit', now < hitUntil);
   if (net) {
-    const [, kills, deaths, ping, correction, full] = net.hud();
+    const [, kills, deaths, ping, correction, full, team, blue, red, secondsLeft, ended, winner] = net.hud();
     const state = full ? 'server full' : connection || (curr[S.HEALTH] <= 0 ? 'DESTROYED, respawning' : '');
-    hud.net.textContent = `${vsBot ? 'vs bot  ' : ''}K ${kills}  D ${deaths}  ping ${Math.round(ping)} ms  corr ${correction.toFixed(3)} m  ${now < messageUntil ? message : state}`;
+    hud.net.textContent = `K ${kills}  D ${deaths}  ping ${Math.round(ping)} ms  corr ${correction.toFixed(3)} m  ${now < messageUntil ? message : state}`;
+    const clock = `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')}`;
+    hud.score.textContent = `${team === 0 ? '▸ ' : ''}BLUE ${blue} – ${red} RED${team === 1 ? ' ◂' : ''}   ${ended ? '' : clock}`;
+    hud.banner.textContent = ended ? `${winner < 0 ? 'DRAW' : winner === team ? 'VICTORY' : 'DEFEAT'} · next match in ${secondsLeft}s` : '';
   }
 
   renderer.render(scene, camera);

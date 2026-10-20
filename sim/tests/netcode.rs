@@ -26,6 +26,7 @@ struct Harness {
 impl Harness {
     fn new() -> Self {
         let mut game = Game::new(Tuning::default());
+        game.bots = false;
         let clients = (0..2)
             .map(|_| {
                 let id = game.join().expect("room for two");
@@ -117,7 +118,7 @@ fn duel(no_rewind: bool, ticks: u32, fire: Range<u32>, strafe: impl Fn(u32) -> f
         let a = &h.clients[0].1;
         let aim = a.remotes(now).first().map(|b| {
             let eye = a.mech.pos + Vector::Y * t.eye_height;
-            let d = b.mech.pos + Vector::Y * (t.mech_height * 0.5) - eye;
+            let d = b.view.pos + Vector::Y * (t.mech_height * 0.5) - eye;
             ((-d.x).atan2(-d.z), d.y.atan2(d.x.hypot(d.z)))
         });
         let a_input = match aim {
@@ -193,36 +194,136 @@ fn input_backlog_drains_and_rate_is_capped() {
     assert_eq!(game.snapshot(id).ack_seq, seq, "inputs still queued after a one-off burst");
 
     // A client sending at twice the tick rate must not move faster than walk speed.
-    let start = game.snapshot(id).players[0].mech.pos;
+    let start = game.snapshot(id).me.pos;
     let walk = Input { move_z: 1.0, ..idle };
     for _ in 0..60 {
         send(&mut game, id, &mut seq, 2, walk);
         game.step();
     }
-    let moved = (game.snapshot(id).players[0].mech.pos - start).length();
+    let moved = (game.snapshot(id).me.pos - start).length();
     assert!(moved < t.walk_speed * 2.0 * 1.1, "moved {moved} m in 2 s sending inputs at 2x");
 }
 
+fn bots(game: &Game, id: u8) -> usize {
+    game.snapshot(id).players.iter().filter(|p| p.bot).count()
+}
+
+fn team_of(game: &Game, id: u8) -> u8 {
+    game.snapshot(id).players.iter().find(|p| p.id == id).unwrap().team
+}
+
 #[test]
-fn bot_fills_slot_kills_idle_human_and_gives_way() {
+fn teams_fill_and_balance() {
+    let mut game = Game::new(Tuning::default());
+    let a = game.join().unwrap();
+    game.step();
+    let s = game.snapshot(a);
+    assert_eq!(s.players.len(), 8);
+    for team in 0..2 {
+        assert_eq!(s.players.iter().filter(|p| p.team == team).count(), 4, "team {team} not full");
+    }
+    assert_eq!(bots(&game, a), 7, "a lone human should get 7 bots");
+
+    let b = game.join().unwrap();
+    game.step();
+    assert_ne!(team_of(&game, a), team_of(&game, b), "second human should balance onto the other team");
+    assert_eq!(bots(&game, a), 6);
+    assert_eq!(game.snapshot(a).players.len(), 8);
+
+    for _ in 0..6 {
+        assert!(game.join().is_some());
+    }
+    assert_eq!(bots(&game, a), 0);
+    assert!(game.join().is_none(), "a 9th human should be turned away");
+}
+
+#[test]
+fn no_friendly_fire() {
+    let t = Tuning::default();
+    let mut game = Game::new(t.clone());
+    game.bots = false;
+    let shooter = game.join().unwrap();
+    let _enemy = game.join().unwrap();
+    let mate = game.join().unwrap();
+    assert_eq!(team_of(&game, shooter), team_of(&game, mate));
+    game.step();
+
+    // Spawn slots put the teammate 15 m to the shooter's left on the same line.
+    let (from, to) = (game.snapshot(shooter).me.pos, game.snapshot(mate).me.pos);
+    let d = to + Vector::Y * (t.mech_height * 0.5) - (from + Vector::Y * t.eye_height);
+    let aim = Input { yaw: (-d.x).atan2(-d.z), pitch: d.y.atan2(d.x.hypot(d.z)), fire: true, ..Input::default() };
+    let mut seq = 0;
+    let mut shots = 0;
+    for _ in 0..30 {
+        send(&mut game, shooter, &mut seq, 1, aim);
+        game.step();
+        for e in game.snapshot(shooter).events {
+            if let Event::Shot { hit, end, .. } = e {
+                shots += 1;
+                assert_eq!(hit, None, "hit a teammate");
+                assert!((end - from).length() > d.length() + 5.0, "shot stopped short of the teammate");
+            }
+        }
+    }
+    assert!(shots >= 5);
+    assert_eq!(game.snapshot(mate).me.health, t.health_max);
+}
+
+#[test]
+fn match_ends_and_restarts() {
+    let t = Tuning::default();
+    let mut game = Game::new(t.clone());
+    game.score_limit = 2;
+    let human = game.join().unwrap();
+    let mut seq = 0;
+    let mut step = |game: &mut Game| {
+        send(game, human, &mut seq, 1, Input::default());
+        game.step();
+        game.snapshot(human)
+    };
+
+    let mut ticks = 0;
+    let ended = loop {
+        let s = step(&mut game);
+        if s.state.ended {
+            break s.state;
+        }
+        ticks += 1;
+        assert!(ticks < 60 * 30, "nobody reached 2 kills in 60 s");
+    };
+    let winner = ended.winner.expect("a score-limit win isn't a draw");
+    assert_eq!(ended.scores[usize::from(winner)], 2);
+
+    // Post-match: shots fly but nobody dies, then a fresh match starts with everyone healthy.
+    let restarted = loop {
+        let s = step(&mut game);
+        assert!(!s.events.iter().any(|e| matches!(e, Event::Kill { .. })), "kill after the match ended");
+        if !s.state.ended {
+            break s;
+        }
+    };
+    assert_eq!(restarted.state.scores, [0, 0]);
+    assert!(restarted.players.iter().all(|p| p.view.health == t.health_max && p.kills == 0 && p.deaths == 0));
+
+    // Time limit with no kills is a draw.
+    let mut game = Game::new(t);
+    game.bots = false;
+    game.match_seconds = 1.0;
+    let human = game.join().unwrap();
+    for _ in 0..31 {
+        game.step();
+    }
+    let state = game.snapshot(human).state;
+    assert!(state.ended && state.winner.is_none() && state.scores == [0, 0]);
+}
+
+#[test]
+fn second_human_replaces_a_bot() {
     let mut game = Game::new(Tuning::default());
     let human = game.join().unwrap();
     game.step();
-    let bots = |game: &Game| game.snapshot(human).players.iter().filter(|p| p.bot).count();
-    assert_eq!(bots(&game), 1, "a lone human should get a bot opponent");
-
-    // The human stands at spawn doing nothing; the bot has 30 s to find and kill them.
-    let mut seq = 0;
-    for _ in 0..(30.0 * sim::TICK_HZ) as u32 {
-        send(&mut game, human, &mut seq, 1, Input::default());
-        game.step();
-    }
-    let me = game.snapshot(human).players.into_iter().find(|p| p.id == human).unwrap();
-    assert!(me.deaths >= 1, "bot never killed an idle human");
-
-    // A second human takes the bot's slot.
-    assert!(game.join().is_some(), "bot should give up its slot");
+    assert!(game.join().is_some(), "a bot should give up its slot");
     game.step();
-    assert_eq!(bots(&game), 0);
-    assert_eq!(game.snapshot(human).players.len(), 2);
+    assert_eq!(bots(&game, human), 6);
+    assert_eq!(game.snapshot(human).players.len(), 8);
 }

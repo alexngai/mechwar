@@ -3,7 +3,7 @@
 
 use std::collections::VecDeque;
 
-use crate::net::{self, ClientMsg, Event, PlayerNet, ServerMsg, Snapshot};
+use crate::net::{self, ClientMsg, Event, MatchState, PlayerNet, ServerMsg, Snapshot};
 use crate::{Arena, DT, Input, Mech, Tuning, step_mech};
 
 /// Remote mechs are drawn this many ticks behind the newest snapshot, to ride out jitter.
@@ -20,6 +20,8 @@ pub struct NetClient {
     pub mech: Mech,
     pub kills: u16,
     pub deaths: u16,
+    pub team: u8,
+    pub state: MatchState,
     /// Last reconciliation's change to the predicted position. Zero when prediction is exact.
     pub correction: f32,
     pub ping_ms: f64,
@@ -44,6 +46,8 @@ impl Default for NetClient {
             mech: Mech::default(),
             kills: 0,
             deaths: 0,
+            team: 0,
+            state: MatchState::default(),
             correction: 0.0,
             ping_ms: 0.0,
             events: Vec::new(),
@@ -93,7 +97,7 @@ impl NetClient {
             }
             // Reconcile: take the server's state at ack_seq and replay what it hasn't seen yet.
             let predicted = self.mech.pos;
-            self.mech = me.mech;
+            self.mech = s.me;
             for (_, input, _) in &self.pending {
                 step_mech(&self.arena, &self.tuning, &mut self.mech, input);
             }
@@ -101,7 +105,9 @@ impl NetClient {
             self.synced = true;
             self.kills = me.kills;
             self.deaths = me.deaths;
+            self.team = me.team;
         }
+        self.state = s.state;
 
         self.events.extend_from_slice(&s.events);
         self.snapshots.push_back(s);
@@ -133,13 +139,13 @@ impl NetClient {
             .map(|pb| {
                 let Some(pa) = a.players.iter().find(|p| p.id == pb.id) else { return *pb };
                 // Don't slide a mech across a death or respawn teleport.
-                if pa.mech.health <= 0.0 || pb.mech.health <= 0.0 {
+                if pa.view.health <= 0.0 || pb.view.health <= 0.0 {
                     return if f < 0.5 { *pa } else { *pb };
                 }
-                let mut p = *pb;
-                p.mech.pos = pa.mech.pos.lerp(pb.mech.pos, f);
-                p.mech.yaw = pa.mech.yaw + (pb.mech.yaw - pa.mech.yaw) * f;
-                p.mech.pitch = pa.mech.pitch + (pb.mech.pitch - pa.mech.pitch) * f;
+                let (va, mut p) = (pa.view, *pb);
+                p.view.pos = va.pos.lerp(pb.view.pos, f);
+                p.view.yaw = va.yaw + (pb.view.yaw - va.yaw) * f;
+                p.view.pitch = va.pitch + (pb.view.pitch - va.pitch) * f;
                 p
             })
             .collect()

@@ -1,17 +1,21 @@
-//! Authoritative match: applies each client's inputs through `step_mech`, resolves hits with
-//! lag compensation, and builds snapshots. Pure logic; `server/` owns the sockets.
+//! Authoritative team deathmatch: applies each client's inputs through `step_mech`, resolves
+//! hits with lag compensation, fills teams with bots, keeps score and runs the match clock.
+//! Pure logic; `server/` owns the sockets.
 
 use std::collections::VecDeque;
 
 use rapier3d::parry::query::RayCast;
 use rapier3d::prelude::Pose;
 
-use crate::bot::Bot;
-use crate::net::{ClientMsg, Event, PlayerNet, Snapshot};
+use crate::bot::{self, Bot};
+use crate::net::{ClientMsg, Event, MatchState, MechView, PlayerNet, Snapshot};
 use crate::{Arena, Mech, TICK_HZ, Tuning, Vector, aim_ray, mech_capsule, spawn_mech, step_mech};
 
-pub const MAX_PLAYERS: usize = 2;
-const SPAWNS: [Vector; MAX_PLAYERS] = [Vector::new(0.0, 0.1, 40.0), Vector::new(0.0, 0.1, -40.0)];
+pub const TEAM_SIZE: usize = 4;
+pub const MAX_PLAYERS: usize = 2 * TEAM_SIZE;
+/// Spawn x per team slot; team 0 spawns at z = +40, team 1 at z = -40.
+const SPAWN_X: [f32; TEAM_SIZE] = [0.0, -15.0, 15.0, -30.0];
+const POST_MATCH_SECONDS: f32 = 10.0;
 /// Inputs queued beyond this drop oldest first.
 const MAX_QUEUED: usize = 8;
 /// Input credit earned per tick. 2% over real time lets a client with a slightly fast clock drain
@@ -26,6 +30,9 @@ const HISTORY_TICKS: usize = TICK_HZ as usize;
 
 struct Player {
     id: u8,
+    team: u8,
+    /// Index into the team's spawn points, used for the first spawn of each match.
+    slot: usize,
     mech: Mech,
     inputs: VecDeque<ClientMsg>,
     /// Inputs this player may still apply; see CREDIT_PER_TICK.
@@ -40,36 +47,68 @@ struct Player {
     bot: Option<Bot>,
 }
 
+enum Phase {
+    Playing { started_at: u32 },
+    /// Shots do no damage until the next match starts at `restart_at`.
+    Ended { winner: Option<u8>, restart_at: u32 },
+}
+
 pub struct Game {
     pub tuning: Tuning,
     pub tick: u32,
     /// Fill empty slots with bots while at least one human is connected.
     pub bots: bool,
+    /// Team kills that win the match.
+    pub score_limit: u16,
+    pub match_seconds: f32,
     arena: Arena,
     players: Vec<Player>,
     /// This tick's events; cleared at the start of each step.
     events: Vec<Event>,
+    scores: [u16; 2],
+    phase: Phase,
 }
 
 impl Game {
     pub fn new(tuning: Tuning) -> Self {
-        Self { tuning, tick: 0, bots: true, arena: Arena::default(), players: Vec::new(), events: Vec::new() }
+        Self {
+            tuning,
+            tick: 0,
+            bots: true,
+            score_limit: 25,
+            match_seconds: 600.0,
+            arena: Arena::default(),
+            players: Vec::new(),
+            events: Vec::new(),
+            scores: [0; 2],
+            phase: Phase::Playing { started_at: 0 },
+        }
     }
 
-    /// Adds a human at a free spawn, taking a bot's slot if needed; None when full of humans.
+    /// Adds a human to the team with fewer humans, taking a bot's slot there if needed.
+    /// None when every slot already holds a human.
     pub fn join(&mut self) -> Option<u8> {
-        if self.players.len() >= MAX_PLAYERS {
-            let bot = self.players.iter().position(|p| p.bot.is_some())?;
+        let humans = |team| self.players.iter().filter(|p| p.team == team && p.bot.is_none()).count();
+        let team = if humans(1) < humans(0) { 1 } else { 0 };
+        if self.team_count(team) >= TEAM_SIZE {
+            let bot = self.players.iter().position(|p| p.team == team && p.bot.is_some())?;
             self.players.remove(bot);
         }
-        self.add_player(None)
+        self.add_player(team, None)
     }
 
-    fn add_player(&mut self, bot: Option<Bot>) -> Option<u8> {
+    fn team_count(&self, team: u8) -> usize {
+        self.players.iter().filter(|p| p.team == team).count()
+    }
+
+    fn add_player(&mut self, team: u8, bot: Option<Bot>) -> Option<u8> {
         let id = (0..MAX_PLAYERS as u8).find(|id| !self.players.iter().any(|p| p.id == *id))?;
+        let slot = (0..TEAM_SIZE).find(|s| !self.players.iter().any(|p| p.team == team && p.slot == *s))?;
         self.players.push(Player {
             id,
-            mech: spawn_mech(&self.tuning, SPAWNS[usize::from(id)]),
+            team,
+            slot,
+            mech: spawn_mech(&self.tuning, spawn_point(team, slot)),
             inputs: VecDeque::new(),
             credit: 0.0,
             ack_seq: 0,
@@ -99,33 +138,48 @@ impl Game {
         self.tick += 1;
         self.events.clear();
 
-        // Bots fill empty slots while any human is here; an empty server keeps none.
+        // Bots top up both teams while any human is here; an empty server keeps no one and
+        // holds the match at its start, so the clock runs from the first human's arrival.
         if self.players.iter().any(|p| p.bot.is_none()) {
-            while self.bots && self.players.len() < MAX_PLAYERS {
-                self.add_player(Some(Bot::new(u64::from(self.tick))));
+            for team in 0..2 {
+                while self.bots && self.team_count(team) < TEAM_SIZE {
+                    let seed = u64::from(self.tick) << 8 | self.players.len() as u64;
+                    self.add_player(team, Some(Bot::new(seed)));
+                }
             }
         } else {
             self.players.clear();
+            self.start_match();
         }
 
-        for p in &mut self.players {
-            if p.respawn_at.is_some_and(|at| self.tick >= at) {
-                p.mech = spawn_mech(&self.tuning, SPAWNS[usize::from(p.id)]);
+        match self.phase {
+            Phase::Playing { started_at } if self.tick >= started_at + secs(self.match_seconds) => self.end_match(),
+            Phase::Ended { restart_at, .. } if self.tick >= restart_at => self.start_match(),
+            _ => {}
+        }
+
+        for i in 0..self.players.len() {
+            if self.players[i].respawn_at.is_some_and(|at| self.tick >= at) {
+                let pos = self.respawn_point(self.players[i].team);
+                let p = &mut self.players[i];
+                p.mech = spawn_mech(&self.tuning, pos);
                 p.respawn_at = None;
             }
         }
 
-        // Bots queue one input per tick, aiming at the nearest living opponent as of now.
+        // Bots queue one input per tick, aiming at the nearest visible enemy as of now (else the
+        // nearest enemy, to go find).
         for i in 0..self.players.len() {
             let me = &self.players[i];
             if me.bot.is_none() {
                 continue;
             }
-            let target = self
-                .players
-                .iter()
-                .filter(|p| p.id != me.id && p.mech.health > 0.0)
-                .min_by(|a, b| a.mech.pos.distance(me.mech.pos).total_cmp(&b.mech.pos.distance(me.mech.pos)))
+            let enemies = || self.players.iter().filter(|p| p.team != me.team && p.mech.health > 0.0);
+            let dist = |p: &&Player| p.mech.pos.distance(me.mech.pos);
+            let target = enemies()
+                .filter(|p| bot::sees(&self.arena, &self.tuning, &me.mech, &p.mech))
+                .min_by(|a, b| dist(a).total_cmp(&dist(b)))
+                .or_else(|| enemies().min_by(|a, b| dist(a).total_cmp(&dist(b))))
                 .map(|p| p.mech);
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
@@ -162,10 +216,48 @@ impl Game {
         }
     }
 
-    /// Hitscan from the shooter's eye against targets rewound to where the shooter saw them.
+    /// Fresh scores, and everyone back at their team spawn with full health.
+    fn start_match(&mut self) {
+        self.scores = [0; 2];
+        self.phase = Phase::Playing { started_at: self.tick };
+        for p in &mut self.players {
+            p.mech = spawn_mech(&self.tuning, spawn_point(p.team, p.slot));
+            p.respawn_at = None;
+            p.kills = 0;
+            p.deaths = 0;
+        }
+    }
+
+    fn end_match(&mut self) {
+        let [a, b] = self.scores;
+        let winner = match a.cmp(&b) {
+            std::cmp::Ordering::Greater => Some(0),
+            std::cmp::Ordering::Less => Some(1),
+            std::cmp::Ordering::Equal => None,
+        };
+        self.phase = Phase::Ended { winner, restart_at: self.tick + secs(POST_MATCH_SECONDS) };
+    }
+
+    /// The team spawn farthest from the nearest living enemy.
+    fn respawn_point(&self, team: u8) -> Vector {
+        let threat = |spawn: Vector| {
+            self.players
+                .iter()
+                .filter(|p| p.team != team && p.mech.health > 0.0)
+                .map(|p| p.mech.pos.distance(spawn))
+                .fold(f32::MAX, f32::min)
+        };
+        (0..TEAM_SIZE)
+            .map(|slot| spawn_point(team, slot))
+            .max_by(|a, b| threat(*a).total_cmp(&threat(*b)))
+            .expect("teams have spawns")
+    }
+
+    /// Hitscan from the shooter's eye against enemies rewound to where the shooter saw them.
+    /// Teammates are passed through: no friendly fire.
     fn resolve_shot(&mut self, shooter: usize, view_tick: f32) {
         let t = &self.tuning;
-        let m = &self.players[shooter].mech;
+        let (m, team) = (&self.players[shooter].mech, self.players[shooter].team);
         let ray = aim_ray(t, m);
         // step_mech already cast this ray against the arena; aim_point is where it stopped.
         let mut best = (m.aim_point - ray.origin).length();
@@ -173,7 +265,7 @@ impl Game {
         let view = view_tick.clamp(self.tick as f32 - MAX_REWIND_TICKS, self.tick as f32);
         let capsule = mech_capsule(t);
         for (j, target) in self.players.iter().enumerate() {
-            if j == shooter || target.mech.health <= 0.0 {
+            if target.team == team || target.mech.health <= 0.0 {
                 continue;
             }
             let Some(pos) = rewind(&target.history, view) else { continue };
@@ -183,6 +275,8 @@ impl Game {
                 hit = Some(j);
             }
         }
+        // After the match ends shots still fly, but don't hit anyone.
+        let hit = hit.filter(|_| matches!(self.phase, Phase::Playing { .. }));
 
         let shooter_id = self.players[shooter].id;
         let end = ray.point_at(best);
@@ -190,7 +284,7 @@ impl Game {
         let Some(j) = hit else { return };
 
         let damage = self.tuning.shot_damage;
-        let respawn_at = self.tick + (self.tuning.respawn_delay * TICK_HZ).round() as u32;
+        let respawn_at = self.tick + secs(self.tuning.respawn_delay);
         let target = &mut self.players[j];
         target.mech.health -= damage;
         if target.mech.health <= 0.0 {
@@ -200,22 +294,53 @@ impl Game {
             let victim = target.id;
             self.players[shooter].kills += 1;
             self.events.push(Event::Kill { killer: shooter_id, victim });
+            self.scores[usize::from(team)] += 1;
+            if self.scores[usize::from(team)] >= self.score_limit {
+                self.end_match();
+            }
         }
     }
 
-    /// State for one recipient: everyone's mechs plus that recipient's input ack.
+    /// State for one recipient: its own full mech and input ack, everyone's views, the match.
     pub fn snapshot(&self, id: u8) -> Snapshot {
+        let me = self.players.iter().find(|p| p.id == id);
+        let (ended, winner, until) = match self.phase {
+            Phase::Playing { started_at } => (false, None, started_at + secs(self.match_seconds)),
+            Phase::Ended { winner, restart_at } => (true, winner, restart_at),
+        };
         Snapshot {
             tick: self.tick,
-            ack_seq: self.players.iter().find(|p| p.id == id).map_or(0, |p| p.ack_seq),
+            ack_seq: me.map_or(0, |p| p.ack_seq),
+            me: me.map_or_else(Mech::default, |p| p.mech),
             players: self
                 .players
                 .iter()
-                .map(|p| PlayerNet { id: p.id, mech: p.mech, kills: p.kills, deaths: p.deaths, bot: p.bot.is_some() })
+                .map(|p| PlayerNet {
+                    id: p.id,
+                    team: p.team,
+                    bot: p.bot.is_some(),
+                    kills: p.kills,
+                    deaths: p.deaths,
+                    view: MechView::from(&p.mech),
+                })
                 .collect(),
             events: self.events.clone(),
+            state: MatchState {
+                scores: self.scores,
+                seconds_left: (until.saturating_sub(self.tick) as f32 / TICK_HZ).ceil() as u16,
+                ended,
+                winner,
+            },
         }
     }
+}
+
+fn spawn_point(team: u8, slot: usize) -> Vector {
+    Vector::new(SPAWN_X[slot], 0.1, if team == 0 { 40.0 } else { -40.0 })
+}
+
+fn secs(s: f32) -> u32 {
+    (s * TICK_HZ).round() as u32
 }
 
 /// Feet position at fractional tick `at`, interpolated like the client draws it; None if dead then.

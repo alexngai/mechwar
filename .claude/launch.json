@@ -27,6 +27,15 @@
         "PATH=\"$HOME/.cargo/bin:$PATH\" SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk LAG_MS=40 npm run server"
       ],
       "port": 9001
+    },
+    {
+      "name": "server-short-match",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "PATH=\"$HOME/.cargo/bin:$PATH\" SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk LAG_MS=40 SCORE_LIMIT=5 npm run server"
+      ],
+      "port": 9001
     }
   ]
 }
