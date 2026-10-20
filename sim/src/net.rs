@@ -35,6 +35,7 @@ pub struct PlayerNet {
     pub mech: Mech,
     pub kills: u16,
     pub deaths: u16,
+    pub bot: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]

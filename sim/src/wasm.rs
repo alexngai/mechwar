@@ -73,7 +73,7 @@ impl WasmNetClient {
         mech_state(&self.0.mech)
     }
 
-    /// Nine floats per remote mech: id, feet xyz, yaw, pitch, health, boosting, hovering.
+    /// Ten floats per remote mech: id, feet xyz, yaw, pitch, health, boosting, hovering, bot.
     pub fn remotes(&self, now: f64) -> Vec<f32> {
         let b = |v: bool| if v { 1.0 } else { 0.0 };
         self.0
@@ -81,7 +81,7 @@ impl WasmNetClient {
             .iter()
             .flat_map(|p| {
                 let m = &p.mech;
-                [f32::from(p.id), m.pos.x, m.pos.y, m.pos.z, m.yaw, m.pitch, m.health, b(m.boosting), b(m.hovering)]
+                [f32::from(p.id), m.pos.x, m.pos.y, m.pos.z, m.yaw, m.pitch, m.health, b(m.boosting), b(m.hovering), b(p.bot)]
             })
             .collect()
     }

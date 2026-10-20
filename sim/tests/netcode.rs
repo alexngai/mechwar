@@ -176,6 +176,7 @@ fn send(game: &mut Game, id: u8, seq: &mut u32, n: u32, input: Input) {
 fn input_backlog_drains_and_rate_is_capped() {
     let t = Tuning::default();
     let mut game = Game::new(t.clone());
+    game.bots = false;
     let id = game.join().unwrap();
     let (mut seq, idle) = (0, Input::default());
 
@@ -200,4 +201,28 @@ fn input_backlog_drains_and_rate_is_capped() {
     }
     let moved = (game.snapshot(id).players[0].mech.pos - start).length();
     assert!(moved < t.walk_speed * 2.0 * 1.1, "moved {moved} m in 2 s sending inputs at 2x");
+}
+
+#[test]
+fn bot_fills_slot_kills_idle_human_and_gives_way() {
+    let mut game = Game::new(Tuning::default());
+    let human = game.join().unwrap();
+    game.step();
+    let bots = |game: &Game| game.snapshot(human).players.iter().filter(|p| p.bot).count();
+    assert_eq!(bots(&game), 1, "a lone human should get a bot opponent");
+
+    // The human stands at spawn doing nothing; the bot has 30 s to find and kill them.
+    let mut seq = 0;
+    for _ in 0..(30.0 * sim::TICK_HZ) as u32 {
+        send(&mut game, human, &mut seq, 1, Input::default());
+        game.step();
+    }
+    let me = game.snapshot(human).players.into_iter().find(|p| p.id == human).unwrap();
+    assert!(me.deaths >= 1, "bot never killed an idle human");
+
+    // A second human takes the bot's slot.
+    assert!(game.join().is_some(), "bot should give up its slot");
+    game.step();
+    assert_eq!(bots(&game), 0);
+    assert_eq!(game.snapshot(human).players.len(), 2);
 }

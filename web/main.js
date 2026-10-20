@@ -92,7 +92,7 @@ tracer.frustumCulled = false; // setFromPoints doesn't refresh the bounding sphe
 const remoteTracer = tracer.clone();
 remoteTracer.geometry = tracer.geometry.clone();
 scene.add(tracer, impact, remoteTracer);
-let flashUntil = 0, remoteFlashUntil = 0, hitUntil = 0, remoteShot = null, message = '', messageUntil = 0;
+let flashUntil = 0, remoteFlashUntil = 0, hitUntil = 0, remoteShot = null, message = '', messageUntil = 0, vsBot = false;
 
 // Other players: a clone of the placeholder mech per id.
 const remotes = new Map();
@@ -142,7 +142,8 @@ const folders = {};
 const push = () => sim?.set_tuning(JSON.stringify(tuning));
 for (const [name, p] of Object.entries(tuning)) {
   // Online the sim runs on compiled-in tuning.json on both ends, so only camera values are live.
-  if (net && p.group !== 'camera') continue;
+  // Bot values only matter to the server.
+  if ((net && p.group !== 'camera') || p.group === 'bot') continue;
   folders[p.group] ??= gui.addFolder(p.group).close();
   folders[p.group].add(p, 'value', p.min, p.max, p.step).name(`${name} (${p.unit})`).onChange(push);
 }
@@ -192,8 +193,10 @@ function frame(now) {
 
   if (net) {
     const r = net.remotes(now), seen = new Set();
-    for (let i = 0; i < r.length; i += 9) {
-      const [id, x, y, z, ryaw, rpitch, health, boosting, hovering] = r.subarray(i, i + 9);
+    vsBot = false;
+    for (let i = 0; i < r.length; i += 10) {
+      const [id, x, y, z, ryaw, rpitch, health, boosting, hovering, isBot] = r.subarray(i, i + 10);
+      if (isBot) vsBot = true;
       const g = remoteMech(id);
       seen.add(id);
       g.position.set(x, y, z);
@@ -245,7 +248,7 @@ function frame(now) {
   if (net) {
     const [, kills, deaths, ping, correction, full] = net.hud();
     const state = full ? 'server full' : connection || (curr[S.HEALTH] <= 0 ? 'DESTROYED, respawning' : '');
-    hud.net.textContent = `K ${kills}  D ${deaths}  ping ${Math.round(ping)} ms  corr ${correction.toFixed(3)} m  ${now < messageUntil ? message : state}`;
+    hud.net.textContent = `${vsBot ? 'vs bot  ' : ''}K ${kills}  D ${deaths}  ping ${Math.round(ping)} ms  corr ${correction.toFixed(3)} m  ${now < messageUntil ? message : state}`;
   }
 
   renderer.render(scene, camera);

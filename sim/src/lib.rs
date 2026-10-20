@@ -5,6 +5,7 @@ use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterCo
 use rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 
+pub mod bot;
 pub mod client;
 pub mod game;
 pub mod net;
@@ -69,6 +70,10 @@ pub struct Tuning {
     pub health_max: f32,
     pub shot_damage: f32,
     pub respawn_delay: f32,
+
+    pub bot_turn_rate_deg: f32,
+    pub bot_aim_error_deg: f32,
+    pub bot_reaction_s: f32,
 }
 
 impl Tuning {
@@ -182,6 +187,13 @@ impl Default for Arena {
         // Builds the broad phase so scene queries see the static colliders. No physics step runs.
         world.detect_collisions(&(), &());
         Self { world }
+    }
+}
+
+impl Arena {
+    /// Distance along `ray` (unit direction) to the first arena surface within `max`.
+    pub fn cast_ray(&self, ray: &Ray, max: f32) -> Option<f32> {
+        self.world.query_pipeline().cast_ray(ray, max, true).map(|(_, toi)| toi)
     }
 }
 
@@ -361,7 +373,7 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
 
     // Aim ray from the eye against the arena; the server adds mechs to this for hits.
     let ray = aim_ray(t, m);
-    let toi = queries.cast_ray(&ray, t.weapon_range, true).map_or(t.weapon_range, |(_, toi)| toi);
+    let toi = arena.cast_ray(&ray, t.weapon_range).unwrap_or(t.weapon_range);
     m.aim_point = ray.point_at(toi);
 
     // Heat. ponytail: one shot per tick max, so fire_rate above TICK_HZ caps at 30/s.

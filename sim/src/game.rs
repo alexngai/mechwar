@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 use rapier3d::parry::query::RayCast;
 use rapier3d::prelude::Pose;
 
+use crate::bot::Bot;
 use crate::net::{ClientMsg, Event, PlayerNet, Snapshot};
 use crate::{Arena, Mech, TICK_HZ, Tuning, Vector, aim_ray, mech_capsule, spawn_mech, step_mech};
 
@@ -35,11 +36,15 @@ struct Player {
     kills: u16,
     deaths: u16,
     respawn_at: Option<u32>,
+    /// Server-driven player; None for a human.
+    bot: Option<Bot>,
 }
 
 pub struct Game {
     pub tuning: Tuning,
     pub tick: u32,
+    /// Fill empty slots with bots while at least one human is connected.
+    pub bots: bool,
     arena: Arena,
     players: Vec<Player>,
     /// This tick's events; cleared at the start of each step.
@@ -48,11 +53,19 @@ pub struct Game {
 
 impl Game {
     pub fn new(tuning: Tuning) -> Self {
-        Self { tuning, tick: 0, arena: Arena::default(), players: Vec::new(), events: Vec::new() }
+        Self { tuning, tick: 0, bots: true, arena: Arena::default(), players: Vec::new(), events: Vec::new() }
     }
 
-    /// Adds a player at a free spawn, or None when the match is full.
+    /// Adds a human at a free spawn, taking a bot's slot if needed; None when full of humans.
     pub fn join(&mut self) -> Option<u8> {
+        if self.players.len() >= MAX_PLAYERS {
+            let bot = self.players.iter().position(|p| p.bot.is_some())?;
+            self.players.remove(bot);
+        }
+        self.add_player(None)
+    }
+
+    fn add_player(&mut self, bot: Option<Bot>) -> Option<u8> {
         let id = (0..MAX_PLAYERS as u8).find(|id| !self.players.iter().any(|p| p.id == *id))?;
         self.players.push(Player {
             id,
@@ -64,6 +77,7 @@ impl Game {
             kills: 0,
             deaths: 0,
             respawn_at: None,
+            bot,
         });
         Some(id)
     }
@@ -85,11 +99,39 @@ impl Game {
         self.tick += 1;
         self.events.clear();
 
+        // Bots fill empty slots while any human is here; an empty server keeps none.
+        if self.players.iter().any(|p| p.bot.is_none()) {
+            while self.bots && self.players.len() < MAX_PLAYERS {
+                self.add_player(Some(Bot::new(u64::from(self.tick))));
+            }
+        } else {
+            self.players.clear();
+        }
+
         for p in &mut self.players {
             if p.respawn_at.is_some_and(|at| self.tick >= at) {
                 p.mech = spawn_mech(&self.tuning, SPAWNS[usize::from(p.id)]);
                 p.respawn_at = None;
             }
+        }
+
+        // Bots queue one input per tick, aiming at the nearest living opponent as of now.
+        for i in 0..self.players.len() {
+            let me = &self.players[i];
+            if me.bot.is_none() {
+                continue;
+            }
+            let target = self
+                .players
+                .iter()
+                .filter(|p| p.id != me.id && p.mech.health > 0.0)
+                .min_by(|a, b| a.mech.pos.distance(me.mech.pos).total_cmp(&b.mech.pos.distance(me.mech.pos)))
+                .map(|p| p.mech);
+            let p = &mut self.players[i];
+            let bot = p.bot.as_mut().expect("checked above");
+            let input = bot.think(&self.arena, &self.tuning, &p.mech, target.as_ref(), self.tick);
+            bot.seq += 1;
+            p.inputs.push_back(ClientMsg { seq: bot.seq, input, view_tick: self.tick as f32 });
         }
 
         // Inputs are applied exactly as the client predicted them, never guessed or repeated,
@@ -169,7 +211,7 @@ impl Game {
             players: self
                 .players
                 .iter()
-                .map(|p| PlayerNet { id: p.id, mech: p.mech, kills: p.kills, deaths: p.deaths })
+                .map(|p| PlayerNet { id: p.id, mech: p.mech, kills: p.kills, deaths: p.deaths, bot: p.bot.is_some() })
                 .collect(),
             events: self.events.clone(),
         }
