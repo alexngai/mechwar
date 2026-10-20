@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import GUI from 'lil-gui';
 import init, { WasmNetClient, WasmSim, arena, tick_dt } from '../sim/pkg/sim.js';
 import tuning from '../tuning.json';
+import { Effects } from './fx.js';
+import { Mech } from './mech.js';
 
 await init();
 const DT = tick_dt();
@@ -54,60 +56,12 @@ const grid = new THREE.GridHelper(100, 50, 0x3d4038, 0x55594e);
 grid.position.y = 0.01;
 scene.add(grid);
 
-// Placeholder B-class mech, feet at origin, facing -Z, 5 m tall at scale 1.
-const mech = new THREE.Group();
-const hull = 0x8a8f5c, trim = 0x3b3f33;
-for (const x of [-0.8, 0.8]) {
-  const leg = box(0.7, 2.6, 0.9, trim);
-  leg.position.set(x, 1.3, 0);
-  const foot = box(1.0, 0.3, 1.5, trim);
-  foot.position.set(x, 0.15, -0.2);
-  mech.add(leg, foot);
-}
-const torso = box(2.8, 1.6, 2.4, hull);
-torso.position.y = 3.6;
-torso.name = 'torso';
-// Online hull colors: team 0 blue, team 1 red.
-const teamHull = [0x4f6f8f, 0x8f4f4a].map((color) => new THREE.MeshLambertMaterial({ color, flatShading: true }));
-const canopy = box(1.4, 0.6, 0.6, 0x223040, 0x1a3a50);
-canopy.position.set(0, 4.0, -1.3);
-const thruster = box(1.2, 0.8, 0.3, 0xffa040, 0xff7a20);
-thruster.position.set(0, 3.4, 1.35);
-thruster.name = 'thruster';
-const arms = new THREE.Group();
-arms.position.y = 3.6;
-arms.name = 'arms';
-const gunTip = new THREE.Object3D();
-gunTip.name = 'gunTip';
-for (const x of [-1.8, 1.8]) {
-  const gun = box(0.5, 0.5, 2.4, trim);
-  gun.position.set(x, 0, -0.7);
-  arms.add(gun);
-}
-gunTip.position.set(1.8, 0, -1.9);
-arms.add(gunTip);
-mech.add(torso, canopy, thruster, arms);
-scene.add(mech);
-
-const tracer = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineBasicMaterial({ color: 0xfff0a0 }));
-const impact = box(0.5, 0.5, 0.5, 0xfff0a0, 0xffd060);
-tracer.frustumCulled = false; // setFromPoints doesn't refresh the bounding sphere
-scene.add(tracer, impact);
-let flashUntil = 0, hitUntil = 0, message = '', messageUntil = 0;
-
-// Other players: a clone of the placeholder mech per id, each with its own tracer.
+const fx = new Effects(scene);
+const me = new Mech(scene, fx);
+// Other players by id: their mech, team, and a velocity estimated from interpolated motion.
 const remotes = new Map();
-const remoteMech = (id) => {
-  if (!remotes.has(id)) {
-    const g = mech.clone();
-    const shotTracer = tracer.clone();
-    shotTracer.geometry = tracer.geometry.clone();
-    g.userData = { tracer: shotTracer, shotEnd: new THREE.Vector3(), flashUntil: 0, team: -1 };
-    scene.add(g, shotTracer);
-    remotes.set(id, g);
-  }
-  return remotes.get(id);
-};
+const shots = []; // own predicted shots, drawn once this frame's pose is set
+let hitUntil = 0, hurt = 0, message = '', messageUntil = 0;
 
 // --- Input ---------------------------------------------------------------
 const keys = new Set();
@@ -156,14 +110,17 @@ gui.add({ copy: () => navigator.clipboard.writeText(JSON.stringify(tuning, null,
 
 // --- HUD -------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
-const hud = { status: $('status'), net: $('net'), score: $('score'), banner: $('banner'), fuel: $('fuel'), heat: $('heat'), dodge: $('dodge'), hp: $('hp'), crosshair: $('crosshair') };
+const hud = { status: $('status'), net: $('net'), score: $('score'), banner: $('banner'), damage: $('damage'), fuel: $('fuel'), heat: $('heat'), dodge: $('dodge'), hp: $('hp'), crosshair: $('crosshair') };
 
 // --- Fixed-step sim, interpolated render ----------------------------------
 let prev = game.state(), curr = prev, acc = 0, last = performance.now();
-const eye = new THREE.Vector3(), offset = new THREE.Vector3(), aim = new THREE.Vector3(), from = new THREE.Vector3();
+const eye = new THREE.Vector3(), offset = new THREE.Vector3(), aim = new THREE.Vector3();
+const pos = new THREE.Vector3(), vel = new THREE.Vector3(), seen = new THREE.Vector3(), step = new THREE.Vector3();
+const ray = new THREE.Ray(), sphere = new THREE.Sphere(), crossing = new THREE.Vector3();
 
 function frame(now) {
-  acc += Math.min((now - last) / 1000, 0.25);
+  const dt = Math.min((now - last) / 1000, 0.25);
+  acc += dt;
   last = now;
   while (acc >= DT) {
     const input = [axis('KeyD', 'KeyA'), axis('KeyW', 'KeyS'), yaw, pitch,
@@ -174,74 +131,90 @@ function frame(now) {
     } else {
       sim.step(...input);
     }
-    dodge = 0;
     prev = curr;
     curr = game.state();
+    if (dodge && curr[S.DODGE_CD] > prev[S.DODGE_CD]) me.dodge(dodge);
+    dodge = 0;
     acc -= DT;
-    if (curr[S.SHOT]) {
-      impact.position.set(curr[S.AIM], curr[S.AIM + 1], curr[S.AIM + 2]);
-      flashUntil = now + 60;
-    }
+    if (curr[S.SHOT]) shots.push(new THREE.Vector3(curr[S.AIM], curr[S.AIM + 1], curr[S.AIM + 2]));
   }
   const a = acc / DT;
   const lerp = (i) => prev[i] + (curr[i] - prev[i]) * a;
-
   const scale = T('mech_height') / 5;
-  mech.position.set(lerp(S.POS), lerp(S.POS + 1), lerp(S.POS + 2));
-  mech.scale.setScalar(scale);
-  mech.rotation.y = yaw;
-  arms.rotation.x = pitch;
-  mech.visible = !cockpit && curr[S.HEALTH] > 0;
-  thruster.visible = !!(curr[S.BOOSTING] || curr[S.HOVERING]);
-  tracer.visible = impact.visible = now < flashUntil;
+  const [myId, , , , , , myTeam] = net ? net.hud() : [-1, 0, 0, 0, 0, 0, -1];
+
+  pos.set(lerp(S.POS), lerp(S.POS + 1), lerp(S.POS + 2));
+  me.setTeam(myTeam);
+  me.root.visible = !cockpit;
+  me.update(dt, {
+    pos, yaw, pitch, scale,
+    vel: vel.set(lerp(S.VEL), lerp(S.VEL + 1), lerp(S.VEL + 2)),
+    grounded: !!curr[S.GROUNDED], boosting: !!curr[S.BOOSTING], hovering: !!curr[S.HOVERING],
+    health: curr[S.HEALTH], heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
+  });
 
   if (net) {
-    const [myId, , , , , , myTeam] = net.hud();
-    torso.material = teamHull[myTeam];
-    const r = net.remotes(now), seen = new Set();
+    const r = net.remotes(now), live = new Set();
     for (let i = 0; i < r.length; i += 11) {
       const [id, team, x, y, z, ryaw, rpitch, health, boosting, hovering] = r.subarray(i, i + 11);
-      const g = remoteMech(id);
-      seen.add(id);
-      if (g.userData.team !== team) {
-        g.getObjectByName('torso').material = teamHull[team];
-        g.userData.team = team;
-      }
-      g.position.set(x, y, z);
-      g.rotation.y = ryaw;
-      g.scale.setScalar(scale);
-      g.getObjectByName('arms').rotation.x = rpitch;
-      g.getObjectByName('thruster').visible = !!(boosting || hovering);
-      g.visible = health > 0;
+      let e = remotes.get(id);
+      if (!e) remotes.set(id, (e = { mech: new Mech(scene, fx), team, pos: new THREE.Vector3(x, y, z), vel: new THREE.Vector3() }));
+      live.add(id);
+      // Gait speed comes from interpolated motion; a jump (respawn, slot reuse) resets it.
+      seen.set(x, y, z);
+      if (dt === 0 || seen.distanceTo(e.pos) > 8) e.vel.set(0, 0, 0);
+      else e.vel.lerp(step.subVectors(seen, e.pos).divideScalar(dt), 0.3);
+      e.pos.copy(seen);
+      e.team = team;
+      e.mech.setTeam(team);
+      e.mech.update(dt, {
+        pos: e.pos, yaw: ryaw, pitch: rpitch, scale, vel: e.vel,
+        grounded: !hovering && Math.abs(e.vel.y) < 1.5, boosting: !!boosting, hovering: !!hovering, health,
+      });
     }
-    for (const [id, g] of remotes) if (!seen.has(id)) { scene.remove(g, g.userData.tracer); remotes.delete(id); }
+    for (const [id, e] of remotes) if (!live.has(id)) { e.mech.dispose(); remotes.delete(id); }
 
     const ev = net.take_events();
     for (let i = 0; i < ev.length; i += 6) {
       const [kind, a, b, x, y, z] = ev.subarray(i, i + 6);
-      if (kind === 0 && remotes.has(a)) {
-        const shooter = remotes.get(a).userData;
-        shooter.shotEnd.set(x, y, z);
-        shooter.flashUntil = now + 60;
+      if (kind === 0) {
+        // Own shots were drawn when predicted; everyone else's come from the server.
+        if (a !== myId) remotes.get(a)?.mech.fire(new THREE.Vector3(x, y, z));
+        if (a === myId && b >= 0) hitUntil = now + 150;
+        if (b === myId) { me.hit(); hurt = 1; } else if (b >= 0) remotes.get(b)?.mech.hit();
       }
-      if (kind === 0 && a === myId && b >= 0) hitUntil = now + 150;
       if (kind === 1 && (a === myId || b === myId)) { message = a === myId ? 'ENEMY DESTROYED' : 'DESTROYED'; messageUntil = now + 2500; }
     }
   }
 
+  // The predicted aim point only knows the arena, so stop own tracers at the first enemy mech
+  // they cross (visual only; the server decides hits).
+  for (const end of shots) {
+    ray.origin.copy(pos).y += T('eye_height');
+    ray.direction.subVectors(end, ray.origin);
+    let reach = ray.direction.length();
+    ray.direction.normalize();
+    for (const e of remotes.values()) {
+      if (!e.mech.alive || e.team === myTeam) continue;
+      for (const h of [1.6, 3.4]) {
+        sphere.center.copy(e.pos).y += h * scale;
+        sphere.radius = T('mech_radius') * scale;
+        if (ray.intersectSphere(sphere, crossing)) reach = Math.min(reach, crossing.distanceTo(ray.origin));
+      }
+    }
+    me.fire(ray.at(reach, end));
+  }
+  shots.length = 0;
+
   // Look is applied at render rate for responsiveness; position is interpolated.
-  eye.copy(mech.position).y += T('eye_height');
+  eye.copy(pos).y += T('eye_height');
   camera.rotation.set(pitch, yaw, 0);
   camera.position.copy(eye);
   if (!cockpit) camera.position.add(offset.set(0, T('chase_height'), T('chase_distance')).applyQuaternion(camera.quaternion));
   if (camera.fov !== T('fov')) { camera.fov = T('fov'); camera.updateProjectionMatrix(); }
-  scene.updateMatrixWorld();
-  if (tracer.visible) tracer.geometry.setFromPoints([gunTip.getWorldPosition(new THREE.Vector3()), impact.position]);
-  for (const g of remotes.values()) {
-    const { tracer: shotTracer, shotEnd, flashUntil: until } = g.userData;
-    shotTracer.visible = g.visible && now < until;
-    if (shotTracer.visible) shotTracer.geometry.setFromPoints([g.getObjectByName('gunTip').getWorldPosition(from), shotEnd]);
-  }
+  fx.update(dt, camera, renderer.domElement.height);
+  hurt = Math.max(0, hurt - dt * 2.5);
+  hud.damage.style.opacity = hurt;
 
   // Crosshair marks where the eye ray lands, so chase-cam parallax stays honest.
   aim.set(curr[S.AIM], curr[S.AIM + 1], curr[S.AIM + 2]).project(camera);

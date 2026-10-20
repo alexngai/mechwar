@@ -21,6 +21,7 @@
     #score { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); padding: 4px 12px; background: #0009; font-size: 14px; white-space: pre; pointer-events: none; }
     #banner { position: fixed; top: 30%; left: 0; right: 0; text-align: center; font-size: 28px; letter-spacing: 2px; text-shadow: 0 2px 6px #000; pointer-events: none; }
     #score:empty, #banner:empty { display: none; }
+    #damage { position: fixed; inset: 0; box-shadow: inset 0 0 140px 30px #ff2a1a; opacity: 0; pointer-events: none; }
     #crosshair { position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -4px 0 0 -4px; border: 1px solid #fff; border-radius: 50%; pointer-events: none; }
     #help { position: fixed; left: 16px; top: 16px; padding: 6px 10px; background: #0009; pointer-events: none; max-width: calc(100vw - 300px); }
     body.locked #help { display: none; }
@@ -35,6 +36,7 @@
     <div class="bar"><span>HEAT</span><div><i id="heat"></i></div></div>
     <div class="bar"><span>DODGE</span><div><i id="dodge"></i></div></div>
   </div>
+  <div id="damage"></div>
   <div id="crosshair"></div>
   <div id="score"></div>
   <div id="banner"></div>
