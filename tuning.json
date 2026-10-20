@@ -1,0 +1,52 @@
+{
+  "walk_speed":        { "value": 9,      "min": 0,     "max": 30,    "step": 0.1,    "unit": "m/s",     "group": "move",   "source": "own tuning" },
+  "ground_accel":      { "value": 30,     "min": 1,     "max": 150,   "step": 1,      "unit": "m/s²",    "group": "move",   "source": "own tuning" },
+  "ground_decel":      { "value": 40,     "min": 1,     "max": 150,   "step": 1,      "unit": "m/s²",    "group": "move",   "source": "own tuning" },
+  "air_control":       { "value": 0.35,   "min": 0,     "max": 1,     "step": 0.01,   "unit": "x accel", "group": "move",   "source": "own tuning" },
+  "gravity":           { "value": 20,     "min": 0,     "max": 60,    "step": 0.5,    "unit": "m/s²",    "group": "move",   "source": "own tuning" },
+  "max_slope_deg":     { "value": 40,     "min": 0,     "max": 80,    "step": 1,      "unit": "deg",     "group": "move",   "source": "own tuning" },
+  "step_height":       { "value": 0.5,    "min": 0,     "max": 2,     "step": 0.05,   "unit": "m",       "group": "move",   "source": "own tuning" },
+  "snap_distance":     { "value": 0.4,    "min": 0,     "max": 2,     "step": 0.05,   "unit": "m",       "group": "move",   "source": "own tuning" },
+  "skin":              { "value": 0.05,   "min": 0.01,  "max": 0.3,   "step": 0.01,   "unit": "m",       "group": "move",   "source": "own tuning" },
+
+  "boost_speed":       { "value": 16,     "min": 0,     "max": 50,    "step": 0.1,    "unit": "m/s",     "group": "boost",  "source": "own tuning" },
+  "boost_accel":       { "value": 20,     "min": 1,     "max": 150,   "step": 1,      "unit": "m/s²",    "group": "boost",  "source": "own tuning" },
+  "boost_drain":       { "value": 18,     "min": 0,     "max": 100,   "step": 0.5,    "unit": "fuel/s",  "group": "boost",  "source": "own tuning" },
+  "boost_min_fuel":    { "value": 5,      "min": 0,     "max": 100,   "step": 0.5,    "unit": "fuel",    "group": "boost",  "source": "own tuning" },
+
+  "dodge_speed":       { "value": 18,     "min": 0,     "max": 60,    "step": 0.5,    "unit": "m/s",     "group": "dodge",  "source": "own tuning" },
+  "dodge_duration":    { "value": 0.35,   "min": 0,     "max": 2,     "step": 0.01,   "unit": "s",       "group": "dodge",  "source": "own tuning" },
+  "dodge_drag":        { "value": 25,     "min": 0,     "max": 150,   "step": 1,      "unit": "m/s²",    "group": "dodge",  "source": "own tuning" },
+  "dodge_cooldown":    { "value": 1.5,    "min": 0,     "max": 10,    "step": 0.05,   "unit": "s",       "group": "dodge",  "source": "own tuning" },
+  "dodge_fuel_cost":   { "value": 10,     "min": 0,     "max": 100,   "step": 0.5,    "unit": "fuel",    "group": "dodge",  "source": "own tuning" },
+
+  "hover_rise_speed":  { "value": 9,      "min": 0,     "max": 30,    "step": 0.1,    "unit": "m/s",     "group": "hover",  "source": "own tuning" },
+  "hover_rise_time":   { "value": 0.8,    "min": 0,     "max": 3,     "step": 0.01,   "unit": "s",       "group": "hover",  "source": "own tuning" },
+  "hover_sink_speed":  { "value": 0.4,    "min": -5,    "max": 10,    "step": 0.05,   "unit": "m/s",     "group": "hover",  "source": "own tuning" },
+  "hover_response":    { "value": 8,      "min": 0.5,   "max": 30,    "step": 0.5,    "unit": "1/s",     "group": "hover",  "source": "own tuning" },
+  "hover_drain":       { "value": 20,     "min": 0,     "max": 100,   "step": 0.5,    "unit": "fuel/s",  "group": "hover",  "source": "own tuning" },
+  "hover_min_fuel":    { "value": 5,      "min": 0,     "max": 100,   "step": 0.5,    "unit": "fuel",    "group": "hover",  "source": "own tuning" },
+
+  "fuel_max":          { "value": 100,    "min": 1,     "max": 300,   "step": 1,      "unit": "fuel",    "group": "fuel",   "source": "own tuning" },
+  "fuel_regen":        { "value": 25,     "min": 0,     "max": 200,   "step": 0.5,    "unit": "fuel/s",  "group": "fuel",   "source": "own tuning" },
+  "fuel_regen_delay":  { "value": 0.8,    "min": 0,     "max": 5,     "step": 0.05,   "unit": "s",       "group": "fuel",   "source": "own tuning" },
+
+  "heat_max":          { "value": 100,    "min": 1,     "max": 300,   "step": 1,      "unit": "heat",    "group": "heat",   "source": "own tuning" },
+  "fire_rate":         { "value": 8,      "min": 0.5,   "max": 30,    "step": 0.5,    "unit": "shots/s", "group": "heat",   "source": "own tuning" },
+  "heat_per_shot":     { "value": 4.5,    "min": 0,     "max": 50,    "step": 0.1,    "unit": "heat",    "group": "heat",   "source": "own tuning" },
+  "heat_decay":        { "value": 30,     "min": 0,     "max": 200,   "step": 1,      "unit": "heat/s",  "group": "heat",   "source": "own tuning" },
+  "heat_decay_delay":  { "value": 0.4,    "min": 0,     "max": 5,     "step": 0.05,   "unit": "s",       "group": "heat",   "source": "own tuning" },
+  "overheat_decay":    { "value": 20,     "min": 0,     "max": 200,   "step": 1,      "unit": "heat/s",  "group": "heat",   "source": "own tuning" },
+  "overheat_release":  { "value": 25,     "min": 0,     "max": 300,   "step": 1,      "unit": "heat",    "group": "heat",   "source": "own tuning" },
+  "weapon_range":      { "value": 300,    "min": 10,    "max": 1000,  "step": 10,     "unit": "m",       "group": "heat",   "source": "own tuning" },
+
+  "mech_radius":       { "value": 1.4,    "min": 0.3,   "max": 4,     "step": 0.05,   "unit": "m",       "group": "body",   "source": "own tuning" },
+  "mech_height":       { "value": 5,      "min": 1,     "max": 12,    "step": 0.1,    "unit": "m",       "group": "body",   "source": "own tuning" },
+  "eye_height":        { "value": 4.2,    "min": 0.5,   "max": 12,    "step": 0.1,    "unit": "m",       "group": "body",   "source": "own tuning" },
+  "pitch_limit_deg":   { "value": 70,     "min": 10,    "max": 89,    "step": 1,      "unit": "deg",     "group": "body",   "source": "own tuning" },
+
+  "mouse_sensitivity": { "value": 0.0022, "min": 0.0002,"max": 0.01,  "step": 0.0001, "unit": "rad/px",  "group": "camera", "source": "own tuning" },
+  "fov":               { "value": 80,     "min": 40,    "max": 120,   "step": 1,      "unit": "deg",     "group": "camera", "source": "own tuning" },
+  "chase_distance":    { "value": 9,      "min": 0,     "max": 30,    "step": 0.5,    "unit": "m",       "group": "camera", "source": "own tuning" },
+  "chase_height":      { "value": 1.5,    "min": -2,    "max": 10,    "step": 0.1,    "unit": "m",       "group": "camera", "source": "own tuning" }
+}

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mech Sandbox</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #1c2026; font: 12px/1.4 ui-monospace, Menlo, monospace; color: #e8e4d8; }
+    canvas { display: block; }
+    #hud { position: fixed; left: 16px; bottom: 16px; width: 240px; pointer-events: none; }
+    .bar { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+    .bar span { width: 44px; }
+    .bar div { flex: 1; height: 10px; overflow: hidden; background: #0008; border: 1px solid #fff4; }
+    .bar i { display: block; height: 100%; width: 0; }
+    #fuel { background: #5fc4e8; }
+    #heat { background: #f0a040; }
+    #heat.over { background: #ff3b30; }
+    #dodge { background: #b8e070; }
+    #crosshair { position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -4px 0 0 -4px; border: 1px solid #fff; border-radius: 50%; pointer-events: none; }
+    #help { position: fixed; left: 16px; top: 16px; padding: 6px 10px; background: #0009; pointer-events: none; max-width: calc(100vw - 300px); }
+    body.locked #help { display: none; }
+  </style>
+</head>
+<body>
+  <div id="hud">
+    <div id="status"></div>
+    <div class="bar"><span>FUEL</span><div><i id="fuel"></i></div></div>
+    <div class="bar"><span>HEAT</span><div><i id="heat"></i></div></div>
+    <div class="bar"><span>DODGE</span><div><i id="dodge"></i></div></div>
+  </div>
+  <div id="crosshair"></div>
+  <div id="help">Click to play · WASD move · Shift boost · Space hover · Q/E dodge · LMB fire · V camera · R respawn · Esc release mouse</div>
+  <script type="module" src="/web/main.js"></script>
+</body>
+</html>

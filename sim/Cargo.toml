@@ -1,0 +1,23 @@
+[package]
+name = "sim"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+# cdylib for wasm-pack, rlib so a native server binary can depend on this crate later.
+crate-type = ["cdylib", "rlib"]
+
+[features]
+wasm = ["dep:wasm-bindgen"]
+
+[dependencies]
+rapier3d = { version = "0.36.1", features = ["enhanced-determinism"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wasm-bindgen = { version = "0.2.129", optional = true }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1

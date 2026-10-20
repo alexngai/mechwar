@@ -1,0 +1,404 @@
+//! Shared mech sim: pure Rust so a native server can link it later.
+//! The `wasm` feature adds the browser bindings in `wasm.rs`.
+
+use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
+use rapier3d::prelude::*;
+use serde::Deserialize;
+
+#[cfg(feature = "wasm")]
+mod wasm;
+
+pub const TICK_HZ: f32 = 30.0;
+pub const DT: f32 = 1.0 / TICK_HZ;
+
+/// Every sim constant. Values live in `tuning.json` at the repo root, which also records
+/// each value's source and slider range. Client-only keys (camera) are ignored here.
+#[derive(Deserialize, Clone, Debug)]
+pub struct Tuning {
+    pub walk_speed: f32,
+    pub ground_accel: f32,
+    pub ground_decel: f32,
+    pub air_control: f32,
+    pub gravity: f32,
+    pub max_slope_deg: f32,
+    pub step_height: f32,
+    pub snap_distance: f32,
+    pub skin: f32,
+
+    pub boost_speed: f32,
+    pub boost_accel: f32,
+    pub boost_drain: f32,
+    pub boost_min_fuel: f32,
+
+    pub dodge_speed: f32,
+    pub dodge_duration: f32,
+    pub dodge_drag: f32,
+    pub dodge_cooldown: f32,
+    pub dodge_fuel_cost: f32,
+
+    pub hover_rise_speed: f32,
+    pub hover_rise_time: f32,
+    pub hover_sink_speed: f32,
+    pub hover_response: f32,
+    pub hover_drain: f32,
+    pub hover_min_fuel: f32,
+
+    pub fuel_max: f32,
+    pub fuel_regen: f32,
+    pub fuel_regen_delay: f32,
+
+    pub heat_max: f32,
+    pub fire_rate: f32,
+    pub heat_per_shot: f32,
+    pub heat_decay: f32,
+    pub heat_decay_delay: f32,
+    pub overheat_decay: f32,
+    pub overheat_release: f32,
+    pub weapon_range: f32,
+
+    pub mech_radius: f32,
+    pub mech_height: f32,
+    pub eye_height: f32,
+    pub pitch_limit_deg: f32,
+}
+
+impl Tuning {
+    /// Parses the tuning.json format: `{ "name": { "value": 1.0, "source": "...", ... } }`.
+    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
+        #[derive(Deserialize)]
+        struct Entry {
+            value: f32,
+        }
+        let entries: serde_json::Map<String, serde_json::Value> = serde_json::from_str(json)?;
+        let mut values = serde_json::Map::new();
+        for (name, entry) in entries {
+            let Entry { value } = serde_json::from_value(entry)?;
+            values.insert(name, value.into());
+        }
+        serde_json::from_value(values.into())
+    }
+}
+
+impl Default for Tuning {
+    fn default() -> Self {
+        Self::from_json(include_str!("../../tuning.json")).expect("tuning.json is valid")
+    }
+}
+
+/// One tick of player intent. `dodge` is -1/+1 (left/right) only on the tick the key went down.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct Input {
+    pub move_x: f32,
+    pub move_z: f32,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub boost: bool,
+    pub hover: bool,
+    pub dodge: i8,
+    pub fire: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Mech {
+    /// Feet position (bottom of the capsule).
+    pub pos: Vector,
+    pub vel: Vector,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub grounded: bool,
+    pub boosting: bool,
+    pub hovering: bool,
+    pub hover_time: f32,
+    pub fuel: f32,
+    pub fuel_regen_wait: f32,
+    pub dodge_cooldown: f32,
+    pub dodge_time: f32,
+    pub heat: f32,
+    pub heat_wait: f32,
+    pub overheated: bool,
+    pub fire_wait: f32,
+    /// Where the aim ray from the eye lands (for the crosshair).
+    pub aim_point: Vector,
+    /// Set on ticks a shot fired.
+    pub shot: bool,
+}
+
+/// Blockout box: center, half extents, tilt about X in degrees (positive raises the -Z end).
+pub struct Block {
+    pub center: [f32; 3],
+    pub half: [f32; 3],
+    pub tilt_x_deg: f32,
+}
+
+const fn block(center: [f32; 3], half: [f32; 3]) -> Block {
+    Block { center, half, tilt_x_deg: 0.0 }
+}
+
+/// Original blockout arena, 100 x 100 m.
+pub const ARENA: &[Block] = &[
+    block([0.0, -0.5, 0.0], [50.0, 0.5, 50.0]), // floor, top at y=0
+    block([50.5, 4.0, 0.0], [0.5, 4.0, 51.0]),  // perimeter walls
+    block([-50.5, 4.0, 0.0], [0.5, 4.0, 51.0]),
+    block([0.0, 4.0, 50.5], [51.0, 4.0, 0.5]),
+    block([0.0, 4.0, -50.5], [51.0, 4.0, 0.5]),
+    block([20.0, 2.5, -20.0], [10.0, 2.5, 8.0]), // raised platform, top at y=5
+    // Ramp: top surface runs from (z=0, y=0) up to the platform edge (z=-12, y=5); 22.62 deg.
+    Block { center: [20.0, 2.269, -6.096], half: [6.0, 0.25, 6.5], tilt_x_deg: 22.62 },
+    block([-15.0, 2.0, 10.0], [4.0, 2.0, 1.5]), // cover
+    block([-25.0, 2.0, -15.0], [1.5, 2.0, 5.0]),
+    block([10.0, 1.5, 22.0], [3.0, 1.5, 3.0]),
+    block([-5.0, 3.0, -30.0], [2.0, 3.0, 2.0]),
+    block([30.0, 2.0, 20.0], [5.0, 2.0, 1.5]),
+];
+
+const SPAWN: Vector = Vector::new(0.0, 0.1, 25.0);
+
+pub struct Sim {
+    pub tuning: Tuning,
+    pub mech: Mech,
+    world: PhysicsWorld,
+}
+
+impl Sim {
+    pub fn new(tuning: Tuning) -> Self {
+        let mut world = PhysicsWorld::default();
+        for b in ARENA {
+            let [hx, hy, hz] = b.half;
+            let collider = ColliderBuilder::cuboid(hx, hy, hz)
+                .translation(Vector::from_array(b.center))
+                .rotation(Vector::new(b.tilt_x_deg.to_radians(), 0.0, 0.0));
+            world.insert_collider(collider, None);
+        }
+        // Builds the broad phase so scene queries see the static colliders. No physics step runs.
+        world.detect_collisions(&(), &());
+        let mut sim = Self { tuning, mech: Mech::default(), world };
+        sim.reset();
+        sim
+    }
+
+    pub fn reset(&mut self) {
+        self.mech = Mech { pos: SPAWN, fuel: self.tuning.fuel_max, ..Mech::default() };
+    }
+
+    pub fn step(&mut self, input: &Input) {
+        let t = &self.tuning;
+        let m = &mut self.mech;
+
+        m.yaw = input.yaw;
+        let pitch_limit = t.pitch_limit_deg.to_radians();
+        m.pitch = input.pitch.clamp(-pitch_limit, pitch_limit);
+        let yaw_rot = Rotation::from_rotation_y(m.yaw);
+        let forward = yaw_rot * Vector::NEG_Z;
+        let right = yaw_rot * Vector::X;
+        let wish = (forward * input.move_z + right * input.move_x).clamp_length_max(1.0);
+        let has_move = wish.length_squared() > 1e-6;
+
+        m.dodge_cooldown = (m.dodge_cooldown - DT).max(0.0);
+        m.dodge_time = (m.dodge_time - DT).max(0.0);
+
+        // Fuel spenders: boost, dodge, hover.
+        let mut used_fuel = false;
+        // Starting needs boost_min_fuel so an empty tank doesn't flicker boost on each regen tick.
+        m.boosting = input.boost && has_move && m.fuel > 0.0 && (m.boosting || m.fuel >= t.boost_min_fuel);
+        if m.boosting {
+            m.fuel -= t.boost_drain * DT;
+            used_fuel = true;
+        }
+
+        if input.dodge != 0 && m.dodge_cooldown <= 0.0 && m.fuel >= t.dodge_fuel_cost {
+            // Raise velocity along the dodge direction to dodge_speed; keep the rest.
+            let dir = right * f32::from(input.dodge.signum());
+            let along = m.vel.dot(dir);
+            if along < t.dodge_speed {
+                m.vel += dir * (t.dodge_speed - along);
+            }
+            m.fuel -= t.dodge_fuel_cost;
+            used_fuel = true;
+            m.dodge_cooldown = t.dodge_cooldown;
+            m.dodge_time = t.dodge_duration;
+        }
+
+        let can_hover = m.fuel > 0.0 && (m.hovering || m.fuel >= t.hover_min_fuel);
+        if input.hover && can_hover {
+            if !m.hovering {
+                m.hover_time = 0.0;
+            }
+            m.hovering = true;
+            m.fuel -= t.hover_drain * DT;
+            used_fuel = true;
+        } else {
+            m.hovering = false;
+        }
+
+        m.fuel = m.fuel.max(0.0);
+        if used_fuel {
+            m.fuel_regen_wait = t.fuel_regen_delay;
+        } else {
+            m.fuel_regen_wait = (m.fuel_regen_wait - DT).max(0.0);
+            if m.fuel_regen_wait == 0.0 {
+                m.fuel = (m.fuel + t.fuel_regen * DT).min(t.fuel_max);
+            }
+        }
+
+        // Horizontal: move toward the target velocity at a capped acceleration.
+        let target = wish * if m.boosting { t.boost_speed } else { t.walk_speed };
+        let mut accel = if m.dodge_time > 0.0 {
+            t.dodge_drag
+        } else if m.boosting {
+            t.boost_accel
+        } else if has_move {
+            t.ground_accel
+        } else {
+            t.ground_decel
+        };
+        if !m.grounded {
+            accel *= t.air_control;
+        }
+        let h = Vector::new(m.vel.x, 0.0, m.vel.z);
+        let dv = target - h;
+        let h = h + dv.clamp_length_max(accel * DT);
+        m.vel.x = h.x;
+        m.vel.z = h.z;
+
+        // Vertical: authored hover curve while hovering, gravity otherwise.
+        if m.hovering {
+            let target_vy = hover_curve(t, m.hover_time);
+            m.vel.y += (target_vy - m.vel.y) * (t.hover_response * DT).min(1.0);
+            m.hover_time += DT;
+        } else if m.grounded {
+            // Pushing into the floor every tick makes Rapier's slide stall; snap_to_ground holds slopes.
+            m.vel.y = 0.0;
+        } else {
+            m.vel.y -= t.gravity * DT;
+        }
+
+        // Kinematic move against the arena.
+        let radius = t.mech_radius.min(t.mech_height * 0.5);
+        let shape = Capsule::new_y(t.mech_height * 0.5 - radius, radius);
+        let pose = Pose::from_translation(m.pos + Vector::Y * (t.mech_height * 0.5));
+        let controller = KinematicCharacterController {
+            offset: CharacterLength::Absolute(t.skin),
+            max_slope_climb_angle: t.max_slope_deg.to_radians(),
+            min_slope_slide_angle: t.max_slope_deg.to_radians(),
+            snap_to_ground: (t.snap_distance > 0.0).then_some(CharacterLength::Absolute(t.snap_distance)),
+            autostep: (t.step_height > 0.0).then_some(CharacterAutostep {
+                max_height: CharacterLength::Absolute(t.step_height),
+                min_width: CharacterLength::Absolute(radius),
+                include_dynamic_bodies: false,
+            }),
+            ..Default::default()
+        };
+        let queries = self.world.query_pipeline();
+        let max_slope = controller.max_slope_climb_angle;
+        let vel = &mut m.vel;
+        let moved = controller.move_shape(DT, &queries, &shape, &pose, *vel * DT, |hit| {
+            // Drop velocity into walls and ceilings. Walkable slopes are left alone so speed
+            // isn't bled off every tick on ramps. ponytail: this also fires for ledges autostep
+            // then climbs, zeroing speed into the step; skip hits below step_height if curbs get added.
+            let mut n = hit.hit.normal1;
+            if n.dot(hit.translation_remaining) > 0.0 {
+                n = -n; // face the normal against the motion
+            }
+            let into = vel.dot(n);
+            if into < 0.0 && Vector::Y.angle_between(n) > max_slope {
+                *vel -= n * into;
+            }
+        });
+        m.pos += moved.translation;
+        m.grounded = moved.grounded;
+        if m.grounded && m.vel.y < 0.0 {
+            m.vel.y = 0.0;
+        }
+
+        // Aim ray from the eye; doubles as the hitscan for the placeholder weapon.
+        let eye = m.pos + Vector::Y * t.eye_height;
+        let aim_dir = yaw_rot * Rotation::from_rotation_x(m.pitch) * Vector::NEG_Z;
+        let ray = Ray::new(eye, aim_dir);
+        let toi = queries.cast_ray(&ray, t.weapon_range, true).map_or(t.weapon_range, |(_, toi)| toi);
+        m.aim_point = eye + aim_dir * toi;
+
+        // Heat. ponytail: one shot per tick max, so fire_rate above TICK_HZ caps at 30/s.
+        m.fire_wait -= DT;
+        m.shot = input.fire && !m.overheated && m.fire_wait <= 0.0;
+        if m.shot {
+            m.fire_wait += 1.0 / t.fire_rate;
+            m.heat += t.heat_per_shot;
+            m.heat_wait = t.heat_decay_delay;
+            if m.heat >= t.heat_max {
+                m.heat = t.heat_max;
+                m.overheated = true;
+            }
+        } else {
+            m.heat_wait = (m.heat_wait - DT).max(0.0);
+            if m.heat_wait == 0.0 {
+                let decay = if m.overheated { t.overheat_decay } else { t.heat_decay };
+                m.heat = (m.heat - decay * DT).max(0.0);
+            }
+        }
+        m.fire_wait = m.fire_wait.max(0.0);
+        if m.overheated && m.heat <= t.overheat_release {
+            m.overheated = false;
+        }
+    }
+}
+
+/// Target vertical speed `time` seconds into a hover: eases from the rise speed down to a slow sink.
+pub fn hover_curve(t: &Tuning, time: f32) -> f32 {
+    let x = if t.hover_rise_time > 0.0 { (time / t.hover_rise_time).clamp(0.0, 1.0) } else { 1.0 };
+    let s = x * x * (3.0 - 2.0 * x);
+    t.hover_rise_speed * (1.0 - s) - t.hover_sink_speed * s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(sim: &mut Sim, input: Input, ticks: usize) {
+        for _ in 0..ticks {
+            sim.step(&input);
+        }
+    }
+
+    #[test]
+    fn fuel_drain_regen_and_dodge_cooldown() {
+        let t = Tuning::default();
+        let mut sim = Sim::new(t.clone());
+        let idle = Input::default();
+        run(&mut sim, idle, 30);
+        assert!(sim.mech.grounded, "mech should land on the floor");
+        assert_eq!(sim.mech.fuel, t.fuel_max);
+
+        // Boost for 1 s drains boost_drain.
+        run(&mut sim, Input { move_z: 1.0, boost: true, ..idle }, TICK_HZ as usize);
+        let after_boost = sim.mech.fuel;
+        assert!((t.fuel_max - after_boost - t.boost_drain).abs() < 0.01, "fuel {after_boost}");
+
+        // No regen during the delay, then regen at fuel_regen.
+        let delay_ticks = (t.fuel_regen_delay / DT) as usize;
+        run(&mut sim, idle, delay_ticks - 1);
+        assert_eq!(sim.mech.fuel, after_boost, "regenerated during the delay");
+        run(&mut sim, idle, 2);
+        assert!(sim.mech.fuel > after_boost, "no regen after the delay");
+        let before = sim.mech.fuel;
+        run(&mut sim, idle, 12);
+        let regen = sim.mech.fuel - before;
+        assert!((regen - t.fuel_regen * 12.0 * DT).abs() < 0.01, "regen {regen}");
+
+        // Dodge costs fuel and starts the cooldown; a second press during cooldown does nothing.
+        run(&mut sim, idle, 200); // refill
+        let dodge = Input { dodge: 1, ..idle };
+        sim.step(&dodge);
+        assert_eq!(sim.mech.fuel, t.fuel_max - t.dodge_fuel_cost);
+        assert_eq!(sim.mech.dodge_cooldown, t.dodge_cooldown);
+        sim.step(&dodge);
+        assert_eq!(sim.mech.fuel, t.fuel_max - t.dodge_fuel_cost, "dodged during cooldown");
+
+        // Once the cooldown runs out, dodge works again (one tick of float slack).
+        let cooldown_ticks = (t.dodge_cooldown / DT).round() as usize;
+        run(&mut sim, idle, cooldown_ticks);
+        assert!(sim.mech.dodge_cooldown < DT);
+        let before = sim.mech.fuel;
+        sim.step(&dodge);
+        assert_eq!(sim.mech.fuel, before - t.dodge_fuel_cost);
+    }
+}
