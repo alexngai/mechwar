@@ -16,6 +16,8 @@
     #heat { background: #f0a040; }
     #heat.over { background: #ff3b30; }
     #dodge { background: #b8e070; }
+    #hp { background: #e8665f; }
+    #crosshair.hit { border-color: #ff3b30; }
     #crosshair { position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -4px 0 0 -4px; border: 1px solid #fff; border-radius: 50%; pointer-events: none; }
     #help { position: fixed; left: 16px; top: 16px; padding: 6px 10px; background: #0009; pointer-events: none; max-width: calc(100vw - 300px); }
     body.locked #help { display: none; }
@@ -23,7 +25,9 @@
 </head>
 <body>
   <div id="hud">
+    <div id="net"></div>
     <div id="status"></div>
+    <div class="bar"><span>HP</span><div><i id="hp"></i></div></div>
     <div class="bar"><span>FUEL</span><div><i id="fuel"></i></div></div>
     <div class="bar"><span>HEAT</span><div><i id="heat"></i></div></div>
     <div class="bar"><span>DODGE</span><div><i id="dodge"></i></div></div>

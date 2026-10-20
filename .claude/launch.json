@@ -4,8 +4,29 @@
     {
       "name": "sandbox",
       "runtimeExecutable": "sh",
-      "runtimeArgs": ["-c", "PATH=\"$HOME/.cargo/bin:$PATH\" SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk npm run dev -- --port 5173 --strictPort"],
+      "runtimeArgs": [
+        "-c",
+        "PATH=\"$HOME/.cargo/bin:$PATH\" SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk npm run dev -- --port 5173 --strictPort"
+      ],
       "port": 5173
+    },
+    {
+      "name": "server",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "PATH=\"$HOME/.cargo/bin:$PATH\" SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk npm run server"
+      ],
+      "port": 9001
+    },
+    {
+      "name": "server-80ms",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "PATH=\"$HOME/.cargo/bin:$PATH\" SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk LAG_MS=40 npm run server"
+      ],
+      "port": 9001
     }
   ]
 }

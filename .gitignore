@@ -1,6 +1,6 @@
 node_modules/
 dist/
-sim/target/
+/target/
 sim/pkg/
 .omc/
 .sessionlog/

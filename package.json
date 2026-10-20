@@ -6,7 +6,8 @@
     "wasm": "wasm-pack build sim --target web --release --no-pack -- --features wasm",
     "dev": "npm run wasm && vite",
     "build": "npm run wasm && vite build",
-    "test": "cargo test --manifest-path sim/Cargo.toml"
+    "server": "cargo run -p server --release",
+    "test": "cargo test"
   },
   "dependencies": {
     "lil-gui": "0.21.0",
