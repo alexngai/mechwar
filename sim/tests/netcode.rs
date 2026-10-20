@@ -164,3 +164,40 @@ fn rewind_is_what_makes_shots_land() {
     let (hits, shots, ..) = duel(true, 50, 25..40, run);
     assert!(shots >= 3 && hits == 0, "without rewind: {hits}/{shots}");
 }
+
+fn send(game: &mut Game, id: u8, seq: &mut u32, n: u32, input: Input) {
+    for _ in 0..n {
+        *seq += 1;
+        game.push_input(id, ClientMsg { seq: *seq, input, view_tick: 0.0 });
+    }
+}
+
+#[test]
+fn input_backlog_drains_and_rate_is_capped() {
+    let t = Tuning::default();
+    let mut game = Game::new(t.clone());
+    let id = game.join().unwrap();
+    let (mut seq, idle) = (0, Input::default());
+
+    // A frame hitch: one tick gets no input, the next gets two, then 1 per tick again. The
+    // backlog must clear, not linger as permanent extra latency.
+    for n in [1, 1, 0, 2] {
+        send(&mut game, id, &mut seq, n, idle);
+        game.step();
+    }
+    for _ in 0..5 {
+        send(&mut game, id, &mut seq, 1, idle);
+        game.step();
+    }
+    assert_eq!(game.snapshot(id).ack_seq, seq, "inputs still queued after a one-off burst");
+
+    // A client sending at twice the tick rate must not move faster than walk speed.
+    let start = game.snapshot(id).players[0].mech.pos;
+    let walk = Input { move_z: 1.0, ..idle };
+    for _ in 0..60 {
+        send(&mut game, id, &mut seq, 2, walk);
+        game.step();
+    }
+    let moved = (game.snapshot(id).players[0].mech.pos - start).length();
+    assert!(moved < t.walk_speed * 2.0 * 1.1, "moved {moved} m in 2 s sending inputs at 2x");
+}

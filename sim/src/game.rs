@@ -11,8 +11,14 @@ use crate::{Arena, Mech, TICK_HZ, Tuning, Vector, aim_ray, mech_capsule, spawn_m
 
 pub const MAX_PLAYERS: usize = 2;
 const SPAWNS: [Vector; MAX_PLAYERS] = [Vector::new(0.0, 0.1, 40.0), Vector::new(0.0, 0.1, -40.0)];
-/// Inputs queued beyond this drop oldest first, so a client can't bank time to speed up.
+/// Inputs queued beyond this drop oldest first.
 const MAX_QUEUED: usize = 8;
+/// Input credit earned per tick. 2% over real time lets a client with a slightly fast clock drain
+/// its backlog, and caps what sending inputs too fast can gain at +2% speed.
+const CREDIT_PER_TICK: f32 = 1.02;
+/// Credit banked while no inputs arrive (about the client's 0.25 s catch-up cap), so the burst
+/// after a hitch is applied at once instead of lingering as extra latency.
+const MAX_CREDIT: f32 = 8.0;
 /// Furthest back a shot may rewind its targets.
 const MAX_REWIND_TICKS: f32 = 0.3 * TICK_HZ;
 const HISTORY_TICKS: usize = TICK_HZ as usize;
@@ -21,6 +27,8 @@ struct Player {
     id: u8,
     mech: Mech,
     inputs: VecDeque<ClientMsg>,
+    /// Inputs this player may still apply; see CREDIT_PER_TICK.
+    credit: f32,
     ack_seq: u32,
     /// (tick, feet position, alive) at the end of recent ticks, for rewinding.
     history: VecDeque<(u32, Vector, bool)>,
@@ -50,6 +58,7 @@ impl Game {
             id,
             mech: spawn_mech(&self.tuning, SPAWNS[usize::from(id)]),
             inputs: VecDeque::new(),
+            credit: 0.0,
             ack_seq: 0,
             history: VecDeque::new(),
             kills: 0,
@@ -85,14 +94,16 @@ impl Game {
 
         // Inputs are applied exactly as the client predicted them, never guessed or repeated,
         // so reconciliation corrections stay at zero over a reliable transport.
+        // ponytail: no jitter buffer, so while a client's send phase sits on the tick boundary
+        // remote viewers can see 0- and 2-step ticks; add an adaptive buffer (or client time
+        // dilation) if that shows in play.
         for i in 0..self.players.len() {
-            // One input per tick, two while catching up after a burst. ponytail: an empty queue
-            // leaves the mech still for that tick, which can stutter on jittery links; add a
-            // 1-2 input jitter buffer if playtests show it.
-            let n = if self.players[i].inputs.len() > 2 { 2 } else { 1 };
-            for _ in 0..n {
+            let p = &mut self.players[i];
+            p.credit = (p.credit + CREDIT_PER_TICK).min(MAX_CREDIT);
+            while self.players[i].credit >= 1.0 {
                 let Some(msg) = self.players[i].inputs.pop_front() else { break };
                 let p = &mut self.players[i];
+                p.credit -= 1.0;
                 p.ack_seq = msg.seq;
                 step_mech(&self.arena, &self.tuning, &mut p.mech, &msg.input);
                 if p.mech.shot {
