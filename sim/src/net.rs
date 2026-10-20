@@ -1,13 +1,20 @@
 //! Wire protocol: postcard in WebSocket binary frames. Both ends link this crate, so the
 //! format can't drift between client and server.
 
-use crate::{Input, Mech, Vector};
+use crate::{Input, Mech, MechClass, Vector};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum ClientMsg {
+    Input(InputMsg),
+    /// Mech class for the next spawn (or right away, before the player's first input).
+    Class(MechClass),
+}
 
 /// One per client tick. `view_tick` is the fractional server tick the client was rendering
 /// remote mechs at when it sampled this input; the server rewinds targets to it for hits.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub struct ClientMsg {
+pub struct InputMsg {
     pub seq: u32,
     pub input: Input,
     pub view_tick: f32,
@@ -36,6 +43,7 @@ pub struct Snapshot {
 pub struct PlayerNet {
     pub id: u8,
     pub team: u8,
+    pub class: MechClass,
     pub bot: bool,
     pub kills: u16,
     pub deaths: u16,

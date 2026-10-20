@@ -1,0 +1,22 @@
+{
+  "A": {
+    "name": "Wisp", "role": "fast, fragile, quick dodge", "source": "own tuning",
+    "overrides": {
+      "walk_speed": 11, "boost_speed": 19, "ground_accel": 40, "dodge_cooldown": 1.1,
+      "health_max": 70, "mech_radius": 1.1, "mech_height": 4.2, "eye_height": 3.6,
+      "fire_rate": 10, "shot_damage": 4.5, "heat_per_shot": 4
+    }
+  },
+  "B": {
+    "name": "Lancer", "role": "balanced", "source": "own tuning",
+    "overrides": {}
+  },
+  "C": {
+    "name": "Bulwark", "role": "slow, tough, heavy cannon", "source": "own tuning",
+    "overrides": {
+      "walk_speed": 7, "boost_speed": 13, "ground_accel": 22, "dodge_speed": 14, "dodge_cooldown": 2.0,
+      "health_max": 150, "mech_radius": 1.8, "mech_height": 5.8, "eye_height": 4.9,
+      "fire_rate": 5, "shot_damage": 11, "heat_per_shot": 7, "heat_max": 120
+    }
+  }
+}

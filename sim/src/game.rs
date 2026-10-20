@@ -8,8 +8,8 @@ use rapier3d::parry::query::RayCast;
 use rapier3d::prelude::Pose;
 
 use crate::bot::{self, Bot};
-use crate::net::{ClientMsg, Event, MatchState, MechView, PlayerNet, Snapshot};
-use crate::{Arena, Mech, TICK_HZ, Tuning, Vector, aim_ray, mech_capsule, spawn_mech, step_mech};
+use crate::net::{Event, InputMsg, MatchState, MechView, PlayerNet, Snapshot};
+use crate::{Arena, Mech, MechClass, TICK_HZ, Tuning, Vector, aim_ray, mech_capsule, spawn_mech, step_mech};
 
 pub const TEAM_SIZE: usize = 4;
 pub const MAX_PLAYERS: usize = 2 * TEAM_SIZE;
@@ -33,8 +33,11 @@ struct Player {
     team: u8,
     /// Index into the team's spawn points, used for the first spawn of each match.
     slot: usize,
+    class: MechClass,
+    /// Class to take at the next spawn.
+    next_class: MechClass,
     mech: Mech,
-    inputs: VecDeque<ClientMsg>,
+    inputs: VecDeque<InputMsg>,
     /// Inputs this player may still apply; see CREDIT_PER_TICK.
     credit: f32,
     ack_seq: u32,
@@ -54,7 +57,8 @@ enum Phase {
 }
 
 pub struct Game {
-    pub tuning: Tuning,
+    /// Tuning per class, indexed by `MechClass::index`.
+    classes: [Tuning; 3],
     pub tick: u32,
     /// Fill empty slots with bots while at least one human is connected.
     pub bots: bool,
@@ -72,7 +76,7 @@ pub struct Game {
 impl Game {
     pub fn new(tuning: Tuning) -> Self {
         Self {
-            tuning,
+            classes: MechClass::ALL.map(|c| tuning.for_class(c)),
             tick: 0,
             bots: true,
             score_limit: 25,
@@ -94,21 +98,33 @@ impl Game {
             let bot = self.players.iter().position(|p| p.team == team && p.bot.is_some())?;
             self.players.remove(bot);
         }
-        self.add_player(team, None)
+        self.add_player(team, None, MechClass::B)
+    }
+
+    /// Class for this player's next spawn; immediate if they haven't moved yet.
+    pub fn pick_class(&mut self, id: u8, class: MechClass) {
+        let Some(p) = self.players.iter_mut().find(|p| p.id == id) else { return };
+        p.next_class = class;
+        if p.ack_seq == 0 && p.mech.health > 0.0 {
+            p.class = class;
+            p.mech = spawn_mech(&self.classes[class.index()], p.mech.pos);
+        }
     }
 
     fn team_count(&self, team: u8) -> usize {
         self.players.iter().filter(|p| p.team == team).count()
     }
 
-    fn add_player(&mut self, team: u8, bot: Option<Bot>) -> Option<u8> {
+    fn add_player(&mut self, team: u8, bot: Option<Bot>, class: MechClass) -> Option<u8> {
         let id = (0..MAX_PLAYERS as u8).find(|id| !self.players.iter().any(|p| p.id == *id))?;
         let slot = (0..TEAM_SIZE).find(|s| !self.players.iter().any(|p| p.team == team && p.slot == *s))?;
         self.players.push(Player {
             id,
             team,
             slot,
-            mech: spawn_mech(&self.tuning, spawn_point(team, slot)),
+            class,
+            next_class: class,
+            mech: spawn_mech(&self.classes[class.index()], spawn_point(team, slot)),
             inputs: VecDeque::new(),
             credit: 0.0,
             ack_seq: 0,
@@ -125,7 +141,7 @@ impl Game {
         self.players.retain(|p| p.id != id);
     }
 
-    pub fn push_input(&mut self, id: u8, msg: ClientMsg) {
+    pub fn push_input(&mut self, id: u8, msg: InputMsg) {
         if let Some(p) = self.players.iter_mut().find(|p| p.id == id) {
             p.inputs.push_back(msg);
             if p.inputs.len() > MAX_QUEUED {
@@ -144,7 +160,8 @@ impl Game {
             for team in 0..2 {
                 while self.bots && self.team_count(team) < TEAM_SIZE {
                     let seed = u64::from(self.tick) << 8 | self.players.len() as u64;
-                    self.add_player(team, Some(Bot::new(seed)));
+                    let class = MechClass::ALL[(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33) as usize % 3];
+                    self.add_player(team, Some(Bot::new(seed)), class);
                 }
             }
         } else {
@@ -162,7 +179,8 @@ impl Game {
             if self.players[i].respawn_at.is_some_and(|at| self.tick >= at) {
                 let pos = self.respawn_point(self.players[i].team);
                 let p = &mut self.players[i];
-                p.mech = spawn_mech(&self.tuning, pos);
+                p.class = p.next_class;
+                p.mech = spawn_mech(&self.classes[p.class.index()], pos);
                 p.respawn_at = None;
             }
         }
@@ -174,18 +192,19 @@ impl Game {
             if me.bot.is_none() {
                 continue;
             }
+            let t = &self.classes[me.class.index()];
             let enemies = || self.players.iter().filter(|p| p.team != me.team && p.mech.health > 0.0);
             let dist = |p: &&Player| p.mech.pos.distance(me.mech.pos);
             let target = enemies()
-                .filter(|p| bot::sees(&self.arena, &self.tuning, &me.mech, &p.mech))
+                .filter(|p| bot::sees(&self.arena, t, &me.mech, &p.mech))
                 .min_by(|a, b| dist(a).total_cmp(&dist(b)))
                 .or_else(|| enemies().min_by(|a, b| dist(a).total_cmp(&dist(b))))
                 .map(|p| p.mech);
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
-            let input = bot.think(&self.arena, &self.tuning, &p.mech, target.as_ref(), self.tick);
+            let input = bot.think(&self.arena, t, &p.mech, target.as_ref(), self.tick);
             bot.seq += 1;
-            p.inputs.push_back(ClientMsg { seq: bot.seq, input, view_tick: self.tick as f32 });
+            p.inputs.push_back(InputMsg { seq: bot.seq, input, view_tick: self.tick as f32 });
         }
 
         // Inputs are applied exactly as the client predicted them, never guessed or repeated,
@@ -201,7 +220,7 @@ impl Game {
                 let p = &mut self.players[i];
                 p.credit -= 1.0;
                 p.ack_seq = msg.seq;
-                step_mech(&self.arena, &self.tuning, &mut p.mech, &msg.input);
+                step_mech(&self.arena, &self.classes[p.class.index()], &mut p.mech, &msg.input);
                 if p.mech.shot {
                     self.resolve_shot(i, msg.view_tick);
                 }
@@ -221,7 +240,8 @@ impl Game {
         self.scores = [0; 2];
         self.phase = Phase::Playing { started_at: self.tick };
         for p in &mut self.players {
-            p.mech = spawn_mech(&self.tuning, spawn_point(p.team, p.slot));
+            p.class = p.next_class;
+            p.mech = spawn_mech(&self.classes[p.class.index()], spawn_point(p.team, p.slot));
             p.respawn_at = None;
             p.kills = 0;
             p.deaths = 0;
@@ -256,21 +276,22 @@ impl Game {
     /// Hitscan from the shooter's eye against enemies rewound to where the shooter saw them.
     /// Teammates are passed through: no friendly fire.
     fn resolve_shot(&mut self, shooter: usize, view_tick: f32) {
-        let t = &self.tuning;
+        let shooter_class = self.players[shooter].class;
+        let t = &self.classes[shooter_class.index()];
         let (m, team) = (&self.players[shooter].mech, self.players[shooter].team);
         let ray = aim_ray(t, m);
         // step_mech already cast this ray against the arena; aim_point is where it stopped.
         let mut best = (m.aim_point - ray.origin).length();
         let mut hit = None;
         let view = view_tick.clamp(self.tick as f32 - MAX_REWIND_TICKS, self.tick as f32);
-        let capsule = mech_capsule(t);
         for (j, target) in self.players.iter().enumerate() {
             if target.team == team || target.mech.health <= 0.0 {
                 continue;
             }
             let Some(pos) = rewind(&target.history, view) else { continue };
-            let pose = Pose::from_translation(pos + Vector::Y * (t.mech_height * 0.5));
-            if let Some(toi) = capsule.cast_ray(&pose, &ray, best, true) {
+            let tt = &self.classes[target.class.index()];
+            let pose = Pose::from_translation(pos + Vector::Y * (tt.mech_height * 0.5));
+            if let Some(toi) = mech_capsule(tt).cast_ray(&pose, &ray, best, true) {
                 best = toi;
                 hit = Some(j);
             }
@@ -283,8 +304,8 @@ impl Game {
         self.events.push(Event::Shot { shooter: shooter_id, end, hit: hit.map(|j| self.players[j].id) });
         let Some(j) = hit else { return };
 
-        let damage = self.tuning.shot_damage;
-        let respawn_at = self.tick + secs(self.tuning.respawn_delay);
+        let damage = self.classes[shooter_class.index()].shot_damage;
+        let respawn_at = self.tick + secs(self.classes[self.players[j].class.index()].respawn_delay);
         let target = &mut self.players[j];
         target.mech.health -= damage;
         if target.mech.health <= 0.0 {
@@ -318,6 +339,7 @@ impl Game {
                 .map(|p| PlayerNet {
                     id: p.id,
                     team: p.team,
+                    class: p.class,
                     bot: p.bot.is_some(),
                     kills: p.kills,
                     deaths: p.deaths,

@@ -2,23 +2,31 @@ import * as THREE from 'three';
 import GUI from 'lil-gui';
 import init, { WasmNetClient, WasmSim, arena, tick_dt } from '../sim/pkg/sim.js';
 import tuning from '../tuning.json';
+import classes from '../classes.json';
 import { Effects } from './fx.js';
 import { Mech } from './mech.js';
 
 await init();
 const DT = tick_dt();
-const T = (name) => tuning[name].value;
+// Mech classes A, B, C by index. tuning.json is B; classes.json overrides values per class.
+const CLASS_KEYS = ['A', 'B', 'C'];
+let classIdx = 1; // offline: the picked class; online: what the server says we are
+const classValue = (cls, name) => classes[CLASS_KEYS[cls]].overrides[name] ?? tuning[name].value;
+const T = (name) => classValue(classIdx, name);
 
 // ?server=ws://host:port plays online against the authoritative server; otherwise offline sandbox.
 const server = new URLSearchParams(location.search).get('server');
 const net = server ? new WasmNetClient() : null;
 const sim = net ? null : new WasmSim(JSON.stringify(tuning));
 const game = net ?? sim;
-let ws = null, connection = server ? 'connecting' : '';
+let ws = null, connection = server ? 'connecting' : '', picked = null;
 if (net) {
   ws = new WebSocket(server);
   ws.binaryType = 'arraybuffer';
-  ws.onopen = () => { connection = ''; };
+  ws.onopen = () => {
+    connection = '';
+    if (picked !== null) ws.send(net.pick_class(picked));
+  };
   ws.onmessage = (e) => net.receive(new Uint8Array(e.data), performance.now());
   ws.onclose = () => { connection = 'disconnected'; };
 }
@@ -57,8 +65,8 @@ grid.position.y = 0.01;
 scene.add(grid);
 
 const fx = new Effects(scene);
-const me = new Mech(scene, fx);
-// Other players by id: their mech, team, and a velocity estimated from interpolated motion.
+let me = new Mech(scene, fx, 'B'), meClass = 1;
+// Other players by id: their mech, team, class, and a velocity estimated from interpolated motion.
 const remotes = new Map();
 const shots = []; // own predicted shots, drawn once this frame's pose is set
 let hitUntil = 0, hurt = 0, message = '', messageUntil = 0;
@@ -67,7 +75,8 @@ let hitUntil = 0, hurt = 0, message = '', messageUntil = 0;
 const keys = new Set();
 let yaw = 0, pitch = 0, dodge = 0, firing = false, cockpit = false;
 const locked = () => document.pointerLockElement === renderer.domElement;
-renderer.domElement.addEventListener('click', () => renderer.domElement.requestPointerLock());
+// Chrome rejects a re-lock right after Esc; the next click simply tries again.
+renderer.domElement.addEventListener('click', () => renderer.domElement.requestPointerLock()?.catch?.(() => {}));
 document.addEventListener('pointerlockchange', () => {
   document.body.classList.toggle('locked', locked());
   if (!locked()) firing = false;
@@ -89,6 +98,9 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyE') dodge = 1;
   if (e.code === 'KeyR' && sim) { sim.reset(); prev = curr = sim.state(); }
   if (e.code === 'KeyV') cockpit = !cockpit;
+  if (e.code === 'KeyC' && picked !== null) pickerOpen = !pickerOpen;
+  const digit = ['Digit1', 'Digit2', 'Digit3'].indexOf(e.code);
+  if (digit >= 0 && !$('picker').hidden) pick(digit);
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
 addEventListener('blur', () => { keys.clear(); firing = false; });
@@ -112,6 +124,33 @@ gui.add({ copy: () => navigator.clipboard.writeText(JSON.stringify(tuning, null,
 const $ = (id) => document.getElementById(id);
 const hud = { status: $('status'), net: $('net'), score: $('score'), banner: $('banner'), damage: $('damage'), fuel: $('fuel'), heat: $('heat'), dodge: $('dodge'), hp: $('hp'), crosshair: $('crosshair') };
 
+// --- Class picker ----------------------------------------------------------
+// Shown before the first deploy and on death; C reopens it. Online the pick applies on the next
+// spawn (or right away before the first input), so inputs are held until a class is chosen.
+let pickerOpen = true;
+CLASS_KEYS.forEach((key, i) => {
+  const c = classes[key], v = (name) => classValue(i, name);
+  const card = document.createElement('button');
+  card.className = 'card';
+  card.innerHTML = `<span class="key">${i + 1}</span><b>${c.name}</b>${c.role}<dl>
+    <dt>HP</dt><dd>${v('health_max')}</dd><dt>Speed</dt><dd>${v('walk_speed')} m/s</dd>
+    <dt>DPS</dt><dd>${Math.round(v('fire_rate') * v('shot_damage'))}</dd></dl>`;
+  card.addEventListener('click', () => pick(i));
+  $('cards').append(card);
+});
+function pick(i) {
+  pickerOpen = false;
+  picked = i;
+  if (net) {
+    if (ws.readyState === WebSocket.OPEN) ws.send(net.pick_class(i));
+  } else {
+    classIdx = i;
+    sim.set_class(i);
+    sim.reset();
+    prev = curr = sim.state();
+  }
+}
+
 // --- Fixed-step sim, interpolated render ----------------------------------
 let prev = game.state(), curr = prev, acc = 0, last = performance.now();
 const eye = new THREE.Vector3(), offset = new THREE.Vector3(), aim = new THREE.Vector3();
@@ -123,6 +162,11 @@ function frame(now) {
   acc += dt;
   last = now;
   while (acc >= DT) {
+    if (net && picked === null) {
+      prev = curr = net.state();
+      acc -= DT;
+      continue;
+    }
     const input = [axis('KeyD', 'KeyA'), axis('KeyW', 'KeyS'), yaw, pitch,
       keys.has('ShiftLeft') || keys.has('ShiftRight'), keys.has('Space'), dodge, firing];
     if (net) {
@@ -140,14 +184,23 @@ function frame(now) {
   }
   const a = acc / DT;
   const lerp = (i) => prev[i] + (curr[i] - prev[i]) * a;
-  const scale = T('mech_height') / 5;
-  const [myId, , , , , , myTeam] = net ? net.hud() : [-1, 0, 0, 0, 0, 0, -1];
+  const hudState = net ? net.hud() : null;
+  const [myId, myTeam] = hudState ? [hudState[0], hudState[6]] : [-1, -1];
+  if (hudState) classIdx = hudState[12];
+  if (meClass !== classIdx) {
+    me.dispose();
+    me = new Mech(scene, fx, CLASS_KEYS[classIdx]);
+    meClass = classIdx;
+  }
+  // Dying online opens the picker once; the pick applies on respawn.
+  const alive = curr[S.HEALTH] > 0;
+  if (net && picked !== null && !alive && prev[S.HEALTH] > 0) pickerOpen = true;
 
   pos.set(lerp(S.POS), lerp(S.POS + 1), lerp(S.POS + 2));
   me.setTeam(myTeam);
   me.root.visible = !cockpit;
   me.update(dt, {
-    pos, yaw, pitch, scale,
+    pos, yaw, pitch, scale: T('mech_height') / me.height,
     vel: vel.set(lerp(S.VEL), lerp(S.VEL + 1), lerp(S.VEL + 2)),
     grounded: !!curr[S.GROUNDED], boosting: !!curr[S.BOOSTING], hovering: !!curr[S.HOVERING],
     health: curr[S.HEALTH], heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
@@ -155,10 +208,14 @@ function frame(now) {
 
   if (net) {
     const r = net.remotes(now), live = new Set();
-    for (let i = 0; i < r.length; i += 11) {
-      const [id, team, x, y, z, ryaw, rpitch, health, boosting, hovering] = r.subarray(i, i + 11);
+    for (let i = 0; i < r.length; i += 12) {
+      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering] = r.subarray(i, i + 12);
       let e = remotes.get(id);
-      if (!e) remotes.set(id, (e = { mech: new Mech(scene, fx), team, pos: new THREE.Vector3(x, y, z), vel: new THREE.Vector3() }));
+      if (e && e.cls !== cls) {
+        e.mech.dispose();
+        e = null;
+      }
+      if (!e) remotes.set(id, (e = { mech: new Mech(scene, fx, CLASS_KEYS[cls]), cls, team, pos: new THREE.Vector3(x, y, z), vel: new THREE.Vector3() }));
       live.add(id);
       // Gait speed comes from interpolated motion; a jump (respawn, slot reuse) resets it.
       seen.set(x, y, z);
@@ -168,7 +225,7 @@ function frame(now) {
       e.team = team;
       e.mech.setTeam(team);
       e.mech.update(dt, {
-        pos: e.pos, yaw: ryaw, pitch: rpitch, scale, vel: e.vel,
+        pos: e.pos, yaw: ryaw, pitch: rpitch, scale: classValue(cls, 'mech_height') / e.mech.height, vel: e.vel,
         grounded: !hovering && Math.abs(e.vel.y) < 1.5, boosting: !!boosting, hovering: !!hovering, health,
       });
     }
@@ -196,9 +253,9 @@ function frame(now) {
     ray.direction.normalize();
     for (const e of remotes.values()) {
       if (!e.mech.alive || e.team === myTeam) continue;
-      for (const h of [1.6, 3.4]) {
-        sphere.center.copy(e.pos).y += h * scale;
-        sphere.radius = T('mech_radius') * scale;
+      for (const h of [0.32, 0.68]) {
+        sphere.center.copy(e.pos).y += h * classValue(e.cls, 'mech_height');
+        sphere.radius = classValue(e.cls, 'mech_radius');
         if (ray.intersectSphere(sphere, crossing)) reach = Math.min(reach, crossing.distanceTo(ray.origin));
       }
     }
@@ -223,7 +280,9 @@ function frame(now) {
 
   const speed = Math.hypot(curr[S.VEL], curr[S.VEL + 2]);
   const flags = [curr[S.BOOSTING] && 'BOOST', curr[S.HOVERING] && 'HOVER', !curr[S.GROUNDED] && 'AIR', curr[S.OVERHEATED] && 'OVERHEAT'].filter(Boolean);
-  hud.status.textContent = `${speed.toFixed(1)} m/s  y ${curr[S.POS + 1].toFixed(1)}  ${flags.join(' ')}`;
+  $('picker').hidden = !pickerOpen;
+  $('picker-note').textContent = picked === null ? '' : alive ? 'Applies on your next respawn · C to close' : 'Applies on respawn';
+  hud.status.textContent = `${classes[CLASS_KEYS[classIdx]].name}  ${speed.toFixed(1)} m/s  y ${curr[S.POS + 1].toFixed(1)}  ${flags.join(' ')}`;
   hud.fuel.style.width = `${(100 * curr[S.FUEL]) / T('fuel_max')}%`;
   hud.heat.style.width = `${(100 * curr[S.HEAT]) / T('heat_max')}%`;
   hud.heat.classList.toggle('over', !!curr[S.OVERHEATED]);
@@ -231,7 +290,7 @@ function frame(now) {
   hud.hp.style.width = `${(100 * curr[S.HEALTH]) / T('health_max')}%`;
   hud.crosshair.classList.toggle('hit', now < hitUntil);
   if (net) {
-    const [, kills, deaths, ping, correction, full, team, blue, red, secondsLeft, ended, winner] = net.hud();
+    const [, kills, deaths, ping, correction, full, team, blue, red, secondsLeft, ended, winner] = hudState;
     const state = full ? 'server full' : connection || (curr[S.HEALTH] <= 0 ? 'DESTROYED, respawning' : '');
     hud.net.textContent = `K ${kills}  D ${deaths}  ping ${Math.round(ping)} ms  corr ${correction.toFixed(3)} m  ${now < messageUntil ? message : state}`;
     const clock = `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')}`;

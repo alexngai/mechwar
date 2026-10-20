@@ -3,16 +3,18 @@
 
 use std::collections::VecDeque;
 
-use crate::net::{self, ClientMsg, Event, MatchState, PlayerNet, ServerMsg, Snapshot};
-use crate::{Arena, DT, Input, Mech, Tuning, step_mech};
+use crate::net::{self, ClientMsg, Event, InputMsg, MatchState, PlayerNet, ServerMsg, Snapshot};
+use crate::{Arena, DT, Input, Mech, MechClass, Tuning, step_mech};
 
 /// Remote mechs are drawn this many ticks behind the newest snapshot, to ride out jitter.
 pub const INTERP_TICKS: f32 = 3.0;
 const SNAPSHOT_BUFFER: usize = 30;
 
 pub struct NetClient {
-    /// Always the compiled-in tuning.json, the same as the server's: prediction needs identical values.
-    pub tuning: Tuning,
+    /// Compiled-in tuning.json per class, the same as the server's: prediction needs identical values.
+    classes: [Tuning; 3],
+    /// Own class as the server last reported it; prediction uses its tuning.
+    pub class: MechClass,
     arena: Arena,
     pub id: Option<u8>,
     pub full: bool,
@@ -39,7 +41,8 @@ pub struct NetClient {
 impl Default for NetClient {
     fn default() -> Self {
         Self {
-            tuning: Tuning::default(),
+            classes: MechClass::ALL.map(|c| Tuning::default().for_class(c)),
+            class: MechClass::B,
             arena: Arena::default(),
             id: None,
             full: false,
@@ -65,9 +68,14 @@ impl NetClient {
     /// is a dead default, so prediction is a no-op and the server's state takes over.
     pub fn tick(&mut self, input: Input, now_ms: f64) -> Vec<u8> {
         self.seq += 1;
-        step_mech(&self.arena, &self.tuning, &mut self.mech, &input);
+        step_mech(&self.arena, &self.classes[self.class.index()], &mut self.mech, &input);
         self.pending.push_back((self.seq, input, now_ms));
-        net::encode(&ClientMsg { seq: self.seq, input, view_tick: self.render_tick(now_ms) })
+        net::encode(&ClientMsg::Input(InputMsg { seq: self.seq, input, view_tick: self.render_tick(now_ms) }))
+    }
+
+    /// Message asking for `class` at the next spawn (or now, before the first input).
+    pub fn pick_class(&self, class: MechClass) -> Vec<u8> {
+        net::encode(&ClientMsg::Class(class))
     }
 
     pub fn receive(&mut self, bytes: &[u8], now_ms: f64) {
@@ -98,8 +106,9 @@ impl NetClient {
             // Reconcile: take the server's state at ack_seq and replay what it hasn't seen yet.
             let predicted = self.mech.pos;
             self.mech = s.me;
+            self.class = me.class;
             for (_, input, _) in &self.pending {
-                step_mech(&self.arena, &self.tuning, &mut self.mech, input);
+                step_mech(&self.arena, &self.classes[self.class.index()], &mut self.mech, input);
             }
             self.correction = if self.synced { (self.mech.pos - predicted).length() } else { 0.0 };
             self.synced = true;

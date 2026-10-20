@@ -6,8 +6,8 @@ use std::ops::Range;
 
 use sim::client::NetClient;
 use sim::game::Game;
-use sim::net::{self, ClientMsg, Event, ServerMsg};
-use sim::{DT, Input, Tuning, Vector};
+use sim::net::{self, ClientMsg, Event, InputMsg, ServerMsg};
+use sim::{DT, Input, MechClass, TICK_HZ, Tuning, Vector};
 
 /// One-way latency: 67 ms each way, about 133 ms round trip.
 const LATENCY_TICKS: u32 = 2;
@@ -25,11 +25,18 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
+        Self::with_classes([MechClass::B; 2])
+    }
+
+    /// Classes are picked before any input, so both spawn in them.
+    fn with_classes(classes: [MechClass; 2]) -> Self {
         let mut game = Game::new(Tuning::default());
         game.bots = false;
-        let clients = (0..2)
-            .map(|_| {
+        let clients = classes
+            .into_iter()
+            .map(|class| {
                 let id = game.join().expect("room for two");
+                game.pick_class(id, class);
                 let mut c = NetClient::default();
                 c.receive(&net::encode(&ServerMsg::Welcome { id }), 0.0);
                 (id, c)
@@ -50,7 +57,7 @@ impl Harness {
         }
         while self.up.front().is_some_and(|m| m.0 <= self.tick) {
             let (_, id, bytes) = self.up.pop_front().unwrap();
-            let mut msg: ClientMsg = net::decode(&bytes).unwrap();
+            let Some(ClientMsg::Input(mut msg)) = net::decode(&bytes) else { panic!("clients only send inputs here") };
             if self.no_rewind {
                 msg.view_tick = f32::MAX;
             }
@@ -71,7 +78,8 @@ impl Harness {
 
 #[test]
 fn prediction_matches_server() {
-    let mut h = Harness::new();
+    // Light and heavy: prediction must use the same class tuning as the server.
+    let mut h = Harness::with_classes([MechClass::A, MechClass::C]);
     let mut last: Vec<Vector> = h.clients.iter().map(|c| c.1.mech.pos).collect();
     let mut travelled = [0f32; 2];
     let mut max_correction = 0f32;
@@ -169,7 +177,7 @@ fn rewind_is_what_makes_shots_land() {
 fn send(game: &mut Game, id: u8, seq: &mut u32, n: u32, input: Input) {
     for _ in 0..n {
         *seq += 1;
-        game.push_input(id, ClientMsg { seq: *seq, input, view_tick: 0.0 });
+        game.push_input(id, InputMsg { seq: *seq, input, view_tick: 0.0 });
     }
 }
 
@@ -303,7 +311,8 @@ fn match_ends_and_restarts() {
         }
     };
     assert_eq!(restarted.state.scores, [0, 0]);
-    assert!(restarted.players.iter().all(|p| p.view.health == t.health_max && p.kills == 0 && p.deaths == 0));
+    let classes = class_tunings();
+    assert!(restarted.players.iter().all(|p| p.view.health == classes[p.class.index()].health_max && p.kills == 0 && p.deaths == 0));
 
     // Time limit with no kills is a draw.
     let mut game = Game::new(t);
@@ -326,4 +335,82 @@ fn second_human_replaces_a_bot() {
     game.step();
     assert_eq!(bots(&game, human), 6);
     assert_eq!(game.snapshot(human).players.len(), 8);
+}
+
+fn class_tunings() -> [Tuning; 3] {
+    MechClass::ALL.map(|c| Tuning::default().for_class(c))
+}
+
+fn player(game: &Game, id: u8) -> sim::net::PlayerNet {
+    game.snapshot(id).players.into_iter().find(|p| p.id == id).unwrap()
+}
+
+/// `shooter` (no latency) holds aim on `victim`'s chest and fires until a kill; returns the hits.
+fn shoot_until_kill(game: &mut Game, shooter: u8, victim: u8) -> u32 {
+    let classes = class_tunings();
+    let (mut shooter_seq, mut victim_seq, mut hits) = (0, 0, 0);
+    for _ in 0..(30.0 * TICK_HZ) as u32 {
+        let (s, v) = (player(game, shooter), player(game, victim));
+        let (st, vt) = (&classes[s.class.index()], &classes[v.class.index()]);
+        let d = v.view.pos + Vector::Y * (vt.mech_height * 0.5) - (s.view.pos + Vector::Y * st.eye_height);
+        let aim = Input { yaw: (-d.x).atan2(-d.z), pitch: d.y.atan2(d.x.hypot(d.z)), fire: true, ..Input::default() };
+        send(game, shooter, &mut shooter_seq, 1, aim);
+        send(game, victim, &mut victim_seq, 1, Input::default());
+        game.step();
+        for e in game.snapshot(shooter).events {
+            match e {
+                Event::Shot { hit: Some(h), .. } if h == victim => hits += 1,
+                Event::Kill { victim: k, .. } if k == victim => return hits,
+                _ => {}
+            }
+        }
+    }
+    panic!("no kill in 30 s after {hits} hits");
+}
+
+fn duel_game() -> (Game, u8, u8) {
+    let mut game = Game::new(Tuning::default());
+    game.bots = false;
+    let shooter = game.join().unwrap();
+    let victim = game.join().unwrap();
+    (game, shooter, victim)
+}
+
+#[test]
+fn heavier_class_takes_more_hits() {
+    let classes = class_tunings();
+    for class in [MechClass::A, MechClass::C] {
+        let (mut game, shooter, victim) = duel_game();
+        game.pick_class(victim, class);
+        game.step();
+        let needed = (classes[class.index()].health_max / classes[MechClass::B.index()].shot_damage).ceil() as u32;
+        assert_eq!(shoot_until_kill(&mut game, shooter, victim), needed, "{class:?}");
+    }
+}
+
+#[test]
+fn class_applies_now_then_on_respawn() {
+    let classes = class_tunings();
+    let (mut game, shooter, victim) = duel_game();
+
+    // Picked before any input: spawn as a Bulwark right away.
+    game.pick_class(victim, MechClass::C);
+    game.step();
+    assert_eq!(player(&game, victim).class, MechClass::C);
+    assert_eq!(game.snapshot(victim).me.health, classes[MechClass::C.index()].health_max);
+
+    // Once moving, a new pick waits for the next spawn.
+    let mut seq = 0;
+    send(&mut game, victim, &mut seq, 1, Input::default());
+    game.step();
+    game.pick_class(victim, MechClass::A);
+    game.step();
+    assert_eq!(player(&game, victim).class, MechClass::C);
+
+    shoot_until_kill(&mut game, shooter, victim);
+    for _ in 0..(classes[MechClass::C.index()].respawn_delay * TICK_HZ) as u32 + 2 {
+        game.step();
+    }
+    assert_eq!(player(&game, victim).class, MechClass::A);
+    assert_eq!(game.snapshot(victim).me.health, classes[MechClass::A.index()].health_max);
 }

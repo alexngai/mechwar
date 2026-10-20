@@ -21,6 +21,16 @@
     #score { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); padding: 4px 12px; background: #0009; font-size: 14px; white-space: pre; pointer-events: none; }
     #banner { position: fixed; top: 30%; left: 0; right: 0; text-align: center; font-size: 28px; letter-spacing: 2px; text-shadow: 0 2px 6px #000; pointer-events: none; }
     #score:empty, #banner:empty { display: none; }
+    #picker { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 16px; background: #0a0d10d0; }
+    #picker[hidden] { display: none; }
+    #picker h2 { margin: 0; font-size: 18px; letter-spacing: 2px; }
+    #cards { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+    .card { width: 180px; padding: 14px; border: 1px solid #fff3; background: #1c2026; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+    .card:hover, .card:focus-visible { border-color: #7fe0ff; outline: none; }
+    .card b { display: block; margin-bottom: 4px; font-size: 16px; }
+    .card .key { float: right; opacity: 0.6; }
+    .card dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 10px 0 0; }
+    .card dd { margin: 0; text-align: right; }
     #damage { position: fixed; inset: 0; box-shadow: inset 0 0 140px 30px #ff2a1a; opacity: 0; pointer-events: none; }
     #crosshair { position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -4px 0 0 -4px; border: 1px solid #fff; border-radius: 50%; pointer-events: none; }
     #help { position: fixed; left: 16px; top: 16px; padding: 6px 10px; background: #0009; pointer-events: none; max-width: calc(100vw - 300px); }
@@ -40,7 +50,12 @@
   <div id="crosshair"></div>
   <div id="score"></div>
   <div id="banner"></div>
-  <div id="help">Click to play · WASD move · Shift boost · Space hover · Q/E dodge · LMB fire · V camera · R respawn · Esc release mouse</div>
+  <div id="picker">
+    <h2>CHOOSE YOUR MECH</h2>
+    <div id="cards"></div>
+    <div id="picker-note"></div>
+  </div>
+  <div id="help">Click to play · WASD move · Shift boost · Space hover · Q/E dodge · LMB fire · V camera · C change mech · R respawn · Esc release mouse</div>
   <script type="module" src="/web/main.js"></script>
 </body>
 </html>

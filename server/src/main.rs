@@ -17,7 +17,7 @@ type Outbox = mpsc::UnboundedSender<(Instant, Vec<u8>)>;
 
 enum Cmd {
     Join(Outbox, oneshot::Sender<Option<u8>>),
-    Input(u8, ClientMsg),
+    Msg(u8, ClientMsg),
     Leave(u8),
 }
 
@@ -62,7 +62,8 @@ async fn game_loop(mut cmds: mpsc::UnboundedReceiver<Cmd>) {
                     }
                     let _ = reply.send(id);
                 }
-                Cmd::Input(id, msg) => game.push_input(id, msg),
+                Cmd::Msg(id, ClientMsg::Input(msg)) => game.push_input(id, msg),
+                Cmd::Msg(id, ClientMsg::Class(class)) => game.pick_class(id, class),
                 Cmd::Leave(id) => {
                     println!("player {id} left");
                     game.leave(id);
@@ -109,7 +110,7 @@ async fn connection(stream: TcpStream, cmds: mpsc::UnboundedSender<Cmd>, lag: Du
     let forwarder = tokio::spawn(async move {
         while let Some((arrived, msg)) = delayed.recv().await {
             time::sleep_until(arrived + lag).await;
-            if forward.send(Cmd::Input(id, msg)).is_err() {
+            if forward.send(Cmd::Msg(id, msg)).is_err() {
                 break;
             }
         }
@@ -117,9 +118,9 @@ async fn connection(stream: TcpStream, cmds: mpsc::UnboundedSender<Cmd>, lag: Du
 
     while let Some(Ok(msg)) = source.next().await {
         if let Message::Binary(bytes) = msg
-            && let Some(input) = net::decode::<ClientMsg>(&bytes)
+            && let Some(msg) = net::decode::<ClientMsg>(&bytes)
         {
-            let _ = delay.send((Instant::now(), input));
+            let _ = delay.send((Instant::now(), msg));
         }
     }
     let _ = cmds.send(Cmd::Leave(id));

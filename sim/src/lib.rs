@@ -19,7 +19,8 @@ pub const DT: f32 = 1.0 / TICK_HZ;
 
 /// Every sim constant. Values live in `tuning.json` at the repo root, which also records
 /// each value's source and slider range. Client-only keys (camera) are ignored here.
-#[derive(Deserialize, Clone, Debug)]
+/// `tuning.json` is the B class; `classes.json` overrides values per class.
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Tuning {
     pub walk_speed: f32,
     pub ground_accel: f32,
@@ -90,6 +91,46 @@ impl Tuning {
             values.insert(name, value.into());
         }
         serde_json::from_value(values.into())
+    }
+}
+
+impl Tuning {
+    /// This tuning with a class's `classes.json` overrides applied.
+    pub fn for_class(&self, class: MechClass) -> Tuning {
+        let classes: serde_json::Value = serde_json::from_str(include_str!("../../classes.json")).expect("classes.json is valid JSON");
+        let mut merged = serde_json::to_value(self).expect("tuning serializes");
+        if let Some(overrides) = classes[class.key()]["overrides"].as_object() {
+            for (name, value) in overrides {
+                assert!(merged.get(name).is_some(), "classes.json overrides unknown tuning field `{name}`");
+                merged[name] = value.clone();
+            }
+        }
+        serde_json::from_value(merged).expect("class overrides are numbers")
+    }
+}
+
+/// Mech weight class: A light, B medium (the base tuning), C heavy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MechClass {
+    A,
+    #[default]
+    B,
+    C,
+}
+
+impl MechClass {
+    pub const ALL: [MechClass; 3] = [MechClass::A, MechClass::B, MechClass::C];
+
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
+    pub fn from_index(i: u8) -> Option<MechClass> {
+        Self::ALL.get(usize::from(i)).copied()
+    }
+
+    fn key(self) -> &'static str {
+        ["A", "B", "C"][self.index()]
     }
 }
 

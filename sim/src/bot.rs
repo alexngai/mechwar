@@ -257,10 +257,17 @@ mod tests {
 
     #[test]
     fn nav_edges_are_walkable() {
-        let (arena, t) = (Arena::default(), Tuning::default());
+        let arena = Arena::default();
+        for class in crate::MechClass::ALL {
+            let t = Tuning::default().for_class(class);
+            walk_every_edge(&arena, &t, class);
+        }
+    }
+
+    fn walk_every_edge(arena: &Arena, t: &Tuning, class: crate::MechClass) {
         for &(a, b) in NAV_EDGES {
             for (from, to) in [(a, b), (b, a)] {
-                let mut m = spawn_mech(&t, node(from) + Vector::Y * 0.1);
+                let mut m = spawn_mech(t, node(from) + Vector::Y * 0.1);
                 let goal = node(to);
                 let ticks = ((goal.distance(m.pos) / t.walk_speed + 2.0) * TICK_HZ) as usize;
                 let arrived = (0..ticks).any(|_| {
@@ -269,10 +276,10 @@ mod tests {
                         return true;
                     }
                     let yaw = (-d.x).atan2(-d.z);
-                    step_mech(&arena, &t, &mut m, &Input { move_z: 1.0, yaw, ..Input::default() });
+                    step_mech(arena, t, &mut m, &Input { move_z: 1.0, yaw, ..Input::default() });
                     false
                 });
-                assert!(arrived, "edge {from} -> {to} isn't walkable: stopped at {}", m.pos);
+                assert!(arrived, "{class:?}: edge {from} -> {to} isn't walkable: stopped at {}", m.pos);
             }
         }
     }
