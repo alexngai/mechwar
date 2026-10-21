@@ -455,11 +455,11 @@ function frame(now) {
   fx.projectiles(drawn, dt);
 
   // Look is applied at render rate for responsiveness; position is interpolated. In the cockpit
-  // the view bobs with the gait, rolls into dodges and strafes, and shakes when hit.
+  // the view bobs with the gait and shakes when hit, but stays level (no roll).
   eye.copy(pos).y += T('eye_height');
   camera.position.copy(eye);
   if (firstPerson) {
-    camera.rotation.set(pitch, yaw, me.body.rotation.z * 0.6);
+    camera.rotation.set(pitch, yaw, 0);
     camera.position.y += (me.body.position.y - me.spec.hipY) * 0.6;
     if (shake > 0.01) camera.translateX((Math.random() - 0.5) * 0.14 * shake).translateY((Math.random() - 0.5) * 0.14 * shake);
   } else {

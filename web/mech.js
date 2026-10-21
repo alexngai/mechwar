@@ -291,7 +291,6 @@ export class Mech {
     this.alive = true;
     this.wreck = 0;
     this.flash = 0;
-    this.dodgeRoll = 0;
     this.nextGun = 0;
     this.brace = 0;
     this.glide = 0;
@@ -432,7 +431,6 @@ export class Mech {
     this.airTime = grounded ? 0 : this.airTime + dt;
     this.grounded = grounded;
     this.squash = Math.max(0, this.squash - dt * 2);
-    this.dodgeRoll = damp(this.dodgeRoll, 0, 4, dt);
     this.flash = Math.max(0, this.flash - dt * 6);
 
     // Body bobs with the gait, leans into motion, sinks on landing and slumps when destroyed.
@@ -445,7 +443,8 @@ export class Mech {
     this.shutdown = damp(this.shutdown, repair > 0 ? 1 : 0, 4, dt);
     body.position.y = spec.hipY - bob - this.squash * 0.6 - this.wreck * spec.sink + sway - this.brace * 0.3 - this.shutdown * 0.25 - this.glide * 0.35;
     body.rotation.x = damp(body.rotation.x, alive ? clamp(local.z / 16, -1, 1) * 0.25 : -0.45 * this.wreck, 6, dt);
-    body.rotation.z = damp(body.rotation.z, alive ? -clamp(local.x / 16, -1, 1) * 0.2 + this.dodgeRoll : 0.25 * this.wreck, 8, dt);
+    // No roll into strafes or dashes (it was disorienting); only a wreck keels over.
+    body.rotation.z = damp(body.rotation.z, alive ? 0 : 0.25 * this.wreck, 8, dt);
     for (const gun of this.guns) gun.pod.rotation.x = alive ? THREE.MathUtils.lerp(s.pitch - body.rotation.x, -0.4, this.shutdown) : -0.5;
 
     // Feet swing forward in the air and slide back while planted; knees bend per class.
@@ -595,9 +594,8 @@ export class Mech {
     }
   }
 
-  /** Side-jet burst and a roll toward `dir` (-1 left, +1 right). */
+  /** Side-jet burst for a dash toward `dir` (-1 left, +1 right). */
   dodge(dir) {
-    this.dodgeRoll = -dir * 0.4;
     this.fx.burst(this.body.getWorldPosition(world), flame.set(-dir, 0, 0).applyQuaternion(this.root.quaternion));
   }
 
