@@ -97,6 +97,8 @@ pub enum Event {
     Launch(Projectile),
     /// A projectile burst at `pos`. `hits` has bit `id` set for each player its splash hurt.
     Blast { owner: u8, seq: u32, n: u8, class: MechClass, pos: Vector, hits: u16 },
+    /// An EMP went off at `pos`. `hits` has bit `id` set for each player it jammed.
+    Pulse { owner: u8, pos: Vector, hits: u16 },
 }
 
 pub fn encode<T: Serialize>(msg: &T) -> Vec<u8> {

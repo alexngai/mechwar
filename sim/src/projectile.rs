@@ -3,6 +3,8 @@
 //! deterministic, so the server, the predicting client and remote replays fly identical paths
 //! through the arena; only mech contacts can differ between them.
 
+use std::borrow::Cow;
+
 use rapier3d::parry::query::RayCast;
 use rapier3d::prelude::{Capsule, Pose, Ray, Rotation};
 use serde::{Deserialize, Serialize};
@@ -48,6 +50,20 @@ pub fn volley(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Vec<Projectile> {
             Projectile { owner, seq, n, class: m.class, pos: eye, vel: dir * t.alt_speed, age: 0.0 }
         })
         .collect()
+}
+
+/// Grenades carry this volley index, clear of any secondary volley's, so a grenade and a volley
+/// launched on the same input keep distinct ids.
+pub const GRENADE: u8 = u8::MAX;
+
+/// The grenade `m` threw this tick: a one-shell volley on the grenade's ballistics.
+pub fn grenade(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Projectile {
+    Projectile { n: GRENADE, ..volley(&t.grenade(), m, owner, seq)[0] }
+}
+
+/// What a projectile with volley index `n` flies and bursts with, given its class's tuning `t`.
+pub fn ballistics(t: &Tuning, n: u8) -> Cow<'_, Tuning> {
+    if n == GRENADE { Cow::Owned(t.grenade()) } else { Cow::Borrowed(t) }
 }
 
 /// Advances `p` one tick: gravity, then this tick's path against the arena and `hit_mech`, which

@@ -100,7 +100,7 @@ class Pool {
 
 const UP = new THREE.Vector3(0, 1, 0);
 const v = new THREE.Vector3(), jitter = new THREE.Vector3();
-const dir = new THREE.Vector3(), mid = new THREE.Vector3(), view = new THREE.Vector3(), side = new THREE.Vector3(), normal = new THREE.Vector3();
+const spot = new THREE.Vector3(), dir = new THREE.Vector3(), mid = new THREE.Vector3(), view = new THREE.Vector3(), side = new THREE.Vector3(), normal = new THREE.Vector3();
 const BEAM_LIFE = 0.09, BEAM_WIDTH = 0.25, LIGHT_LIFE = 0.08;
 
 /** Gradient drawn once on a canvas: `stops` maps 0..1 across the canvas to alpha. */
@@ -207,6 +207,7 @@ const SPARK = [[1, 0.9, 0.5], [1, 0.3, 0.05]];
 const FLAME = [[0.85, 0.9, 1], [1, 0.45, 0.1]];
 const COOL_FLAME = [[0.85, 0.97, 1], [0.25, 0.55, 1]];
 const DUST = [[0.62, 0.58, 0.5], [0.5, 0.47, 0.42]];
+const STATIC = [[0.45, 0.75, 1], [0.1, 0.25, 1]];
 
 export class Effects {
   constructor(scene) {
@@ -296,9 +297,28 @@ export class Effects {
     }
   }
 
+  /** EMP: a ring of blue sparks racing out to `radius`, and a flash at its core. */
+  pulse(p, radius) {
+    const life = 0.4;
+    for (let i = 0; i < 64; i++) {
+      const a = (i / 64) * Math.PI * 2;
+      this.glow.spawn(p, v.set(Math.cos(a), rand(-0.08, 0.08), Math.sin(a)).multiplyScalar(radius / life), { life, size: [1.1, 0.5], color: STATIC });
+    }
+    for (let i = 0; i < 14; i++) this.glow.spawn(p, scatter(UP, 0, 5), { life: rand(0.15, 0.3), size: [1.5, 0.3], color: STATIC, drag: 4 });
+  }
+
+  /** A jammed mech's crackle: stray blue sparks around its chest `p`. */
+  jam(p, dt) {
+    for (let i = count(25, dt); i > 0; i--) {
+      spot.set(rand(-1.5, 1.5), rand(-1.5, 1.5), rand(-1.5, 1.5)).add(p);
+      this.glow.spawn(spot, scatter(UP, 0, 6), { life: rand(0.05, 0.12), size: [0.5, 0.1], color: STATIC });
+    }
+  }
+
   /**
-   * This frame's projectiles, each { pos, vel, cls, age }: rockets and darts burn with a smoke
-   * trail, mortar shells (C) tumble dark with a blinking light.
+   * This frame's projectiles, each { pos, vel, cls, age, grenade }: rockets and darts burn with a
+   * smoke trail, mortar shells (C) tumble dark with a blinking light, and grenades tumble small
+   * with a light that blinks faster as the fuse runs down.
    */
   projectiles(list, dt) {
     this.shells.items.forEach((item, i) => {
@@ -307,6 +327,13 @@ export class Effects {
       if (!p) return;
       item.mesh.position.copy(p.pos);
       item.mesh.lookAt(v.copy(p.pos).add(p.vel));
+      if (p.grenade) {
+        item.mesh.scale.setScalar(0.5);
+        item.mesh.rotateX(p.age * 25);
+        item.core.visible = (p.age * (4 + 6 * p.age)) % 1 < 0.5;
+        item.core.material.color.setHex(0x70ffa0);
+        return;
+      }
       const shell = p.cls === 'C', dart = p.cls === 'A';
       item.mesh.scale.setScalar(dart ? 0.6 : shell ? 1.6 : 1);
       item.core.visible = !shell || (p.age * 6) % 1 < 0.5;

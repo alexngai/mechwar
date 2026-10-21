@@ -648,3 +648,82 @@ fn bots_use_secondaries() {
     }
     assert!(present.iter().any(|c| *c != present[0]), "all bots were {:?}, so the test proved little", present[0]);
 }
+
+#[test]
+fn predicted_grenade_matches_server() {
+    use sim::projectile::GRENADE;
+    let t = Tuning::default();
+    let mut h = Harness::new();
+    let (id, watcher) = (h.clients[0].0, 1);
+    // A grenade, a rocket and an EMP on one input, aimed at the floor ahead; the enemy is far beyond.
+    let aim = Input { pitch: -0.3, ..Input::default() };
+    let (mut launched, mut server, mut local, mut seen, mut pulses) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut max_correction = 0f32;
+    for tick in 0..(4.0 * TICK_HZ) as u32 {
+        let press = tick == 5;
+        h.step([Input { grenade: press, alt_fire: press, emp: press, ..aim }, Input::default()]);
+        for e in h.game.snapshot(id).events {
+            match e {
+                Event::Launch(p) => launched.push(p.n),
+                Event::Blast { n, pos, .. } => server.push((if n == GRENADE { t.grenade_radius } else { t.alt_radius }, pos)),
+                Event::Pulse { owner, hits, .. } => pulses.push((owner, hits)),
+                _ => {}
+            }
+        }
+        local.extend(h.clients[0].1.blasts.drain(..).map(|b| (b.1, b.2)));
+        let now = h.now();
+        h.clients[watcher].1.projectiles(now);
+        seen.extend(h.clients[watcher].1.blasts.drain(..).map(|b| (b.1, b.2)));
+        max_correction = max_correction.max(h.clients[0].1.correction);
+    }
+    assert_eq!(launched, [0, GRENADE], "a rocket and a grenade with distinct ids");
+    assert_eq!(server.len(), 2, "server blasts: {server:?}");
+    assert_eq!(local, server, "predicted bursts should land exactly where the server's did");
+    assert_eq!(seen, server, "the other client's replays should burst there too");
+    assert!(h.clients[0].1.projectiles.is_empty());
+    assert_eq!(pulses, [(id, 0)], "the EMP reached no one");
+    assert!(max_correction < 1e-5, "items threw prediction off by {max_correction} m");
+    assert_eq!((h.clients[0].1.mech.grenades, h.clients[0].1.mech.emps), (t.grenade_charges as u8 - 1, t.emp_charges as u8 - 1));
+}
+
+#[test]
+fn emp_jams_the_other_client() {
+    let t = Tuning::default();
+    let mut h = Harness::new();
+    let (a, b) = (h.clients[0].0, h.clients[1].0);
+    let pi = std::f32::consts::PI;
+    // Walk at each other until 10 m apart; then A pulses once while B tries to boost sideways.
+    let (mut pulsed, mut hits, mut jammed_ticks, mut boosted_after) = (None, None, 0, false);
+    for tick in 0..(10.0 * TICK_HZ) as u32 {
+        let s = h.game.snapshot(a);
+        let gap = xz_gap(s.players[0].view.pos, s.players[1].view.pos);
+        let close = pulsed.is_some() || gap < 10.0;
+        let press = close && pulsed.is_none();
+        if press {
+            pulsed = Some(tick);
+        }
+        let ia = if close { Input { emp: press, ..Input::default() } } else { Input { move_z: 1.0, ..Input::default() } };
+        let ib = if close { Input { move_x: 1.0, boost: true, yaw: pi, ..Input::default() } } else { Input { move_z: 1.0, yaw: pi, ..Input::default() } };
+        h.step([ia, ib]);
+        for e in std::mem::take(&mut h.clients[0].1.events) {
+            if let Event::Pulse { owner, hits: bits, .. } = e
+                && owner == a
+            {
+                hits = Some(bits);
+            }
+        }
+        let victim = &h.clients[1].1.mech;
+        if victim.jammed > 0.0 {
+            jammed_ticks += 1;
+            assert!(!victim.boosting, "B's prediction boosted while jammed");
+        } else if jammed_ticks > 0 {
+            boosted_after |= victim.boosting;
+        }
+    }
+    assert!(pulsed.is_some(), "A and B never got within 10 m");
+    assert_eq!(hits, Some(1 << b), "A's client should see its EMP jam B");
+    // B learns of the jam about a round trip after the server applied it, then it wears off in step.
+    let full = (t.emp_jam * TICK_HZ).round() as u32;
+    assert!((full - 2 * LATENCY_TICKS - 2..=full).contains(&jammed_ticks), "B's client was jammed for {jammed_ticks} ticks");
+    assert!(boosted_after, "B never boosted again after the jam");
+}

@@ -45,7 +45,9 @@ if (net) {
 }
 
 // Index layout of state(); keep in sync with mech_state in sim/src/wasm.rs.
-const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, OFFSET: 22 };
+const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, GRENADES: 22, GRENADE_WAIT: 23, EMPS: 24, EMP_WAIT: 25, JAMMED: 26, THREW: 27, PULSED: 28, OFFSET: 29 };
+// Volley index of thrown grenades; matches projectile::GRENADE in sim/src/projectile.rs.
+const GRENADE_N = 255;
 
 // --- Scene ---------------------------------------------------------------
 // ?quality=low|high (default high). High drops to Low once if it can't hold 45 fps.
@@ -120,7 +122,7 @@ let hitUntil = 0, hurt = 0, message = '', messageUntil = 0;
 
 // --- Input ---------------------------------------------------------------
 const keys = new Set();
-let yaw = 0, pitch = 0, dodge = 0, ability = false, firing = false, altFiring = false, cockpit = false;
+let yaw = 0, pitch = 0, dodge = 0, ability = false, grenade = false, emp = false, firing = false, altFiring = false, cockpit = false;
 const locked = () => document.pointerLockElement === renderer.domElement;
 // Chrome rejects a re-lock right after Esc; the next click simply tries again.
 renderer.domElement.addEventListener('click', () => renderer.domElement.requestPointerLock()?.catch?.(() => {}));
@@ -152,6 +154,8 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyQ') dodge = -1;
   if (e.code === 'KeyE') dodge = 1;
   if (e.code === 'KeyF') ability = true;
+  if (e.code === 'KeyG') grenade = true;
+  if (e.code === 'KeyT') emp = true;
   if (e.code === 'KeyR' && sim) { sim.reset(); prev = curr = sim.state(); }
   if (e.code === 'KeyV') cockpit = !cockpit;
   if (e.code === 'KeyI') $('stats').hidden = !$('stats').hidden;
@@ -215,6 +219,9 @@ let prev = game.state(), curr = prev, acc = 0, last = performance.now();
 const eye = new THREE.Vector3(), offset = new THREE.Vector3(), aim = new THREE.Vector3();
 const pos = new THREE.Vector3(), vel = new THREE.Vector3(), seen = new THREE.Vector3(), step = new THREE.Vector3();
 const ray = new THREE.Ray(), sphere = new THREE.Sphere(), crossing = new THREE.Vector3();
+const spark = new THREE.Vector3();
+/** Moves feet position `p` up to the chest of a class `cls` mech. */
+const chest = (p, cls) => { p.y += classValue(cls, 'mech_height') * 0.5; return p; };
 
 function frame(now) {
   const dt = Math.min((now - last) / 1000, 0.25);
@@ -227,7 +234,7 @@ function frame(now) {
       continue;
     }
     const input = [axis('KeyD', 'KeyA'), axis('KeyW', 'KeyS'), yaw, pitch,
-      keys.has('ShiftLeft') || keys.has('ShiftRight'), keys.has('Space'), dodge, firing, altFiring, ability];
+      keys.has('ShiftLeft') || keys.has('ShiftRight'), keys.has('Space'), dodge, firing, altFiring, ability, grenade, emp];
     if (net) {
       const bytes = net.tick(...input, now);
       if (ws.readyState === WebSocket.OPEN) ws.send(bytes);
@@ -239,8 +246,10 @@ function frame(now) {
     if (dodge && curr[S.DODGE_CD] > prev[S.DODGE_CD]) me.dodge(dodge);
     if (ability && curr[S.ABILITY_CD] > prev[S.ABILITY_CD]) me.ability();
     dodge = 0;
-    ability = false;
+    ability = grenade = emp = false;
     acc -= DT;
+    // Own EMPs show as predicted; the server's Pulse for them only marks hits.
+    if (curr[S.PULSED]) fx.pulse(chest(new THREE.Vector3(curr[S.POS], curr[S.POS + 1], curr[S.POS + 2]), classIdx), T('emp_radius'));
     if (curr[S.SHOT]) shots.push(new THREE.Vector3(curr[S.AIM], curr[S.AIM + 1], curr[S.AIM + 2]));
   }
   const a = acc / DT;
@@ -270,6 +279,7 @@ function frame(now) {
     health: curr[S.HEALTH], heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     ability: curr[S.ABILITY_T] > 0, damage: 1 - curr[S.HEALTH] / T('health_max'),
   });
+  if (curr[S.JAMMED] > 0) fx.jam(chest(spark.copy(pos), classIdx), dt);
 
   if (net) {
     const r = net.remotes(now), live = new Set();
@@ -295,6 +305,7 @@ function frame(now) {
         grounded: !hovering && Math.abs(e.vel.y) < 1.5, boosting: !!boosting, hovering: !!hovering, health,
         ability: !!abilityOn, damage: 1 - health / classValue(cls, 'health_max'),
       });
+      if (now < (e.jammedUntil ?? 0)) fx.jam(chest(spark.copy(e.pos), cls), dt);
     }
     for (const [id, e] of remotes) if (!live.has(id)) { e.mech.dispose(); remotes.delete(id); }
   }
@@ -312,12 +323,19 @@ function frame(now) {
     if (kind === 1 && (a === myId || b === myId)) { message = a === myId ? 'ENEMY DESTROYED' : 'DESTROYED'; messageUntil = now + 2500; }
     if (kind === 2) {
       blastAt.set(x, y, z);
-      fx.explosion(blastAt, classValue(b, 'alt_radius') / 5);
+      fx.explosion(blastAt, b / 5);
       fx.muzzleLight(blastAt);
     }
     if (kind === 3) {
       if (a === myId) hitUntil = now + 150;
       if (b === myId) { me.hit(); hurt = 1; } else remotes.get(b)?.mech.hit();
+    }
+    if (kind === 4) {
+      // EMP: b is a bitmask of who it jammed. Our own jam shows from our predicted state.
+      const cls = a === myId ? classIdx : remotes.get(a)?.cls ?? 1;
+      if (a !== myId) fx.pulse(blastAt.set(x, y, z), classValue(cls, 'emp_radius'));
+      if (a === myId && b) hitUntil = now + 150;
+      for (const [id, e] of remotes) if (b & (1 << id)) e.jammedUntil = now + 1000 * classValue(cls, 'emp_jam');
     }
   }
 
@@ -337,7 +355,7 @@ function frame(now) {
     const p = new THREE.Vector3(x + vx * ahead, y + vy * ahead, z + vz * ahead);
     const blend = Math.min((age + ahead) / LAUNCH_BLEND, 1);
     if (blend < 1) p.lerp(shot.from, 1 - blend);
-    drawn.push({ pos: p, vel: new THREE.Vector3(vx, vy, vz), cls: CLASS_KEYS[cls], age: age + ahead });
+    drawn.push({ pos: p, vel: new THREE.Vector3(vx, vy, vz), cls: CLASS_KEYS[cls], age: age + ahead, grenade: n === GRENADE_N });
   }
   for (const key of launches.keys()) if (!live.has(key)) launches.delete(key);
   fx.projectiles(drawn, dt);
@@ -384,10 +402,10 @@ function frame(now) {
   hud.crosshair.style.top = `${(1 - aim.y) * 50}%`;
 
   const speed = Math.hypot(curr[S.VEL], curr[S.VEL + 2]);
-  const flags = [curr[S.BOOSTING] && 'BOOST', curr[S.HOVERING] && 'HOVER', !curr[S.GROUNDED] && 'AIR', curr[S.OVERHEATED] && 'OVERHEAT'].filter(Boolean);
+  const flags = [curr[S.BOOSTING] && 'BOOST', curr[S.HOVERING] && 'HOVER', !curr[S.GROUNDED] && 'AIR', curr[S.OVERHEATED] && 'OVERHEAT', curr[S.JAMMED] > 0 && 'JAMMED'].filter(Boolean);
   $('picker').hidden = !pickerOpen;
   $('picker-note').textContent = picked === null ? '' : alive ? 'Applies on your next respawn · C to close' : 'Applies on respawn';
-  hud.status.textContent = `${classes[CLASS_KEYS[classIdx]].name}  ${speed.toFixed(1)} m/s  y ${curr[S.POS + 1].toFixed(1)}  ${flags.join(' ')}`;
+  hud.status.textContent = `${classes[CLASS_KEYS[classIdx]].name}  ${speed.toFixed(1)} m/s  y ${curr[S.POS + 1].toFixed(1)}  G Tumbler ${curr[S.GRENADES]}  T Brownout ${curr[S.EMPS]}  ${flags.join(' ')}`;
   hud.fuel.style.width = `${(100 * curr[S.FUEL]) / T('fuel_max')}%`;
   hud.heat.style.width = `${(100 * curr[S.HEAT]) / T('heat_max')}%`;
   hud.heat.classList.toggle('over', !!curr[S.OVERHEATED]);
