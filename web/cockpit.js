@@ -111,11 +111,14 @@ export class Cockpit {
     return worldCamera.localToWorld(gun.tip.getWorldPosition(out));
   }
 
-  /** Follows the world camera's lens and the sun, and eases recoil back. */
-  update(dt, worldCamera, sunDir) {
+  /**
+   * Follows the world camera's aspect and the sun, and eases recoil back. `fov` is the base field
+   * of view: the canopy ignores the boost kick so it doesn't rebuild while it eases.
+   */
+  update(dt, worldCamera, sunDir, fov) {
     const c = this.camera;
-    if (c.fov !== worldCamera.fov || c.aspect !== worldCamera.aspect) {
-      c.fov = worldCamera.fov;
+    if (c.fov !== fov || c.aspect !== worldCamera.aspect) {
+      c.fov = fov;
       c.aspect = worldCamera.aspect;
       c.updateProjectionMatrix();
       this.aspect = 0; // force a relayout for the new lens

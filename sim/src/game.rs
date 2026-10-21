@@ -622,7 +622,7 @@ mod tests {
         assert_eq!(mech(&game, user).emps, t.emp_charges as u8 - 1);
 
         // The jammed enemy can't boost until the jam wears off, then can.
-        let boost = Input { move_x: 1.0, boost: true, ..Input::default() };
+        let boost = Input { move_z: 1.0, boost: true, ..Input::default() };
         for ticks in 1.. {
             send(&mut game, near, boost);
             game.step();

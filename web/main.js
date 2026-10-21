@@ -127,7 +127,8 @@ const shots = []; // own predicted shots, drawn once this frame's pose is set
 // Projectiles seen so far by id, with the launcher position each is drawn leaving from.
 const launches = new Map(), blastAt = new THREE.Vector3();
 const LAUNCH_BLEND = 0.15; // s
-let hurt = 0, shake = 0, message = '', messageUntil = 0;
+let hurt = 0, shake = 0, boostKick = 0, message = '', messageUntil = 0;
+const BOOST_FOV = 6; // degrees
 // HUD feedback: own hits and kills, where hits on us came from, and when each player last fired.
 const hits = [], damageFrom = [], lastFired = new Map();
 
@@ -165,8 +166,11 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Space') e.preventDefault();
   if (e.repeat) return;
   keys.add(e.code);
-  if (e.code === 'KeyQ') dodge = -1;
-  if (e.code === 'KeyE') dodge = 1;
+  // Shift gestures: Shift+A/D dashes, Shift+S turns about; whichever key lands second triggers.
+  const isShift = e.code === 'ShiftLeft' || e.code === 'ShiftRight';
+  if (shift() && (e.code === 'KeyA' || e.code === 'KeyD')) dodge = e.code === 'KeyA' ? -1 : 1;
+  else if (isShift && !keys.has('KeyW') && keys.has('KeyA') !== keys.has('KeyD')) dodge = keys.has('KeyA') ? -1 : 1;
+  if ((shift() && e.code === 'KeyS') || (isShift && keys.has('KeyS') && !keys.has('KeyW'))) turnAbout();
   if (e.code === 'KeyF') ability = true;
   if (e.code === 'KeyG') grenade = true;
   if (e.code === 'KeyT') emp = true;
@@ -187,6 +191,12 @@ addEventListener('keyup', (e) => {
 });
 addEventListener('blur', () => { keys.clear(); firing = altFiring = false; });
 const axis = (pos, neg) => (keys.has(pos) ? 1 : 0) - (keys.has(neg) ? 1 : 0);
+const shift = () => keys.has('ShiftLeft') || keys.has('ShiftRight');
+// Quick 180°: the view sweeps half a turn over TURN_TIME, eased, on top of the mouse.
+const TURN_TIME = 0.22; // s
+let turnT = -1;
+const turnAbout = () => { if (turnT < 0) turnT = 0; };
+const ease = (x) => x * x * (3 - 2 * x);
 
 // --- Tuning panel ----------------------------------------------------------
 const gui = new GUI({ title: 'Tuning (tuning.json)' });
@@ -275,14 +285,22 @@ function frame(now) {
   const dt = Math.min((now - last) / 1000, 0.25);
   acc += dt;
   last = now;
+  if (turnT >= 0) {
+    const before = ease(turnT / TURN_TIME);
+    turnT = Math.min(turnT + dt, TURN_TIME);
+    yaw += Math.PI * (ease(turnT / TURN_TIME) - before);
+    if (turnT >= TURN_TIME) turnT = -1;
+  }
   while (acc >= DT) {
     if (net && picked === null) {
       prev = curr = net.state();
       acc -= DT;
       continue;
     }
-    const input = [axis('KeyD', 'KeyA'), axis('KeyW', 'KeyS'), yaw, pitch,
-      keys.has('ShiftLeft') || keys.has('ShiftRight'), keys.has('Space'), dodge, firing, altFiring, ability, keys.has('KeyR'), grenade, emp];
+    // Shift+W boosts (the sim only boosts forward); with Shift held, S is the turn, not a step back.
+    const forward = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') && !shift() ? 1 : 0);
+    const input = [axis('KeyD', 'KeyA'), forward, yaw, pitch,
+      shift(), keys.has('Space'), dodge, firing, altFiring, ability, keys.has('KeyR'), grenade, emp];
     if (net) {
       const bytes = net.tick(...input, now);
       if (ws.readyState === WebSocket.OPEN) ws.send(bytes);
@@ -453,10 +471,13 @@ function frame(now) {
     camera.position.addScaledVector(offset, Math.max(room, 0.5) / want);
   }
   shake *= Math.exp(-6 * dt);
-  if (camera.fov !== T('fov')) { camera.fov = T('fov'); camera.updateProjectionMatrix(); }
+  // A small FOV kick while boosting sells the speed.
+  boostKick += ((curr[S.BOOSTING] ? 1 : 0) - boostKick) * (1 - Math.exp(-6 * dt));
+  const fov = T('fov') + BOOST_FOV * boostKick;
+  if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }
   camera.updateMatrixWorld();
   cockpit.setTeam(myTeam);
-  cockpit.update(dt, camera, SUN_DIR);
+  cockpit.update(dt, camera, SUN_DIR, T('fov'));
 
   // The predicted aim point only knows the arena, so stop own tracers at the first enemy mech
   // they cross (visual only; the server decides hits).

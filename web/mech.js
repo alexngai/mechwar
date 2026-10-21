@@ -294,6 +294,7 @@ export class Mech {
     this.dodgeRoll = 0;
     this.nextGun = 0;
     this.brace = 0;
+    this.glide = 0;
     this.shutdown = 0;
 
     const root = (this.root = new THREE.Group());
@@ -419,7 +420,10 @@ export class Mech {
     local.copy(s.vel).applyAxisAngle(UP, -s.yaw).divideScalar(s.scale);
     const speed = Math.hypot(local.x, local.z);
     const grounded = alive && s.grounded;
-    const moving = grounded && speed > 0.6;
+    // Boosting on the ground, the thrusters carry the mech: legs hold a crouched glide.
+    const gliding = grounded && s.boosting;
+    const moving = grounded && !gliding && speed > 0.6;
+    this.glide = damp(this.glide, gliding ? 1 : 0, 6, dt);
     const stride = clamp(speed * spec.stride[0], spec.stride[1], spec.stride[2]);
     if (moving) this.phase += ((Math.PI * speed) / (2 * stride)) * dt;
     moveDir.set(local.x, 0, local.z).normalize();
@@ -439,7 +443,7 @@ export class Mech {
     // Shut down for repair: the body settles and the guns droop.
     const repair = alive ? s.repair ?? 0 : 0;
     this.shutdown = damp(this.shutdown, repair > 0 ? 1 : 0, 4, dt);
-    body.position.y = spec.hipY - bob - this.squash * 0.6 - this.wreck * spec.sink + sway - this.brace * 0.3 - this.shutdown * 0.25;
+    body.position.y = spec.hipY - bob - this.squash * 0.6 - this.wreck * spec.sink + sway - this.brace * 0.3 - this.shutdown * 0.25 - this.glide * 0.35;
     body.rotation.x = damp(body.rotation.x, alive ? clamp(local.z / 16, -1, 1) * 0.25 : -0.45 * this.wreck, 6, dt);
     body.rotation.z = damp(body.rotation.z, alive ? -clamp(local.x / 16, -1, 1) * 0.2 + this.dodgeRoll : 0.25 * this.wreck, 8, dt);
     for (const gun of this.guns) gun.pod.rotation.x = alive ? THREE.MathUtils.lerp(s.pitch - body.rotation.x, -0.4, this.shutdown) : -0.5;
@@ -451,6 +455,11 @@ export class Mech {
       if (!alive) {
         x = leg.side * (spec.stance + 0.4);
         z = -0.4;
+      } else if (gliding) {
+        x = leg.side * (spec.stance + 0.1);
+        y = 0.12;
+        z = -0.1 + (leg.i ? 0.35 : -0.35);
+        leg.lifted = false;
       } else if (!grounded) {
         x = leg.side * (spec.stance + 0.05);
         y = s.hovering ? 1.1 : 0.55;

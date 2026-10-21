@@ -488,7 +488,8 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     let mut used_fuel = false;
     // Starting needs boost_min_fuel so an empty tank doesn't flicker boost on each regen tick.
     let fuel_ok = slipstream || (m.fuel > 0.0 && (m.boosting || m.fuel >= t.boost_min_fuel));
-    m.boosting = !brace && m.jammed <= 0.0 && input.boost && has_move && fuel_ok;
+    // Thrusters push forward: boost needs a forward input (W, or W with a strafe to curve).
+    m.boosting = !brace && m.jammed <= 0.0 && input.boost && input.move_z > 0.1 && fuel_ok;
     if m.boosting && !slipstream {
         m.fuel -= t.boost_drain * DT;
         used_fuel = true;
@@ -753,14 +754,47 @@ mod tests {
     }
 
     #[test]
+    fn boost_needs_forward() {
+        let (mut sim, t) = class_sim(MechClass::B);
+        run(&mut sim, Input { move_x: 1.0, boost: true, ..Input::default() }, 30);
+        assert!(!sim.mech.boosting, "boosted with only a strafe");
+        assert_eq!(sim.mech.fuel, t.fuel_max, "a strafe with boost held burned fuel");
+        run(&mut sim, Input { move_z: 1.0, boost: true, ..Input::default() }, 45);
+        assert!(sim.mech.boosting);
+        assert!((speed(&sim) - t.boost_speed).abs() < 0.05, "speed {}", speed(&sim));
+    }
+
+    #[test]
+    fn dash_distance() {
+        // A dash from standing with no keys held after it: about three widths, stopped in 0.6 s.
+        for class in MechClass::ALL {
+            let (mut sim, t) = class_sim(class);
+            run(&mut sim, Input::default(), 10);
+            let start = sim.mech.pos;
+            sim.step(&Input { dodge: 1, ..Input::default() });
+            run(&mut sim, Input::default(), (0.6 * TICK_HZ) as usize);
+            let moved = sim.mech.pos.x - start.x;
+            let widths = moved / (2.0 * t.mech_radius);
+            assert!(speed(&sim) < 0.05, "{class:?} still sliding at {} m/s", speed(&sim));
+            assert!((2.0..=4.5).contains(&widths), "{class:?} dashed {moved} m, {widths} widths");
+            if class == MechClass::B {
+                assert!((7.0..=9.5).contains(&moved), "Lancer dashed {moved} m");
+            }
+        }
+    }
+
+    #[test]
     fn slipstream_boosts_free_and_faster() {
         let (mut sim, t) = class_sim(MechClass::A);
         sim.step(&Input { ability: true, ..Input::default() });
         let boost = Input { move_z: 1.0, boost: true, ..Input::default() };
-        run(&mut sim, boost, 60);
+        run(&mut sim, boost, 30);
         assert_eq!(sim.mech.fuel, t.fuel_max, "slipstream burned fuel");
         assert!((speed(&sim) - t.boost_speed * t.slipstream_boost_mult).abs() < 0.05, "speed {}", speed(&sim));
-        run(&mut sim, boost, 74); // past the 4 s
+        // Wait out the 4 s back at the start, then boost again.
+        sim.mech.pos = Vector::new(0.0, 0.1, 45.0);
+        run(&mut sim, Input::default(), 100);
+        run(&mut sim, boost, 30);
         assert!(sim.mech.fuel < t.fuel_max, "boost stayed free after slipstream");
         assert!((speed(&sim) - t.boost_speed).abs() < 0.05, "speed {}", speed(&sim));
     }

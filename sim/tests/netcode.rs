@@ -228,9 +228,9 @@ fn lag_compensated_hits_kill_and_respawn() {
 
 #[test]
 fn rewind_is_what_makes_shots_land() {
-    // B runs one way at full walk speed. A sees it ~7 ticks (233 ms) late, which at 9 m/s is
-    // 2.1 m: more than the capsule radius, so only rewinding to A's view can hit.
-    let run = |_| 1.0;
+    // B runs one way at 9 m/s (three quarters of walk speed, so it stays clear of cover). A sees
+    // it ~7 ticks (233 ms) late: 2.1 m, more than the capsule radius, so only rewinding can hit.
+    let run = |_| 0.75;
     let (hits, shots, ..) = duel(false, 50, 25..40, run);
     assert!(shots >= 3 && hits == shots, "with rewind: {hits}/{shots}");
     let (hits, shots, ..) = duel(true, 50, 25..40, run);
@@ -588,17 +588,23 @@ fn xz_gap(a: Vector, b: Vector) -> f32 {
 fn head_on_mechs_block() {
     let (mut game, north, south) = duel_game();
     let touching = 2.0 * Tuning::default().mech_radius;
-    let (mut north_seq, mut south_seq, mut met) = (0, 0, false);
-    for _ in 0..(6.0 * TICK_HZ) as u32 {
+    // Round capsules pushing head-on eventually slip past each other on any tiny offset; they
+    // must never overlap, and must hold each other up for at least half a second first.
+    let (mut north_seq, mut south_seq, mut met) = (0, 0, None);
+    for tick in 0..(6.0 * TICK_HZ) as u32 {
         send(&mut game, north, &mut north_seq, 1, Input { move_z: 1.0, ..Input::default() });
         send(&mut game, south, &mut south_seq, 1, Input { move_z: 1.0, yaw: std::f32::consts::PI, ..Input::default() });
         game.step();
         let (n, s) = (player(&game, north).view.pos, player(&game, south).view.pos);
         assert!(xz_gap(n, s) >= touching - 0.01, "mechs overlap: gap {}", xz_gap(n, s));
-        assert!(n.z > s.z, "mechs passed through each other");
-        met |= xz_gap(n, s) < touching + 0.1;
+        if xz_gap(n, s) < touching + 0.1 {
+            met.get_or_insert(tick);
+        }
+        if met.is_some_and(|at| tick < at + TICK_HZ as u32 / 2) {
+            assert!(n.z > s.z, "mechs passed each other within half a second of meeting");
+        }
     }
-    assert!(met, "the mechs never met, so the test proved nothing");
+    assert!(met.is_some(), "the mechs never met, so the test proved nothing");
 }
 
 #[test]
@@ -903,7 +909,7 @@ fn emp_jams_the_other_client() {
             pulsed = Some(tick);
         }
         let ia = if close { Input { emp: press, ..Input::default() } } else { Input { move_z: 1.0, ..Input::default() } };
-        let ib = if close { Input { move_x: 1.0, boost: true, yaw: pi, ..Input::default() } } else { Input { move_z: 1.0, yaw: pi, ..Input::default() } };
+        let ib = if close { Input { move_z: 1.0, boost: true, yaw: pi, ..Input::default() } } else { Input { move_z: 1.0, yaw: pi, ..Input::default() } };
         h.step([ia, ib]);
         for e in std::mem::take(&mut h.clients[0].1.events) {
             if let Event::Pulse { owner, hits: bits, .. } = e

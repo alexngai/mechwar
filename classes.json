@@ -2,7 +2,7 @@
   "A": {
     "name": "Wisp", "role": "fast, fragile, quick dodge", "source": "own tuning",
     "overrides": {
-      "walk_speed": 11, "boost_speed": 19, "ground_accel": 40, "dodge_cooldown": 1.1,
+      "walk_speed": 14.5, "boost_speed": 28, "ground_accel": 75, "dodge_speed": 32, "dodge_cooldown": 0.9,
       "health_max": 70, "mech_radius": 1.1, "mech_height": 4.2, "eye_height": 3.6,
       "fire_rate": 14, "shot_damage": 3.4, "heat_per_shot": 2.9,
       "spread_deg": 0.6, "bloom_per_shot": 0.4, "bloom_max": 4.5, "bloom_recovery": 3,
@@ -25,7 +25,7 @@
   "C": {
     "name": "Bulwark", "role": "slow, tough, heavy cannon", "source": "own tuning",
     "overrides": {
-      "walk_speed": 7, "boost_speed": 13, "ground_accel": 22, "dodge_speed": 14, "dodge_cooldown": 2.0,
+      "walk_speed": 9.5, "boost_speed": 19, "ground_accel": 40, "dodge_speed": 29, "dodge_cooldown": 1.6,
       "health_max": 150, "mech_radius": 1.8, "mech_height": 5.8, "eye_height": 4.9,
       "fire_rate": 1.6, "shot_damage": 7, "heat_per_shot": 16, "heat_max": 120, "weapon_range": 60,
       "pellets": 5, "spread_deg": 2.5, "bloom_per_shot": 0, "bloom_max": 0,
