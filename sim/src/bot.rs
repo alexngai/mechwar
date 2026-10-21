@@ -6,7 +6,7 @@ use std::f32::consts::{PI, TAU};
 
 use rapier3d::prelude::{Ray, Rotation};
 
-use crate::{Arena, DT, Input, Mech, TICK_HZ, Tuning, Vector};
+use crate::{Arena, DT, Input, Mech, MechClass, TICK_HZ, Tuning, Vector};
 
 /// Hand-placed waypoints for the blockout arena (feet positions).
 /// ponytail: one hand-made graph; generate edges by simulated walks, or use a navmesh, once
@@ -135,6 +135,12 @@ impl Bot {
                 dodge: if dodge { self.strafe as i8 } else { 0 },
                 // Stay under the overheat lockout rather than spraying into it.
                 fire: on_target && !me.overheated && me.heat < 0.85 * t.heat_max,
+                // Lancers vent before stalling; Bulwarks brace once they're hurt and under fire.
+                ability: match me.class {
+                    MechClass::B => me.overheated || me.heat >= 0.8 * t.heat_max,
+                    MechClass::C => took_damage && me.health < 0.6 * t.health_max,
+                    MechClass::A => false,
+                },
                 ..Input::default()
             };
         }
@@ -184,6 +190,8 @@ impl Bot {
             yaw: new_yaw,
             pitch: me.pitch * 0.9,
             boost: range > FAR && me.fuel > 0.5 * t.fuel_max,
+            // Wisps slipstream on long runs.
+            ability: me.class == MechClass::A && range > FAR,
             hover: tick < self.hover_until,
             ..Input::default()
         }

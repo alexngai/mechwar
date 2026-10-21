@@ -110,6 +110,7 @@ const count = (rate, dt) => Math.floor(rate * dt + Math.random());
 const FIRE = [[1, 0.95, 0.7], [1, 0.35, 0.05]];
 const SPARK = [[1, 0.9, 0.5], [1, 0.3, 0.05]];
 const FLAME = [[0.85, 0.9, 1], [1, 0.45, 0.1]];
+const COOL_FLAME = [[0.85, 0.97, 1], [0.25, 0.55, 1]];
 const DUST = [[0.62, 0.58, 0.5], [0.5, 0.47, 0.42]];
 
 export class Effects {
@@ -136,10 +137,19 @@ export class Effects {
     for (let i = 0; i < 3; i++) this.soft.spawn(p, scatter(UP, 1, 1), { life: rand(0.5, 0.9), size: [0.5, 1.8], color: DUST, alpha: 0.45, drag: 2 });
   }
 
-  thrust(p, dir, power, dt) {
+  /** `cool` flames are Slipstream's blue-white. */
+  thrust(p, dir, power, dt, cool = false) {
     for (let i = count(70 * power, dt); i > 0; i--) {
-      this.glow.spawn(p, scatter(dir, rand(8, 14), 1.2), { life: rand(0.06, 0.13) * power, size: [0.75 * power, 0.15], color: FLAME, drag: 4 });
+      this.glow.spawn(p, scatter(dir, rand(8, 14), 1.2), { life: rand(0.06, 0.13) * power, size: [0.75 * power, 0.15], color: cool ? COOL_FLAME : FLAME, drag: 4 });
     }
+  }
+
+  /** Vent: a big burst of white steam. */
+  steam(p) {
+    for (let i = 0; i < 16; i++) {
+      this.soft.spawn(p, scatter(UP, rand(2, 5), 3), { life: rand(0.8, 1.4), size: [1, 4], color: [[0.95, 0.95, 0.95], [0.8, 0.8, 0.8]], alpha: 0.6, drag: 2 });
+    }
+    for (let i = 0; i < 8; i++) this.glow.spawn(p, scatter(UP, rand(2, 6), 4), { life: rand(0.1, 0.25), size: [0.8, 0.2], color: COOL_FLAME, drag: 3 });
   }
 
   burst(p, dir) {

@@ -88,7 +88,7 @@ fn prediction_matches_server() {
         // A walks with a slow turn, boosts, dodges, hovers and fires; B strafes, dodges and hovers.
         let a = match tick {
             0..60 => Input { move_z: 1.0, yaw: tick as f32 * 0.01, ..i },
-            60..90 => Input { move_z: 1.0, boost: true, yaw: 0.6, ..i },
+            60..90 => Input { move_z: 1.0, boost: true, yaw: 0.6, ability: tick == 60, ..i },
             90 => Input { dodge: 1, yaw: 0.6, ..i },
             91..130 => Input { hover: true, move_x: -1.0, yaw: 0.6, ..i },
             _ => Input { fire: tick < 160, pitch: -0.2, yaw: 0.6, ..i },
@@ -97,6 +97,7 @@ fn prediction_matches_server() {
             move_x: if (tick / 20) % 2 == 0 { 1.0 } else { -1.0 },
             dodge: if tick == 100 { -1 } else { 0 },
             hover: (150..180).contains(&tick),
+            ability: tick == 120,
             ..i
         };
         h.step([a, b]);
@@ -345,15 +346,20 @@ fn player(game: &Game, id: u8) -> sim::net::PlayerNet {
     game.snapshot(id).players.into_iter().find(|p| p.id == id).unwrap()
 }
 
+/// Input for `shooter` aiming at `victim`'s chest as the server has them now.
+fn aim_at(game: &Game, shooter: u8, victim: u8, fire: bool) -> Input {
+    let classes = class_tunings();
+    let (s, v) = (player(game, shooter), player(game, victim));
+    let (st, vt) = (&classes[s.class.index()], &classes[v.class.index()]);
+    let d = v.view.pos + Vector::Y * (vt.mech_height * 0.5) - (s.view.pos + Vector::Y * st.eye_height);
+    Input { yaw: (-d.x).atan2(-d.z), pitch: d.y.atan2(d.x.hypot(d.z)), fire, ..Input::default() }
+}
+
 /// `shooter` (no latency) holds aim on `victim`'s chest and fires until a kill; returns the hits.
 fn shoot_until_kill(game: &mut Game, shooter: u8, victim: u8) -> u32 {
-    let classes = class_tunings();
     let (mut shooter_seq, mut victim_seq, mut hits) = (0, 0, 0);
     for _ in 0..(30.0 * TICK_HZ) as u32 {
-        let (s, v) = (player(game, shooter), player(game, victim));
-        let (st, vt) = (&classes[s.class.index()], &classes[v.class.index()]);
-        let d = v.view.pos + Vector::Y * (vt.mech_height * 0.5) - (s.view.pos + Vector::Y * st.eye_height);
-        let aim = Input { yaw: (-d.x).atan2(-d.z), pitch: d.y.atan2(d.x.hypot(d.z)), fire: true, ..Input::default() };
+        let aim = aim_at(game, shooter, victim, true);
         send(game, shooter, &mut shooter_seq, 1, aim);
         send(game, victim, &mut victim_seq, 1, Input::default());
         game.step();
@@ -413,4 +419,36 @@ fn class_applies_now_then_on_respawn() {
     }
     assert_eq!(player(&game, victim).class, MechClass::A);
     assert_eq!(game.snapshot(victim).me.health, classes[MechClass::A.index()].health_max);
+}
+
+#[test]
+fn brace_cuts_damage() {
+    let classes = class_tunings();
+    let (bulwark, hit) = (&classes[MechClass::C.index()], classes[MechClass::B.index()].shot_damage);
+    let (mut game, shooter, victim) = duel_game();
+    game.pick_class(victim, MechClass::C);
+    game.step();
+
+    // Brace on the first tick, then a burst inside the 5 s window and another after it.
+    let (mut shooter_seq, mut victim_seq) = (0, 0);
+    let (mut braced, mut unbraced) = (Vec::new(), Vec::new());
+    let mut last = game.snapshot(victim).me.health;
+    for tick in 0..(8.0 * TICK_HZ) as u32 {
+        let secs = tick as f32 / TICK_HZ;
+        let fire = (0.5..1.5).contains(&secs) || (6.0..7.0).contains(&secs);
+        let aim = aim_at(&game, shooter, victim, fire);
+        send(&mut game, shooter, &mut shooter_seq, 1, aim);
+        send(&mut game, victim, &mut victim_seq, 1, Input { ability: tick == 0, ..Input::default() });
+        game.step();
+        let hits = game.snapshot(shooter).events.iter().filter(|e| matches!(e, Event::Shot { hit: Some(h), .. } if *h == victim)).count();
+        let health = game.snapshot(victim).me.health;
+        if hits > 0 {
+            let per_hit = (last - health) / hits as f32;
+            if secs < 5.0 { braced.push(per_hit) } else { unbraced.push(per_hit) }
+        }
+        last = health;
+    }
+    assert!(!braced.is_empty() && !unbraced.is_empty(), "no hits landed");
+    assert!(braced.iter().all(|d| (d - hit * bulwark.brace_damage_mult).abs() < 1e-3), "braced hits: {braced:?}");
+    assert!(unbraced.iter().all(|d| (d - hit).abs() < 1e-3), "unbraced hits: {unbraced:?}");
 }

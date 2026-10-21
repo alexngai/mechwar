@@ -32,7 +32,7 @@ if (net) {
 }
 
 // Index layout of state(); keep in sync with mech_state in sim/src/wasm.rs.
-const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17 };
+const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19 };
 
 // --- Scene ---------------------------------------------------------------
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -73,7 +73,7 @@ let hitUntil = 0, hurt = 0, message = '', messageUntil = 0;
 
 // --- Input ---------------------------------------------------------------
 const keys = new Set();
-let yaw = 0, pitch = 0, dodge = 0, firing = false, cockpit = false;
+let yaw = 0, pitch = 0, dodge = 0, ability = false, firing = false, cockpit = false;
 const locked = () => document.pointerLockElement === renderer.domElement;
 // Chrome rejects a re-lock right after Esc; the next click simply tries again.
 renderer.domElement.addEventListener('click', () => renderer.domElement.requestPointerLock()?.catch?.(() => {}));
@@ -96,6 +96,7 @@ addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (e.code === 'KeyQ') dodge = -1;
   if (e.code === 'KeyE') dodge = 1;
+  if (e.code === 'KeyF') ability = true;
   if (e.code === 'KeyR' && sim) { sim.reset(); prev = curr = sim.state(); }
   if (e.code === 'KeyV') cockpit = !cockpit;
   if (e.code === 'KeyC' && picked !== null) pickerOpen = !pickerOpen;
@@ -122,7 +123,7 @@ gui.add({ copy: () => navigator.clipboard.writeText(JSON.stringify(tuning, null,
 
 // --- HUD -------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
-const hud = { status: $('status'), net: $('net'), score: $('score'), banner: $('banner'), damage: $('damage'), fuel: $('fuel'), heat: $('heat'), dodge: $('dodge'), hp: $('hp'), crosshair: $('crosshair') };
+const hud = { ability: $('ability'), abilityName: $('ability-name'), status: $('status'), net: $('net'), score: $('score'), banner: $('banner'), damage: $('damage'), fuel: $('fuel'), heat: $('heat'), dodge: $('dodge'), hp: $('hp'), crosshair: $('crosshair') };
 
 // --- Class picker ----------------------------------------------------------
 // Shown before the first deploy and on death; C reopens it. Online the pick applies on the next
@@ -134,7 +135,8 @@ CLASS_KEYS.forEach((key, i) => {
   card.className = 'card';
   card.innerHTML = `<span class="key">${i + 1}</span><b>${c.name}</b>${c.role}<dl>
     <dt>HP</dt><dd>${v('health_max')}</dd><dt>Speed</dt><dd>${v('walk_speed')} m/s</dd>
-    <dt>DPS</dt><dd>${Math.round(v('fire_rate') * v('shot_damage'))}</dd></dl>`;
+    <dt>DPS</dt><dd>${Math.round(v('fire_rate') * v('shot_damage'))}</dd></dl>
+    <p><b>F · ${c.ability.name}</b>${c.ability.desc}</p>`;
   card.addEventListener('click', () => pick(i));
   $('cards').append(card);
 });
@@ -168,7 +170,7 @@ function frame(now) {
       continue;
     }
     const input = [axis('KeyD', 'KeyA'), axis('KeyW', 'KeyS'), yaw, pitch,
-      keys.has('ShiftLeft') || keys.has('ShiftRight'), keys.has('Space'), dodge, firing];
+      keys.has('ShiftLeft') || keys.has('ShiftRight'), keys.has('Space'), dodge, firing, ability];
     if (net) {
       const bytes = net.tick(...input, now);
       if (ws.readyState === WebSocket.OPEN) ws.send(bytes);
@@ -178,7 +180,9 @@ function frame(now) {
     prev = curr;
     curr = game.state();
     if (dodge && curr[S.DODGE_CD] > prev[S.DODGE_CD]) me.dodge(dodge);
+    if (ability && curr[S.ABILITY_CD] > prev[S.ABILITY_CD]) me.ability();
     dodge = 0;
+    ability = false;
     acc -= DT;
     if (curr[S.SHOT]) shots.push(new THREE.Vector3(curr[S.AIM], curr[S.AIM + 1], curr[S.AIM + 2]));
   }
@@ -204,12 +208,13 @@ function frame(now) {
     vel: vel.set(lerp(S.VEL), lerp(S.VEL + 1), lerp(S.VEL + 2)),
     grounded: !!curr[S.GROUNDED], boosting: !!curr[S.BOOSTING], hovering: !!curr[S.HOVERING],
     health: curr[S.HEALTH], heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
+    ability: curr[S.ABILITY_T] > 0,
   });
 
   if (net) {
     const r = net.remotes(now), live = new Set();
-    for (let i = 0; i < r.length; i += 12) {
-      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering] = r.subarray(i, i + 12);
+    for (let i = 0; i < r.length; i += 13) {
+      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering, , abilityOn] = r.subarray(i, i + 13);
       let e = remotes.get(id);
       if (e && e.cls !== cls) {
         e.mech.dispose();
@@ -227,6 +232,7 @@ function frame(now) {
       e.mech.update(dt, {
         pos: e.pos, yaw: ryaw, pitch: rpitch, scale: classValue(cls, 'mech_height') / e.mech.height, vel: e.vel,
         grounded: !hovering && Math.abs(e.vel.y) < 1.5, boosting: !!boosting, hovering: !!hovering, health,
+        ability: !!abilityOn,
       });
     }
     for (const [id, e] of remotes) if (!live.has(id)) { e.mech.dispose(); remotes.delete(id); }
@@ -288,6 +294,10 @@ function frame(now) {
   hud.heat.classList.toggle('over', !!curr[S.OVERHEATED]);
   hud.dodge.style.width = `${100 * (1 - curr[S.DODGE_CD] / Math.max(T('dodge_cooldown'), 1e-6))}%`;
   hud.hp.style.width = `${(100 * curr[S.HEALTH]) / T('health_max')}%`;
+  const abilityActive = curr[S.ABILITY_T] > 0;
+  hud.ability.style.width = `${100 * (1 - curr[S.ABILITY_CD] / Math.max(T('ability_cooldown'), 1e-6))}%`;
+  hud.ability.classList.toggle('active', abilityActive);
+  hud.abilityName.textContent = `${classes[CLASS_KEYS[classIdx]].ability.name}${abilityActive ? ' ON' : curr[S.ABILITY_CD] <= 0 ? ' F' : ''}`;
   hud.crosshair.classList.toggle('hit', now < hitUntil);
   if (net) {
     const [, kills, deaths, ping, correction, full, team, blue, red, secondsLeft, ended, winner] = hudState;

@@ -15,7 +15,7 @@ fn mech_state(m: &Mech) -> Vec<f32> {
         b(m.grounded), b(m.boosting), b(m.hovering),
         m.dodge_cooldown, b(m.shot),
         m.aim_point.x, m.aim_point.y, m.aim_point.z,
-        m.health,
+        m.health, m.ability_time, m.ability_cooldown,
     ]
 }
 
@@ -44,6 +44,7 @@ impl WasmSim {
     /// 0 = A, 1 = B, 2 = C. Takes effect for movement at once; call `reset` to respawn in it.
     pub fn set_class(&mut self, class: u8) {
         self.class = MechClass::from_index(class).unwrap_or_default();
+        self.sim.class = self.class;
         self.sim.tuning = self.base.for_class(self.class);
     }
 
@@ -52,8 +53,8 @@ impl WasmSim {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn step(&mut self, move_x: f32, move_z: f32, yaw: f32, pitch: f32, boost: bool, hover: bool, dodge: i8, fire: bool) {
-        self.sim.step(&Input { move_x, move_z, yaw, pitch, boost, hover, dodge, fire });
+    pub fn step(&mut self, move_x: f32, move_z: f32, yaw: f32, pitch: f32, boost: bool, hover: bool, dodge: i8, fire: bool, ability: bool) {
+        self.sim.step(&Input { move_x, move_z, yaw, pitch, boost, hover, dodge, fire, ability });
     }
 
     pub fn state(&self) -> Vec<f32> {
@@ -74,8 +75,10 @@ impl WasmNetClient {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn tick(&mut self, move_x: f32, move_z: f32, yaw: f32, pitch: f32, boost: bool, hover: bool, dodge: i8, fire: bool, now: f64) -> Vec<u8> {
-        self.0.tick(Input { move_x, move_z, yaw, pitch, boost, hover, dodge, fire }, now)
+    pub fn tick(
+        &mut self, move_x: f32, move_z: f32, yaw: f32, pitch: f32, boost: bool, hover: bool, dodge: i8, fire: bool, ability: bool, now: f64,
+    ) -> Vec<u8> {
+        self.0.tick(Input { move_x, move_z, yaw, pitch, boost, hover, dodge, fire, ability }, now)
     }
 
     pub fn receive(&mut self, bytes: &[u8], now: f64) {
@@ -91,7 +94,8 @@ impl WasmNetClient {
         mech_state(&self.0.mech)
     }
 
-    /// Twelve floats per remote mech: id, team, class, feet xyz, yaw, pitch, health, boosting, hovering, bot.
+    /// Thirteen floats per remote mech: id, team, class, feet xyz, yaw, pitch, health, boosting, hovering, bot,
+    /// ability active.
     pub fn remotes(&self, now: f64) -> Vec<f32> {
         let b = |v: bool| if v { 1.0 } else { 0.0 };
         self.0
@@ -99,7 +103,7 @@ impl WasmNetClient {
             .iter()
             .flat_map(|p| {
                 let v = &p.view;
-                [f32::from(p.id), f32::from(p.team), p.class.index() as f32, v.pos.x, v.pos.y, v.pos.z, v.yaw, v.pitch, v.health, b(v.boosting), b(v.hovering), b(p.bot)]
+                [f32::from(p.id), f32::from(p.team), p.class.index() as f32, v.pos.x, v.pos.y, v.pos.z, v.yaw, v.pitch, v.health, b(v.boosting), b(v.hovering), b(p.bot), b(v.ability)]
             })
             .collect()
     }

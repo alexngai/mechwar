@@ -59,11 +59,21 @@ pub struct MechView {
     pub health: f32,
     pub boosting: bool,
     pub hovering: bool,
+    /// Class ability active (Slipstream or Brace; Vent is instant).
+    pub ability: bool,
 }
 
 impl From<&Mech> for MechView {
     fn from(m: &Mech) -> Self {
-        Self { pos: m.pos, yaw: m.yaw, pitch: m.pitch, health: m.health, boosting: m.boosting, hovering: m.hovering }
+        Self {
+            pos: m.pos,
+            yaw: m.yaw,
+            pitch: m.pitch,
+            health: m.health,
+            boosting: m.boosting,
+            hovering: m.hovering,
+            ability: m.ability_time > 0.0,
+        }
     }
 }
 

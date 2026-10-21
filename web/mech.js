@@ -155,6 +155,7 @@ export class Mech {
   /** `cls` is 'A' (Wisp), 'B' (Lancer) or 'C' (Bulwark). Scale by tuning mech_height / `height`. */
   constructor(scene, fx, cls = 'B') {
     const spec = (this.spec = CLASSES[cls] ?? LANCER);
+    this.cls = CLASSES[cls] ? cls : 'B';
     this.height = spec.height;
     this.scene = scene;
     this.fx = fx;
@@ -173,6 +174,7 @@ export class Mech {
     this.dodgeRoll = 0;
     this.nextGun = 0;
     this.tracerLife = 0;
+    this.brace = 0;
 
     const root = (this.root = new THREE.Group());
     const body = (this.body = new THREE.Group());
@@ -211,6 +213,11 @@ export class Mech {
     );
     this.tracer.frustumCulled = false; // setFromPoints doesn't refresh the bounding sphere
     this.tracer.visible = false;
+
+    // Brace shell: a faint pulsing shield around the Bulwark.
+    this.shellMat = new THREE.MeshBasicMaterial({ color: 0x7fe0ff, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
+    this.shell = put(root, new THREE.Mesh(new THREE.IcosahedronGeometry(spec.height * 0.55, 1), this.shellMat), 0, spec.height * 0.5, 0);
+    this.shell.visible = false;
     scene.add(root, this.tracer);
   }
 
@@ -220,7 +227,7 @@ export class Mech {
 
   /**
    * Pose from sim state: { pos, yaw, pitch, scale, vel, grounded, boosting, hovering, health,
-   * heat (0-1), overheated }. Also emits thruster, footstep, smoke and death effects.
+   * heat (0-1), overheated, ability (active) }. Also emits thruster, footstep, smoke and death effects.
    */
   update(dt, s) {
     this.t += dt;
@@ -253,7 +260,9 @@ export class Mech {
     // Body bobs with the gait, leans into motion, sinks on landing and slumps when destroyed.
     const bob = moving ? spec.bob * (1 - Math.cos(2 * this.phase)) * Math.min(speed / 6, 1) : 0;
     const sway = alive && s.hovering ? 0.06 * Math.sin(this.t * 5) : 0;
-    body.position.y = spec.hipY - bob - this.squash * 0.6 - this.wreck * spec.sink + sway;
+    // Brace sinks the Bulwark into a lower stance.
+    this.brace = damp(this.brace, alive && s.ability && this.cls === 'C' ? 1 : 0, 8, dt);
+    body.position.y = spec.hipY - bob - this.squash * 0.6 - this.wreck * spec.sink + sway - this.brace * 0.3;
     body.rotation.x = damp(body.rotation.x, alive ? clamp(local.z / 16, -1, 1) * 0.25 : -0.45 * this.wreck, 6, dt);
     body.rotation.z = damp(body.rotation.z, alive ? -clamp(local.x / 16, -1, 1) * 0.2 + this.dodgeRoll : 0.25 * this.wreck, 8, dt);
     for (const gun of this.guns) gun.pod.rotation.x = alive ? s.pitch - body.rotation.x : -0.5;
@@ -291,13 +300,18 @@ export class Mech {
 
     root.updateMatrixWorld(true);
     const thrusting = alive && (s.boosting || s.hovering);
-    this.nozzleMat.emissive.setRGB(thrusting ? 1 : 0.15, thrusting ? 0.45 : 0.05, 0);
+    const slipstream = alive && s.ability && this.cls === 'A';
+    if (slipstream) this.nozzleMat.emissive.setRGB(0.4, 0.7, 1);
+    else this.nozzleMat.emissive.setRGB(thrusting ? 1 : 0.15, thrusting ? 0.45 : 0.05, 0);
     if (thrusting) {
-      // Boost pushes flame back, hover straight down.
+      // Boost pushes flame back, hover straight down; Slipstream burns longer and blue-white.
       if (s.hovering) flame.set(0, -1, 0.15).normalize();
       else flame.set(0, -0.35, 1).normalize().applyQuaternion(root.quaternion);
-      for (const exit of this.nozzles) this.fx.thrust(exit.getWorldPosition(world), flame, s.hovering ? 1.4 : 1, dt);
+      const power = s.hovering ? 1.4 : slipstream ? 1.6 : 1;
+      for (const exit of this.nozzles) this.fx.thrust(exit.getWorldPosition(world), flame, power, dt, slipstream);
     }
+    this.shell.visible = this.brace > 0.05;
+    this.shellMat.opacity = this.brace * (0.12 + 0.05 * Math.sin(this.t * 8));
     if (!alive) this.fx.smoke(world.copy(s.pos).addScaledVector(UP, 0.44 * spec.height * s.scale), dt, 0.18);
     if (alive && s.overheated) for (const gun of this.guns) this.fx.smoke(gun.tip.getWorldPosition(world), dt, 0.75);
 
@@ -323,6 +337,18 @@ export class Mech {
     this.flash = 1;
   }
 
+  /** One-off cue when the class ability fires: Vent steam, a Slipstream kick, or a Brace pulse. */
+  ability() {
+    if (this.cls === 'B') {
+      this.fx.steam(this.body.getWorldPosition(world));
+      for (const gun of this.guns) this.fx.steam(gun.tip.getWorldPosition(world));
+    } else if (this.cls === 'A') {
+      this.fx.burst(this.body.getWorldPosition(world), flame.set(0, -0.2, 1).applyQuaternion(this.root.quaternion));
+    } else {
+      this.flash = 0.6;
+    }
+  }
+
   /** Side-jet burst and a roll toward `dir` (-1 left, +1 right). */
   dodge(dir) {
     this.dodgeRoll = -dir * 0.4;
@@ -332,6 +358,6 @@ export class Mech {
   dispose() {
     this.scene.remove(this.root, this.tracer);
     this.root.traverse((o) => o.geometry?.dispose());
-    for (const m of [this.hull, this.barrels, this.nozzleMat]) m.dispose();
+    for (const m of [this.hull, this.barrels, this.nozzleMat, this.shellMat]) m.dispose();
   }
 }

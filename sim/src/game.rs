@@ -107,7 +107,7 @@ impl Game {
         p.next_class = class;
         if p.ack_seq == 0 && p.mech.health > 0.0 {
             p.class = class;
-            p.mech = spawn_mech(&self.classes[class.index()], p.mech.pos);
+            p.mech = spawn(&self.classes, class, p.mech.pos);
         }
     }
 
@@ -124,7 +124,7 @@ impl Game {
             slot,
             class,
             next_class: class,
-            mech: spawn_mech(&self.classes[class.index()], spawn_point(team, slot)),
+            mech: spawn(&self.classes, class, spawn_point(team, slot)),
             inputs: VecDeque::new(),
             credit: 0.0,
             ack_seq: 0,
@@ -180,7 +180,7 @@ impl Game {
                 let pos = self.respawn_point(self.players[i].team);
                 let p = &mut self.players[i];
                 p.class = p.next_class;
-                p.mech = spawn_mech(&self.classes[p.class.index()], pos);
+                p.mech = spawn(&self.classes, p.class, pos);
                 p.respawn_at = None;
             }
         }
@@ -241,7 +241,7 @@ impl Game {
         self.phase = Phase::Playing { started_at: self.tick };
         for p in &mut self.players {
             p.class = p.next_class;
-            p.mech = spawn_mech(&self.classes[p.class.index()], spawn_point(p.team, p.slot));
+            p.mech = spawn(&self.classes, p.class, spawn_point(p.team, p.slot));
             p.respawn_at = None;
             p.kills = 0;
             p.deaths = 0;
@@ -304,7 +304,10 @@ impl Game {
         self.events.push(Event::Shot { shooter: shooter_id, end, hit: hit.map(|j| self.players[j].id) });
         let Some(j) = hit else { return };
 
-        let damage = self.classes[shooter_class.index()].shot_damage;
+        let target = &self.players[j];
+        let braced = target.mech.class == MechClass::C && target.mech.ability_time > 0.0;
+        let damage = self.classes[shooter_class.index()].shot_damage
+            * if braced { self.classes[target.class.index()].brace_damage_mult } else { 1.0 };
         let respawn_at = self.tick + secs(self.classes[self.players[j].class.index()].respawn_delay);
         let target = &mut self.players[j];
         target.mech.health -= damage;
@@ -355,6 +358,11 @@ impl Game {
             },
         }
     }
+}
+
+/// A fresh mech of `class` at `pos`.
+fn spawn(classes: &[Tuning; 3], class: MechClass, pos: Vector) -> Mech {
+    Mech { class, ..spawn_mech(&classes[class.index()], pos) }
 }
 
 fn spawn_point(team: u8, slot: usize) -> Vector {

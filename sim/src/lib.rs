@@ -72,6 +72,12 @@ pub struct Tuning {
     pub shot_damage: f32,
     pub respawn_delay: f32,
 
+    pub ability_cooldown: f32,
+    pub ability_duration: f32,
+    pub slipstream_boost_mult: f32,
+    pub brace_damage_mult: f32,
+    pub brace_speed_mult: f32,
+
     pub bot_turn_rate_deg: f32,
     pub bot_aim_error_deg: f32,
     pub bot_reaction_s: f32,
@@ -151,12 +157,19 @@ pub struct Input {
     pub hover: bool,
     pub dodge: i8,
     pub fire: bool,
+    /// Class ability; like `dodge`, only on the tick the key went down.
+    pub ability: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct Mech {
+    /// Picks the ability `step_mech` applies.
+    pub class: MechClass,
     /// Dead at 0 or below: `step_mech` leaves a dead mech alone.
     pub health: f32,
+    /// Seconds the ability stays active, and until it can be used again.
+    pub ability_time: f32,
+    pub ability_cooldown: f32,
     /// Feet position (bottom of the capsule).
     pub pos: Vector,
     pub vel: Vector,
@@ -258,19 +271,20 @@ pub fn aim_ray(t: &Tuning, m: &Mech) -> Ray {
 /// Single-player wrapper used by the offline sandbox.
 pub struct Sim {
     pub tuning: Tuning,
+    pub class: MechClass,
     pub mech: Mech,
     arena: Arena,
 }
 
 impl Sim {
     pub fn new(tuning: Tuning) -> Self {
-        let mut sim = Self { tuning, mech: Mech::default(), arena: Arena::default() };
+        let mut sim = Self { tuning, class: MechClass::B, mech: Mech::default(), arena: Arena::default() };
         sim.reset();
         sim
     }
 
     pub fn reset(&mut self) {
-        self.mech = spawn_mech(&self.tuning, SPAWN);
+        self.mech = Mech { class: self.class, ..spawn_mech(&self.tuning, SPAWN) };
     }
 
     pub fn step(&mut self, input: &Input) {
@@ -298,11 +312,27 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     m.dodge_cooldown = (m.dodge_cooldown - DT).max(0.0);
     m.dodge_time = (m.dodge_time - DT).max(0.0);
 
+    // Class ability: Slipstream (A) frees and speeds up boost, Vent (B) dumps heat at once,
+    // Brace (C) trades speed and boost for less damage (applied by the server).
+    m.ability_time = (m.ability_time - DT).max(0.0);
+    m.ability_cooldown = (m.ability_cooldown - DT).max(0.0);
+    if input.ability && m.ability_cooldown <= 0.0 {
+        m.ability_time = t.ability_duration;
+        m.ability_cooldown = t.ability_cooldown;
+        if m.class == MechClass::B {
+            m.heat = 0.0;
+            m.overheated = false;
+        }
+    }
+    let slipstream = m.class == MechClass::A && m.ability_time > 0.0;
+    let brace = m.class == MechClass::C && m.ability_time > 0.0;
+
     // Fuel spenders: boost, dodge, hover.
     let mut used_fuel = false;
     // Starting needs boost_min_fuel so an empty tank doesn't flicker boost on each regen tick.
-    m.boosting = input.boost && has_move && m.fuel > 0.0 && (m.boosting || m.fuel >= t.boost_min_fuel);
-    if m.boosting {
+    let fuel_ok = slipstream || (m.fuel > 0.0 && (m.boosting || m.fuel >= t.boost_min_fuel));
+    m.boosting = !brace && input.boost && has_move && fuel_ok;
+    if m.boosting && !slipstream {
         m.fuel -= t.boost_drain * DT;
         used_fuel = true;
     }
@@ -343,7 +373,12 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     }
 
     // Horizontal: move toward the target velocity at a capped acceleration.
-    let target = wish * if m.boosting { t.boost_speed } else { t.walk_speed };
+    let target = wish
+        * if m.boosting {
+            t.boost_speed * if slipstream { t.slipstream_boost_mult } else { 1.0 }
+        } else {
+            t.walk_speed * if brace { t.brace_speed_mult } else { 1.0 }
+        };
     let mut accel = if m.dodge_time > 0.0 {
         t.dodge_drag
     } else if m.boosting {
@@ -500,4 +535,62 @@ mod tests {
         sim.step(&dodge);
         assert_eq!(sim.mech.fuel, before - t.dodge_fuel_cost);
     }
+
+    fn class_sim(class: MechClass) -> (Sim, Tuning) {
+        let t = Tuning::default().for_class(class);
+        let mut sim = Sim::new(t.clone());
+        sim.class = class;
+        sim.reset();
+        // A long clear run down the middle of the arena.
+        sim.mech.pos = Vector::new(0.0, 0.1, 45.0);
+        (sim, t)
+    }
+
+    fn speed(sim: &Sim) -> f32 {
+        sim.mech.vel.x.hypot(sim.mech.vel.z)
+    }
+
+    #[test]
+    fn vent_dumps_heat_once_per_cooldown() {
+        let (mut sim, t) = class_sim(MechClass::B);
+        let fire = Input { fire: true, ..Input::default() };
+        let vent = Input { ability: true, ..Input::default() };
+        run(&mut sim, fire, 120);
+        assert!(sim.mech.overheated);
+        sim.step(&vent);
+        assert_eq!(sim.mech.heat, 0.0);
+        assert!(!sim.mech.overheated);
+        assert_eq!(sim.mech.ability_cooldown, t.ability_cooldown);
+        run(&mut sim, fire, 30);
+        let heat = sim.mech.heat;
+        sim.step(&vent);
+        assert!(sim.mech.heat > 0.0 && sim.mech.heat <= heat, "vented again during the cooldown");
+    }
+
+    #[test]
+    fn slipstream_boosts_free_and_faster() {
+        let (mut sim, t) = class_sim(MechClass::A);
+        sim.step(&Input { ability: true, ..Input::default() });
+        let boost = Input { move_z: 1.0, boost: true, ..Input::default() };
+        run(&mut sim, boost, 60);
+        assert_eq!(sim.mech.fuel, t.fuel_max, "slipstream burned fuel");
+        assert!((speed(&sim) - t.boost_speed * t.slipstream_boost_mult).abs() < 0.05, "speed {}", speed(&sim));
+        run(&mut sim, boost, 74); // past the 4 s
+        assert!(sim.mech.fuel < t.fuel_max, "boost stayed free after slipstream");
+        assert!((speed(&sim) - t.boost_speed).abs() < 0.05, "speed {}", speed(&sim));
+    }
+
+    #[test]
+    fn brace_slows_and_grounds_boost() {
+        let (mut sim, t) = class_sim(MechClass::C);
+        sim.step(&Input { ability: true, ..Input::default() });
+        let boost = Input { move_z: 1.0, boost: true, ..Input::default() };
+        run(&mut sim, boost, 60);
+        assert!(!sim.mech.boosting, "boosted while braced");
+        assert!((speed(&sim) - t.walk_speed * t.brace_speed_mult).abs() < 0.05, "speed {}", speed(&sim));
+        run(&mut sim, boost, 120); // past the 5 s
+        assert!(sim.mech.boosting);
+        assert!((speed(&sim) - t.boost_speed).abs() < 0.05, "speed {}", speed(&sim));
+    }
+
 }
