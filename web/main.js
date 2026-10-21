@@ -8,6 +8,7 @@ import { Effects } from './fx.js';
 import saltworks from '../maps/saltworks.json';
 import blockout from '../maps/blockout.json';
 import { Mech } from './mech.js';
+import { createSky } from './sky.js';
 
 await init();
 const DT = tick_dt();
@@ -47,16 +48,39 @@ if (net) {
 const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19 };
 
 // --- Scene ---------------------------------------------------------------
+// ?quality=low|high (default high). High drops to Low once if it can't hold 45 fps.
+let quality = params.get('quality') === 'low' ? 'low' : 'high';
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.prepend(renderer.domElement);
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x8fa3b0);
-scene.fog = new THREE.Fog(0x8fa3b0, 60, 180);
-scene.add(new THREE.HemisphereLight(0xdfe8f0, 0x4a4238, 1.6));
-const sun = new THREE.DirectionalLight(0xfff2dd, 1.8);
-sun.position.set(30, 60, 20);
-scene.add(sun);
+scene.add(new THREE.HemisphereLight(0xdfe8f0, 0x4a4238, 1.4));
+
+// The sun's shadow map follows the player, covering the fight around them.
+const SUN_DIR = new THREE.Vector3(0.45, 0.8, 0.35).normalize();
+createSky(scene, SUN_DIR); // dome, horizon fog and distant skyline, lit from the same sun
+const SHADOW_HALF = 40;
+const sun = new THREE.DirectionalLight(0xfff0d8, 2.6);
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -SHADOW_HALF, right: SHADOW_HALF, top: SHADOW_HALF, bottom: -SHADOW_HALF, near: 1, far: 220 });
+sun.shadow.camera.updateProjectionMatrix();
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.04;
+scene.add(sun, sun.target);
+const sunRight = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), SUN_DIR).normalize();
+const sunUp = new THREE.Vector3().crossVectors(SUN_DIR, sunRight);
+/** Centers the shadow map on `p`, snapped to whole shadow texels so edges don't shimmer. */
+function placeSun(p) {
+  const texel = (2 * SHADOW_HALF) / sun.shadow.mapSize.x;
+  const snap = (v) => Math.round(v / texel) * texel;
+  sun.target.position
+    .copy(sunRight).multiplyScalar(snap(p.dot(sunRight)))
+    .addScaledVector(sunUp, snap(p.dot(sunUp)))
+    .addScaledVector(SUN_DIR, p.dot(SUN_DIR));
+  sun.position.copy(sun.target.position).addScaledVector(SUN_DIR, 100);
+}
 const camera = new THREE.PerspectiveCamera(T('fov'), 1, 0.1, 500);
 camera.rotation.order = 'YXZ';
 
@@ -72,6 +96,20 @@ ensureArena(sim ? mapIndex(params.get('map') ?? 'saltworks') : -1);
 
 const fx = new Effects(scene);
 let me = new Mech(scene, fx, 'B'), meClass = 1;
+
+function applyQuality() {
+  const high = quality === 'high';
+  renderer.setPixelRatio(Math.min(devicePixelRatio, high ? 2 : 1));
+  renderer.shadowMap.enabled = sun.castShadow = high;
+  fx.setQuality(high);
+  Mech.halos = high;
+  // Shadow support is compiled into materials, so they need rebuilding.
+  scene.traverse((o) => {
+    if (o.material) o.material.needsUpdate = true;
+  });
+  resize();
+}
+applyQuality();
 // Other players by id: their mech, team, class, and a velocity estimated from interpolated motion.
 const remotes = new Map();
 const shots = []; // own predicted shots, drawn once this frame's pose is set
@@ -105,6 +143,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyF') ability = true;
   if (e.code === 'KeyR' && sim) { sim.reset(); prev = curr = sim.state(); }
   if (e.code === 'KeyV') cockpit = !cockpit;
+  if (e.code === 'KeyI') $('stats').hidden = !$('stats').hidden;
   if (e.code === 'KeyC' && picked !== null) pickerOpen = !pickerOpen;
   const digit = ['Digit1', 'Digit2', 'Digit3'].indexOf(e.code);
   if (digit >= 0 && !$('picker').hidden) pick(digit);
@@ -288,6 +327,7 @@ function frame(now) {
     camera.position.addScaledVector(offset, Math.max(room, 0.5) / want);
   }
   if (camera.fov !== T('fov')) { camera.fov = T('fov'); camera.updateProjectionMatrix(); }
+  placeSun(pos);
   fx.update(dt, camera, renderer.domElement.height);
   hurt = Math.max(0, hurt - dt * 2.5);
   hud.damage.style.opacity = hurt;
@@ -322,7 +362,28 @@ function frame(now) {
   }
 
   renderer.render(scene, camera);
+  watchPerformance(now, dt);
   requestAnimationFrame(frame);
+}
+
+// Stats overlay (I) and the one-time fallback from High to Low.
+let fps = 60, slowFor = 0, statsAt = 0;
+function watchPerformance(now, dt) {
+  if (dt <= 0 || dt >= 0.25) return; // paused or backgrounded: not a real frame time
+  fps += (1 / dt - fps) * 0.05;
+  if (quality === 'high') {
+    slowFor = fps < 45 ? slowFor + dt : 0;
+    if (slowFor > 5) {
+      quality = 'low';
+      applyQuality();
+      console.info('quality: dropped to low (under 45 fps)');
+    }
+  }
+  if (!$('stats').hidden && now - statsAt > 500) {
+    statsAt = now;
+    const { calls, triangles } = renderer.info.render;
+    $('stats').textContent = `${quality}  ${Math.round(fps)} fps  ${calls} draw calls  ${Math.round(triangles / 1000)}k tris`;
+  }
 }
 
 function resize() {

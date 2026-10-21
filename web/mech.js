@@ -1,6 +1,7 @@
 // Original procedural mechs: three walker classes built from boxes and posed every frame from
 // sim state. They're rigid parts on joints, so there's no skinned mesh; legs use two-bone IK.
 import * as THREE from 'three';
+import { halo } from './fx.js';
 
 // Hull paint by team: -1 offline, 0 blue, 1 red.
 const PAINT = { '-1': 0x8a8f5c, 0: 0x4f6f8f, 1: 0x8f4f4a };
@@ -173,7 +174,6 @@ export class Mech {
     this.flash = 0;
     this.dodgeRoll = 0;
     this.nextGun = 0;
-    this.tracerLife = 0;
     this.brace = 0;
 
     const root = (this.root = new THREE.Group());
@@ -207,18 +207,25 @@ export class Mech {
       };
     });
 
-    this.tracer = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
-      new THREE.LineBasicMaterial({ color: 0xfff0a0 }),
-    );
-    this.tracer.frustumCulled = false; // setFromPoints doesn't refresh the bounding sphere
-    this.tracer.visible = false;
 
     // Brace shell: a faint pulsing shield around the Bulwark.
     this.shellMat = new THREE.MeshBasicMaterial({ color: 0x7fe0ff, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
     this.shell = put(root, new THREE.Mesh(new THREE.IcosahedronGeometry(spec.height * 0.55, 1), this.shellMat), 0, spec.height * 0.5, 0);
     this.shell.visible = false;
-    scene.add(root, this.tracer);
+
+    // Big parts cast sun shadows; everything receives them. Tiny parts skip the shadow pass.
+    const glowing = [];
+    root.traverse((o) => {
+      if (!o.isMesh || o === this.shell) return;
+      o.receiveShadow = true;
+      o.geometry.computeBoundingSphere();
+      o.castShadow = o.geometry.boundingSphere.radius > 0.35;
+      if (o.material === glowMat) glowing.push(o);
+    });
+    // Glow halos stand in for bloom: visors and lenses always, nozzles while thrusting.
+    this.halos = glowing.map((o) => o.add(halo(0x7fe0ff, 1.1)).children.at(-1));
+    this.nozzleHalos = this.nozzles.map((exit) => exit.add(halo(0xffa040, 1.8)).children.at(-1));
+    scene.add(root);
   }
 
   setTeam(team) {
@@ -310,6 +317,11 @@ export class Mech {
       const power = s.hovering ? 1.4 : slipstream ? 1.6 : 1;
       for (const exit of this.nozzles) this.fx.thrust(exit.getWorldPosition(world), flame, power, dt, slipstream);
     }
+    for (const h of this.halos) h.visible = Mech.halos && alive;
+    for (const h of this.nozzleHalos) {
+      h.visible = Mech.halos && thrusting;
+      h.material.color.setHex(slipstream ? 0x80c0ff : 0xffa040);
+    }
     this.shell.visible = this.brace > 0.05;
     this.shellMat.opacity = this.brace * (0.12 + 0.05 * Math.sin(this.t * 8));
     if (!alive) this.fx.smoke(world.copy(s.pos).addScaledVector(UP, 0.44 * spec.height * s.scale), dt, 0.18);
@@ -319,16 +331,14 @@ export class Mech {
     this.barrels.emissive.setRGB(heat * 0.9, heat * 0.25, heat * 0.05);
     this.hull.color.setHex(PAINT[this.team] ?? PAINT[-1]).multiplyScalar(1 - 0.75 * this.wreck);
     this.hull.emissive.setScalar(this.flash * 0.7);
-    this.tracerLife -= dt;
-    this.tracer.visible = this.tracerLife > 0;
   }
 
-  /** Muzzle flash and tracer from the next barrel to `end`, with sparks there. */
+  /** Muzzle flash, light and a glowing beam from the next barrel to `end`, with sparks there. */
   fire(end) {
     const gun = this.guns[(this.nextGun = (this.nextGun + 1) % this.guns.length)];
     const from = gun.tip.getWorldPosition(world);
-    this.tracer.geometry.setFromPoints([from, end]);
-    this.tracerLife = 0.06;
+    this.fx.beam(from, end);
+    this.fx.muzzleLight(from);
     this.fx.muzzle(from, flame.subVectors(end, from).normalize());
     this.fx.impact(end);
   }
@@ -356,8 +366,11 @@ export class Mech {
   }
 
   dispose() {
-    this.scene.remove(this.root, this.tracer);
+    this.scene.remove(this.root);
     this.root.traverse((o) => o.geometry?.dispose());
     for (const m of [this.hull, this.barrels, this.nozzleMat, this.shellMat]) m.dispose();
   }
 }
+
+/** Halos on (High quality) or off (Low). */
+Mech.halos = true;

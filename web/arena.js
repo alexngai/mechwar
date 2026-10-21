@@ -2,6 +2,7 @@
 // generated ground texture and baked ambient occlusion, merged into three meshes. Only `solids`
 // collide (the sim reads the same file); everything added here is visual.
 import * as THREE from 'three';
+import { halo } from './fx.js';
 
 const COLORS = {
   ground: 0x9a9384, concrete: 0xa8a08e, metal: 0x6f7880, panel: 0x8f969a, salt: 0xe8e4d8, tank: 0xb9ac8e,
@@ -107,6 +108,7 @@ function decorParts(d, parts, glow) {
     const head = new THREE.BoxGeometry(0.7, 0.22, 0.7);
     head.translate(x, y + 3.25, z);
     glow.push(paint(head, 0xffd9a0));
+    glow.lamps.push(new THREE.Vector3(x, y + 3.1, z));
   }
 }
 
@@ -212,6 +214,7 @@ export function buildArena(scene, map) {
   });
 
   const ground = [], solid = [], glow = [];
+  glow.lamps = [];
   map.solids.forEach((s, i) => {
     const g = paint(boxGeometry(s.half), COLORS[s.mat] ?? COLORS.concrete, jitter(i));
     g.applyMatrix4(boxes[i].matrix);
@@ -235,6 +238,14 @@ export function buildArena(scene, map) {
     new THREE.Mesh(mergeGeometries(solid), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })),
     glow.length && new THREE.Mesh(mergeGeometries(glow), new THREE.MeshBasicMaterial({ vertexColors: true })),
   ].filter(Boolean);
+  // Sun shadows: the floor only receives; solids and their trim cast and receive.
+  meshes[0].receiveShadow = true;
+  meshes[1].castShadow = meshes[1].receiveShadow = true;
+  for (const p of glow.lamps) {
+    const h = halo(0xffd29a, 2.6);
+    h.position.copy(p);
+    meshes.push(h);
+  }
   scene.add(...meshes);
   console.info(`arena ${map.name}: ${meshes.length} meshes, built in ${Math.round(performance.now() - started)} ms`);
   return meshes;

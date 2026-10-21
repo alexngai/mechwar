@@ -1,0 +1,192 @@
+// The world past the arena walls: a gradient sky dome with a soft sun, matching fog, and one merged
+// skyline mesh of desert mesas, a refinery and salt storage domes on the flats. All procedural and
+// purely visual: nothing here collides or casts shadows.
+import * as THREE from 'three';
+
+const SKY = { horizon: 0xd9cdb4, zenith: 0x8fb0c8, sun: 0xfff1d6 };
+const COLORS = {
+  flat: 0xd3ccbb, talus: 0xb5a58e, scree: 0xab9882, cliff: 0x9f8774, cap: 0xbcae96,
+  concrete: 0xa49d8f, steel: 0x8a8984, dark: 0x6e6b66, rust: 0x8c6550, tank: 0xc4bcaa, salt: 0xcbc3b0,
+};
+// Scales the skyline's fog depth. At full strength fog 70–230 m would erase the 150–260 m ring;
+// this keeps the far mesas as pale silhouettes while the arena itself gets the real fog.
+const SKYLINE_FOG = 0.85;
+
+/** Small seeded PRNG (mulberry32) so the skyline is the same on every load. */
+function mulberry32(seed) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function skyMaterial(sunDir) {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      horizon: { value: new THREE.Color(SKY.horizon) },
+      zenith: { value: new THREE.Color(SKY.zenith) },
+      sunColor: { value: new THREE.Color(SKY.sun) },
+      sunDir: { value: sunDir.clone().normalize() },
+    },
+    vertexShader: /* glsl */ `
+      varying vec3 vWorld;
+      void main() {
+        vec4 world = modelMatrix * vec4(position, 1.0);
+        vWorld = world.xyz;
+        gl_Position = projectionMatrix * viewMatrix * world;
+      }`,
+    fragmentShader: /* glsl */ `
+      uniform vec3 horizon, zenith, sunColor, sunDir;
+      varying vec3 vWorld;
+      #include <common>
+      #include <dithering_pars_fragment>
+      void main() {
+        vec3 dir = normalize(vWorld - cameraPosition);
+        float up = max(dir.y, 0.0); // below the horizon stays horizon-colored, like the fog
+        vec3 col = mix(horizon, zenith, (1.0 - exp(-3.0 * up)) / (1.0 - exp(-3.0)));
+        float c = max(dot(dir, sunDir), 0.0);
+        // Wide haze glow plus a tight halo; the disc alone is bright enough to clip under ACES.
+        col += sunColor * (0.25 * pow(c, 8.0) + 0.5 * pow(c, 400.0));
+        col += sunColor * 3.0 * smoothstep(0.99985, 0.99993, c);
+        gl_FragColor = vec4(col, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+        #include <dithering_fragment>
+      }`,
+    side: THREE.BackSide,
+    depthWrite: false,
+    dithering: true,
+  });
+}
+
+/** All skyline triangles, written straight into one non-indexed geometry. */
+function skylineGeometry() {
+  const rand = mulberry32(0x5a175a17);
+  const positions = [], colors = [], color = new THREE.Color();
+  const tri = (a, b, c, hex) => {
+    positions.push(...a, ...b, ...c);
+    color.setHex(hex).multiplyScalar(0.93 + rand() * 0.14); // per-facet shade for the faceted look
+    for (let i = 0; i < 3; i++) colors.push(color.r, color.g, color.b);
+  };
+
+  /**
+   * A faceted solid of revolution at (x, z): `rings` are [radius, height] pairs from the bottom up, `colors`
+   * one per band plus one for the top cap (no cap if the top radius is 0). `sx`/`sz` stretch it, `yaw` turns
+   * it, `spin` turns the facets, `wobble` jitters each facet's radius.
+   */
+  function lathe(x, z, rings, colors, { sides = 8, yaw = 0, spin = 0, sx = 1, sz = 1, wobble = 0 } = {}) {
+    const m = Array.from({ length: sides }, () => 1 + (rand() * 2 - 1) * wobble);
+    const cy = Math.cos(yaw), sy = Math.sin(yaw);
+    const p = (k, j) => {
+      const a = spin + ((j % sides) / sides) * Math.PI * 2, r = rings[k][0] * m[j % sides];
+      const lx = Math.cos(a) * r * sx, lz = Math.sin(a) * r * sz;
+      return [x + lx * cy - lz * sy, rings[k][1], z + lx * sy + lz * cy];
+    };
+    for (let k = 0; k + 1 < rings.length; k++)
+      for (let j = 0; j < sides; j++) {
+        const a = p(k, j), b = p(k, j + 1), c = p(k + 1, j + 1), d = p(k + 1, j);
+        if (rings[k + 1][0] > 1e-3) tri(a, d, c, colors[k]); // skip slivers where a ring closes to a point
+        if (rings[k][0] > 1e-3) tri(a, c, b, colors[k]);
+      }
+    const last = rings.length - 1, [r, y] = rings[last];
+    if (r > 1e-3 && colors[last] !== undefined) for (let j = 0; j < sides; j++) tri([x, y, z], p(last, j + 1), p(last, j), colors[last]);
+  }
+  const at = (angle, dist) => [Math.cos(angle) * dist, Math.sin(angle) * dist];
+  const box = ([x, z], w, d, h, hex, yaw) =>
+    lathe(x, z, [[Math.SQRT1_2, 0], [Math.SQRT1_2, h]], [hex, hex], { sides: 4, spin: Math.PI / 4, sx: w, sz: d, yaw });
+  const cylinder = ([x, z], r, h, hex, roof = hex) => lathe(x, z, [[r, 0], [r, h], [r * 0.2, h + r * 0.3]], [hex, roof, roof], { sides: 10 });
+  // Latitude rings from `t0` up to the pole: -PI/2 for a whole sphere, 0 for a dome.
+  const sphere = ([x, z], r, cy, hex, t0 = -Math.PI / 2) => {
+    const rings = [];
+    for (let i = 0; i <= 5; i++) {
+      const t = t0 + (i / 5) * (Math.PI / 2 - t0);
+      rings.push([r * Math.cos(t), cy + r * Math.sin(t)]);
+    }
+    lathe(x, z, rings, rings.map(() => hex), { sides: 10 });
+  };
+
+  // Salt flat from the arena wall out to the haze, just under the arena floor. Rings run outer to inner so it faces up.
+  lathe(0, 0, [[400, -0.1], [58, -0.1]], [COLORS.flat], { sides: 32 });
+
+  // Mesas: flat caprock over a cliff band and a sloping talus apron. The refinery sector gets low, far ones as a backdrop.
+  const REFINERY = [3.45, 4.45]; // radians around the arena
+  const MESAS = 26;
+  for (let i = 0; i < MESAS; i++) {
+    const angle = ((i + rand() * 0.6) / MESAS) * Math.PI * 2;
+    const behind = angle > REFINERY[0] && angle < REFINERY[1];
+    const dist = behind ? 235 + rand() * 25 : 150 + rand() * 110;
+    const h = behind ? 10 + rand() * 10 : 10 + rand() * 30;
+    const sx = 1 + rand() * 1.3;
+    const r = Math.min(h * (0.9 + rand() * 1.6), 45, (dist - 105) / sx);
+    const cliff = 0.5 + rand() * 0.25; // height where the cliff band starts, as a fraction
+    lathe(...at(angle, dist), [[r, 0], [r * 0.85, h * cliff * 0.5], [r * 0.7, h * cliff], [r * 0.64, h]],
+      [COLORS.talus, COLORS.scree, COLORS.cliff, COLORS.cap], { sides: 9, yaw: rand() * Math.PI, sx, wobble: 0.18 });
+  }
+
+  // Refinery on the horizon: cooling towers, stacks, columns, tank farm, spheres and process halls.
+  for (const [angle, dist, h] of [[3.55, 212, 46], [3.68, 224, 40]]) {
+    const rings = [];
+    for (let i = 0; i <= 5; i++) {
+      const y = (i / 5) * h, waist = h * 0.75; // hyperboloid: 0.45h radius at the base, 0.22h at the waist
+      rings.push([h * 0.22 * Math.sqrt(1 + ((y - waist) / (h * 0.42)) ** 2), y]);
+    }
+    lathe(...at(angle, dist), rings, rings.slice(1).map((_, i) => (i === 4 ? COLORS.dark : COLORS.concrete)), { sides: 12 }); // open top
+  }
+  for (const [angle, dist, h, r] of [[3.86, 196, 42, 1.8], [3.95, 186, 55, 2], [4.0, 190, 48, 1.7], [4.18, 201, 38, 1.6], [4.36, 206, 60, 0.9]])
+    lathe(...at(angle, dist), [[r, 0], [r * 0.85, h * 0.86], [r * 0.85, h]], [COLORS.steel, COLORS.rust, COLORS.dark], { sides: 6 });
+  for (const [angle, dist, h, r] of [[4.07, 178, 32, 2.6], [4.11, 181, 26, 2], [4.04, 183, 22, 3]])
+    lathe(...at(angle, dist), [[r, 0], [r, h], [0, h + r]], [COLORS.steel, COLORS.steel], { sides: 8 });
+  for (let i = 0; i < 6; i++) cylinder(at(3.82 + i * 0.045 + rand() * 0.02, 168 + (i % 2) * 12), 5 + rand() * 3, 8 + rand() * 4, COLORS.tank, COLORS.steel);
+  for (let i = 0; i < 3; i++) {
+    const r = 5.5 + rand();
+    sphere(at(4.22 + i * 0.04, 175 + rand() * 3), r, 3 + r, COLORS.tank); // on short legs
+  }
+  for (const [angle, dist, w, d, h] of [[3.78, 190, 24, 14, 9], [3.98, 205, 30, 12, 7], [4.15, 188, 16, 16, 12], [4.28, 192, 22, 10, 6]])
+    box(at(angle, dist), w, d, h, COLORS.concrete, angle + Math.PI / 2);
+
+  // Salt storage domes and silos off to one side: the plant's own stockpile.
+  for (let i = 0; i < 3; i++) {
+    const r = 10 + rand() * 4;
+    sphere(at(1.02 + i * 0.09, 168 + rand() * 8), r, -0.15 * r, COLORS.salt, 0);
+  }
+  for (let i = 0; i < 3; i++) cylinder(at(1.32 + i * 0.03, 182), 4, 18 + rand() * 4, COLORS.tank, COLORS.dark);
+  // A pair of lonely stacks across the flats.
+  for (const [angle, dist, h] of [[5.6, 240, 34], [5.63, 244, 28]]) lathe(...at(angle, dist), [[1.4, 0], [1.2, h]], [COLORS.dark, COLORS.dark], { sides: 6 });
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.computeVertexNormals(); // non-indexed, so these are flat facet normals
+  return geometry;
+}
+
+function skylineMaterial() {
+  const material = new THREE.MeshLambertMaterial({ vertexColors: true });
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <fog_vertex>',
+      `#include <fog_vertex>\n#ifdef USE_FOG\n  vFogDepth *= ${SKYLINE_FOG.toFixed(2)};\n#endif`,
+    );
+  };
+  return material;
+}
+
+/**
+ * Adds the sky dome and distant skyline to `scene`, and sets its fog and background to the horizon color.
+ * `sunDir` points toward the sun (normalized). Returns `{ horizon }` for matching other colors to the haze.
+ */
+export function createSky(scene, sunDir) {
+  const horizon = new THREE.Color(SKY.horizon);
+  scene.background = horizon.clone();
+  scene.fog = new THREE.Fog(horizon.clone(), 70, 230);
+
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 16), skyMaterial(sunDir));
+  dome.renderOrder = -1; // drawn first; without depth writes everything else draws over it
+  dome.frustumCulled = false;
+  const skyline = new THREE.Mesh(skylineGeometry(), skylineMaterial());
+  skyline.matrixAutoUpdate = false;
+  scene.add(dome, skyline);
+  return { horizon };
+}

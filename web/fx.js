@@ -100,6 +100,86 @@ class Pool {
 
 const UP = new THREE.Vector3(0, 1, 0);
 const v = new THREE.Vector3(), jitter = new THREE.Vector3();
+const dir = new THREE.Vector3(), mid = new THREE.Vector3(), view = new THREE.Vector3(), side = new THREE.Vector3(), normal = new THREE.Vector3();
+const BEAM_LIFE = 0.09, BEAM_WIDTH = 0.25, LIGHT_LIFE = 0.08;
+
+/** Gradient drawn once on a canvas: `stops` maps 0..1 across the canvas to alpha. */
+function canvasTexture(width, height, paint) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  paint(canvas.getContext('2d'), width, height);
+  return new THREE.CanvasTexture(canvas);
+}
+
+let glowTexture;
+/** An additive glow sprite: a cheap stand-in for bloom around bright things. */
+export function halo(color, size) {
+  glowTexture ??= canvasTexture(64, 64, (g, w) => {
+    const r = g.createRadialGradient(w / 2, w / 2, 0, w / 2, w / 2, w / 2);
+    r.addColorStop(0, 'rgba(255,255,255,1)');
+    r.addColorStop(0.25, 'rgba(255,255,255,0.45)');
+    r.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = r;
+    g.fillRect(0, 0, w, w);
+  });
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: glowTexture, color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }),
+  );
+  sprite.scale.setScalar(size);
+  return sprite;
+}
+
+/** Tracers: pooled camera-facing quads stretched muzzle to impact, soft across their width. */
+class Beams {
+  constructor(scene, count = 24) {
+    const texture = canvasTexture(1, 32, (g, w, h) => {
+      const l = g.createLinearGradient(0, 0, 0, h);
+      l.addColorStop(0, 'rgba(255,255,255,0)');
+      l.addColorStop(0.5, 'rgba(255,255,255,1)');
+      l.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = l;
+      g.fillRect(0, 0, w, h);
+    });
+    const geometry = new THREE.PlaneGeometry(1, 1);
+    this.next = 0;
+    this.items = Array.from({ length: count }, () => {
+      const mesh = new THREE.Mesh(
+        geometry,
+        new THREE.MeshBasicMaterial({ map: texture, color: 0xffe2a0, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+      );
+      mesh.matrixAutoUpdate = false;
+      mesh.frustumCulled = false;
+      mesh.visible = false;
+      scene.add(mesh);
+      return { mesh, from: new THREE.Vector3(), to: new THREE.Vector3(), life: 0 };
+    });
+  }
+
+  spawn(from, to) {
+    const beam = this.items[this.next];
+    this.next = (this.next + 1) % this.items.length;
+    beam.from.copy(from);
+    beam.to.copy(to);
+    beam.life = BEAM_LIFE;
+  }
+
+  update(dt, camera) {
+    for (const b of this.items) {
+      b.life -= dt;
+      b.mesh.visible = b.life > 0;
+      if (!b.mesh.visible) continue;
+      const length = dir.subVectors(b.to, b.from).length();
+      dir.divideScalar(length);
+      mid.addVectors(b.from, b.to).multiplyScalar(0.5);
+      // Turn the quad about the beam's axis to face the camera.
+      side.crossVectors(dir, view.subVectors(camera.position, mid)).normalize();
+      normal.crossVectors(side, dir);
+      b.mesh.matrix.makeBasis(dir.multiplyScalar(length), side.multiplyScalar(BEAM_WIDTH), normal).setPosition(mid);
+      b.mesh.material.opacity = b.life / BEAM_LIFE;
+    }
+  }
+}
 const rand = (a, b) => a + Math.random() * (b - a);
 /** `dir * speed` plus a random kick up to `spread` on each axis. */
 const scatter = (dir, speed, spread) =>
@@ -117,6 +197,18 @@ export class Effects {
   constructor(scene) {
     this.glow = new Pool(scene, 1500, THREE.AdditiveBlending);
     this.soft = new Pool(scene, 600, THREE.NormalBlending);
+    this.beams = new Beams(scene);
+    // Two short-lived lights at the latest muzzle flashes (High quality only).
+    this.lights = [0, 1].map(() => {
+      const light = new THREE.PointLight(0xffc27a, 0, 16, 2);
+      scene.add(light);
+      return { light, life: 0 };
+    });
+    this.nextLight = 0;
+  }
+
+  setQuality(high) {
+    for (const l of this.lights) l.light.visible = high;
   }
 
   /** `height` is the drawing buffer height in pixels; point sizes are in meters. */
@@ -124,6 +216,22 @@ export class Effects {
     const scale = height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
     this.glow.update(dt, scale);
     this.soft.update(dt, scale);
+    this.beams.update(dt, camera);
+    for (const l of this.lights) {
+      l.life = Math.max(0, l.life - dt);
+      l.light.intensity = (l.life / LIGHT_LIFE) * 60;
+    }
+  }
+
+  beam(from, to) {
+    this.beams.spawn(from, to);
+  }
+
+  muzzleLight(p) {
+    const l = this.lights[this.nextLight];
+    this.nextLight = (this.nextLight + 1) % this.lights.length;
+    l.light.position.copy(p);
+    l.life = LIGHT_LIFE;
   }
 
   muzzle(p, dir) {
