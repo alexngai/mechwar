@@ -112,6 +112,11 @@ pub struct Tuning {
     pub alt_damage: f32,
     pub alt_radius: f32,
 
+    /// Stop-to-repair: shut down for `repair_windup`, then heal at `repair_rate`.
+    pub repair_windup: f32,
+    pub repair_rate: f32,
+    pub repair_cooldown: f32,
+
     pub bot_turn_rate_deg: f32,
     pub bot_aim_error_deg: f32,
     pub bot_reaction_s: f32,
@@ -195,6 +200,8 @@ pub struct Input {
     pub alt_fire: bool,
     /// Class ability; like `dodge`, only on the tick the key went down.
     pub ability: bool,
+    /// Held to repair; see `step_mech`.
+    pub repair: bool,
 }
 
 impl Input {
@@ -248,6 +255,21 @@ pub struct Mech {
     pub shot: bool,
     /// Set on ticks the secondary launched a volley.
     pub launched: bool,
+    /// Seconds into the current repair; 0 when not repairing.
+    pub repair_time: f32,
+    /// Seconds until a repair can start again.
+    pub repair_cooldown: f32,
+}
+
+impl Mech {
+    /// Ends a repair, if one is running (released, full, or damaged on the server), and starts
+    /// its cooldown.
+    pub fn stop_repair(&mut self, t: &Tuning) {
+        if self.repair_time > 0.0 {
+            self.repair_time = 0.0;
+            self.repair_cooldown = t.repair_cooldown;
+        }
+    }
 }
 
 /// Static arena colliders for scene queries. Shared by the offline sim, the server and the client.
@@ -376,6 +398,22 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     if m.health <= 0.0 {
         return;
     }
+
+    // Repair: holding it shuts the mech down, ignoring every other input but look, and after the
+    // wind-up heals. Letting go, full health or damage (`stop_repair` on the server) ends it.
+    m.repair_cooldown = (m.repair_cooldown - DT).max(0.0);
+    let shutdown = input.repair && (m.repair_time > 0.0 || (m.repair_cooldown <= 0.0 && m.health < t.health_max));
+    if shutdown {
+        m.repair_time += DT;
+        // The partial first tick keeps the total heal at exactly rate * (time - windup).
+        m.health = (m.health + t.repair_rate * (m.repair_time - t.repair_windup).clamp(0.0, DT)).min(t.health_max);
+        if m.health >= t.health_max {
+            m.stop_repair(t);
+        }
+    } else {
+        m.stop_repair(t);
+    }
+    let input = &if shutdown { Input { yaw: input.yaw, pitch: input.pitch, ..Input::default() } } else { *input };
 
     m.yaw = input.yaw;
     let pitch_limit = t.pitch_limit_deg.to_radians();
@@ -698,4 +736,57 @@ mod tests {
         assert!((speed(&sim) - t.boost_speed).abs() < 0.05, "speed {}", speed(&sim));
     }
 
+    #[test]
+    fn repair_heals_after_windup_then_cools_down() {
+        let (mut sim, t) = class_sim(MechClass::B);
+        let repair = Input { repair: true, ..Input::default() };
+        run(&mut sim, Input::default(), 30); // land
+        sim.mech.health = 40.0;
+
+        let windup = (t.repair_windup * TICK_HZ).round() as usize;
+        run(&mut sim, repair, windup - 1);
+        assert_eq!(sim.mech.health, 40.0, "healed during the wind-up");
+        assert!(sim.mech.repair_time > 0.0, "repair never started");
+        run(&mut sim, repair, 31);
+        let want = 40.0 + t.repair_rate * ((windup + 30) as f32 * DT - t.repair_windup);
+        assert!((sim.mech.health - want).abs() < 0.01, "health {} after a second of healing, want {want}", sim.mech.health);
+
+        // Held on, it fills up and ends by itself.
+        let to_full = ((t.health_max - sim.mech.health) / t.repair_rate * TICK_HZ).round() as usize;
+        run(&mut sim, repair, to_full + 1);
+        assert_eq!(sim.mech.health, t.health_max);
+        assert_eq!(sim.mech.repair_time, 0.0, "still repairing at full health");
+        assert!(sim.mech.repair_cooldown > t.repair_cooldown - 1.5 * DT, "cooldown {} after {to_full} ticks", sim.mech.repair_cooldown);
+
+        // No new repair until the cooldown is over.
+        sim.mech.health = 50.0;
+        sim.step(&repair);
+        assert_eq!(sim.mech.repair_time, 0.0, "repaired again during the cooldown");
+        run(&mut sim, repair, (t.repair_cooldown * TICK_HZ) as usize + 2);
+        assert!(sim.mech.repair_time > 0.0, "no repair after the cooldown");
+    }
+
+    #[test]
+    fn repair_shuts_the_mech_down() {
+        let (mut sim, t) = class_sim(MechClass::A);
+        run(&mut sim, Input::default(), 30); // land
+        sim.mech.health = 10.0;
+        let everything = Input { move_x: 1.0, move_z: 1.0, boost: true, hover: true, dodge: 1, fire: true, alt_fire: true, ability: true, ..Input::default() };
+        let start = sim.mech.pos;
+        for _ in 0..60 {
+            sim.step(&Input { repair: true, ..everything });
+            let m = &sim.mech;
+            assert!(!m.shot && !m.launched && !m.boosting && !m.hovering, "acted while shut down: {m:?}");
+        }
+        let m = sim.mech;
+        assert!(m.pos.distance(start) < 1e-3, "moved {} m while shut down", m.pos.distance(start));
+        assert_eq!((m.fuel, m.heat, m.dodge_cooldown, m.ability_cooldown), (t.fuel_max, 0.0, 0.0, 0.0));
+        assert!(m.health > 10.0, "never healed");
+
+        // Letting go brings everything back on the same tick, and starts the cooldown.
+        sim.step(&everything);
+        let m = sim.mech;
+        assert!(m.shot && m.launched && m.boosting && m.dodge_cooldown > 0.0 && m.ability_time > 0.0, "still shut down: {m:?}");
+        assert_eq!((m.repair_time, m.repair_cooldown), (0.0, t.repair_cooldown));
+    }
 }

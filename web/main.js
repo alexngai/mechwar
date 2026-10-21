@@ -47,7 +47,7 @@ if (net) {
 }
 
 // Index layout of state(); keep in sync with mech_state in sim/src/wasm.rs.
-const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, OFFSET: 22 };
+const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, REPAIR_CD: 23, OFFSET: 24 };
 
 // --- Scene ---------------------------------------------------------------
 // ?quality=low|high (default high). High drops to Low once if it can't hold 45 fps.
@@ -165,7 +165,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyQ') dodge = -1;
   if (e.code === 'KeyE') dodge = 1;
   if (e.code === 'KeyF') ability = true;
-  if (e.code === 'KeyR' && sim) { sim.reset(); prev = curr = sim.state(); }
+  if (e.code === 'KeyK' && sim) { sim.reset(); prev = curr = sim.state(); }
   if (e.code === 'KeyV') {
     firstPerson = !firstPerson;
     try { localStorage.setItem('webhawk.view', firstPerson ? 'cockpit' : 'chase'); } catch { /* private mode */ }
@@ -227,6 +227,9 @@ function pick(i) {
   }
 }
 
+/** Seconds into a repair as Mech.update's `repair`: 0 none, wind-up fraction, then 1 healing. */
+const repairPhase = (t, cls = classIdx) => (t > 0 ? Math.min(t / Math.max(classValue(cls, 'repair_windup'), 1e-6), 1) : 0);
+
 // --- Fixed-step sim, interpolated render ----------------------------------
 let prev = game.state(), curr = prev, acc = 0, last = performance.now();
 const eye = new THREE.Vector3(), offset = new THREE.Vector3(), aim = new THREE.Vector3();
@@ -246,7 +249,7 @@ function frame(now) {
       continue;
     }
     const input = [axis('KeyD', 'KeyA'), axis('KeyW', 'KeyS'), yaw, pitch,
-      keys.has('ShiftLeft') || keys.has('ShiftRight'), keys.has('Space'), dodge, firing, altFiring, ability];
+      keys.has('ShiftLeft') || keys.has('ShiftRight'), keys.has('Space'), dodge, firing, altFiring, ability, keys.has('KeyR')];
     if (net) {
       const bytes = net.tick(...input, now);
       if (ws.readyState === WebSocket.OPEN) ws.send(bytes);
@@ -291,12 +294,13 @@ function frame(now) {
     grounded: !!curr[S.GROUNDED], boosting: !!curr[S.BOOSTING], hovering: !!curr[S.HOVERING],
     health: curr[S.HEALTH], heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     ability: curr[S.ABILITY_T] > 0, damage: 1 - curr[S.HEALTH] / T('health_max'),
+    repair: repairPhase(curr[S.REPAIR_T]),
   });
 
   if (net) {
     const r = net.remotes(now), live = new Set();
-    for (let i = 0; i < r.length; i += 13) {
-      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering, , abilityOn] = r.subarray(i, i + 13);
+    for (let i = 0; i < r.length; i += 14) {
+      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering, , abilityOn, repairing] = r.subarray(i, i + 14);
       let e = remotes.get(id);
       if (e && e.cls !== cls) {
         e.mech.dispose();
@@ -311,12 +315,15 @@ function frame(now) {
       e.pos.copy(seen);
       e.team = team;
       e.health = health;
+      // Remotes only say whether they're repairing; time the wind-up from when it started.
+      e.repairAt = repairing ? e.repairAt ?? now : null;
       e.mech.setTeam(team);
       e.mech.setUnit(id);
       e.mech.update(dt, {
         pos: e.pos, yaw: ryaw, pitch: rpitch, scale: classValue(cls, 'mech_height') / e.mech.height, vel: e.vel,
         grounded: !hovering && Math.abs(e.vel.y) < 1.5, boosting: !!boosting, hovering: !!hovering, health,
         ability: !!abilityOn, damage: 1 - health / classValue(cls, 'health_max'),
+        repair: repairPhase(e.repairAt === null ? 0 : (now - e.repairAt) / 1000 + 1e-3, cls),
       });
     }
     for (const [id, e] of remotes) if (!live.has(id)) { e.mech.dispose(); remotes.delete(id); }

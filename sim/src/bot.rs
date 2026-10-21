@@ -280,6 +280,8 @@ impl Bot {
             // Wisps slipstream on long runs.
             ability: me.class == MechClass::A && range > FAR,
             hover: tick < self.hover_until,
+            // Hurt and out of sight: stop and repair until full or seen again.
+            repair: me.repair_time > 0.0 || me.health < 0.5 * t.health_max,
             ..Input::default()
         }
     }

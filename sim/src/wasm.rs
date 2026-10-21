@@ -18,6 +18,7 @@ fn mech_state(m: &Mech) -> Vec<f32> {
         m.aim_point.x, m.aim_point.y, m.aim_point.z,
         m.health, m.ability_time, m.ability_cooldown,
         m.alt_wait, b(m.launched),
+        m.repair_time, m.repair_cooldown,
     ]
 }
 
@@ -88,8 +89,8 @@ impl WasmSim {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn step(&mut self, move_x: f32, move_z: f32, yaw: f32, pitch: f32, boost: bool, hover: bool, dodge: i8, fire: bool, alt_fire: bool, ability: bool) {
-        self.sim.step(&Input { move_x, move_z, yaw, pitch, boost, hover, dodge, fire, alt_fire, ability });
+    pub fn step(&mut self, move_x: f32, move_z: f32, yaw: f32, pitch: f32, boost: bool, hover: bool, dodge: i8, fire: bool, alt_fire: bool, ability: bool, repair: bool) {
+        self.sim.step(&Input { move_x, move_z, yaw, pitch, boost, hover, dodge, fire, alt_fire, ability, repair });
     }
 
     /// Same layout as `WasmNetClient::projectiles`; offline they're all own and predicted.
@@ -139,9 +140,9 @@ impl WasmNetClient {
     #[allow(clippy::too_many_arguments)]
     pub fn tick(
         &mut self, move_x: f32, move_z: f32, yaw: f32, pitch: f32, boost: bool, hover: bool, dodge: i8, fire: bool, alt_fire: bool, ability: bool,
-        now: f64,
+        repair: bool, now: f64,
     ) -> Vec<u8> {
-        self.0.tick(Input { move_x, move_z, yaw, pitch, boost, hover, dodge, fire, alt_fire, ability }, now)
+        self.0.tick(Input { move_x, move_z, yaw, pitch, boost, hover, dodge, fire, alt_fire, ability, repair }, now)
     }
 
     /// Projectiles to draw now; see `projectile_floats`. Predicted ones are extrapolated by the
@@ -181,8 +182,8 @@ impl WasmNetClient {
         ray_distance(self.0.arena(), [ox, oy, oz], [dx, dy, dz], max)
     }
 
-    /// Thirteen floats per remote mech: id, team, class, feet xyz, yaw, pitch, health, boosting, hovering, bot,
-    /// ability active.
+    /// Fourteen floats per remote mech: id, team, class, feet xyz, yaw, pitch, health, boosting, hovering, bot,
+    /// ability active, repairing.
     pub fn remotes(&self, now: f64) -> Vec<f32> {
         let b = |v: bool| if v { 1.0 } else { 0.0 };
         self.0
@@ -190,7 +191,7 @@ impl WasmNetClient {
             .iter()
             .flat_map(|p| {
                 let v = &p.view;
-                [f32::from(p.id), f32::from(p.team), p.class.index() as f32, v.pos.x, v.pos.y, v.pos.z, v.yaw, v.pitch, v.health, b(v.boosting), b(v.hovering), b(p.bot), b(v.ability)]
+                [f32::from(p.id), f32::from(p.team), p.class.index() as f32, v.pos.x, v.pos.y, v.pos.z, v.yaw, v.pitch, v.health, b(v.boosting), b(v.hovering), b(p.bot), b(v.ability), b(v.repairing)]
             })
             .collect()
     }

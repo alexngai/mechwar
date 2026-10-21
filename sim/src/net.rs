@@ -63,6 +63,7 @@ pub struct MechView {
     pub hovering: bool,
     /// Class ability active (Slipstream or Brace; Vent is instant).
     pub ability: bool,
+    pub repairing: bool,
 }
 
 impl From<&Mech> for MechView {
@@ -75,6 +76,7 @@ impl From<&Mech> for MechView {
             boosting: m.boosting,
             hovering: m.hovering,
             ability: m.ability_time > 0.0,
+            repairing: m.repair_time > 0.0,
         }
     }
 }

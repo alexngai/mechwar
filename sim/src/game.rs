@@ -408,8 +408,8 @@ impl Game {
         self.events.push(Event::Blast { owner: p.owner, seq: p.seq, n: p.n, primary: p.primary, class: p.class, pos: at, hits });
     }
 
-    /// Damages player `j` (less while braced) while the match is on. A kill scores for
-    /// `attacker`, if they're still here.
+    /// Damages player `j` (less while braced) while the match is on, ending any repair. A kill
+    /// scores for `attacker`, if they're still here.
     fn apply_damage(&mut self, attacker: Option<usize>, j: usize, amount: f32) {
         let target = &self.players[j];
         if !matches!(self.phase, Phase::Playing { .. }) || target.mech.health <= 0.0 {
@@ -420,6 +420,7 @@ impl Game {
         let damage = amount * if braced { tt.brace_damage_mult } else { 1.0 };
         let respawn_at = self.tick + secs(tt.respawn_delay);
         let target = &mut self.players[j];
+        target.mech.stop_repair(tt);
         target.mech.health -= damage;
         if target.mech.health > 0.0 {
             return;
