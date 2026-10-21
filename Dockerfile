@@ -9,6 +9,7 @@ RUN rustup target add wasm32-unknown-unknown \
     | tar -xz --strip-components=1 -C /usr/local/bin "wasm-pack-v0.15.0-${arch}-unknown-linux-musl/wasm-pack"
 WORKDIR /src
 COPY Cargo.toml Cargo.lock tuning.json classes.json ./
+COPY maps maps
 COPY sim sim
 COPY server server
 RUN wasm-pack build sim --target web --release --no-pack -- --features wasm \
@@ -19,6 +20,7 @@ WORKDIR /src
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY index.html tuning.json classes.json ./
+COPY maps maps
 COPY web web
 COPY --from=rust /src/sim/pkg sim/pkg
 RUN npx vite build
