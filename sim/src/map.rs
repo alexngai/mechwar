@@ -4,11 +4,13 @@
 use serde::Deserialize;
 
 /// Compiled-in maps. The index is what goes over the wire.
-pub const MAPS: [(&str, &str); 2] = [
+pub const MAPS: [(&str, &str); 3] = [
     ("saltworks", include_str!("../../maps/saltworks.json")),
     ("blockout", include_str!("../../maps/blockout.json")),
+    ("foundry", include_str!("../../maps/foundry.json")),
 ];
-pub const DEFAULT: usize = 0;
+/// Foundry.
+pub const DEFAULT: usize = 2;
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct Solid {

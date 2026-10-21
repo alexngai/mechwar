@@ -6,6 +6,7 @@ import classes from '../classes.json';
 import { buildArena } from './arena.js';
 import { Effects } from './fx.js';
 import saltworks from '../maps/saltworks.json';
+import foundry from '../maps/foundry.json';
 import blockout from '../maps/blockout.json';
 import { Mech, TEAMS } from './mech.js';
 import { Cockpit } from './cockpit.js';
@@ -28,12 +29,12 @@ const sameOrigin = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${locatio
 const server = params.get('server') ?? (import.meta.env.PROD && !params.has('offline') ? sameOrigin : null);
 const net = server ? new WasmNetClient() : null;
 // Maps by name; the sim's compiled-in list gives the index. Offline, ?map=<name> picks one.
-const MAPS = { saltworks, blockout };
+const MAPS = { saltworks, blockout, foundry };
 const mapIndex = (name) => {
   for (let i = 0; map_name(i); i++) if (map_name(i) === name) return i;
   return 0;
 };
-const sim = net ? null : new WasmSim(JSON.stringify(tuning), mapIndex(params.get('map') ?? 'saltworks'));
+const sim = net ? null : new WasmSim(JSON.stringify(tuning), mapIndex(params.get('map') ?? 'foundry'));
 const game = net ?? sim;
 let ws = null, connection = server ? 'connecting' : '', picked = null;
 if (net) {
@@ -64,11 +65,17 @@ renderer.toneMappingExposure = 1.05;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 document.body.prepend(renderer.domElement);
 const scene = new THREE.Scene();
-scene.add(new THREE.HemisphereLight(0xdfe8f0, 0x4a4238, 1.4));
+const hemi = new THREE.HemisphereLight(0xdfe8f0, 0x4a4238, 1.4);
+scene.add(hemi);
+// Night maps swap the sun for a dim blue moon in the same spot; lamps and furnaces are baked in.
+const LIGHTS = {
+  day: { sky: 0xdfe8f0, ground: 0x4a4238, ambient: 1.4, sun: 0xfff0d8, direct: 2.6 },
+  night: { sky: 0x6a7aa0, ground: 0x3a2a1e, ambient: 1.8, sun: 0x9fb4e8, direct: 1.6 },
+};
 
 // The sun's shadow map follows the player, covering the fight around them.
 const SUN_DIR = new THREE.Vector3(0.45, 0.8, 0.35).normalize();
-createSky(scene, SUN_DIR); // dome, horizon fog and distant skyline, lit from the same sun
+const sky = createSky(scene, SUN_DIR); // dome, horizon fog and distant skyline, lit from the same sun
 const SHADOW_HALF = 40;
 const sun = new THREE.DirectionalLight(0xfff0d8, 2.6);
 sun.shadow.mapSize.set(2048, 2048);
@@ -93,16 +100,6 @@ const camera = new THREE.PerspectiveCamera(T('fov'), 1, 0.1, 500);
 camera.rotation.order = 'YXZ';
 
 
-// The arena is built once its map is known: right away offline, after the Welcome online.
-let arenaMap = -1;
-const ensureArena = (index) => {
-  if (index < 0 || index === arenaMap) return;
-  arenaMap = index;
-  buildArena(scene, MAPS[map_name(index)]);
-  glass.setMap(MAPS[map_name(index)]);
-};
-ensureArena(sim ? mapIndex(params.get('map') ?? 'saltworks') : -1);
-
 const fx = new Effects(scene);
 // Sound starts on the first click or key press, as browsers require.
 const sound = new Sound();
@@ -113,6 +110,25 @@ let me = new Mech(scene, fx, 'B'), meClass = 1;
 me.own = true;
 const cockpit = new Cockpit();
 cockpit.setWeapons('B', me, T('eye_height'), T('mech_height') / me.height);
+
+// The arena is built once its map is known: right away offline, after the Welcome online.
+let arenaMap = -1, arena = { vents: [], furnaces: [] };
+const ensureArena = (index) => {
+  if (index < 0 || index === arenaMap) return;
+  arenaMap = index;
+  const map = MAPS[map_name(index)], light = map.night ? LIGHTS.night : LIGHTS.day;
+  arena = buildArena(scene, map);
+  sky.fit(map);
+  glass.setMap(map);
+  hemi.color.setHex(light.sky);
+  hemi.groundColor.setHex(light.ground);
+  hemi.intensity = light.ambient;
+  sun.color.setHex(light.sun);
+  sun.intensity = light.direct;
+  cockpit.light(hemi, sun);
+  fx.setNight(!!map.night);
+};
+ensureArena(sim ? mapIndex(params.get('map') ?? 'foundry') : -1);
 
 function applyQuality() {
   const high = quality === 'high';
@@ -546,6 +562,13 @@ function frame(now) {
     alive, heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     hull: curr[S.HEALTH] / T('health_max'), repairing: repairPhase(curr[S.REPAIR_T]), jammed: curr[S.JAMMED] > 0,
   }, dt);
+  // Stacks smoke and spark, furnaces spit sparks, and an industrial map's air carries cinders.
+  for (const p of arena.vents) {
+    fx.plume(p, dt);
+    fx.sparks(p, dt, 10);
+  }
+  for (const p of arena.furnaces) fx.sparks(p, dt, 5);
+  if (arena.vents.length) fx.cinders(camera.position, dt);
   fx.update(dt, camera, renderer.domElement.height);
   hurt = Math.max(0, hurt - dt * 2.5);
   hud.damage.style.opacity = hurt;

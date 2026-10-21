@@ -49,8 +49,17 @@ impl Nav {
         self.nodes[i]
     }
 
-    pub fn nearest(&self, p: Vector) -> usize {
-        (0..self.nodes.len()).min_by(|&a, &b| self.nodes[a].distance(p).total_cmp(&self.nodes[b].distance(p))).unwrap()
+    /// The closest waypoint in clear view of `p` (else the closest at all), counting height
+    /// triple: one across a wall, or up on the deck overhead, is no place to start walking from.
+    pub fn nearest(&self, arena: &Arena, p: Vector) -> usize {
+        let cost = |i: usize| ((self.nodes[i] - p) * Vector::new(1.0, 3.0, 1.0)).length();
+        let mut order: Vec<usize> = (0..self.nodes.len()).collect();
+        order.sort_by(|&a, &b| cost(a).total_cmp(&cost(b)));
+        let clear = |i: usize| {
+            let (from, d) = (p + Vector::Y * 1.5, self.nodes[i] - p);
+            d.length() < 0.1 || arena.cast_ray(&Ray::new(from, d / d.length()), d.length()).is_none()
+        };
+        order.iter().copied().find(|&i| clear(i)).unwrap_or(order[0])
     }
 
     /// Which waypoints can be reached from `from`.
@@ -109,6 +118,8 @@ fn walkable(arena: &Arena, t: &Tuning, from: Vector, to: Vector) -> bool {
 
 /// Waypoint counts as reached within this horizontal distance.
 const ARRIVE: f32 = 2.5;
+/// Bots boost toward a waypoint at least this far away.
+const BOOST_LEG: f32 = 15.0;
 /// Engagement range band: close in beyond FAR, back off inside NEAR.
 const FAR: f32 = 45.0;
 const NEAR: f32 = 20.0;
@@ -189,7 +200,6 @@ impl Bot {
         let range = flat(target.pos - me.pos).length();
 
         if sees(arena, t, me, target) {
-            self.path_goal = None;
             let err = t.bot_aim_error_deg.to_radians();
             self.wobble.0 = (self.wobble.0 + (self.rand() - 0.5) * err * 0.3).clamp(-err, err);
             self.wobble.1 = (self.wobble.1 + (self.rand() - 0.5) * err * 0.3).clamp(-err, err);
@@ -230,9 +240,19 @@ impl Bot {
             if throw {
                 self.grenade_at = tick + secs(4.0 + 4.0 * self.rand());
             }
+            // Far off, keep walking the route (firing on the way) rather than straight at the
+            // target: on a tiered map that keeps bots on their ramps and decks, not off ledges.
+            // In range, hold the band and strafe.
+            let (move_x, move_z) = if range > FAR {
+                let dir = self.route(arena, nav, me, target, tick).normalize_or_zero();
+                let rot = Rotation::from_rotation_y(new_yaw);
+                (dir.dot(rot * Vector::X), dir.dot(rot * Vector::NEG_Z))
+            } else {
+                (self.strafe, if range < NEAR { -1.0 } else { 0.0 })
+            };
             return Input {
-                move_x: self.strafe,
-                move_z: if range > FAR { 1.0 } else if range < NEAR { -1.0 } else { 0.0 },
+                move_x,
+                move_z,
                 yaw: new_yaw,
                 pitch: new_pitch,
                 dodge: if dodge { self.strafe as i8 } else { 0 },
@@ -240,6 +260,7 @@ impl Bot {
                 fire: shell.is_none() && on_target && !me.overheated && me.heat < 0.85 * t.heat_max,
                 alt_fire: alt && alt_cool && on_target,
                 grenade: throw,
+                hover: tick < self.hover_until,
                 // When it would land (taking the target for our size), and they aren't jammed already.
                 emp: me.emps > 0 && target.jammed <= 0.0 && item::emp_reaches(arena, t, me, t, target),
                 // Lancers vent before stalling; Bulwarks brace once they're hurt and under fire.
@@ -253,9 +274,33 @@ impl Bot {
         }
 
         // No line of sight: walk the waypoint graph toward the target.
-        let goal = nav.nearest(target.pos);
+        let toward = self.route(arena, nav, me, target, tick);
+        let dir = toward.normalize_or_zero();
+        let want_yaw = (-dir.x).atan2(-dir.z);
+        let new_yaw = me.yaw + wrap(want_yaw - me.yaw).clamp(-max_turn, max_turn);
+        let rot = Rotation::from_rotation_y(new_yaw);
+        Input {
+            move_x: dir.dot(rot * Vector::X),
+            move_z: dir.dot(rot * Vector::NEG_Z),
+            yaw: new_yaw,
+            pitch: me.pitch * 0.9,
+            // Boost on long legs only: at boost speed a bot overshoots turns onto ramps.
+            boost: range > FAR && me.fuel > 0.5 * t.fuel_max && toward.length() > BOOST_LEG,
+            // Wisps slipstream on long runs.
+            ability: me.class == MechClass::A && range > FAR,
+            hover: tick < self.hover_until,
+            // Hurt and out of sight: stop and repair until full or seen again.
+            repair: me.repair_time > 0.0 || me.health < 0.5 * t.health_max,
+            ..Input::default()
+        }
+    }
+
+    /// Follows the waypoint route toward `target`, replanning when its nearest waypoint changes;
+    /// returns the flat offset to the next waypoint (or the target, past the last).
+    fn route(&mut self, arena: &Arena, nav: &Nav, me: &Mech, target: &Mech, tick: u32) -> Vector {
+        let goal = nav.nearest(arena, target.pos);
         if self.path_goal != Some(goal) {
-            self.path = nav.path(nav.nearest(me.pos), goal);
+            self.path = nav.path(nav.nearest(arena, me.pos), goal);
             // Already past the first waypoint toward the second? Skip it rather than walk back.
             if let [a, b, ..] = self.path[..]
                 && me.pos.distance(nav.node(b)) < nav.node(a).distance(nav.node(b))
@@ -286,24 +331,7 @@ impl Bot {
             self.best = f32::MAX;
             self.progress_at = tick;
         }
-
-        let dir = toward.normalize_or_zero();
-        let want_yaw = (-dir.x).atan2(-dir.z);
-        let new_yaw = me.yaw + wrap(want_yaw - me.yaw).clamp(-max_turn, max_turn);
-        let rot = Rotation::from_rotation_y(new_yaw);
-        Input {
-            move_x: dir.dot(rot * Vector::X),
-            move_z: dir.dot(rot * Vector::NEG_Z),
-            yaw: new_yaw,
-            pitch: me.pitch * 0.9,
-            boost: range > FAR && me.fuel > 0.5 * t.fuel_max,
-            // Wisps slipstream on long runs.
-            ability: me.class == MechClass::A && range > FAR,
-            hover: tick < self.hover_until,
-            // Hurt and out of sight: stop and repair until full or seen again.
-            repair: me.repair_time > 0.0 || me.health < 0.5 * t.health_max,
-            ..Input::default()
-        }
+        toward
     }
 }
 

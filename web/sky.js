@@ -3,7 +3,11 @@
 // purely visual: nothing here collides or casts shadows.
 import * as THREE from 'three';
 
-const SKY = { horizon: 0xd9cdb4, zenith: 0x8fb0c8, sun: 0xfff1d6 };
+const SKY = {
+  day: { horizon: 0xd9cdb4, zenith: 0x8fb0c8, sun: 0xfff1d6, stars: 0 },
+  // Moonlit: a deep blue zenith over a horizon warmed by the works' own glow; the sun becomes the moon.
+  night: { horizon: 0x2e2520, zenith: 0x050912, sun: 0x8492b4, stars: 1 },
+};
 const COLORS = {
   flat: 0xd3ccbb, talus: 0xb5a58e, scree: 0xab9882, cliff: 0x9f8774, cap: 0xbcae96,
   concrete: 0xa49d8f, steel: 0x8a8984, dark: 0x6e6b66, rust: 0x8c6550, tank: 0xc4bcaa, salt: 0xcbc3b0,
@@ -11,6 +15,8 @@ const COLORS = {
 // Scales the skyline's fog depth. At full strength fog 70–230 m would erase the 150–260 m ring;
 // this keeps the far mesas as pale silhouettes while the arena itself gets the real fog.
 const SKYLINE_FOG = 0.85;
+// The skyline is laid out around a 120 m square arena; bigger maps push all of it outward.
+const LAID_OUT_FOR = Math.hypot(120, 120);
 
 /** Small seeded PRNG (mulberry32) so the skyline is the same on every load. */
 function mulberry32(seed) {
@@ -25,10 +31,11 @@ function mulberry32(seed) {
 function skyMaterial(sunDir) {
   return new THREE.ShaderMaterial({
     uniforms: {
-      horizon: { value: new THREE.Color(SKY.horizon) },
-      zenith: { value: new THREE.Color(SKY.zenith) },
-      sunColor: { value: new THREE.Color(SKY.sun) },
+      horizon: { value: new THREE.Color(SKY.day.horizon) },
+      zenith: { value: new THREE.Color(SKY.day.zenith) },
+      sunColor: { value: new THREE.Color(SKY.day.sun) },
       sunDir: { value: sunDir.clone().normalize() },
+      stars: { value: 0 },
     },
     vertexShader: /* glsl */ `
       varying vec3 vWorld;
@@ -39,6 +46,7 @@ function skyMaterial(sunDir) {
       }`,
     fragmentShader: /* glsl */ `
       uniform vec3 horizon, zenith, sunColor, sunDir;
+      uniform float stars;
       varying vec3 vWorld;
       #include <common>
       #include <dithering_pars_fragment>
@@ -50,6 +58,9 @@ function skyMaterial(sunDir) {
         // Wide haze glow plus a tight halo; the disc alone is bright enough to clip under ACES.
         col += sunColor * (0.25 * pow(c, 8.0) + 0.5 * pow(c, 400.0));
         col += sunColor * 3.0 * smoothstep(0.99985, 0.99993, c);
+        // Stars: a sparse hash over direction cells, fading into the haze near the horizon.
+        float star = step(0.9985, fract(sin(dot(floor(dir * 300.0), vec3(12.9898, 78.233, 45.164))) * 43758.5453));
+        col += stars * star * smoothstep(0.03, 0.3, up) * vec3(0.85, 0.9, 1.0);
         gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -61,8 +72,8 @@ function skyMaterial(sunDir) {
   });
 }
 
-/** All skyline triangles, written straight into one non-indexed geometry. */
-function skylineGeometry() {
+/** All skyline triangles, written straight into one non-indexed geometry, `push` meters farther out. */
+function skylineGeometry(push) {
   const rand = mulberry32(0x5a175a17);
   const positions = [], colors = [], color = new THREE.Color();
   const tri = (a, b, c, hex) => {
@@ -93,7 +104,7 @@ function skylineGeometry() {
     const last = rings.length - 1, [r, y] = rings[last];
     if (r > 1e-3 && colors[last] !== undefined) for (let j = 0; j < sides; j++) tri([x, y, z], p(last, j + 1), p(last, j), colors[last]);
   }
-  const at = (angle, dist) => [Math.cos(angle) * dist, Math.sin(angle) * dist];
+  const at = (angle, dist) => [Math.cos(angle) * (dist + push), Math.sin(angle) * (dist + push)];
   const box = ([x, z], w, d, h, hex, yaw) =>
     lathe(x, z, [[Math.SQRT1_2, 0], [Math.SQRT1_2, h]], [hex, hex], { sides: 4, spin: Math.PI / 4, sx: w, sz: d, yaw });
   const cylinder = ([x, z], r, h, hex, roof = hex) => lathe(x, z, [[r, 0], [r, h], [r * 0.2, h + r * 0.3]], [hex, roof, roof], { sides: 10 });
@@ -108,7 +119,7 @@ function skylineGeometry() {
   };
 
   // Salt flat from the arena wall out to the haze, just under the arena floor. Rings run outer to inner so it faces up.
-  lathe(0, 0, [[400, -0.1], [58, -0.1]], [COLORS.flat], { sides: 32 });
+  lathe(0, 0, [[400 + push, -0.1], [58 + push, -0.1]], [COLORS.flat], { sides: 32 });
 
   // Mesas: flat caprock over a cliff band and a sloping talus apron. The refinery sector gets low, far ones as a backdrop.
   const REFINERY = [3.45, 4.45]; // radians around the arena
@@ -162,12 +173,14 @@ function skylineGeometry() {
   return geometry;
 }
 
-function skylineMaterial() {
+/** `push` is a uniform: pushed-out pieces fog as if they were still where they were laid out. */
+function skylineMaterial(push) {
   const material = new THREE.MeshLambertMaterial({ vertexColors: true });
   material.onBeforeCompile = (shader) => {
-    shader.vertexShader = shader.vertexShader.replace(
+    shader.uniforms.push = push;
+    shader.vertexShader = `uniform float push;\n${shader.vertexShader}`.replace(
       '#include <fog_vertex>',
-      `#include <fog_vertex>\n#ifdef USE_FOG\n  vFogDepth *= ${SKYLINE_FOG.toFixed(2)};\n#endif`,
+      `#include <fog_vertex>\n#ifdef USE_FOG\n  vFogDepth = max(vFogDepth - push, 0.0) * ${SKYLINE_FOG.toFixed(2)};\n#endif`,
     );
   };
   return material;
@@ -175,18 +188,33 @@ function skylineMaterial() {
 
 /**
  * Adds the sky dome and distant skyline to `scene`, and sets its fog and background to the horizon color.
- * `sunDir` points toward the sun (normalized). Returns `{ horizon }` for matching other colors to the haze.
+ * `sunDir` points toward the sun (normalized), or the moon at night. Returns `{ fit(map) }`, which
+ * moves the skyline clear of the map's `size` and sets the sky for its `night`.
  */
 export function createSky(scene, sunDir) {
-  const horizon = new THREE.Color(SKY.horizon);
-  scene.background = horizon.clone();
-  scene.fog = new THREE.Fog(horizon.clone(), 70, 230);
+  scene.background = new THREE.Color(SKY.day.horizon);
+  scene.fog = new THREE.Fog(SKY.day.horizon, 70, 230);
 
   const dome = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 16), skyMaterial(sunDir));
   dome.renderOrder = -1; // drawn first; without depth writes everything else draws over it
   dome.frustumCulled = false;
-  const skyline = new THREE.Mesh(skylineGeometry(), skylineMaterial());
+  const push = { value: 0 };
+  const skyline = new THREE.Mesh(skylineGeometry(0), skylineMaterial(push));
   skyline.matrixAutoUpdate = false;
   scene.add(dome, skyline);
-  return { horizon };
+  const fit = ({ size: [w, d], night }) => {
+    const look = night ? SKY.night : SKY.day, u = dome.material.uniforms;
+    u.horizon.value.setHex(look.horizon);
+    u.zenith.value.setHex(look.zenith);
+    u.sunColor.value.setHex(look.sun);
+    u.stars.value = look.stars;
+    scene.fog.color.setHex(look.horizon);
+    scene.background.setHex(look.horizon);
+    const value = Math.max(0, (Math.hypot(w, d) - LAID_OUT_FOR) / 2);
+    if (value === push.value) return;
+    push.value = value;
+    skyline.geometry.dispose();
+    skyline.geometry = skylineGeometry(value);
+  };
+  return { fit };
 }

@@ -1,6 +1,6 @@
-// Procedural effects: an additive glow pool (fire, sparks, flashes) and a soft smoke pool, each one
-// THREE.Points updated on the CPU. ponytail: a full pool overwrites its oldest particle; raise the
-// sizes if effects visibly cut out in big fights.
+// Procedural effects: an additive glow pool (fire, sparks, flashes), a soft smoke pool and an
+// ember pool (stack sparks, cinders), each one THREE.Points updated on the CPU. ponytail: a full
+// pool overwrites its oldest particle; raise the sizes if effects visibly cut out in big fights.
 import * as THREE from 'three';
 
 const vertexShader = `
@@ -8,13 +8,14 @@ attribute float size;
 attribute float alpha;
 attribute vec3 tint;
 uniform float scale;
+uniform float cap; // largest angular size (rad): keeps embers drifting past the eye from blooming
 varying vec3 vTint;
 varying float vAlpha;
 void main() {
   vTint = tint;
   vAlpha = alpha;
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
-  gl_PointSize = size * scale / -mv.z;
+  gl_PointSize = scale * min(size / -mv.z, cap);
   gl_Position = projectionMatrix * mv;
 }`;
 
@@ -29,9 +30,10 @@ void main() {
 }`;
 
 class Pool {
-  constructor(scene, max, blending) {
+  constructor(scene, max, blending, cap = 1e3) {
     this.max = max;
     this.next = 0;
+    this.shade = 1; // scales spawned colors: smoke is lit by the scene, so it darkens at night
     this.pos = new Float32Array(max * 3);
     this.vel = new Float32Array(max * 3);
     this.tint = new Float32Array(max * 3);
@@ -50,7 +52,7 @@ class Pool {
     for (const [name, array, n] of [['position', this.pos, 3], ['tint', this.tint, 3], ['size', this.size, 1], ['alpha', this.alpha, 1]]) {
       this.geo.setAttribute(name, new THREE.BufferAttribute(array, n));
     }
-    this.uniforms = { scale: { value: 1 } };
+    this.uniforms = { scale: { value: 1 }, cap: { value: cap } };
     const points = new THREE.Points(
       this.geo,
       new THREE.ShaderMaterial({ vertexShader, fragmentShader, uniforms: this.uniforms, blending, transparent: true, depthWrite: false }),
@@ -70,8 +72,10 @@ class Pool {
     const i3 = i * 3;
     this.pos.set([p.x, p.y, p.z], i3);
     this.vel.set([v.x, v.y, v.z], i3);
-    this.c0.set(color[0], i3);
-    this.c1.set(color[1], i3);
+    for (let k = 0; k < 3; k++) {
+      this.c0[i3 + k] = color[0][k] * this.shade;
+      this.c1[i3 + k] = color[1][k] * this.shade;
+    }
   }
 
   update(dt, scale) {
@@ -99,6 +103,7 @@ class Pool {
 }
 
 const UP = new THREE.Vector3(0, 1, 0);
+const WIND = new THREE.Vector3(0.45, 0.85, 0.25).normalize(); // plumes rise and lean downwind
 const v = new THREE.Vector3(), jitter = new THREE.Vector3();
 const spot = new THREE.Vector3(), dir = new THREE.Vector3(), mid = new THREE.Vector3(), view = new THREE.Vector3(), side = new THREE.Vector3(), normal = new THREE.Vector3();
 const BEAM_LIFE = 0.09, BEAM_WIDTH = 0.25, LIGHT_LIFE = 0.08;
@@ -208,12 +213,15 @@ const FLAME = [[0.85, 0.9, 1], [1, 0.45, 0.1]];
 const COOL_FLAME = [[0.85, 0.97, 1], [0.25, 0.55, 1]];
 const DUST = [[0.62, 0.58, 0.5], [0.5, 0.47, 0.42]];
 const REPAIR = [[0.75, 1, 0.8], [0.25, 1, 0.5]];
+const EMBER = [[1, 0.78, 0.38], [0.9, 0.2, 0.02]];
 const STATIC = [[0.45, 0.75, 1], [0.1, 0.25, 1]];
 
 export class Effects {
   constructor(scene) {
     this.glow = new Pool(scene, 1500, THREE.AdditiveBlending);
-    this.soft = new Pool(scene, 600, THREE.NormalBlending);
+    this.soft = new Pool(scene, 800, THREE.NormalBlending);
+    // Sparks and cinders: tiny, many, and never bigger than a few pixels however close.
+    this.embers = new Pool(scene, 800, THREE.AdditiveBlending, 0.012);
     this.beams = new Beams(scene);
     this.shells = new Shells(scene);
     // Two short-lived lights at the latest muzzle flashes (High quality only).
@@ -229,11 +237,17 @@ export class Effects {
     for (const l of this.lights) l.light.visible = high;
   }
 
+  /** Smoke and dust are lit by the scene, so they darken at night; fire and sparks glow regardless. */
+  setNight(night) {
+    this.soft.shade = night ? 0.3 : 1;
+  }
+
   /** `height` is the drawing buffer height in pixels; point sizes are in meters. */
   update(dt, camera, height) {
     const scale = height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
     this.glow.update(dt, scale);
     this.soft.update(dt, scale);
+    this.embers.update(dt, scale);
     this.beams.update(dt, camera);
     for (const l of this.lights) {
       l.life = Math.max(0, l.life - dt);
@@ -363,6 +377,31 @@ export class Effects {
       this.soft.spawn(p, scatter(UP, rand(1.5, 3), 0.6), {
         life: rand(1.2, 2.2), size: [0.8, 3.5], color: [[shade, shade, shade], [shade * 0.8, shade * 0.8, shade * 0.8]], alpha: 0.5, drag: 0.8,
       });
+    }
+  }
+
+  /** A smokestack's plume at `p`: big, slow, dark puffs that drift downwind as they spread. */
+  plume(p, dt) {
+    for (let i = count(6, dt); i > 0; i--) {
+      this.soft.spawn(p, scatter(WIND, rand(2.5, 4), 0.4), {
+        life: rand(5, 7), size: [rand(3, 4), rand(12, 16)], color: [[0.42, 0.4, 0.38], [0.62, 0.6, 0.58]], alpha: 0.35, drag: 0.15,
+      });
+    }
+  }
+
+  /** Sparks rising from a stack or furnace at `p`, `rate` a second, drifting downwind as they cool. */
+  sparks(p, dt, rate) {
+    for (let i = count(rate, dt); i > 0; i--) {
+      spot.set(p.x + rand(-1.5, 1.5), p.y, p.z + rand(-1.5, 1.5));
+      this.embers.spawn(spot, scatter(WIND, rand(2, 5), 1.2), { life: rand(2, 3.5), size: [rand(0.25, 0.4), 0.05], color: EMBER, drag: 0.2 });
+    }
+  }
+
+  /** Cinders adrift in the air around `p` (the camera): slow, wind-borne, fading as they cool. */
+  cinders(p, dt) {
+    for (let i = count(80, dt); i > 0; i--) {
+      spot.set(p.x + rand(-35, 35), p.y + rand(-6, 14), p.z + rand(-35, 35));
+      this.embers.spawn(spot, scatter(WIND, rand(0.5, 1.5), 0.6), { life: rand(3, 5), size: [rand(0.2, 0.35), 0.05], color: EMBER, drag: 0.1 });
     }
   }
 

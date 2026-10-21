@@ -1,16 +1,20 @@
 // The arena's look, built from map data (maps/*.json): solids with kitbashed trim, decor props, a
-// generated ground texture and baked ambient occlusion, merged into three meshes. Only `solids`
-// collide (the sim reads the same file); everything added here is visual.
+// generated ground texture and baked ambient occlusion (plus lamp and furnace light on night maps),
+// merged into three meshes. Only `solids` collide (the sim reads the same file); everything added
+// here is visual.
 import * as THREE from 'three';
 import { halo } from './fx.js';
 
 const COLORS = {
   ground: 0x9a9384, concrete: 0xa8a08e, metal: 0x6f7880, panel: 0x8f969a, salt: 0xe8e4d8, tank: 0xb9ac8e,
-  trim: 0x55585b, rail: 0xd3a23a, pipe: 0x7d7262, pole: 0x3a3c3f,
+  trim: 0x55585b, rail: 0xd3a23a, pipe: 0x7d7262, pole: 0x3a3c3f, rust: 0x8a5634, soot: 0x4f4c49, stack: 0x6e5a4c,
 };
 const TILE = 8; // ground texture repeat, meters
+// Baked night lights: color, reach (m) and strength. Lamps light pools; furnaces glow orange.
+const LAMP = { color: 0xffc98a, radius: 16, power: 1.4 };
+const FURNACE = { color: 0xff8a3a, radius: 15, power: 4 };
 const AO_STEPS = [0.4, 0.9, 1.6, 2.5, 3.6]; // sample distances along the normal, meters
-const color = new THREE.Color(), v = new THREE.Vector3(), n = new THREE.Vector3(), local = new THREE.Vector3(), sample = new THREE.Vector3();
+const color = new THREE.Color(), v = new THREE.Vector3(), n = new THREE.Vector3(), local = new THREE.Vector3(), sample = new THREE.Vector3(), to = new THREE.Vector3();
 
 const solidMatrix = (s) =>
   new THREE.Matrix4().compose(
@@ -21,7 +25,7 @@ const solidMatrix = (s) =>
 
 /** A box geometry split into roughly `cell`-meter quads so per-vertex AO has room to vary. */
 function boxGeometry([hx, hy, hz], cell = 2) {
-  const seg = (h) => Math.min(48, Math.max(1, Math.round((2 * h) / cell)));
+  const seg = (h) => Math.min(96, Math.max(1, Math.round((2 * h) / cell)));
   return new THREE.BoxGeometry(2 * hx, 2 * hy, 2 * hz, seg(hx), seg(hy), seg(hz));
 }
 
@@ -70,6 +74,11 @@ function kitbash(s, parts) {
   if (s.mat === 'tank') {
     for (const f of [-0.35, 0.3]) add(2 * hx + 0.3, 0.35, 2 * hz + 0.3, 0, f * 2 * hy, 0, COLORS.pipe);
   }
+  if (s.mat === 'stack') {
+    // Steel bands up the shaft and a sooty lip, fluted like the stack's square and diamond halves.
+    for (let y = -hy + 6; y < hy - 2; y += 7) add(2 * hx + 0.4, 0.6, 2 * hz + 0.4, 0, y, 0, COLORS.trim);
+    add(2 * hx + 0.6, 1.2, 2 * hz + 0.6, 0, hy - 0.6, 0, COLORS.soot);
+  }
 }
 
 function decorParts(d, parts, glow) {
@@ -109,13 +118,20 @@ function decorParts(d, parts, glow) {
     head.translate(x, y + 3.25, z);
     glow.push(paint(head, 0xffd9a0));
     glow.lamps.push(new THREE.Vector3(x, y + 3.1, z));
+  } else if (d.kind === 'furnace') {
+    // A furnace mouth: a glowing slab set into a wall (`from`/`to` corners), lit from `at`.
+    const a = new THREE.Vector3(...d.from), b = new THREE.Vector3(...d.to);
+    const g = new THREE.BoxGeometry(...new THREE.Vector3().subVectors(b, a).toArray().map(Math.abs));
+    g.translate(...a.add(b).multiplyScalar(0.5).toArray());
+    glow.push(paint(g, 0xffa050));
+    glow.furnaces.push(new THREE.Vector3(...d.at));
   }
 }
 
-/** Concatenates indexed geometries that share position, normal, uv and color attributes. */
+/** Concatenates indexed geometries that share the first one's attributes. */
 function mergeGeometries(geometries) {
   const merged = new THREE.BufferGeometry();
-  for (const name of ['position', 'normal', 'uv', 'color']) {
+  for (const name of Object.keys(geometries[0].attributes)) {
     const size = geometries[0].attributes[name].itemSize;
     const data = new Float32Array(geometries.reduce((sum, g) => sum + g.attributes[name].array.length, 0));
     let at = 0;
@@ -169,6 +185,64 @@ function bakeAO(geometry, boxes) {
   }
 }
 
+/** True when the segment from `a` to `b` passes through the box placed by inverse matrix `inv`. */
+function blocks(a, b, inv, [hx, hy, hz]) {
+  const p = local.copy(a).applyMatrix4(inv), q = sample.copy(b).applyMatrix4(inv).sub(p);
+  let t0 = 0, t1 = 1;
+  for (const [o, d, h] of [[p.x, q.x, hx], [p.y, q.y, hy], [p.z, q.z, hz]]) {
+    if (Math.abs(d) < 1e-9) {
+      if (Math.abs(o) > h) return false;
+      continue;
+    }
+    const u = (-h - o) / d, w = (h - o) / d;
+    t0 = Math.max(t0, Math.min(u, w));
+    t1 = Math.min(t1, Math.max(u, w));
+    if (t0 > t1) return false;
+  }
+  return true;
+}
+
+/**
+ * Bakes `lights` into a `glow` attribute: per vertex, each light's color by its falloff and the
+ * angle it strikes at, unless a solid stands between them (the lamps cast real shadows).
+ */
+function bakeLights(geometry, lights, boxes) {
+  const pos = geometry.attributes.position, nor = geometry.attributes.normal;
+  const glow = new Float32Array(pos.count * 3);
+  geometry.computeBoundingSphere();
+  const { center, radius } = geometry.boundingSphere;
+  for (const l of lights.filter((l) => l.at.distanceTo(center) < l.radius + radius)) {
+    const near = boxes.filter((b) => b.center.distanceTo(l.at) < b.radius + l.radius);
+    for (let i = 0; i < pos.count; i++) {
+      n.fromBufferAttribute(nor, i);
+      // From just off the surface, so the vertex's own solid doesn't shade it.
+      v.fromBufferAttribute(pos, i).addScaledVector(n, 0.05);
+      to.subVectors(l.at, v);
+      const d = to.length(), facing = n.dot(to) / d;
+      if (d >= l.radius || facing <= 0) continue;
+      if (near.some((b) => blocks(v, l.at, b.inv, b.half))) continue;
+      const k = l.power * (1 - d / l.radius) ** 2 * facing;
+      glow[i * 3] += l.rgb.r * k;
+      glow[i * 3 + 1] += l.rgb.g * k;
+      glow[i * 3 + 2] += l.rgb.b * k;
+    }
+  }
+  geometry.setAttribute('glow', new THREE.BufferAttribute(glow, 3));
+}
+
+/** Has a Lambert material add the baked `glow` attribute as light of its own. */
+function glowing(material) {
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec3 glow;\nvarying vec3 vGlow;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n  vGlow = glow;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vGlow;')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n  totalEmissiveRadiance += vGlow * diffuseColor.rgb;');
+  };
+  return material;
+}
+
 /** Concrete slabs with seams, grit and salt stains; drawn once, no file download. */
 function groundTexture() {
   const size = 256, canvas = document.createElement('canvas');
@@ -204,7 +278,10 @@ function groundTexture() {
   return texture;
 }
 
-/** Adds the map's meshes to `scene`; returns them so a map change can remove them. */
+/**
+ * Adds the map's meshes to `scene`; returns them so a map change can remove them, with `vents`
+ * (stack tops, which smoke) and `furnaces` (furnace mouths, which spark).
+ */
 export function buildArena(scene, map) {
   const started = performance.now();
   const boxes = map.solids.map((s) => {
@@ -215,6 +292,7 @@ export function buildArena(scene, map) {
 
   const ground = [], solid = [], glow = [];
   glow.lamps = [];
+  glow.furnaces = [];
   map.solids.forEach((s, i) => {
     const g = paint(boxGeometry(s.half), COLORS[s.mat] ?? COLORS.concrete, jitter(i));
     g.applyMatrix4(boxes[i].matrix);
@@ -232,21 +310,35 @@ export function buildArena(scene, map) {
     for (const p of parts) solid.push(p.applyMatrix4(boxes[i].matrix));
   });
   for (const d of map.decor ?? []) decorParts(d, solid, glow);
+  const lit = (m) => (map.night ? glowing(m) : m);
+  if (map.night) {
+    const light = (at, l) => ({ at, ...l, rgb: new THREE.Color(l.color) });
+    const lights = [...glow.lamps.map((p) => light(p, LAMP)), ...glow.furnaces.map((p) => light(p, FURNACE))];
+    for (const g of [...ground, ...solid]) bakeLights(g, lights, boxes);
+  }
 
   const meshes = [
-    ground.length && new THREE.Mesh(mergeGeometries(ground), new THREE.MeshLambertMaterial({ map: groundTexture(), vertexColors: true })),
-    new THREE.Mesh(mergeGeometries(solid), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })),
+    ground.length && new THREE.Mesh(mergeGeometries(ground), lit(new THREE.MeshLambertMaterial({ map: groundTexture(), vertexColors: true }))),
+    new THREE.Mesh(mergeGeometries(solid), lit(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }))),
     glow.length && new THREE.Mesh(mergeGeometries(glow), new THREE.MeshBasicMaterial({ vertexColors: true })),
   ].filter(Boolean);
   // Sun shadows: the floor only receives; solids and their trim cast and receive.
   meshes[0].receiveShadow = true;
   meshes[1].castShadow = meshes[1].receiveShadow = true;
   for (const p of glow.lamps) {
-    const h = halo(0xffd29a, 2.6);
+    const h = halo(0xffd29a, map.night ? 4 : 2.6);
+    h.position.copy(p);
+    meshes.push(h);
+  }
+  for (const p of glow.furnaces) {
+    const h = halo(0xff8a3a, 7);
     h.position.copy(p);
     meshes.push(h);
   }
   scene.add(...meshes);
   console.info(`arena ${map.name}: ${meshes.length} meshes, built in ${Math.round(performance.now() - started)} ms`);
+  // Smoke rises from the top of each stack (its square half; the diamond is the same stack).
+  meshes.vents = map.solids.filter((s) => s.mat === 'stack' && !s.yaw).map((s) => new THREE.Vector3(s.box[0], s.box[1] + s.half[1] + 0.5, s.box[2]));
+  meshes.furnaces = glow.furnaces;
   return meshes;
 }

@@ -1,5 +1,5 @@
-//! Every compiled-in map: spawns are standable, the generated nav graph is connected, and
-//! Saltworks is fair (180-degree symmetric) and navigable by bots.
+//! Every compiled-in map: spawns are standable, the generated nav graph is connected, the real
+//! maps are fair (180-degree symmetric), and bots can navigate Saltworks and climb Foundry.
 
 use sim::bot::{Bot, Nav, sees};
 use sim::game::TEAM_SIZE;
@@ -39,8 +39,13 @@ fn nav_graph_connects_every_waypoint() {
 }
 
 #[test]
-fn saltworks_is_rotationally_symmetric() {
-    let map = Map::load(Map::index("saltworks").unwrap());
+fn maps_are_rotationally_symmetric() {
+    for (index, (name, _)) in MAPS.iter().enumerate().filter(|(_, (name, _))| *name != "blockout") {
+        rotationally_symmetric(name, &Map::load(index));
+    }
+}
+
+fn rotationally_symmetric(name: &str, map: &Map) {
     for s in &map.solids {
         let [x, y, z] = s.center;
         let twin = map.solids.iter().any(|t| {
@@ -49,10 +54,10 @@ fn saltworks_is_rotationally_symmetric() {
             let facing = s.tilt == 0.0 || ((t.yaw - s.yaw).rem_euclid(360.0) - 180.0).abs() < 0.01;
             same_place && t.half == s.half && t.tilt == s.tilt && facing
         });
-        assert!(twin, "solid at {:?} has no 180-degree twin", s.center);
+        assert!(twin, "{name}: solid at {:?} has no 180-degree twin", s.center);
     }
     let [a, b] = &map.spawns;
-    assert!(a.iter().zip(b).all(|(p, q)| p[0] == -q[0] && p[1] == q[1] && p[2] == -q[2]), "spawns aren't mirrored");
+    assert!(a.iter().zip(b).all(|(p, q)| p[0] == -q[0] && p[1] == q[1] && p[2] == -q[2]), "{name}: spawns aren't mirrored");
 }
 
 #[test]
@@ -72,4 +77,35 @@ fn bot_reaches_the_far_catwalk_on_saltworks() {
         step_mech(&arena, &t, &mut me, &input);
     }
     panic!("bot never got line of sight; ended at {}", me.pos);
+}
+
+#[test]
+fn foundry_has_four_levels() {
+    let index = Map::index("foundry").unwrap();
+    let map = Map::load(index);
+    let reachable = Nav::for_map(index).reachable(0);
+    for level in [-5.0, 0.0, 7.0, 14.0] {
+        let count = map.nav.iter().zip(&reachable).filter(|(p, r)| **r && (p[1] - level).abs() < 0.5).count();
+        assert!(count >= 4, "only {count} connected waypoints at {level} m");
+    }
+}
+
+#[test]
+fn bot_climbs_to_the_skybridge_on_foundry() {
+    let index = Map::index("foundry").unwrap();
+    let map = Map::load(index);
+    let (arena, nav, t) = (Arena::new(&map), Nav::for_map(index), Tuning::default());
+    let mut me = spawn_mech(&t, Vector::from_array(map.spawns[0][0]));
+    // Up on the south team's skybridge.
+    let target = spawn_mech(&t, Vector::new(5.0, 14.1, -40.0));
+    assert!(!sees(&arena, &t, &me, &target), "target should start hidden");
+    let mut bot = Bot::new(7);
+    for tick in 0..(50.0 * TICK_HZ) as u32 {
+        if me.grounded && me.pos.y > 13.5 {
+            return;
+        }
+        let input = bot.think(&arena, nav, &t, &me, Some(&target), tick);
+        step_mech(&arena, &t, &mut me, &input);
+    }
+    panic!("bot never reached the gantry level; ended at {}", me.pos);
 }

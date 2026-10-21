@@ -26,8 +26,9 @@ export class Cockpit {
   constructor() {
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(80, 1, 0.05, 50);
-    this.scene.add(new THREE.HemisphereLight(0xdfe8f0, 0x4a4238, 1.1));
+    this.hemi = new THREE.HemisphereLight(0xdfe8f0, 0x4a4238, 1.1);
     this.sun = new THREE.DirectionalLight(0xfff0d8, 1.6);
+    this.scene.add(this.hemi);
     this.scene.add(this.sun, this.sun.target);
     this.accent = new THREE.MeshBasicMaterial({ color: TEAMS[-1].accent });
     this.frame = new THREE.Group();
@@ -93,6 +94,15 @@ export class Cockpit {
     this.scene.add(group);
     this.weapons = { group, guns };
     this.next = 0;
+  }
+
+  /** Matches the world's `hemi` and `sun` lights, a little dimmer: the canopy is under a roof. */
+  light(hemi, sun) {
+    this.hemi.color.copy(hemi.color);
+    this.hemi.groundColor.copy(hemi.groundColor);
+    this.hemi.intensity = hemi.intensity * 0.8;
+    this.sun.color.copy(sun.color);
+    this.sun.intensity = sun.intensity * 0.6;
   }
 
   setTeam(team) {
