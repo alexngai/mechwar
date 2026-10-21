@@ -47,7 +47,9 @@ if (net) {
 }
 
 // Index layout of state(); keep in sync with mech_state in sim/src/wasm.rs.
-const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, REPAIR_CD: 23, OFFSET: 24 };
+const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, REPAIR_CD: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, OFFSET: 31 };
+// Volley index of thrown grenades; matches projectile::GRENADE in sim/src/projectile.rs.
+const GRENADE_N = 255;
 
 // --- Scene ---------------------------------------------------------------
 // ?quality=low|high (default high). High drops to Low once if it can't hold 45 fps.
@@ -130,7 +132,7 @@ const hits = [], damageFrom = [], lastFired = new Map();
 
 // --- Input ---------------------------------------------------------------
 const keys = new Set();
-let yaw = 0, pitch = 0, dodge = 0, ability = false, firing = false, altFiring = false;
+let yaw = 0, pitch = 0, dodge = 0, ability = false, grenade = false, emp = false, firing = false, altFiring = false;
 // First-person cockpit unless the player last chose the chase camera (V).
 const stored = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
 let firstPerson = stored('webhawk.view') !== 'chase';
@@ -165,6 +167,8 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyQ') dodge = -1;
   if (e.code === 'KeyE') dodge = 1;
   if (e.code === 'KeyF') ability = true;
+  if (e.code === 'KeyG') grenade = true;
+  if (e.code === 'KeyT') emp = true;
   if (e.code === 'KeyK' && sim) { sim.reset(); prev = curr = sim.state(); }
   if (e.code === 'KeyV') {
     firstPerson = !firstPerson;
@@ -236,6 +240,9 @@ const eye = new THREE.Vector3(), offset = new THREE.Vector3(), aim = new THREE.V
 const pos = new THREE.Vector3(), vel = new THREE.Vector3(), seen = new THREE.Vector3(), step = new THREE.Vector3();
 const ray = new THREE.Ray(), sphere = new THREE.Sphere(), crossing = new THREE.Vector3();
 const heading = new THREE.Vector3(), chest = new THREE.Vector3(), to = new THREE.Vector3(), look = new THREE.Vector3(), ndc = new THREE.Vector3(), muzzle = new THREE.Vector3();
+const spark = new THREE.Vector3();
+/** Moves feet position `p` up to the chest of a class `cls` mech. */
+const toChest = (p, cls) => { p.y += classValue(cls, 'mech_height') * 0.5; return p; };
 
 function frame(now) {
   renderer.info.reset();
@@ -249,7 +256,7 @@ function frame(now) {
       continue;
     }
     const input = [axis('KeyD', 'KeyA'), axis('KeyW', 'KeyS'), yaw, pitch,
-      keys.has('ShiftLeft') || keys.has('ShiftRight'), keys.has('Space'), dodge, firing, altFiring, ability, keys.has('KeyR')];
+      keys.has('ShiftLeft') || keys.has('ShiftRight'), keys.has('Space'), dodge, firing, altFiring, ability, keys.has('KeyR'), grenade, emp];
     if (net) {
       const bytes = net.tick(...input, now);
       if (ws.readyState === WebSocket.OPEN) ws.send(bytes);
@@ -261,11 +268,13 @@ function frame(now) {
     if (dodge && curr[S.DODGE_CD] > prev[S.DODGE_CD]) me.dodge(dodge);
     if (ability && curr[S.ABILITY_CD] > prev[S.ABILITY_CD]) me.ability();
     dodge = 0;
-    ability = false;
+    ability = grenade = emp = false;
     acc -= DT;
     // Hitscan pellets, where each stopped against the arena.
     const ends = game.take_shots();
     for (let k = 0; k < ends.length; k += 3) shots.push(new THREE.Vector3(ends[k], ends[k + 1], ends[k + 2]));
+    // Own EMPs show as predicted; the server's Pulse for them only marks hits.
+    if (curr[S.PULSED]) fx.pulse(toChest(new THREE.Vector3(curr[S.POS], curr[S.POS + 1], curr[S.POS + 2]), classIdx), T('emp_radius'));
   }
   const a = acc / DT;
   const lerp = (i) => prev[i] + (curr[i] - prev[i]) * a;
@@ -296,6 +305,7 @@ function frame(now) {
     ability: curr[S.ABILITY_T] > 0, damage: 1 - curr[S.HEALTH] / T('health_max'),
     repair: repairPhase(curr[S.REPAIR_T]),
   });
+  if (curr[S.JAMMED] > 0) fx.jam(toChest(spark.copy(pos), classIdx), dt);
 
   if (net) {
     const r = net.remotes(now), live = new Set();
@@ -325,6 +335,7 @@ function frame(now) {
         ability: !!abilityOn, damage: 1 - health / classValue(cls, 'health_max'),
         repair: repairPhase(e.repairAt === null ? 0 : (now - e.repairAt) / 1000 + 1e-3, cls),
       });
+      if (now < (e.jammedUntil ?? 0)) fx.jam(toChest(spark.copy(e.pos), cls), dt);
     }
     for (const [id, e] of remotes) if (!live.has(id)) { e.mech.dispose(); remotes.delete(id); }
   }
@@ -347,10 +358,17 @@ function frame(now) {
     }
     if (kind === 1 && a === myId) hits.push({ at: now, kill: true });
     if (kind === 1 && (a === myId || b === myId)) { message = a === myId ? 'ENEMY DESTROYED' : 'DESTROYED'; messageUntil = now + 2500; }
-    if (kind === 2 || kind === 4) {
+    if (kind === 2) {
       blastAt.set(x, y, z);
-      fx.explosion(blastAt, classValue(b, kind === 4 ? 'shot_radius' : 'alt_radius') / 5);
+      fx.explosion(blastAt, b / 5);
       fx.muzzleLight(blastAt);
+    }
+    if (kind === 4) {
+      // EMP: b is a bitmask of who it jammed. Our own jam shows from our predicted state.
+      const cls = a === myId ? classIdx : remotes.get(a)?.cls ?? 1;
+      if (a !== myId) fx.pulse(blastAt.set(x, y, z), classValue(cls, 'emp_radius'));
+      if (a === myId && b) hits.push({ at: now, kill: false });
+      for (const [id, e] of remotes) if (b & (1 << id)) e.jammedUntil = now + 1000 * classValue(cls, 'emp_jam');
     }
   }
 
@@ -380,7 +398,7 @@ function frame(now) {
     const p = new THREE.Vector3(x + vx * ahead, y + vy * ahead, z + vz * ahead);
     const blend = Math.min((age + ahead) / LAUNCH_BLEND, 1);
     if (blend < 1) p.lerp(shot.from, 1 - blend);
-    drawn.push({ pos: p, vel: new THREE.Vector3(vx, vy, vz), cls: CLASS_KEYS[cls], age: age + ahead, primary: !!primary });
+    drawn.push({ pos: p, vel: new THREE.Vector3(vx, vy, vz), cls: CLASS_KEYS[cls], age: age + ahead, primary: !!primary, grenade: n === GRENADE_N });
   }
   for (const key of launches.keys()) if (!live.has(key)) launches.delete(key);
   fx.projectiles(drawn, dt);
@@ -509,6 +527,12 @@ function drawGlass(now, myTeam) {
     dodge: 1 - curr[S.DODGE_CD] / Math.max(T('dodge_cooldown'), 1e-6),
     health: curr[S.HEALTH], healthMax: T('health_max'), fuel: curr[S.FUEL] / T('fuel_max'), className: c.name,
     friendColor: hex((TEAMS[myTeam] ?? TEAMS[-1]).accent), enemyColor: hex((TEAMS[1 - myTeam] ?? TEAMS[1]).accent),
+    repair: { phase: repairPhase(curr[S.REPAIR_T]), ready: 1 - curr[S.REPAIR_CD] / Math.max(T('repair_cooldown'), 1e-6) },
+    items: [
+      { key: 'G', name: 'Tumbler', charges: curr[S.GRENADES], max: T('grenade_charges'), recharge: 1 - curr[S.GRENADE_WAIT] / Math.max(T('grenade_recharge'), 1e-6) },
+      { key: 'T', name: 'Brownout', charges: curr[S.EMPS], max: T('emp_charges'), recharge: 1 - curr[S.EMP_WAIT] / Math.max(T('emp_recharge'), 1e-6) },
+    ],
+    jammed: curr[S.JAMMED] > 0,
     contacts, tags, hits, damage: damageFrom,
   });
 }

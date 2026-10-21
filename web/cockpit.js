@@ -40,7 +40,8 @@ export class Cockpit {
 
   /** Rebuilds the canopy to span the view at `aspect`; pillars stay just inside the screen edges. */
   layout(aspect) {
-    if (aspect === this.aspect) return;
+    // A hidden page can report a zero-height view; keep the last layout until it's real.
+    if (aspect === this.aspect || !(aspect > 0 && Number.isFinite(aspect))) return;
     this.aspect = aspect;
     for (const o of [...this.frame.children]) {
       o.geometry.dispose();

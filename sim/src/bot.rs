@@ -7,6 +7,7 @@ use std::sync::OnceLock;
 
 use rapier3d::prelude::{Ray, Rotation};
 
+use crate::item;
 use crate::map::{MAPS, Map};
 use crate::{Arena, DT, Input, Mech, MechClass, TICK_HZ, Tuning, Vector, spawn_mech, step_mech};
 
@@ -115,6 +116,8 @@ const NEAR: f32 = 20.0;
 const AIM_TOLERANCE: f32 = 2.0 * PI / 180.0;
 /// Farthest a Bulwark lobs its mortar.
 const MORTAR_RANGE: f32 = 40.0;
+/// Farthest a bot lobs a grenade (short of its flat-ground reach).
+const GRENADE_RANGE: f32 = 28.0;
 
 pub struct Bot {
     pub seq: u32,
@@ -133,6 +136,8 @@ pub struct Bot {
     /// Target chest positions, oldest first, so aim lags by the reaction time.
     seen: VecDeque<Vector>,
     last_health: f32,
+    /// No grenade before this tick, so charges go one every few seconds.
+    grenade_at: u32,
 }
 
 impl Bot {
@@ -150,6 +155,7 @@ impl Bot {
             wobble: (0.0, 0.0),
             seen: VecDeque::new(),
             last_health: 0.0,
+            grenade_at: 0,
         }
     }
 
@@ -195,13 +201,20 @@ impl Bot {
             let alt_range = if t.alt_gravity > 0.0 { MORTAR_RANGE } else { 0.8 * t.alt_speed * t.alt_fuse };
             let alt = me.alt_wait <= 0.0 && dist < alt_range && dist > t.alt_radius + 2.0;
             let alt_cool = !me.overheated && me.heat + t.alt_heat < t.heat_max;
-            // Projectile primaries are led by their flight time too.
-            let lead = if alt { dist / t.alt_speed } else if t.shot_speed > 0.0 { dist / t.shot_speed } else { 0.0 };
+            // Otherwise a grenade takes the aim the same way, every few seconds while charges last.
+            let grenade = t.grenade();
+            let throw = !alt && me.grenades > 0 && tick >= self.grenade_at && dist < GRENADE_RANGE && dist > t.grenade_radius + 2.0;
+            let shell = if alt { Some(t) } else if throw { Some(&grenade) } else { None };
+            // Shells are led by their flight time, and so are projectile primaries.
+            let primary_lead = if t.shot_speed > 0.0 { dist / t.shot_speed } else { 0.0 };
+            let lead = shell.map_or(primary_lead, |s| dist / s.alt_speed);
             let (yaw, mut pitch) = look_at(eye, chest + target.vel * lead);
-            if alt && t.alt_gravity > 0.0 {
+            if let Some(s) = shell
+                && s.alt_gravity > 0.0
+            {
                 // Range d on flat ground: sin(2θ) = g d / v².
-                let s = (t.alt_gravity * flat(chest - eye).length() / (t.alt_speed * t.alt_speed)).min(1.0);
-                pitch = 0.5 * s.asin() - t.alt_loft_deg.to_radians();
+                let r = (s.alt_gravity * flat(chest - eye).length() / (s.alt_speed * s.alt_speed)).min(1.0);
+                pitch = 0.5 * r.asin() - s.alt_loft_deg.to_radians();
             }
             let (want_yaw, want_pitch) = (yaw + self.wobble.0, pitch + self.wobble.1);
             let new_yaw = me.yaw + wrap(want_yaw - me.yaw).clamp(-max_turn, max_turn);
@@ -213,6 +226,10 @@ impl Bot {
                 self.strafe_until = tick + secs(0.8 + 1.2 * self.rand());
             }
             let dodge = took_damage && me.dodge_cooldown <= 0.0 && self.rand() < 0.3;
+            let throw = throw && on_target;
+            if throw {
+                self.grenade_at = tick + secs(4.0 + 4.0 * self.rand());
+            }
             return Input {
                 move_x: self.strafe,
                 move_z: if range > FAR { 1.0 } else if range < NEAR { -1.0 } else { 0.0 },
@@ -220,8 +237,11 @@ impl Bot {
                 pitch: new_pitch,
                 dodge: if dodge { self.strafe as i8 } else { 0 },
                 // Stay under the overheat lockout rather than spraying into it.
-                fire: !alt && on_target && !me.overheated && me.heat < 0.85 * t.heat_max,
+                fire: shell.is_none() && on_target && !me.overheated && me.heat < 0.85 * t.heat_max,
                 alt_fire: alt && alt_cool && on_target,
+                grenade: throw,
+                // When it would land (taking the target for our size), and they aren't jammed already.
+                emp: me.emps > 0 && target.jammed <= 0.0 && item::emp_reaches(arena, t, me, t, target),
                 // Lancers vent before stalling; Bulwarks brace once they're hurt and under fire.
                 ability: match me.class {
                     MechClass::B => me.overheated || me.heat >= 0.8 * t.heat_max,
@@ -316,6 +336,7 @@ fn secs(s: f32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::projectile;
 
     #[test]
     fn bot_paths_to_hidden_target() {
@@ -334,5 +355,40 @@ mod tests {
             step_mech(&arena, &t, &mut me, &input);
         }
         panic!("bot never got line of sight; ended at {}", me.pos);
+    }
+
+    #[test]
+    fn bots_use_items() {
+        let blockout = Map::index("blockout").unwrap();
+        let (arena, nav, t) = (Arena::new(&Map::load(blockout)), Nav::for_map(blockout), Tuning::default());
+        // A target standing in the open `range` m north of the bot, for 4 s: the first grenade
+        // thrown, and whether it pulsed.
+        let engage = |range: f32| {
+            let mut me = spawn_mech(&t, Vector::new(0.0, 0.1, 40.0));
+            let target = spawn_mech(&t, Vector::new(0.0, 0.1, 40.0 - range));
+            let mut bot = Bot::new(1);
+            let (mut grenade, mut pulsed) = (None, false);
+            for tick in 0..secs(4.0) {
+                let input = bot.think(&arena, nav, &t, &me, Some(&target), tick);
+                step_mech(&arena, &t, &mut me, &input);
+                pulsed |= me.pulsed;
+                if me.threw {
+                    grenade.get_or_insert(projectile::grenade(&t, &me, 0, tick));
+                }
+            }
+            (grenade, pulsed, target)
+        };
+
+        let (grenade, pulsed, target) = engage(20.0);
+        assert!(!pulsed, "pulsed a target 20 m away");
+        let mut g = grenade.expect("no grenade at 20 m");
+        let gt = t.grenade();
+        let at = (0..secs(5.0))
+            .find_map(|_| projectile::fly(&arena, &gt, &mut g, |ray, max| projectile::first_mech(ray, max, [(&t, &target)])))
+            .expect("grenade never burst");
+        assert!(projectile::splash(&arena, &gt, false, at, &t, &target) > 0.0, "grenade burst at {at}, out of reach of {}", target.pos);
+
+        let (_, pulsed, _) = engage(9.0);
+        assert!(pulsed, "never pulsed a target 9 m away");
     }
 }

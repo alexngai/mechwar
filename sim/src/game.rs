@@ -9,6 +9,7 @@ use rapier3d::prelude::Pose;
 
 use crate::bot::{self, Bot, Nav};
 use crate::collide;
+use crate::item;
 use crate::net::{Event, InputMsg, MatchState, MechView, PlayerNet, Snapshot};
 use crate::projectile::{self, Projectile};
 use crate::weapon;
@@ -254,12 +255,18 @@ impl Game {
                 if p.mech.shot && t.shot_speed > 0.0 {
                     shells.extend(weapon::volley(t, &p.mech, p.id, msg.seq));
                 }
+                if p.mech.threw {
+                    shells.push(projectile::grenade(t, &p.mech, p.id, msg.seq));
+                }
                 for shell in shells {
                     self.events.push(Event::Launch(shell));
                     self.projectiles.push(Flying { p: shell, team: p.team });
                 }
                 if p.mech.shot && t.shot_speed <= 0.0 {
                     self.resolve_shot(i, msg.seq, msg.view_tick);
+                }
+                if self.players[i].mech.pulsed {
+                    self.pulse(i);
                 }
             }
         }
@@ -287,8 +294,8 @@ impl Game {
                     .filter(|q| q.team != f.team && q.mech.health > 0.0)
                     .map(|q| (&self.classes[q.class.index()], &q.mech))
             };
-            let t = &self.classes[f.p.class.index()];
-            match projectile::fly(&self.arena, t, &mut f.p, |ray, max| projectile::first_mech(ray, max, enemies())) {
+            let t = projectile::tuning_for(&self.classes[f.p.class.index()], f.p.n);
+            match projectile::fly(&self.arena, &t, &mut f.p, |ray, max| projectile::first_mech(ray, max, enemies())) {
                 Some(at) => {
                     bursts.push((f.p, f.team, at));
                     false
@@ -388,13 +395,13 @@ impl Game {
 
     /// Splash from projectile `p` (fired by `team`) bursting at `at`, and its Blast event.
     fn burst(&mut self, p: Projectile, team: u8, at: Vector) {
-        let t = &self.classes[p.class.index()];
+        let t = projectile::tuning_for(&self.classes[p.class.index()], p.n);
         let hurt: Vec<(usize, f32)> = self
             .players
             .iter()
             .enumerate()
             .filter(|(_, q)| q.team != team && q.mech.health > 0.0)
-            .map(|(j, q)| (j, projectile::splash(&self.arena, t, p.primary, at, &self.classes[q.class.index()], &q.mech)))
+            .map(|(j, q)| (j, projectile::splash(&self.arena, &t, p.primary, at, &self.classes[q.class.index()], &q.mech)))
             .filter(|&(_, damage)| damage > 0.0)
             .collect();
         let attacker = self.players.iter().position(|q| q.id == p.owner);
@@ -406,6 +413,27 @@ impl Game {
             }
         }
         self.events.push(Event::Blast { owner: p.owner, seq: p.seq, n: p.n, primary: p.primary, class: p.class, pos: at, hits });
+    }
+
+    /// Player `user`'s EMP: jams every living enemy it reaches, and its Pulse event.
+    /// ponytail: targets aren't rewound like shots, so at high ping one the user saw just inside
+    /// the radius can be out of it by now; rewind with `history` if that shows in play.
+    fn pulse(&mut self, user: usize) {
+        let u = &self.players[user];
+        let t = &self.classes[u.class.index()];
+        let reached: Vec<usize> = (0..self.players.len())
+            .filter(|&j| {
+                let q = &self.players[j];
+                q.team != u.team && q.mech.health > 0.0 && item::emp_reaches(&self.arena, t, &u.mech, &self.classes[q.class.index()], &q.mech)
+            })
+            .collect();
+        let (owner, pos) = (u.id, item::emp_center(t, &u.mech));
+        let mut hits = 0;
+        for j in reached {
+            item::jam(t, &mut self.players[j].mech);
+            hits |= 1 << self.players[j].id;
+        }
+        self.events.push(Event::Pulse { owner, pos, hits });
     }
 
     /// Damages player `j` (less while braced) while the match is on, ending any repair. A kill
@@ -496,4 +524,64 @@ fn rewind(history: &VecDeque<(u32, Vector, bool)>, at: f32) -> Option<Vector> {
     let (a, b) = (history[i - 1], history[i]);
     let f = (at - a.0 as f32) / (b.0 - a.0) as f32;
     (a.2 && b.2).then(|| a.1.lerp(b.1, f))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::InputMsg;
+    use crate::{DT, Input};
+
+    fn send(game: &mut Game, id: u8, input: Input) {
+        game.push_input(id, InputMsg { seq: game.tick + 1, input, view_tick: game.tick as f32 });
+    }
+
+    fn mech(game: &Game, id: u8) -> Mech {
+        game.players.iter().find(|p| p.id == id).unwrap().mech
+    }
+
+    #[test]
+    fn emp_hits_only_enemies_in_reach() {
+        let t = Tuning::default();
+        let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+        game.bots = false;
+        // Joins alternate teams. Around the user: a teammate 5 m off, an enemy 8 m off, one 12 m
+        // off behind the cover at (-15, 10), and one 23 m off, out of range.
+        let [user, near, mate, walled, far] = [0, 1, 2, 3, 5];
+        for (x, z) in [(-15.0, 18.0), (-15.0, 26.0), (-10.0, 18.0), (-15.0, 6.0), (0.0, 40.0), (5.0, 30.0)] {
+            let id = game.join().unwrap();
+            game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = Vector::new(x, 0.1, z);
+        }
+        assert!(game.players.iter().all(|p| p.team == p.id % 2), "teams aren't as the test assumes");
+
+        send(&mut game, user, Input { emp: true, ..Input::default() });
+        game.step();
+        let pulse = game.events.iter().find_map(|e| match *e {
+            Event::Pulse { owner, hits, .. } => Some((owner, hits)),
+            _ => None,
+        });
+        assert_eq!(pulse, Some((user, 1 << near)));
+        let hit = mech(&game, near);
+        assert_eq!((hit.jammed, hit.fuel), (t.emp_jam, t.fuel_max - t.emp_drain));
+        for id in [user, mate, walled, far] {
+            let m = mech(&game, id);
+            assert_eq!((m.jammed, m.fuel), (0.0, t.fuel_max), "player {id} was jammed");
+        }
+        assert_eq!(mech(&game, user).emps, t.emp_charges as u8 - 1);
+
+        // The jammed enemy can't boost until the jam wears off, then can.
+        let boost = Input { move_x: 1.0, boost: true, ..Input::default() };
+        for ticks in 1.. {
+            send(&mut game, near, boost);
+            game.step();
+            let m = mech(&game, near);
+            if m.jammed > 0.0 {
+                assert!(!m.boosting, "boosted while jammed");
+                continue;
+            }
+            assert!(m.boosting, "still can't boost after the jam");
+            assert!((ticks as f32 * DT - t.emp_jam).abs() <= DT, "jam lasted {ticks} ticks");
+            break;
+        }
+    }
 }

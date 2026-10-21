@@ -3,7 +3,7 @@
 // reticle at the aim point, target tags, damage arcs, radar bottom-left, hull and readiness
 // gauges bottom center. Everything is drawn in device pixels scaled by `u` (1/1000 of the height).
 
-const AMBER = '#ffc46a', DIM = 'rgba(255,196,106,0.35)', FAINT = 'rgba(255,196,106,0.14)', WARN = '#ff4a3a', FUEL = '#7fd8ff';
+const AMBER = '#ffc46a', DIM = 'rgba(255,196,106,0.35)', FAINT = 'rgba(255,196,106,0.14)', WARN = '#ff4a3a', FUEL = '#7fd8ff', REPAIR = '#6dff9a';
 const TAU = Math.PI * 2;
 const RADAR_RANGE = 90; // m
 const POINTS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
@@ -257,15 +257,43 @@ export class Hud {
     g.beginPath();
     g.arc(cx - 140 * u, dy + 30 * u, 5 * u, 0, TAU);
     g.fill();
-    const rows = [[`${f.altName}`, f.alt, f.altReady ? 'RMB' : ''], [`${f.abilityName}`, f.ability, f.abilityActive ? 'ON' : f.ability >= 1 ? 'F' : '']];
+    const repairKey = f.repair.phase >= 1 ? 'ON' : f.repair.phase > 0 ? '…' : f.repair.ready >= 1 ? 'R' : '';
+    const rows = [
+      [`${f.altName}`, f.alt, f.altReady ? 'RMB' : ''],
+      [`${f.abilityName}`, f.ability, f.abilityActive ? 'ON' : f.ability >= 1 ? 'F' : ''],
+      ['Repair', f.repair.phase > 0 ? f.repair.phase : f.repair.ready, repairKey],
+    ];
     g.textAlign = 'left';
     rows.forEach(([name, fill, key], i) => {
-      const y = dy - 22 * u + i * 26 * u, x = cx + 150 * u;
+      const y = dy - 34 * u + i * 24 * u, x = cx + 150 * u;
       g.fillStyle = fill >= 1 ? AMBER : DIM;
       g.font = font(12);
       g.fillText(`${name.toUpperCase()} ${key}`, x, y);
       bar(g, x, y + 5 * u, 120 * u, 4 * u, fill, fill >= 1 ? AMBER : DIM);
     });
+    // Items, left of the hull: a pip per charge and the next charge's progress.
+    g.textAlign = 'right';
+    f.items.forEach((it, i) => {
+      const y = dy - 22 * u + i * 26 * u, x = cx - 165 * u;
+      g.fillStyle = it.charges > 0 ? AMBER : DIM;
+      g.font = font(12);
+      g.fillText(`${it.key} ${it.name.toUpperCase()}`, x, y);
+      for (let k = 0; k < it.max; k++) {
+        g.fillStyle = k < it.charges ? AMBER : FAINT;
+        g.fillRect(x - 120 * u + k * 12 * u, y + 5 * u, 9 * u, 5 * u);
+      }
+      if (it.charges < it.max) bar(g, x - 120 * u + it.max * 12 * u, y + 7 * u, 40 * u, 2 * u, it.recharge, DIM);
+    });
+    // Shutdown and jamming warnings over the hull numeral.
+    g.textAlign = 'center';
+    g.font = font(16, 'bold');
+    if (f.repair.phase > 0) {
+      g.fillStyle = REPAIR;
+      g.fillText(f.repair.phase >= 1 ? 'REPAIRING · SYSTEMS OFFLINE' : 'SHUTTING DOWN', cx, dy - 52 * u);
+    } else if (f.jammed && Math.floor(f.now / 200) % 2 === 0) {
+      g.fillStyle = WARN;
+      g.fillText('BOOST JAMMED', cx, dy - 52 * u);
+    }
   }
 }
 

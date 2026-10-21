@@ -9,6 +9,7 @@ pub mod bot;
 pub mod client;
 pub mod collide;
 pub mod game;
+pub mod item;
 pub mod map;
 pub mod net;
 pub mod projectile;
@@ -117,6 +118,24 @@ pub struct Tuning {
     pub repair_rate: f32,
     pub repair_cooldown: f32,
 
+    /// Items, one per slot, each with charges that recharge one at a time; see `item.rs`.
+    /// Offensive: a thrown grenade, flown like a secondary shell.
+    pub grenade_charges: f32,
+    pub grenade_recharge: f32,
+    pub grenade_speed: f32,
+    pub grenade_loft_deg: f32,
+    pub grenade_gravity: f32,
+    pub grenade_bounce: f32,
+    pub grenade_fuse: f32,
+    pub grenade_damage: f32,
+    pub grenade_radius: f32,
+    /// Support: an EMP that drains nearby enemies' fuel and jams their boost.
+    pub emp_charges: f32,
+    pub emp_recharge: f32,
+    pub emp_radius: f32,
+    pub emp_drain: f32,
+    pub emp_jam: f32,
+
     pub bot_turn_rate_deg: f32,
     pub bot_aim_error_deg: f32,
     pub bot_reaction_s: f32,
@@ -202,6 +221,9 @@ pub struct Input {
     pub ability: bool,
     /// Held to repair; see `step_mech`.
     pub repair: bool,
+    /// Items, also only on the tick the key went down.
+    pub grenade: bool,
+    pub emp: bool,
 }
 
 impl Input {
@@ -259,6 +281,16 @@ pub struct Mech {
     pub repair_time: f32,
     /// Seconds until a repair can start again.
     pub repair_cooldown: f32,
+    /// Item charges left, and seconds until the next one comes back (0 when full).
+    pub grenades: u8,
+    pub grenade_wait: f32,
+    pub emps: u8,
+    pub emp_wait: f32,
+    /// Seconds an enemy EMP keeps boost off.
+    pub jammed: f32,
+    /// Set on ticks a grenade was thrown, and an EMP went off.
+    pub threw: bool,
+    pub pulsed: bool,
 }
 
 impl Mech {
@@ -306,9 +338,9 @@ impl Arena {
     }
 }
 
-/// A fresh mech standing at `pos` with full fuel and health.
+/// A fresh mech standing at `pos` with full fuel, health and item charges.
 pub fn spawn_mech(t: &Tuning, pos: Vector) -> Mech {
-    Mech { pos, fuel: t.fuel_max, health: t.health_max, ..Mech::default() }
+    Mech { pos, fuel: t.fuel_max, health: t.health_max, grenades: t.grenade_charges as u8, emps: t.emp_charges as u8, ..Mech::default() }
 }
 
 /// Collision and hit shape, centered `mech_height / 2` above the feet.
@@ -328,13 +360,14 @@ pub struct Sim {
     pub tuning: Tuning,
     pub class: MechClass,
     pub mech: Mech,
-    /// Secondary fire in flight; offline it only meets the arena.
+    /// Secondary fire and grenades in flight; offline they only meet the arena.
     pub projectiles: Vec<projectile::Projectile>,
-    /// Where projectiles burst (and whether they were primary fire) since the page last took them.
-    pub blasts: Vec<(bool, Vector)>,
+    /// Where projectiles burst since the page last took them, with their blast radius.
+    pub blasts: Vec<(f32, Vector)>,
     /// Where hitscan pellets stopped since the page last took them.
     pub shots: Vec<Vector>,
-    /// Stands in for the input seq that seeds the spread online.
+    /// Steps so far: stands in for the input seq that seeds the spread online and tells this
+    /// mech's projectiles apart.
     seq: u32,
     arena: Arena,
     /// Team 0's first spawn on the map.
@@ -365,6 +398,9 @@ impl Sim {
         if self.mech.launched {
             self.projectiles.extend(projectile::volley(t, &self.mech, 0, self.seq));
         }
+        if self.mech.threw {
+            self.projectiles.push(projectile::grenade(t, &self.mech, 0, self.seq));
+        }
         if self.mech.shot && t.shot_speed > 0.0 {
             self.projectiles.extend(weapon::volley(t, &self.mech, 0, self.seq));
         } else if self.mech.shot {
@@ -372,12 +408,15 @@ impl Sim {
             self.shots.extend(weapon::pellets(t, &self.mech, self.seq).iter().map(|r| r.point_at(arena.cast_ray(r, t.weapon_range).unwrap_or(t.weapon_range))));
         }
         let (arena, blasts) = (&self.arena, &mut self.blasts);
-        self.projectiles.retain_mut(|p| match projectile::fly(arena, t, p, |_, _| None) {
-            Some(at) => {
-                blasts.push((p.primary, at));
-                false
+        self.projectiles.retain_mut(|p| {
+            let radius = projectile::radius(t, p);
+            match projectile::fly(arena, &projectile::tuning_for(t, p.n), p, |_, _| None) {
+                Some(at) => {
+                    blasts.push((radius, at));
+                    false
+                }
+                None => true,
             }
-            None => true,
         });
     }
 
@@ -395,6 +434,8 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     }
     m.shot = false;
     m.launched = false;
+    m.threw = false;
+    m.pulsed = false;
     if m.health <= 0.0 {
         return;
     }
@@ -441,12 +482,13 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     }
     let slipstream = m.class == MechClass::A && m.ability_time > 0.0;
     let brace = m.class == MechClass::C && m.ability_time > 0.0;
+    item::step(t, m, input);
 
     // Fuel spenders: boost, dodge, hover.
     let mut used_fuel = false;
     // Starting needs boost_min_fuel so an empty tank doesn't flicker boost on each regen tick.
     let fuel_ok = slipstream || (m.fuel > 0.0 && (m.boosting || m.fuel >= t.boost_min_fuel));
-    m.boosting = !brace && input.boost && has_move && fuel_ok;
+    m.boosting = !brace && m.jammed <= 0.0 && input.boost && has_move && fuel_ok;
     if m.boosting && !slipstream {
         m.fuel -= t.boost_drain * DT;
         used_fuel = true;
