@@ -45,7 +45,7 @@ if (net) {
 }
 
 // Index layout of state(); keep in sync with mech_state in sim/src/wasm.rs.
-const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, OFFSET: 20 };
+const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, OFFSET: 22 };
 
 // --- Scene ---------------------------------------------------------------
 // ?quality=low|high (default high). High drops to Low once if it can't hold 45 fps.
@@ -113,17 +113,20 @@ applyQuality();
 // Other players by id: their mech, team, class, and a velocity estimated from interpolated motion.
 const remotes = new Map();
 const shots = []; // own predicted shots, drawn once this frame's pose is set
+// Projectiles seen so far by id, with the launcher position each is drawn leaving from.
+const launches = new Map(), blastAt = new THREE.Vector3();
+const LAUNCH_BLEND = 0.15; // s
 let hitUntil = 0, hurt = 0, message = '', messageUntil = 0;
 
 // --- Input ---------------------------------------------------------------
 const keys = new Set();
-let yaw = 0, pitch = 0, dodge = 0, ability = false, firing = false, cockpit = false;
+let yaw = 0, pitch = 0, dodge = 0, ability = false, firing = false, altFiring = false, cockpit = false;
 const locked = () => document.pointerLockElement === renderer.domElement;
 // Chrome rejects a re-lock right after Esc; the next click simply tries again.
 renderer.domElement.addEventListener('click', () => renderer.domElement.requestPointerLock()?.catch?.(() => {}));
 document.addEventListener('pointerlockchange', () => {
   document.body.classList.toggle('locked', locked());
-  if (!locked()) firing = false;
+  if (!locked()) firing = altFiring = false;
 });
 addEventListener('mousemove', (e) => {
   if (!locked()) return;
@@ -131,8 +134,16 @@ addEventListener('mousemove', (e) => {
   yaw -= e.movementX * T('mouse_sensitivity');
   pitch = THREE.MathUtils.clamp(pitch - e.movementY * T('mouse_sensitivity'), -limit, limit);
 });
-addEventListener('mousedown', (e) => { if (locked() && e.button === 0) firing = true; });
-addEventListener('mouseup', (e) => { if (e.button === 0) firing = false; });
+addEventListener('mousedown', (e) => {
+  if (!locked()) return;
+  if (e.button === 0) firing = true;
+  if (e.button === 2) altFiring = true;
+});
+addEventListener('mouseup', (e) => {
+  if (e.button === 0) firing = false;
+  if (e.button === 2) altFiring = false;
+});
+addEventListener('contextmenu', (e) => e.preventDefault());
 addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement) return;
   if (e.code === 'Space') e.preventDefault();
@@ -149,7 +160,7 @@ addEventListener('keydown', (e) => {
   if (digit >= 0 && !$('picker').hidden) pick(digit);
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
-addEventListener('blur', () => { keys.clear(); firing = false; });
+addEventListener('blur', () => { keys.clear(); firing = altFiring = false; });
 const axis = (pos, neg) => (keys.has(pos) ? 1 : 0) - (keys.has(neg) ? 1 : 0);
 
 // --- Tuning panel ----------------------------------------------------------
@@ -168,7 +179,7 @@ gui.add({ copy: () => navigator.clipboard.writeText(JSON.stringify(tuning, null,
 
 // --- HUD -------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
-const hud = { ability: $('ability'), abilityName: $('ability-name'), status: $('status'), net: $('net'), score: $('score'), banner: $('banner'), damage: $('damage'), fuel: $('fuel'), heat: $('heat'), dodge: $('dodge'), hp: $('hp'), crosshair: $('crosshair') };
+const hud = { ability: $('ability'), abilityName: $('ability-name'), alt: $('alt'), altName: $('alt-name'), status: $('status'), net: $('net'), score: $('score'), banner: $('banner'), damage: $('damage'), fuel: $('fuel'), heat: $('heat'), dodge: $('dodge'), hp: $('hp'), crosshair: $('crosshair') };
 
 // --- Class picker ----------------------------------------------------------
 // Shown before the first deploy and on death; C reopens it. Online the pick applies on the next
@@ -181,6 +192,7 @@ CLASS_KEYS.forEach((key, i) => {
   card.innerHTML = `<span class="key">${i + 1}</span><b>${c.name}</b>${c.role}<dl>
     <dt>HP</dt><dd>${v('health_max')}</dd><dt>Speed</dt><dd>${v('walk_speed')} m/s</dd>
     <dt>DPS</dt><dd>${Math.round(v('fire_rate') * v('shot_damage'))}</dd></dl>
+    <p><b>RMB · ${c.secondary.name}</b>${c.secondary.desc}</p>
     <p><b>F · ${c.ability.name}</b>${c.ability.desc}</p>`;
   card.addEventListener('click', () => pick(i));
   $('cards').append(card);
@@ -215,7 +227,7 @@ function frame(now) {
       continue;
     }
     const input = [axis('KeyD', 'KeyA'), axis('KeyW', 'KeyS'), yaw, pitch,
-      keys.has('ShiftLeft') || keys.has('ShiftRight'), keys.has('Space'), dodge, firing, ability];
+      keys.has('ShiftLeft') || keys.has('ShiftRight'), keys.has('Space'), dodge, firing, altFiring, ability];
     if (net) {
       const bytes = net.tick(...input, now);
       if (ws.readyState === WebSocket.OPEN) ws.send(bytes);
@@ -285,19 +297,50 @@ function frame(now) {
       });
     }
     for (const [id, e] of remotes) if (!live.has(id)) { e.mech.dispose(); remotes.delete(id); }
+  }
 
-    const ev = net.take_events();
-    for (let i = 0; i < ev.length; i += 6) {
-      const [kind, a, b, x, y, z] = ev.subarray(i, i + 6);
-      if (kind === 0) {
-        // Own shots were drawn when predicted; everyone else's come from the server.
-        if (a !== myId) remotes.get(a)?.mech.fire(new THREE.Vector3(x, y, z));
-        if (a === myId && b >= 0) hitUntil = now + 150;
-        if (b === myId) { me.hit(); hurt = 1; } else if (b >= 0) remotes.get(b)?.mech.hit();
-      }
-      if (kind === 1 && (a === myId || b === myId)) { message = a === myId ? 'ENEMY DESTROYED' : 'DESTROYED'; messageUntil = now + 2500; }
+  // Shots and kills come from the server; blasts and splash hits also happen offline.
+  const ev = game.take_events();
+  for (let i = 0; i < ev.length; i += 6) {
+    const [kind, a, b, x, y, z] = ev.subarray(i, i + 6);
+    if (kind === 0) {
+      // Own shots were drawn when predicted; everyone else's come from the server.
+      if (a !== myId) remotes.get(a)?.mech.fire(new THREE.Vector3(x, y, z));
+      if (a === myId && b >= 0) hitUntil = now + 150;
+      if (b === myId) { me.hit(); hurt = 1; } else if (b >= 0) remotes.get(b)?.mech.hit();
+    }
+    if (kind === 1 && (a === myId || b === myId)) { message = a === myId ? 'ENEMY DESTROYED' : 'DESTROYED'; messageUntil = now + 2500; }
+    if (kind === 2) {
+      blastAt.set(x, y, z);
+      fx.explosion(blastAt, classValue(b, 'alt_radius') / 5);
+      fx.muzzleLight(blastAt);
+    }
+    if (kind === 3) {
+      if (a === myId) hitUntil = now + 150;
+      if (b === myId) { me.hit(); hurt = 1; } else remotes.get(b)?.mech.hit();
     }
   }
+
+  // Projectiles: own ones extrapolated like the own mech, others already at render time. Each is
+  // drawn leaving its launcher and eases onto its sim path (which starts at the eye).
+  const pr = game.projectiles(now), drawn = [], live = new Set();
+  for (let i = 0; i < pr.length; i += 12) {
+    const [owner, seq, n, cls, x, y, z, vx, vy, vz, age, predicted] = pr.subarray(i, i + 12);
+    const key = `${owner}:${seq}:${n}`, ahead = predicted ? a * DT : 0;
+    const mech = predicted ? me : remotes.get(owner)?.mech;
+    let shot = launches.get(key);
+    if (!shot) {
+      launches.set(key, (shot = { from: mech ? mech.launcher.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3(x, y, z) }));
+      if (n === 0) mech?.launch();
+    }
+    live.add(key);
+    const p = new THREE.Vector3(x + vx * ahead, y + vy * ahead, z + vz * ahead);
+    const blend = Math.min((age + ahead) / LAUNCH_BLEND, 1);
+    if (blend < 1) p.lerp(shot.from, 1 - blend);
+    drawn.push({ pos: p, vel: new THREE.Vector3(vx, vy, vz), cls: CLASS_KEYS[cls], age: age + ahead });
+  }
+  for (const key of launches.keys()) if (!live.has(key)) launches.delete(key);
+  fx.projectiles(drawn, dt);
 
   // The predicted aim point only knows the arena, so stop own tracers at the first enemy mech
   // they cross (visual only; the server decides hits).
@@ -354,6 +397,8 @@ function frame(now) {
   hud.ability.style.width = `${100 * (1 - curr[S.ABILITY_CD] / Math.max(T('ability_cooldown'), 1e-6))}%`;
   hud.ability.classList.toggle('active', abilityActive);
   hud.abilityName.textContent = `${classes[CLASS_KEYS[classIdx]].ability.name}${abilityActive ? ' ON' : curr[S.ABILITY_CD] <= 0 ? ' F' : ''}`;
+  hud.alt.style.width = `${100 * (1 - curr[S.ALT_WAIT] / Math.max(T('alt_cooldown'), 1e-6))}%`;
+  hud.altName.textContent = `${classes[CLASS_KEYS[classIdx]].secondary.name}${curr[S.ALT_WAIT] <= 0 ? ' RMB' : ''}`;
   hud.crosshair.classList.toggle('hit', now < hitUntil);
   if (net) {
     const [, kills, deaths, ping, correction, full, team, blue, red, secondsLeft, ended, winner] = hudState;

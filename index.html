@@ -18,6 +18,7 @@
     #dodge { background: #b8e070; }
     #hp { background: #e8665f; }
     #ability { background: #b9a2e8; }
+    #alt { background: #e8a25a; }
     #ability.active { background: #7fe0ff; }
     .bar span.wide { width: auto; min-width: 44px; }
     .card p { margin: 10px 0 0; opacity: 0.85; }
@@ -51,6 +52,7 @@
     <div class="bar"><span>FUEL</span><div><i id="fuel"></i></div></div>
     <div class="bar"><span>HEAT</span><div><i id="heat"></i></div></div>
     <div class="bar"><span>DODGE</span><div><i id="dodge"></i></div></div>
+    <div class="bar"><span id="alt-name" class="wide">SECONDARY</span><div><i id="alt"></i></div></div>
     <div class="bar"><span id="ability-name" class="wide">ABILITY</span><div><i id="ability"></i></div></div>
   </div>
   <div id="damage"></div>
@@ -63,7 +65,7 @@
     <div id="cards"></div>
     <div id="picker-note"></div>
   </div>
-  <div id="help">Click to play · WASD move · Shift boost · Space hover · Q/E dodge · F ability · LMB fire · V camera · C change mech · I stats · R respawn · Esc release mouse</div>
+  <div id="help">Click to play · WASD move · Shift boost · Space hover · Q/E dodge · F ability · LMB fire · RMB secondary · V camera · C change mech · I stats · R respawn · Esc release mouse</div>
   <script type="module" src="/web/main.js"></script>
 </body>
 </html>

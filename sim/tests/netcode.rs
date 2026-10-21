@@ -533,3 +533,118 @@ fn prediction_through_contact() {
     assert!(first_contact.is_some(), "the mechs never met");
     assert!(contact_correction < 0.5, "correction {contact_correction} m during contact");
 }
+
+/// Yaw and pitch from `id`'s eye to `at`, as the server has them now.
+fn look(game: &Game, id: u8, at: Vector) -> Input {
+    let p = player(game, id);
+    let d = at - (p.view.pos + Vector::Y * class_tunings()[p.class.index()].eye_height);
+    Input { yaw: (-d.x).atan2(-d.z), pitch: d.y.atan2(d.x.hypot(d.z)), ..Input::default() }
+}
+
+/// `shooter` waits out its cooldown, launches one volley with `aim`, and holds still until it
+/// bursts. Returns the Blast.
+fn launch(game: &mut Game, shooter: u8, seq: &mut u32, aim: Input) -> (Vector, u16) {
+    for _ in 0..(10.0 * TICK_HZ) as u32 {
+        let ready = game.snapshot(shooter).me.alt_wait <= 0.0;
+        send(game, shooter, seq, 1, Input { alt_fire: ready, ..aim });
+        game.step();
+        if ready {
+            break;
+        }
+    }
+    for _ in 0..(10.0 * TICK_HZ) as u32 {
+        for e in game.snapshot(shooter).events {
+            if let Event::Blast { owner, pos, hits, .. } = e
+                && owner == shooter
+            {
+                return (pos, hits);
+            }
+        }
+        send(game, shooter, seq, 1, aim);
+        game.step();
+    }
+    panic!("no blast in 10 s");
+}
+
+#[test]
+fn rockets_splash_enemies_only() {
+    let t = Tuning::default();
+    let mut game = Game::new(t.clone(), blockout());
+    game.bots = false;
+    let shooter = game.join().unwrap();
+    let enemy = game.join().unwrap();
+    let mate = game.join().unwrap();
+    assert_eq!(team_of(&game, shooter), team_of(&game, mate));
+    game.step();
+    let mut seq = 0;
+    let health = |game: &Game, id| game.snapshot(id).me.health;
+
+    // The floor 2 m beside the teammate, then the shooter's own feet: nobody on the team is hurt.
+    let beside = player(&game, mate).view.pos + Vector::new(t.mech_radius + 2.0, 0.0, 0.0);
+    let aim = look(&game, shooter, beside);
+    let (at, hits) = launch(&mut game, shooter, &mut seq, aim);
+    assert!(at.distance(beside) < 1.0, "burst at {at}, not beside the teammate");
+    let feet = player(&game, shooter).view.pos + Vector::new(0.0, 0.0, -1.5);
+    let aim = look(&game, shooter, feet);
+    let (_, own) = launch(&mut game, shooter, &mut seq, aim);
+    assert_eq!((hits, own), (0, 0));
+    assert_eq!((health(&game, mate), health(&game, shooter)), (t.health_max, t.health_max));
+
+    // Straight at the enemy: near-full damage, and rockets alone finish it.
+    let chest = |game: &Game| player(game, enemy).view.pos + Vector::Y * (t.mech_height * 0.5);
+    let aim = look(&game, shooter, chest(&game));
+    let (_, hits) = launch(&mut game, shooter, &mut seq, aim);
+    assert_eq!(hits, 1 << enemy);
+    let dealt = t.health_max - health(&game, enemy);
+    assert!(dealt > 0.9 * t.alt_damage && dealt <= t.alt_damage, "a direct rocket did {dealt}");
+    let needed = (t.health_max / dealt).ceil() as u32;
+    for _ in 1..needed {
+        let aim = look(&game, shooter, chest(&game));
+        launch(&mut game, shooter, &mut seq, aim);
+    }
+    assert_eq!(health(&game, enemy), 0.0);
+    assert_eq!(player(&game, shooter).kills, 1);
+}
+
+#[test]
+fn predicted_blast_matches_server() {
+    let mut h = Harness::new();
+    let (id, watcher) = (h.clients[0].0, 1);
+    let aim = Input { pitch: -0.3, ..Input::default() }; // the floor ahead; the enemy is far beyond
+    let (mut server, mut local, mut seen) = (Vec::new(), Vec::new(), Vec::new());
+    for tick in 0..(4.0 * TICK_HZ) as u32 {
+        h.step([Input { alt_fire: tick == 5, ..aim }, Input::default()]);
+        server.extend(h.game.snapshot(id).events.iter().filter_map(|e| match *e {
+            Event::Blast { pos, .. } => Some(pos),
+            _ => None,
+        }));
+        local.extend(h.clients[0].1.blasts.drain(..).map(|b| b.2));
+        let now = h.now();
+        h.clients[watcher].1.projectiles(now);
+        seen.extend(h.clients[watcher].1.blasts.drain(..).map(|b| b.2));
+    }
+    assert_eq!(server.len(), 1, "server blasts: {server:?}");
+    assert_eq!(local, server, "the predicted burst should land exactly where the server's did");
+    assert_eq!(seen, server, "the other client's replay should burst there too");
+    assert!(h.clients[0].1.projectiles.is_empty());
+}
+
+#[test]
+fn bots_use_secondaries() {
+    let mut game = Game::new(Tuning::default(), blockout());
+    let human = game.join().unwrap();
+    let mut launched = [false; 3];
+    for _ in 0..(30.0 * TICK_HZ) as u32 {
+        game.step();
+        for e in game.snapshot(human).events {
+            if let Event::Launch(p) = e {
+                launched[p.class.index()] = true;
+            }
+        }
+    }
+    let present: Vec<MechClass> = game.snapshot(human).players.iter().filter(|p| p.bot).map(|p| p.class).collect();
+    for class in MechClass::ALL.into_iter().filter(|c| present.contains(c)) {
+        assert!(launched[class.index()], "{class:?} bots never fired their secondary");
+    }
+    assert!(present.iter().any(|c| *c != present[0]), "all bots were {:?}, so the test proved little", present[0]);
+}

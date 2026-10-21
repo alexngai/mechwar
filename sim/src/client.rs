@@ -4,11 +4,34 @@
 use std::collections::VecDeque;
 
 use crate::net::{self, ClientMsg, Event, InputMsg, MatchState, PlayerNet, ServerMsg, Snapshot};
+use crate::projectile::{self, Projectile};
 use crate::{Arena, DT, Input, Map, Mech, MechClass, Tuning, Vector, collide, map, step_mech};
 
 /// Remote mechs are drawn this many ticks behind the newest snapshot, to ride out jitter.
 pub const INTERP_TICKS: f32 = 3.0;
 const SNAPSHOT_BUFFER: usize = 30;
+/// Own bursts remembered so the server's Blast for them doesn't explode twice.
+const BURSTS_KEPT: usize = 32;
+/// A server Blast this far from where an own projectile burst locally gets its own explosion.
+const BURST_MISMATCH: f32 = 2.0;
+
+/// Someone else's projectile, replayed from its Launch on the render timeline.
+struct Replay {
+    /// Server tick it launched (and flew its first tick) on.
+    launched: u32,
+    p: Projectile,
+    /// Ticks flown so far; the state is as of tick `launched - 1 + flown`.
+    flown: u32,
+    /// Burst against the arena locally; hidden until the server's Blast arrives in render time.
+    done: bool,
+}
+
+/// A projectile to draw this frame.
+pub struct Drawn {
+    pub p: Projectile,
+    /// Own projectiles are at the predicted tick, so the page extrapolates them like the own mech.
+    pub predicted: bool,
+}
 
 pub struct NetClient {
     /// Compiled-in tuning.json per class, the same as the server's: prediction needs identical values.
@@ -31,8 +54,20 @@ pub struct NetClient {
     /// Drawn on top of the predicted position so a correction slides in instead of snapping;
     /// decays each tick.
     pub render_offset: Vector,
-    /// Other mechs at their latest server positions, treated as fixed when predicting contact.
-    obstacles: Vec<Mech>,
+    /// Other mechs and their teams at their latest server positions, treated as fixed when
+    /// predicting contact.
+    obstacles: Vec<(u8, Mech)>,
+    /// Own secondary fire, predicted from launch.
+    pub projectiles: Vec<Projectile>,
+    /// Own projectiles that burst locally, and where.
+    burst: VecDeque<((u8, u32, u8), Vector)>,
+    replays: Vec<Replay>,
+    /// Blasts of others' projectiles, held until render time reaches their tick.
+    held: Vec<(u32, (u8, u32, u8), MechClass, Vector)>,
+    /// Explosions to show (owner, class, where) and splash hits (attacker, victim) since the page
+    /// last took them.
+    pub blasts: Vec<(u8, MechClass, Vector)>,
+    pub hits: Vec<(u8, u8)>,
     pub ping_ms: f64,
     /// Server events not yet taken by the page.
     pub events: Vec<Event>,
@@ -62,6 +97,12 @@ impl Default for NetClient {
             correction: 0.0,
             render_offset: Vector::ZERO,
             obstacles: Vec::new(),
+            projectiles: Vec::new(),
+            burst: VecDeque::new(),
+            replays: Vec::new(),
+            held: Vec::new(),
+            blasts: Vec::new(),
+            hits: Vec::new(),
             ping_ms: 0.0,
             events: Vec::new(),
             seq: 0,
@@ -79,6 +120,11 @@ impl NetClient {
     pub fn tick(&mut self, input: Input, now_ms: f64) -> Vec<u8> {
         self.seq += 1;
         self.predict(&input);
+        // Only the first prediction of an input launches; reconciliation replays never do.
+        if let (true, Some(id)) = (self.mech.launched, self.id) {
+            self.projectiles.extend(projectile::volley(&self.classes[self.class.index()], &self.mech, id, self.seq));
+        }
+        self.fly_own();
         self.render_offset *= 0.7;
         self.pending.push_back((self.seq, input, now_ms));
         net::encode(&ClientMsg::Input(InputMsg { seq: self.seq, input, view_tick: self.render_tick(now_ms) }))
@@ -88,10 +134,28 @@ impl NetClient {
     fn predict(&mut self, input: &Input) {
         let t = &self.classes[self.class.index()];
         step_mech(&self.arena, t, &mut self.mech, input);
-        for other in &self.obstacles {
+        for (_, other) in &self.obstacles {
             let mut other = *other;
             collide::separate(&self.arena, t, &mut self.mech, &self.classes[other.class.index()], &mut other, 1.0);
         }
+    }
+
+    /// Flies own projectiles one tick against the arena and enemies where they were last seen.
+    fn fly_own(&mut self) {
+        let (classes, arena, obstacles, team) = (&self.classes, &self.arena, &self.obstacles, self.team);
+        let (burst, blasts) = (&mut self.burst, &mut self.blasts);
+        self.projectiles.retain_mut(|p| {
+            let enemies = || obstacles.iter().filter(|(t, m)| *t != team && m.health > 0.0).map(|(_, m)| (&classes[m.class.index()], m));
+            let Some(at) = projectile::fly(arena, &classes[p.class.index()], p, |ray, max| projectile::first_mech(ray, max, enemies())) else {
+                return true;
+            };
+            blasts.push((p.owner, p.class, at));
+            burst.push_back((p.id(), at));
+            if burst.len() > BURSTS_KEPT {
+                burst.pop_front();
+            }
+            false
+        });
     }
 
     /// Message asking for `class` at the next spawn (or now, before the first input).
@@ -136,7 +200,7 @@ impl NetClient {
                 .players
                 .iter()
                 .filter(|p| p.id != own)
-                .map(|p| Mech { class: p.class, pos: p.view.pos, health: p.view.health, ..Mech::default() })
+                .map(|p| (p.team, Mech { class: p.class, pos: p.view.pos, health: p.view.health, ..Mech::default() }))
                 .collect();
             // Reconcile: take the server's state at ack_seq and replay what it hasn't seen yet.
             let predicted = self.mech.pos;
@@ -156,7 +220,29 @@ impl NetClient {
         }
         self.state = s.state;
 
-        self.events.extend_from_slice(&s.events);
+        for e in &s.events {
+            match *e {
+                Event::Launch(p) if Some(p.owner) != self.id => self.replays.push(Replay { launched: s.tick, p, flown: 0, done: false }),
+                Event::Launch(_) => {}
+                Event::Blast { owner, seq, n, class, pos, hits } => {
+                    let id = (owner, seq, n);
+                    self.hits.extend((0..16).filter(|v| hits & 1 << v != 0).map(|v| (owner, v)));
+                    if Some(owner) != self.id {
+                        self.held.push((s.tick, id, class, pos));
+                    } else if let Some(&(_, local)) = self.burst.iter().find(|b| b.0 == id) {
+                        // Already exploded where we predicted; only a real miss gets a second one.
+                        if local.distance(pos) > BURST_MISMATCH {
+                            self.blasts.push((owner, class, pos));
+                        }
+                    } else {
+                        // It met a mech we didn't predict: end it where the server says.
+                        self.projectiles.retain(|p| p.id() != id);
+                        self.blasts.push((owner, class, pos));
+                    }
+                }
+                Event::Shot { .. } | Event::Kill { .. } => self.events.push(*e),
+            }
+        }
         self.snapshots.push_back(s);
         if self.snapshots.len() > SNAPSHOT_BUFFER {
             self.snapshots.pop_front();
@@ -170,6 +256,40 @@ impl NetClient {
     /// Fractional server tick remote mechs are drawn at; also sent as each input's `view_tick`.
     pub fn render_tick(&self, now_ms: f64) -> f32 {
         self.clock_offset.map_or(0.0, |o| ((now_ms + o) / 1000.0 / f64::from(DT)) as f32 - INTERP_TICKS)
+    }
+
+    /// Projectiles to draw now: own ones as predicted, everyone else's replayed at `render_tick`.
+    /// Also releases held Blasts whose tick render time has reached.
+    pub fn projectiles(&mut self, now_ms: f64) -> Vec<Drawn> {
+        let at = self.render_tick(now_ms);
+        let (blasts, replays) = (&mut self.blasts, &mut self.replays);
+        self.held.retain(|&(tick, id, class, pos)| {
+            if tick as f32 > at {
+                return true;
+            }
+            blasts.push((id.0, class, pos));
+            replays.retain(|r| r.p.id() != id);
+            false
+        });
+        let mut drawn: Vec<Drawn> = self.projectiles.iter().map(|&p| Drawn { p, predicted: true }).collect();
+        for r in &mut self.replays {
+            let t = &self.classes[r.p.class.index()];
+            // State after `flown` ticks is as of tick `launched - 1 + flown`.
+            let due = (at - r.launched as f32 + 1.0).floor().max(0.0) as u32;
+            while r.flown < due && !r.done {
+                r.done = projectile::fly(&self.arena, t, &mut r.p, |_, _| None).is_some();
+                r.flown += 1;
+            }
+            if r.flown > 0 && !r.done {
+                let f = at - (r.launched as f32 - 1.0 + r.flown as f32);
+                let mut p = r.p;
+                p.pos += p.vel * (f.clamp(0.0, 1.0) * DT);
+                drawn.push(Drawn { p, predicted: false });
+            }
+        }
+        // A replay whose Blast never comes (it can't over TCP, but be safe) goes after a while.
+        self.replays.retain(|r| r.flown < 30 * 30);
+        drawn
     }
 
     /// Other players interpolated at `render_tick`, holding the newest snapshot when nothing is newer.

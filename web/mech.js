@@ -122,6 +122,7 @@ function put(parent, obj, x, y, z, rx = 0, rz = 0) {
 // returns its muzzle, `leg` builds one leg's parts, `nozzles` are [x, y, z, size?] on the body.
 // `strip` [width, y, z, length] is the accent light line and `plate` [width, height, y, z] the
 // unit-number plate; each is a box just wider than the body there, so it shows on both flanks.
+// `launcher` builds the secondary weapon and returns its tip.
 // Materials: `m.hull` personal paint, `m.pods` team paint, `m.trim` metal, `m.hazard` stripes,
 // `m.accent` team-colored lights.
 
@@ -140,6 +141,10 @@ const LANCER = {
     put(body, box(1.7, 0.3, 1.4, m.hull), 0, 1.45, 0.25, -0.06); // roof plate
     put(body, box(1.3, 1.0, 0.7, m.trim), 0, 0.85, 1.3); // backpack
     put(body, box(0.06, 0.9, 0.06, m.trim), -0.75, 1.95, 0.7); // antenna
+  },
+  launcher(body, m) {
+    put(body, cyl(0.17, 0.17, 1.2, m.barrels), 0.5, 1.78, -0.05, ALONG_Z); // shoulder rocket tube
+    return put(body, new THREE.Object3D(), 0.5, 1.78, -0.7);
   },
   gun(pod, side, m) {
     pod.position.set(side * 1.45, 0.9, -0.1);
@@ -172,6 +177,10 @@ const WISP = {
     put(body, box(0.25, 0.25, 0.55, m.trim), -0.72, 0.7, -0.1); // sensor pod
     put(body, box(0.12, 0.08, 0.04, m.accent), -0.72, 0.72, -0.39); // sensor lens
     for (const side of [-1, 1]) put(body, box(0.05, 0.9, 0.5, m.pods), side * 0.4, 1.3, 0.7, 0.7, -side * 0.4); // swept fin
+  },
+  launcher(body, m) {
+    put(body, box(0.3, 0.2, 0.55, m.trim), -0.72, 0.93, -0.05); // dart rack over the sensor pod
+    return put(body, new THREE.Object3D(), -0.72, 0.93, -0.35);
   },
   gun(pod, side, m) {
     pod.position.set(side * 0.78, 0.6, -0.05);
@@ -210,6 +219,11 @@ const BULWARK = {
       put(body, box(0.3, 0.9, 1.9, m.hull), side * 1.62, 0.8, 0.1); // side armor
       put(body, cyl(0.12, 0.14, 0.7, m.barrels), side * 0.6, 1.9, 1.9); // exhaust stack
     }
+  },
+  launcher(body, m) {
+    // Mortar tube on the reactor pack, leaning forward, low enough to keep the chase view clear.
+    put(body, cyl(0.24, 0.3, 1.0, m.barrels), 0, 2.0, 1.55, -0.4);
+    return put(body, new THREE.Object3D(), 0, 2.0 + 0.5 * Math.cos(0.4), 1.55 - 0.5 * Math.sin(0.4));
   },
   gun(pod, side, m) {
     pod.position.set(side * 1.15, 2.55, 0.2);
@@ -285,6 +299,7 @@ export class Mech {
     body.position.y = spec.hipY;
     root.add(body);
     spec.hull(body, this);
+    this.launcher = spec.launcher(body, this);
 
     // Thruster nozzles under the backpack; `exit` marks where flame leaves.
     this.nozzles = spec.nozzles.map(([x, y, z, size = 1]) => {
@@ -504,6 +519,13 @@ export class Mech {
 
   hit() {
     this.flash = 1;
+  }
+
+  /** Secondary fire leaving the launcher: a flash and a puff of flame and smoke. */
+  launch() {
+    const tip = this.launcher.getWorldPosition(world);
+    this.fx.burst(tip, flame.set(0, 0.3, -1).normalize().applyQuaternion(this.root.quaternion));
+    this.fx.muzzleLight(tip);
   }
 
   /** One-off cue when the class ability fires: Vent steam, a Slipstream kick, or a Brace pulse. */

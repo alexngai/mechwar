@@ -1,6 +1,6 @@
 //! Browser bindings. Plain f32 arrays keep the JS boundary cheap at 30 Hz.
 
-use crate::client::NetClient;
+use crate::client::{Drawn, NetClient};
 use crate::net::Event;
 use crate::{Arena, DT, Input, Mech, MechClass, Sim, Tuning, Vector, map};
 use rapier3d::prelude::Ray;
@@ -17,7 +17,26 @@ fn mech_state(m: &Mech) -> Vec<f32> {
         m.dodge_cooldown, b(m.shot),
         m.aim_point.x, m.aim_point.y, m.aim_point.z,
         m.health, m.ability_time, m.ability_cooldown,
+        m.alt_wait, b(m.launched),
     ]
+}
+
+/// Twelve floats per projectile: owner, seq, n, class, xyz, velocity xyz, age, predicted (0/1).
+fn projectile_floats(drawn: impl IntoIterator<Item = Drawn>) -> Vec<f32> {
+    drawn
+        .into_iter()
+        .flat_map(|Drawn { p, predicted }| {
+            [
+                f32::from(p.owner), p.seq as f32, f32::from(p.n), p.class.index() as f32,
+                p.pos.x, p.pos.y, p.pos.z, p.vel.x, p.vel.y, p.vel.z, p.age, if predicted { 1.0 } else { 0.0 },
+            ]
+        })
+        .collect()
+}
+
+/// Blast event floats (kind 2): owner, class, where.
+fn blast_floats(out: &mut Vec<f32>, (owner, class, at): (u8, MechClass, Vector)) {
+    out.extend([2.0, f32::from(owner), class.index() as f32, at.x, at.y, at.z]);
 }
 
 /// Distance along a ray to the first arena surface, capped at `max` (for the chase camera).
@@ -62,8 +81,23 @@ impl WasmSim {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn step(&mut self, move_x: f32, move_z: f32, yaw: f32, pitch: f32, boost: bool, hover: bool, dodge: i8, fire: bool, ability: bool) {
-        self.sim.step(&Input { move_x, move_z, yaw, pitch, boost, hover, dodge, fire, ability });
+    pub fn step(&mut self, move_x: f32, move_z: f32, yaw: f32, pitch: f32, boost: bool, hover: bool, dodge: i8, fire: bool, alt_fire: bool, ability: bool) {
+        self.sim.step(&Input { move_x, move_z, yaw, pitch, boost, hover, dodge, fire, alt_fire, ability });
+    }
+
+    /// Same layout as `WasmNetClient::projectiles`; offline they're all own and predicted.
+    pub fn projectiles(&self, _now: f64) -> Vec<f32> {
+        projectile_floats(self.sim.projectiles.iter().map(|&p| Drawn { p, predicted: true }))
+    }
+
+    /// Same layout as `WasmNetClient::take_events`; offline only Blasts happen.
+    pub fn take_events(&mut self) -> Vec<f32> {
+        let mut out = Vec::new();
+        let class = self.class;
+        for at in std::mem::take(&mut self.sim.blasts) {
+            blast_floats(&mut out, (0, class, at));
+        }
+        out
     }
 
     pub fn state(&self) -> Vec<f32> {
@@ -92,9 +126,16 @@ impl WasmNetClient {
 
     #[allow(clippy::too_many_arguments)]
     pub fn tick(
-        &mut self, move_x: f32, move_z: f32, yaw: f32, pitch: f32, boost: bool, hover: bool, dodge: i8, fire: bool, ability: bool, now: f64,
+        &mut self, move_x: f32, move_z: f32, yaw: f32, pitch: f32, boost: bool, hover: bool, dodge: i8, fire: bool, alt_fire: bool, ability: bool,
+        now: f64,
     ) -> Vec<u8> {
-        self.0.tick(Input { move_x, move_z, yaw, pitch, boost, hover, dodge, fire, ability }, now)
+        self.0.tick(Input { move_x, move_z, yaw, pitch, boost, hover, dodge, fire, alt_fire, ability }, now)
+    }
+
+    /// Projectiles to draw now; see `projectile_floats`. Predicted ones are extrapolated by the
+    /// page like the own mech; the rest are already at render time.
+    pub fn projectiles(&mut self, now: f64) -> Vec<f32> {
+        projectile_floats(self.0.projectiles(now))
     }
 
     pub fn receive(&mut self, bytes: &[u8], now: f64) {
@@ -138,17 +179,28 @@ impl WasmNetClient {
     }
 
     /// Six floats per event since the last call: kind, a, b, x, y, z.
-    /// Shot (kind 0): a = shooter, b = hit id or -1, xyz = where it stopped. Kill (kind 1): a = killer, b = victim.
+    /// Shot (kind 0): a = shooter, b = hit id or -1, xyz = where it stopped. Kill (kind 1): a = killer,
+    /// b = victim. Blast (kind 2): a = owner, b = class, xyz = where. Splash hit (kind 3): a = attacker,
+    /// b = victim.
     pub fn take_events(&mut self) -> Vec<f32> {
-        std::mem::take(&mut self.0.events)
-            .iter()
-            .flat_map(|e| match *e {
+        let mut out = Vec::new();
+        for e in std::mem::take(&mut self.0.events) {
+            match e {
                 Event::Shot { shooter, end, hit } => {
-                    [0.0, f32::from(shooter), hit.map_or(-1.0, f32::from), end.x, end.y, end.z]
+                    out.extend([0.0, f32::from(shooter), hit.map_or(-1.0, f32::from), end.x, end.y, end.z]);
                 }
-                Event::Kill { killer, victim } => [1.0, f32::from(killer), f32::from(victim), 0.0, 0.0, 0.0],
-            })
-            .collect()
+                Event::Kill { killer, victim } => out.extend([1.0, f32::from(killer), f32::from(victim), 0.0, 0.0, 0.0]),
+                // The client turns these into the blasts and hits below.
+                Event::Launch(_) | Event::Blast { .. } => {}
+            }
+        }
+        for blast in std::mem::take(&mut self.0.blasts) {
+            blast_floats(&mut out, blast);
+        }
+        for (attacker, victim) in std::mem::take(&mut self.0.hits) {
+            out.extend([3.0, f32::from(attacker), f32::from(victim), 0.0, 0.0, 0.0]);
+        }
+        out
     }
 
     /// id (-1 until welcomed), kills, deaths, ping ms, last correction m, full (0/1), team,

@@ -11,6 +11,7 @@ pub mod collide;
 pub mod game;
 pub mod map;
 pub mod net;
+pub mod projectile;
 #[cfg(feature = "wasm")]
 mod wasm;
 
@@ -82,6 +83,19 @@ pub struct Tuning {
     pub slipstream_boost_mult: f32,
     pub brace_damage_mult: f32,
     pub brace_speed_mult: f32,
+
+    /// Secondary weapon: a volley of `alt_count` projectiles; see `projectile.rs`.
+    pub alt_cooldown: f32,
+    pub alt_heat: f32,
+    pub alt_count: f32,
+    pub alt_spread_deg: f32,
+    pub alt_speed: f32,
+    pub alt_loft_deg: f32,
+    pub alt_gravity: f32,
+    pub alt_bounce: f32,
+    pub alt_fuse: f32,
+    pub alt_damage: f32,
+    pub alt_radius: f32,
 
     pub bot_turn_rate_deg: f32,
     pub bot_aim_error_deg: f32,
@@ -162,6 +176,8 @@ pub struct Input {
     pub hover: bool,
     pub dodge: i8,
     pub fire: bool,
+    /// Secondary weapon, held like `fire`.
+    pub alt_fire: bool,
     /// Class ability; like `dodge`, only on the tick the key went down.
     pub ability: bool,
 }
@@ -207,10 +223,14 @@ pub struct Mech {
     pub heat_wait: f32,
     pub overheated: bool,
     pub fire_wait: f32,
+    /// Seconds until the secondary can fire again.
+    pub alt_wait: f32,
     /// Where the aim ray from the eye lands (for the crosshair).
     pub aim_point: Vector,
     /// Set on ticks a shot fired.
     pub shot: bool,
+    /// Set on ticks the secondary launched a volley.
+    pub launched: bool,
 }
 
 /// Static arena colliders for scene queries. Shared by the offline sim, the server and the client.
@@ -240,6 +260,11 @@ impl Arena {
     pub fn cast_ray(&self, ray: &Ray, max: f32) -> Option<f32> {
         self.world.query_pipeline().cast_ray(ray, max, true).map(|(_, toi)| toi)
     }
+
+    /// Like `cast_ray`, plus the surface normal there.
+    pub fn cast_ray_normal(&self, ray: &Ray, max: f32) -> Option<(f32, Vector)> {
+        self.world.query_pipeline().cast_ray_and_get_normal(ray, max, true).map(|(_, hit)| (hit.time_of_impact, hit.normal))
+    }
 }
 
 /// A fresh mech standing at `pos` with full fuel and health.
@@ -264,6 +289,10 @@ pub struct Sim {
     pub tuning: Tuning,
     pub class: MechClass,
     pub mech: Mech,
+    /// Secondary fire in flight; offline it only meets the arena.
+    pub projectiles: Vec<projectile::Projectile>,
+    /// Where projectiles burst since the page last took them.
+    pub blasts: Vec<Vector>,
     arena: Arena,
     /// Team 0's first spawn on the map.
     spawn: Vector,
@@ -277,7 +306,7 @@ impl Sim {
     pub fn with_map(tuning: Tuning, map: usize) -> Self {
         let map = Map::load(map);
         let spawn = Vector::from_array(map.spawns[0][0]);
-        let mut sim = Self { tuning, class: MechClass::B, mech: Mech::default(), arena: Arena::new(&map), spawn };
+        let mut sim = Self { tuning, class: MechClass::B, mech: Mech::default(), projectiles: Vec::new(), blasts: Vec::new(), arena: Arena::new(&map), spawn };
         sim.reset();
         sim
     }
@@ -288,6 +317,17 @@ impl Sim {
 
     pub fn step(&mut self, input: &Input) {
         step_mech(&self.arena, &self.tuning, &mut self.mech, input);
+        if self.mech.launched {
+            self.projectiles.extend(projectile::volley(&self.tuning, &self.mech, 0, 0));
+        }
+        let (arena, t, blasts) = (&self.arena, &self.tuning, &mut self.blasts);
+        self.projectiles.retain_mut(|p| match projectile::fly(arena, t, p, |_, _| None) {
+            Some(at) => {
+                blasts.push(at);
+                false
+            }
+            None => true,
+        });
     }
 
     pub fn arena(&self) -> &Arena {
@@ -299,6 +339,7 @@ impl Sim {
 /// through it, so both must see identical inputs, tuning and arena.
 pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     m.shot = false;
+    m.launched = false;
     if m.health <= 0.0 {
         return;
     }
@@ -455,12 +496,21 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     let toi = arena.cast_ray(&ray, t.weapon_range).unwrap_or(t.weapon_range);
     m.aim_point = ray.point_at(toi);
 
-    // Heat. ponytail: one shot per tick max, so fire_rate above TICK_HZ caps at 30/s.
+    // Both weapons share one heat meter, and overheating locks both.
+    // ponytail: one shot per tick max, so fire_rate above TICK_HZ caps at 30/s.
     m.fire_wait -= DT;
+    m.alt_wait = (m.alt_wait - DT).max(0.0);
     m.shot = input.fire && !m.overheated && m.fire_wait <= 0.0;
+    m.launched = input.alt_fire && !m.overheated && m.alt_wait <= 0.0;
     if m.shot {
         m.fire_wait += 1.0 / t.fire_rate;
         m.heat += t.heat_per_shot;
+    }
+    if m.launched {
+        m.alt_wait = t.alt_cooldown;
+        m.heat += t.alt_heat;
+    }
+    if m.shot || m.launched {
         m.heat_wait = t.heat_decay_delay;
         if m.heat >= t.heat_max {
             m.heat = t.heat_max;
@@ -568,6 +618,24 @@ mod tests {
         let heat = sim.mech.heat;
         sim.step(&vent);
         assert!(sim.mech.heat > 0.0 && sim.mech.heat <= heat, "vented again during the cooldown");
+    }
+
+    #[test]
+    fn secondary_shares_heat() {
+        let (mut sim, t) = class_sim(MechClass::B);
+        let alt = Input { alt_fire: true, ..Input::default() };
+        sim.step(&alt);
+        assert!(sim.mech.launched);
+        assert_eq!(sim.mech.heat, t.alt_heat);
+        assert_eq!(sim.projectiles.len(), 1);
+        sim.step(&alt);
+        assert!(!sim.mech.launched, "fired again during the cooldown");
+
+        // Firing for the length of the cooldown overheats with the secondary ready again.
+        run(&mut sim, Input { fire: true, ..Input::default() }, (t.alt_cooldown * TICK_HZ) as usize);
+        assert!(sim.mech.overheated && sim.mech.alt_wait <= 0.0, "test needs a ready secondary while overheated");
+        sim.step(&Input { fire: true, alt_fire: true, ..Input::default() });
+        assert!(!sim.mech.launched && !sim.mech.shot, "fired while overheated");
     }
 
     #[test]

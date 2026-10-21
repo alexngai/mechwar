@@ -113,6 +113,8 @@ const FAR: f32 = 45.0;
 const NEAR: f32 = 20.0;
 /// Fire only when aim is this close to where the bot wants it.
 const AIM_TOLERANCE: f32 = 2.0 * PI / 180.0;
+/// Farthest a Bulwark lobs its mortar.
+const MORTAR_RANGE: f32 = 40.0;
 
 pub struct Bot {
     pub seq: u32,
@@ -185,7 +187,20 @@ impl Bot {
             let err = t.bot_aim_error_deg.to_radians();
             self.wobble.0 = (self.wobble.0 + (self.rand() - 0.5) * err * 0.3).clamp(-err, err);
             self.wobble.1 = (self.wobble.1 + (self.rand() - 0.5) * err * 0.3).clamp(-err, err);
-            let (yaw, pitch) = look_at(me.pos + Vector::Y * t.eye_height, self.seen[0]);
+            // The secondary, when ready and in its useful range, takes over the aim until it fires:
+            // led by the flight time, and lobbed along the flat-ground arc for the mortar. The gun
+            // holds meanwhile, so heat drops enough for the launch not to overheat.
+            let (eye, chest) = (me.pos + Vector::Y * t.eye_height, self.seen[0]);
+            let dist = chest.distance(eye);
+            let alt_range = if t.alt_gravity > 0.0 { MORTAR_RANGE } else { 0.8 * t.alt_speed * t.alt_fuse };
+            let alt = me.alt_wait <= 0.0 && dist < alt_range && dist > t.alt_radius + 2.0;
+            let alt_cool = !me.overheated && me.heat + t.alt_heat < t.heat_max;
+            let (yaw, mut pitch) = look_at(eye, if alt { chest + target.vel * (dist / t.alt_speed) } else { chest });
+            if alt && t.alt_gravity > 0.0 {
+                // Range d on flat ground: sin(2θ) = g d / v².
+                let s = (t.alt_gravity * flat(chest - eye).length() / (t.alt_speed * t.alt_speed)).min(1.0);
+                pitch = 0.5 * s.asin() - t.alt_loft_deg.to_radians();
+            }
             let (want_yaw, want_pitch) = (yaw + self.wobble.0, pitch + self.wobble.1);
             let new_yaw = me.yaw + wrap(want_yaw - me.yaw).clamp(-max_turn, max_turn);
             let new_pitch = me.pitch + (want_pitch - me.pitch).clamp(-max_turn, max_turn);
@@ -203,7 +218,8 @@ impl Bot {
                 pitch: new_pitch,
                 dodge: if dodge { self.strafe as i8 } else { 0 },
                 // Stay under the overheat lockout rather than spraying into it.
-                fire: on_target && !me.overheated && me.heat < 0.85 * t.heat_max,
+                fire: !alt && on_target && !me.overheated && me.heat < 0.85 * t.heat_max,
+                alt_fire: alt && alt_cool && on_target,
                 // Lancers vent before stalling; Bulwarks brace once they're hurt and under fire.
                 ability: match me.class {
                     MechClass::B => me.overheated || me.heat >= 0.8 * t.heat_max,

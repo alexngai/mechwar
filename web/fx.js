@@ -180,6 +180,21 @@ class Beams {
     }
   }
 }
+/** Secondary-fire projectiles, pooled: a dark body along the flight with a glowing core. */
+class Shells {
+  constructor(scene, count = 24) {
+    const geometry = new THREE.CylinderGeometry(0.1, 0.13, 0.8, 6).rotateX(Math.PI / 2); // along Z
+    const material = new THREE.MeshLambertMaterial({ color: 0x2a2c30, flatShading: true });
+    this.items = Array.from({ length: count }, () => {
+      const mesh = new THREE.Mesh(geometry, material);
+      const core = mesh.add(halo(0xffb060, 1.4)).children.at(-1);
+      mesh.visible = false;
+      scene.add(mesh);
+      return { mesh, core };
+    });
+  }
+}
+
 const rand = (a, b) => a + Math.random() * (b - a);
 /** `dir * speed` plus a random kick up to `spread` on each axis. */
 const scatter = (dir, speed, spread) =>
@@ -198,6 +213,7 @@ export class Effects {
     this.glow = new Pool(scene, 1500, THREE.AdditiveBlending);
     this.soft = new Pool(scene, 600, THREE.NormalBlending);
     this.beams = new Beams(scene);
+    this.shells = new Shells(scene);
     // Two short-lived lights at the latest muzzle flashes (High quality only).
     this.lights = [0, 1].map(() => {
       const light = new THREE.PointLight(0xffc27a, 0, 16, 2);
@@ -267,16 +283,44 @@ export class Effects {
     }
   }
 
-  explosion(p) {
-    for (let i = 0; i < 40; i++) {
-      this.glow.spawn(p, scatter(UP, rand(0, 3), 9), { life: rand(0.3, 0.7), size: [rand(1.5, 2.5), rand(3, 4.5)], color: FIRE, drag: 3 });
+  /** A mech's death at scale 1; secondary-fire blasts pass their radius over 5. */
+  explosion(p, scale = 1) {
+    for (let i = 0; i < 40 * scale; i++) {
+      this.glow.spawn(p, scatter(UP, rand(0, 3), 9 * scale), { life: rand(0.3, 0.7), size: [rand(1.5, 2.5) * scale, rand(3, 4.5) * scale], color: FIRE, drag: 3 });
     }
-    for (let i = 0; i < 30; i++) {
-      this.glow.spawn(p, scatter(UP, rand(4, 8), 14), { life: rand(0.4, 0.9), size: [0.3, 0.05], color: SPARK, gravity: 15, drag: 0.5 });
+    for (let i = 0; i < 30 * scale; i++) {
+      this.glow.spawn(p, scatter(UP, rand(4, 8), 14 * scale), { life: rand(0.4, 0.9), size: [0.3, 0.05], color: SPARK, gravity: 15, drag: 0.5 });
     }
-    for (let i = 0; i < 20; i++) {
-      this.soft.spawn(p, scatter(UP, rand(1, 3), 3), { life: rand(1.5, 2.8), size: [2, 6], color: [[0.25, 0.24, 0.22], [0.15, 0.15, 0.15]], alpha: 0.7, drag: 1.5 });
+    for (let i = 0; i < 20 * scale; i++) {
+      this.soft.spawn(p, scatter(UP, rand(1, 3), 3 * scale), { life: rand(1.5, 2.8), size: [2 * scale, 6 * scale], color: [[0.25, 0.24, 0.22], [0.15, 0.15, 0.15]], alpha: 0.7, drag: 1.5 });
     }
+  }
+
+  /**
+   * This frame's projectiles, each { pos, vel, cls, age }: rockets and darts burn with a smoke
+   * trail, mortar shells (C) tumble dark with a blinking light.
+   */
+  projectiles(list, dt) {
+    this.shells.items.forEach((item, i) => {
+      const p = list[i];
+      item.mesh.visible = !!p;
+      if (!p) return;
+      item.mesh.position.copy(p.pos);
+      item.mesh.lookAt(v.copy(p.pos).add(p.vel));
+      const shell = p.cls === 'C', dart = p.cls === 'A';
+      item.mesh.scale.setScalar(dart ? 0.6 : shell ? 1.6 : 1);
+      item.core.visible = !shell || (p.age * 6) % 1 < 0.5;
+      item.core.material.color.setHex(shell ? 0xff4020 : 0xffb060);
+      if (shell) {
+        if (Math.random() < dt * 8) this.soft.spawn(p.pos, scatter(UP, 0.3, 0.3), { life: 0.6, size: [0.4, 1.2], color: DUST, alpha: 0.3, drag: 2 });
+        return;
+      }
+      dir.copy(p.vel).normalize();
+      for (let k = count(dart ? 30 : 45, dt); k > 0; k--) {
+        this.soft.spawn(p.pos, scatter(dir, -1, 0.3), { life: rand(0.3, dart ? 0.4 : 0.8), size: [0.35, dart ? 0.9 : 1.6], color: [[0.8, 0.8, 0.78], [0.6, 0.6, 0.6]], alpha: 0.45, drag: 2 });
+      }
+      for (let k = count(40, dt); k > 0; k--) this.glow.spawn(p.pos, scatter(dir, -6, 1), { life: 0.06, size: [dart ? 0.4 : 0.7, 0.1], color: FLAME, drag: 4 });
+    });
   }
 
   /** Continuous rising smoke; `shade` 0 (black) to 1 (white): dark for wrecks, light for overheat steam. */

@@ -10,10 +10,12 @@ use rapier3d::prelude::Pose;
 use crate::bot::{self, Bot, Nav};
 use crate::collide;
 use crate::net::{Event, InputMsg, MatchState, MechView, PlayerNet, Snapshot};
+use crate::projectile::{self, Projectile};
 use crate::{Arena, Map, Mech, MechClass, TICK_HZ, Tuning, Vector, aim_ray, mech_capsule, spawn_mech, step_mech};
 
 pub const TEAM_SIZE: usize = 4;
 pub const MAX_PLAYERS: usize = 2 * TEAM_SIZE;
+const _: () = assert!(MAX_PLAYERS <= 16, "Blast hits are a u16 bitmask of player ids");
 const POST_MATCH_SECONDS: f32 = 10.0;
 /// Inputs queued beyond this drop oldest first.
 const MAX_QUEUED: usize = 8;
@@ -49,6 +51,12 @@ struct Player {
     bot: Option<Bot>,
 }
 
+/// A projectile in flight and its owner's team, kept in case the owner leaves.
+struct Flying {
+    p: Projectile,
+    team: u8,
+}
+
 enum Phase {
     Playing { started_at: u32 },
     /// Shots do no damage until the next match starts at `restart_at`.
@@ -71,6 +79,7 @@ pub struct Game {
     /// Feet positions per team and slot, from the map.
     spawns: [Vec<Vector>; 2],
     players: Vec<Player>,
+    projectiles: Vec<Flying>,
     /// This tick's events; cleared at the start of each step.
     events: Vec<Event>,
     scores: [u16; 2],
@@ -92,6 +101,7 @@ impl Game {
             score_limit: 25,
             match_seconds: 600.0,
             players: Vec::new(),
+            projectiles: Vec::new(),
             events: Vec::new(),
             scores: [0; 2],
             phase: Phase::Playing { started_at: 0 },
@@ -234,7 +244,14 @@ impl Game {
                 let p = &mut self.players[i];
                 p.credit -= 1.0;
                 p.ack_seq = msg.seq;
-                step_mech(&self.arena, &self.classes[p.class.index()], &mut p.mech, &msg.input);
+                let t = &self.classes[p.class.index()];
+                step_mech(&self.arena, t, &mut p.mech, &msg.input);
+                if p.mech.launched {
+                    for shell in projectile::volley(t, &p.mech, p.id, msg.seq) {
+                        self.events.push(Event::Launch(shell));
+                        self.projectiles.push(Flying { p: shell, team: p.team });
+                    }
+                }
                 if p.mech.shot {
                     self.resolve_shot(i, msg.view_tick);
                 }
@@ -252,6 +269,32 @@ impl Game {
             }
         }
 
+        // Projectiles fly once everyone has moved, against enemies where they stand now.
+        // ponytail: no rewind, so shooters lead by their ping; fast-forward new projectiles by
+        // half the shooter's RTT if hits feel late.
+        let mut flying = std::mem::take(&mut self.projectiles);
+        let mut bursts = Vec::new();
+        flying.retain_mut(|f| {
+            let enemies = || {
+                self.players
+                    .iter()
+                    .filter(|q| q.team != f.team && q.mech.health > 0.0)
+                    .map(|q| (&self.classes[q.class.index()], &q.mech))
+            };
+            let t = &self.classes[f.p.class.index()];
+            match projectile::fly(&self.arena, t, &mut f.p, |ray, max| projectile::first_mech(ray, max, enemies())) {
+                Some(at) => {
+                    bursts.push((f.p, f.team, at));
+                    false
+                }
+                None => true,
+            }
+        });
+        self.projectiles = flying;
+        for (p, team, at) in bursts {
+            self.burst(p, team, at);
+        }
+
         for p in &mut self.players {
             p.history.push_back((self.tick, p.mech.pos, p.mech.health > 0.0));
             if p.history.len() > HISTORY_TICKS {
@@ -263,6 +306,7 @@ impl Game {
     /// Fresh scores, and everyone back at their team spawn with full health.
     fn start_match(&mut self) {
         self.scores = [0; 2];
+        self.projectiles.clear();
         self.phase = Phase::Playing { started_at: self.tick };
         for p in &mut self.players {
             p.class = p.next_class;
@@ -328,26 +372,60 @@ impl Game {
         let shooter_id = self.players[shooter].id;
         let end = ray.point_at(best);
         self.events.push(Event::Shot { shooter: shooter_id, end, hit: hit.map(|j| self.players[j].id) });
-        let Some(j) = hit else { return };
+        if let Some(j) = hit {
+            self.apply_damage(Some(shooter), j, self.classes[shooter_class.index()].shot_damage);
+        }
+    }
 
+    /// Splash from projectile `p` (fired by `team`) bursting at `at`, and its Blast event.
+    fn burst(&mut self, p: Projectile, team: u8, at: Vector) {
+        let t = &self.classes[p.class.index()];
+        let hurt: Vec<(usize, f32)> = self
+            .players
+            .iter()
+            .enumerate()
+            .filter(|(_, q)| q.team != team && q.mech.health > 0.0)
+            .map(|(j, q)| (j, projectile::splash(&self.arena, t, at, &self.classes[q.class.index()], &q.mech)))
+            .filter(|&(_, damage)| damage > 0.0)
+            .collect();
+        let attacker = self.players.iter().position(|q| q.id == p.owner);
+        let mut hits = 0;
+        for (j, damage) in hurt {
+            if matches!(self.phase, Phase::Playing { .. }) {
+                hits |= 1 << self.players[j].id;
+                self.apply_damage(attacker, j, damage);
+            }
+        }
+        self.events.push(Event::Blast { owner: p.owner, seq: p.seq, n: p.n, class: p.class, pos: at, hits });
+    }
+
+    /// Damages player `j` (less while braced) while the match is on. A kill scores for
+    /// `attacker`, if they're still here.
+    fn apply_damage(&mut self, attacker: Option<usize>, j: usize, amount: f32) {
         let target = &self.players[j];
+        if !matches!(self.phase, Phase::Playing { .. }) || target.mech.health <= 0.0 {
+            return;
+        }
+        let tt = &self.classes[target.class.index()];
         let braced = target.mech.class == MechClass::C && target.mech.ability_time > 0.0;
-        let damage = self.classes[shooter_class.index()].shot_damage
-            * if braced { self.classes[target.class.index()].brace_damage_mult } else { 1.0 };
-        let respawn_at = self.tick + secs(self.classes[self.players[j].class.index()].respawn_delay);
+        let damage = amount * if braced { tt.brace_damage_mult } else { 1.0 };
+        let respawn_at = self.tick + secs(tt.respawn_delay);
         let target = &mut self.players[j];
         target.mech.health -= damage;
-        if target.mech.health <= 0.0 {
-            target.mech.health = 0.0;
-            target.deaths += 1;
-            target.respawn_at = Some(respawn_at);
-            let victim = target.id;
-            self.players[shooter].kills += 1;
-            self.events.push(Event::Kill { killer: shooter_id, victim });
-            self.scores[usize::from(team)] += 1;
-            if self.scores[usize::from(team)] >= self.score_limit {
-                self.end_match();
-            }
+        if target.mech.health > 0.0 {
+            return;
+        }
+        target.mech.health = 0.0;
+        target.deaths += 1;
+        target.respawn_at = Some(respawn_at);
+        let victim = target.id;
+        let Some(a) = attacker else { return };
+        let (killer, team) = (self.players[a].id, self.players[a].team);
+        self.players[a].kills += 1;
+        self.events.push(Event::Kill { killer, victim });
+        self.scores[usize::from(team)] += 1;
+        if self.scores[usize::from(team)] >= self.score_limit {
+            self.end_match();
         }
     }
 
