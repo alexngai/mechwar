@@ -1,7 +1,7 @@
 //! Client netcode: predicts the local mech with `step_mech`, reconciles against server
 //! snapshots, and interpolates remote mechs. Pure logic; the page moves the bytes.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use crate::net::{self, ClientMsg, Event, InputMsg, MatchState, PlayerNet, ServerMsg, Snapshot};
 use crate::projectile::{self, Id, Projectile};
@@ -71,6 +71,8 @@ pub struct NetClient {
     /// the page last took them.
     pub blasts: Vec<(u8, f32, Vector)>,
     pub hits: Vec<(u8, u8)>,
+    /// Callsigns by player id, from the server's latest Roster.
+    pub names: HashMap<u8, String>,
     pub ping_ms: f64,
     /// Server events not yet taken by the page.
     pub events: Vec<Event>,
@@ -107,6 +109,7 @@ impl Default for NetClient {
             held: Vec::new(),
             blasts: Vec::new(),
             hits: Vec::new(),
+            names: HashMap::new(),
             ping_ms: 0.0,
             events: Vec::new(),
             seq: 0,
@@ -176,6 +179,16 @@ impl NetClient {
     }
 
     /// Message asking for `class` at the next spawn (or now, before the first input).
+    /// Message setting our callsign to `raw`; the server sanitizes it.
+    pub fn name_msg(&self, raw: &str) -> Vec<u8> {
+        net::encode(&ClientMsg::Name(raw.into()))
+    }
+
+    /// Everyone (us included) as of the newest snapshot, for the scoreboard.
+    pub fn board(&self) -> Vec<PlayerNet> {
+        self.snapshots.back().map_or_else(Vec::new, |s| s.players.clone())
+    }
+
     pub fn pick_class(&self, class: MechClass) -> Vec<u8> {
         net::encode(&ClientMsg::Class(class))
     }
@@ -191,6 +204,7 @@ impl NetClient {
                 self.id = Some(id);
             }
             Some(ServerMsg::Full) => self.full = true,
+            Some(ServerMsg::Roster(roster)) => self.names = roster.into_iter().collect(),
             Some(ServerMsg::Snapshot(s)) => self.apply(s, now_ms),
             None => {}
         }

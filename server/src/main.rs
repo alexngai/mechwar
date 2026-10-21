@@ -76,6 +76,7 @@ async fn game_loop(mut cmds: mpsc::UnboundedReceiver<Cmd>) {
         game.match_seconds = v.parse().expect("MATCH_SECONDS must be seconds");
     }
     let mut outboxes: Vec<(u8, Outbox)> = Vec::new();
+    let mut roster_sent = u32::MAX;
     let mut interval = time::interval(Duration::from_secs_f32(DT));
     loop {
         interval.tick().await;
@@ -93,6 +94,7 @@ async fn game_loop(mut cmds: mpsc::UnboundedReceiver<Cmd>) {
                 }
                 Cmd::Msg(id, ClientMsg::Input(msg)) => game.push_input(id, msg),
                 Cmd::Msg(id, ClientMsg::Class(class)) => game.pick_class(id, class),
+                Cmd::Msg(id, ClientMsg::Name(name)) => game.set_name(id, &name),
                 Cmd::Leave(id) => {
                     println!("player {id} left");
                     game.leave(id);
@@ -102,6 +104,13 @@ async fn game_loop(mut cmds: mpsc::UnboundedReceiver<Cmd>) {
         }
         game.step();
         let now = Instant::now();
+        if game.roster_version() != roster_sent {
+            roster_sent = game.roster_version();
+            let roster = net::encode(&ServerMsg::Roster(game.roster()));
+            for (_, out) in &outboxes {
+                let _ = out.send((now, roster.clone()));
+            }
+        }
         for (id, out) in &outboxes {
             let _ = out.send((now, net::encode(&ServerMsg::Snapshot(game.snapshot(*id)))));
         }

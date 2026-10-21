@@ -5,11 +5,13 @@ use crate::projectile::Projectile;
 use crate::{Input, Mech, MechClass, Vector};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ClientMsg {
     Input(InputMsg),
     /// Mech class for the next spawn (or right away, before the player's first input).
     Class(MechClass),
+    /// The player's callsign, as typed; the server sanitizes it (`game::sanitize_name`).
+    Name(String),
 }
 
 /// One per client tick. `view_tick` is the fractional server tick the client was rendering
@@ -27,6 +29,8 @@ pub enum ServerMsg {
     Welcome { id: u8, map: u8 },
     Full,
     Snapshot(Snapshot),
+    /// Every player's id and callsign; sent when anyone joins, leaves or renames.
+    Roster(Vec<(u8, String)>),
 }
 
 /// Sent every server tick. `ack_seq` is the last input the server applied for the recipient,

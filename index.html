@@ -27,6 +27,20 @@
     .card dd { margin: 0; text-align: right; }
     #stats { position: fixed; right: 16px; bottom: 16px; padding: 4px 8px; background: #0009; pointer-events: none; }
     #damage { position: fixed; inset: 0; box-shadow: inset 0 0 140px 30px #ff2a1a; opacity: 0; pointer-events: none; }
+    #callsign-row { display: flex; gap: 10px; align-items: center; letter-spacing: 2px; opacity: 0.9; }
+    #callsign { font: inherit; font-size: 14px; letter-spacing: 1px; padding: 6px 8px; width: 180px; background: #0d1014; color: #ffc46a; border: 1px solid #fff3; }
+    #callsign:focus { border-color: #ffc46a; outline: none; }
+    #board { position: fixed; top: 14%; left: 50%; transform: translateX(-50%); padding: 12px 16px; background: #0a0d10e0; border: 1px solid #ffc46a55; color: #ffc46a; pointer-events: none; }
+    #board[hidden] { display: none; }
+    #board .head { text-align: center; font-size: 15px; letter-spacing: 2px; margin-bottom: 8px; }
+    #board .teams { display: flex; gap: 24px; }
+    #board table { border-collapse: collapse; min-width: 260px; }
+    #board th, #board td { padding: 2px 8px; text-align: left; }
+    #board td:nth-child(n+3), #board th:nth-child(n+3) { text-align: right; }
+    #board .t0 th:first-child { color: #4fb4ff; }
+    #board .t1 th:first-child { color: #ff5a36; }
+    #board tr.me td { background: #ffc46a22; color: #fff; }
+    #board i { font-style: normal; font-size: 10px; opacity: 0.6; }
     #help { position: fixed; left: 16px; top: 40px; padding: 6px 10px; background: #0009; pointer-events: none; max-width: calc(100vw - 300px); }
     body.locked #help { display: none; }
   </style>
@@ -37,13 +51,15 @@
   <canvas id="glass"></canvas>
   <div id="stats" hidden></div>
   <div id="score"></div>
+  <div id="board" hidden></div>
   <div id="banner"></div>
   <div id="picker">
+    <label id="callsign-row">CALLSIGN <input id="callsign" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Pilot"></label>
     <h2>CHOOSE YOUR MECH</h2>
     <div id="cards"></div>
     <div id="picker-note"></div>
   </div>
-  <div id="help">Click to play · WASD move · Shift boost · Space hover · Q/E dodge · F ability · G grenade · T EMP · LMB fire · RMB secondary · V camera · C change mech · I stats · R hold to repair · K respawn · Esc release mouse</div>
+  <div id="help">Click to play · WASD move · Shift boost · Space hover · Q/E dodge · F ability · G grenade · T EMP · LMB fire · RMB secondary · V camera · C change mech · I stats · Tab scores · R hold to repair · K respawn · Esc release mouse</div>
   <script type="module" src="/web/main.js"></script>
 </body>
 </html>

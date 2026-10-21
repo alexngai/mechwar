@@ -41,6 +41,7 @@ if (net) {
   ws.onopen = () => {
     connection = '';
     if (picked !== null) ws.send(net.pick_class(picked));
+    if (callsign()) ws.send(net.set_name(callsign()));
   };
   ws.onmessage = (e) => net.receive(new Uint8Array(e.data), performance.now());
   ws.onclose = () => { connection = 'disconnected'; };
@@ -175,11 +176,15 @@ addEventListener('keydown', (e) => {
     try { localStorage.setItem('webhawk.view', firstPerson ? 'cockpit' : 'chase'); } catch { /* private mode */ }
   }
   if (e.code === 'KeyI') $('stats').hidden = !$('stats').hidden;
+  if (e.code === 'Tab') { e.preventDefault(); boardOpen = true; }
   if (e.code === 'KeyC' && picked !== null) pickerOpen = !pickerOpen;
   const digit = ['Digit1', 'Digit2', 'Digit3'].indexOf(e.code);
   if (digit >= 0 && !$('picker').hidden) pick(digit);
 });
-addEventListener('keyup', (e) => keys.delete(e.code));
+addEventListener('keyup', (e) => {
+  keys.delete(e.code);
+  if (e.code === 'Tab') boardOpen = false;
+});
 addEventListener('blur', () => { keys.clear(); firing = altFiring = false; });
 const axis = (pos, neg) => (keys.has(pos) ? 1 : 0) - (keys.has(neg) ? 1 : 0);
 
@@ -195,6 +200,7 @@ for (const [name, p] of Object.entries(tuning)) {
   folders[p.group].add(p, 'value', p.min, p.max, p.step).name(`${name} (${p.unit})`).onChange(push);
 }
 (folders.move ?? folders.camera).open();
+if (net) gui.close(); // online only camera values are live; keep the corner for the kill feed
 gui.add({ copy: () => navigator.clipboard.writeText(JSON.stringify(tuning, null, 2) + '\n') }, 'copy').name('Copy tuning.json');
 
 // --- HUD -------------------------------------------------------------------
@@ -204,7 +210,27 @@ const hud = { net: $('net'), score: $('score'), banner: $('banner'), damage: $('
 // --- Class picker ----------------------------------------------------------
 // Shown before the first deploy and on death; C reopens it. Online the pick applies on the next
 // spawn (or right away before the first input), so inputs are held until a class is chosen.
-let pickerOpen = true;
+let pickerOpen = true, boardOpen = false, boardAt = 0;
+
+// --- Callsign ----------------------------------------------------------------
+// Typed on the picker, remembered locally, and sent (after a pause in typing) for the server to
+// sanitize and share. Others' names come from the server's roster.
+const callsignInput = $('callsign');
+callsignInput.value = stored('webhawk.name') ?? '';
+const callsign = () => callsignInput.value.trim();
+let renameTimer = 0;
+callsignInput.addEventListener('input', () => {
+  clearTimeout(renameTimer);
+  renameTimer = setTimeout(() => {
+    try { localStorage.setItem('webhawk.name', callsign()); } catch { /* private mode */ }
+    if (ws?.readyState === WebSocket.OPEN) ws.send(net.set_name(callsign()));
+  }, 600);
+});
+/** Display name of player `id` (offline, only we exist). */
+const nameOf = (id) => (net ? net.name(id) || `Pilot-${String(id).padStart(2, '0')}` : callsign() || 'You');
+const esc = (text) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+// Recent kills for the feed: names and team colors when they happened.
+const feed = [];
 CLASS_KEYS.forEach((key, i) => {
   const c = classes[key], v = (name) => classValue(i, name);
   const card = document.createElement('button');
@@ -310,7 +336,7 @@ function frame(now) {
   if (net) {
     const r = net.remotes(now), live = new Set();
     for (let i = 0; i < r.length; i += 14) {
-      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering, , abilityOn, repairing] = r.subarray(i, i + 14);
+      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering, bot, abilityOn, repairing] = r.subarray(i, i + 14);
       let e = remotes.get(id);
       if (e && e.cls !== cls) {
         e.mech.dispose();
@@ -327,6 +353,7 @@ function frame(now) {
       e.health = health;
       // Remotes only say whether they're repairing; time the wind-up from when it started.
       e.repairAt = repairing ? e.repairAt ?? now : null;
+      Object.assign(e, { bot: !!bot, ability: !!abilityOn, repairing: !!repairing });
       e.mech.setTeam(team);
       e.mech.setUnit(id);
       e.mech.update(dt, {
@@ -357,6 +384,12 @@ function frame(now) {
       else remotes.get(b)?.mech.hit();
     }
     if (kind === 1 && a === myId) hits.push({ at: now, kill: true });
+    if (kind === 1) {
+      const teamOf = (id) => (id === myId ? myTeam : remotes.get(id)?.team ?? -1);
+      const color = (id) => hex((TEAMS[teamOf(id)] ?? TEAMS[-1]).accent);
+      feed.push({ at: now, killer: nameOf(a), victim: nameOf(b), killerColor: color(a), victimColor: color(b), mine: a === myId || b === myId });
+      if (feed.length > 5) feed.shift();
+    }
     if (kind === 1 && (a === myId || b === myId)) { message = a === myId ? 'ENEMY DESTROYED' : 'DESTROYED'; messageUntil = now + 2500; }
     if (kind === 2) {
       blastAt.set(x, y, z);
@@ -452,6 +485,11 @@ function frame(now) {
   $('picker').hidden = !pickerOpen;
   $('picker-note').textContent = picked === null ? '' : alive ? 'Applies on your next respawn · C to close' : 'Applies on respawn';
   drawGlass(now, myTeam);
+  $('board').hidden = !boardOpen;
+  if (boardOpen && now - boardAt > 250) {
+    boardAt = now;
+    renderBoard(myId, hudState);
+  }
   if (net) {
     const [, kills, deaths, ping, correction, full, team, blue, red, secondsLeft, ended, winner] = hudState;
     const state = full ? 'server full' : connection || (curr[S.HEALTH] <= 0 ? 'DESTROYED, respawning' : '');
@@ -482,6 +520,38 @@ function tookHit(attacker, now) {
   if (damageFrom.length > 4) damageFrom.shift();
 }
 
+/** What a remote mech is doing that's worth a word on its tag. */
+function statusOf(e, now) {
+  if (e.repairing) return 'REPAIRING';
+  if (now < (e.jammedUntil ?? 0)) return 'JAMMED';
+  if (e.ability && e.cls === 2) return 'BRACED';
+  if (e.ability && e.cls === 0) return 'SLIPSTREAM';
+  return '';
+}
+
+/** The Tab scoreboard: both teams sorted by kills, our row marked. */
+function renderBoard(myId, hudState) {
+  const rows = [];
+  const b = net ? net.board() : [];
+  for (let i = 0; i < b.length; i += 6) {
+    const [id, team, cls, bot, kills, deaths] = b.subarray(i, i + 6);
+    rows.push({ id, team, cls, bot, kills, deaths });
+  }
+  if (!net) rows.push({ id: -1, team: 0, cls: classIdx, bot: 0, kills: 0, deaths: 0 });
+  const [blue, red, secondsLeft] = hudState ? [hudState[7], hudState[8], hudState[9]] : [0, 0, 0];
+  const clock = `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')}`;
+  const table = (team) => {
+    const body = rows
+      .filter((r) => r.team === team)
+      .sort((x, y) => y.kills - x.kills || x.deaths - y.deaths)
+      .map((r) => `<tr class="${r.id === myId ? 'me' : ''}"><td>${esc(nameOf(r.id))}${r.bot ? ' <i>BOT</i>' : ''}</td>`
+        + `<td>${classes[CLASS_KEYS[r.cls]].name}</td><td>${r.kills}</td><td>${r.deaths}</td></tr>`)
+      .join('');
+    return `<table class="team t${team}"><tr><th>${team ? 'RED' : 'BLUE'}</th><th>MECH</th><th>K</th><th>D</th></tr>${body}</table>`;
+  };
+  $('board').innerHTML = `<div class="head">BLUE ${blue} – ${red} RED · ${net ? clock : 'OFFLINE'}</div><div class="teams">${table(0)}${table(1)}</div>`;
+}
+
 /**
  * Fills and draws the glass HUD: tags for teammates always and for enemies in sight, radar
  * contacts (enemies only while seen or just after firing), the reticle at the aim point.
@@ -507,7 +577,11 @@ function drawGlass(now, myTeam) {
     ndc.copy(e.pos).y += enemy ? h * 0.5 : h + 0.8;
     ndc.project(camera);
     if (ndc.z > 1 || Math.abs(ndc.x) > 1.1 || Math.abs(ndc.y) > 1.1) continue;
-    const tag = { ...toScreen(ndc), dist, enemy, unit: id, health: e.health / classValue(e.cls, 'health_max'), label: classes[CLASS_KEYS[e.cls]].name, focus: false };
+    const healthMax = classValue(e.cls, 'health_max');
+    const tag = {
+      ...toScreen(ndc), dist, enemy, unit: id, name: nameOf(id), bot: e.bot, status: statusOf(e, now), focus: false,
+      health: e.health / healthMax, hp: Math.ceil(e.health), hpMax: healthMax, label: classes[CLASS_KEYS[e.cls]].name,
+    };
     const angle = enemy ? look.angleTo(to.subVectors(chest, camera.position)) : Infinity;
     if (angle < focusAngle) [focusAngle, focus] = [angle, tag];
     tags.push(tag);
@@ -533,6 +607,7 @@ function drawGlass(now, myTeam) {
       { key: 'T', name: 'Brownout', charges: curr[S.EMPS], max: T('emp_charges'), recharge: 1 - curr[S.EMP_WAIT] / Math.max(T('emp_recharge'), 1e-6) },
     ],
     jammed: curr[S.JAMMED] > 0,
+    feed: feed.filter((k) => now - k.at < 6000),
     contacts, tags, hits, damage: damageFrom,
   });
 }

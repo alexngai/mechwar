@@ -927,3 +927,61 @@ fn emp_jams_the_other_client() {
     assert!((full - 2 * LATENCY_TICKS - 2..=full).contains(&jammed_ticks), "B's client was jammed for {jammed_ticks} ticks");
     assert!(boosted_after, "B never boosted again after the jam");
 }
+
+#[test]
+fn names_are_sanitized() {
+    use sim::game::{NAME_MAX, sanitize_name};
+    assert_eq!(sanitize_name("  <b>Ana</b>\u{7}  "), "bAnab");
+    assert_eq!(sanitize_name("Grey  🙂  Wolf"), "Grey Wolf");
+    assert_eq!(sanitize_name("abcdefghijklmnopqrstuvwxyz").len(), NAME_MAX);
+    assert_eq!(sanitize_name("abcdefghijklmno pq"), "abcdefghijklmno", "a cut at a space is trimmed");
+    assert_eq!(sanitize_name("\u{202e}\u{200b}"), "");
+
+    let (mut game, a, _) = duel_game();
+    let name = |game: &Game| game.roster().into_iter().find(|p| p.0 == a).unwrap().1;
+    assert_eq!(name(&game), format!("Pilot-{a:02}"));
+    game.set_name(a, "Kite");
+    assert_eq!(name(&game), "Kite");
+    game.set_name(a, "Kite Two");
+    assert_eq!(name(&game), "Kite", "renamed again within 2 s");
+    for _ in 0..(2.0 * TICK_HZ) as u32 {
+        game.step();
+    }
+    game.set_name(a, "🙂");
+    assert_eq!(name(&game), format!("Pilot-{a:02}"), "an empty name falls back to the default");
+}
+
+#[test]
+fn roster_reaches_clients() {
+    let mut game = Game::new(Tuning::default(), blockout());
+    let a = game.join().unwrap();
+    let b = game.join().unwrap();
+    game.step(); // bots fill the rest
+    let mut clients: Vec<NetClient> = [a, b].iter().map(|_| NetClient::default()).collect();
+    let mut seen = game.roster_version();
+    let deliver = |game: &Game, clients: &mut Vec<NetClient>| {
+        let bytes = net::encode(&ServerMsg::Roster(game.roster()));
+        for c in clients.iter_mut() {
+            c.receive(&bytes, 0.0);
+        }
+    };
+    deliver(&game, &mut clients);
+    assert_eq!(clients[1].names[&b], format!("Pilot-{b:02}"));
+    let bots: Vec<_> = game.snapshot(a).players.iter().filter(|p| p.bot).map(|p| clients[0].names[&p.id].clone()).collect();
+    assert_eq!(bots.len(), 6);
+    assert!(bots.iter().all(|n| !n.starts_with("Pilot")), "bots should have callsigns: {bots:?}");
+
+    // A names itself through the protocol; the roster version moves and B learns it.
+    let Some(ClientMsg::Name(raw)) = net::decode(&clients[0].name_msg("  Kite!! ")) else { panic!("not a Name message") };
+    game.set_name(a, &raw);
+    assert_ne!(game.roster_version(), seen);
+    seen = game.roster_version();
+    deliver(&game, &mut clients);
+    assert_eq!(clients[1].names[&a], "Kite");
+
+    // A leaves: gone from B's roster.
+    game.leave(a);
+    assert_ne!(game.roster_version(), seen);
+    deliver(&game, &mut clients);
+    assert!(!clients[1].names.contains_key(&a));
+}

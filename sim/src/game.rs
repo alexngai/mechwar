@@ -30,6 +30,20 @@ const MAX_CREDIT: f32 = 8.0;
 /// Furthest back a shot may rewind its targets.
 const MAX_REWIND_TICKS: f32 = 0.3 * TICK_HZ;
 const HISTORY_TICKS: usize = TICK_HZ as usize;
+/// Longest callsign, in characters.
+pub const NAME_MAX: usize = 16;
+/// A player may rename this often.
+const RENAME_SECONDS: f32 = 2.0;
+/// Bots' callsigns, by player id.
+const BOT_NAMES: [&str; 8] = ["Kestrel", "Vane", "Cinder", "Ashlar", "Gantry", "Flint", "Sable", "Harrow"];
+
+/// A typed callsign reduced to what others may see: ASCII letters, digits, space, `-`, `_` and
+/// `.`, single spaces, trimmed, at most NAME_MAX characters. Empty if nothing is left.
+pub fn sanitize_name(raw: &str) -> String {
+    let kept: String = raw.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.')).collect();
+    let words: Vec<&str> = kept.split(' ').filter(|w| !w.is_empty()).collect();
+    words.join(" ").chars().take(NAME_MAX).collect::<String>().trim_end().to_string()
+}
 
 struct Player {
     id: u8,
@@ -51,6 +65,9 @@ struct Player {
     respawn_at: Option<u32>,
     /// Server-driven player; None for a human.
     bot: Option<Bot>,
+    name: String,
+    /// Tick of the last accepted rename, for rate limiting.
+    renamed_at: Option<u32>,
 }
 
 /// A projectile in flight and its owner's team, kept in case the owner leaves.
@@ -86,6 +103,8 @@ pub struct Game {
     events: Vec<Event>,
     scores: [u16; 2],
     phase: Phase,
+    /// Bumped whenever a player joins, leaves or renames; the server sends a Roster on change.
+    roster_version: u32,
 }
 
 impl Game {
@@ -107,6 +126,7 @@ impl Game {
             events: Vec::new(),
             scores: [0; 2],
             phase: Phase::Playing { started_at: 0 },
+            roster_version: 0,
         }
     }
 
@@ -118,6 +138,7 @@ impl Game {
         if self.team_count(team) >= TEAM_SIZE {
             let bot = self.players.iter().position(|p| p.team == team && p.bot.is_some())?;
             self.players.remove(bot);
+            self.roster_version += 1;
         }
         self.add_player(team, None, MechClass::B)
     }
@@ -153,13 +174,41 @@ impl Game {
             kills: 0,
             deaths: 0,
             respawn_at: None,
+            name: if bot.is_some() { BOT_NAMES[usize::from(id) % BOT_NAMES.len()].into() } else { format!("Pilot-{id:02}") },
+            renamed_at: None,
             bot,
         });
+        self.roster_version += 1;
         Some(id)
     }
 
     pub fn leave(&mut self, id: u8) {
         self.players.retain(|p| p.id != id);
+        self.roster_version += 1;
+    }
+
+    /// Sets a human's callsign from what they typed (sanitized), at most once per
+    /// RENAME_SECONDS. An empty result falls back to `Pilot-NN`.
+    pub fn set_name(&mut self, id: u8, raw: &str) {
+        let tick = self.tick;
+        let Some(p) = self.players.iter_mut().find(|p| p.id == id && p.bot.is_none()) else { return };
+        if p.renamed_at.is_some_and(|at| tick < at + secs(RENAME_SECONDS)) {
+            return;
+        }
+        let name = sanitize_name(raw);
+        p.name = if name.is_empty() { format!("Pilot-{id:02}") } else { name };
+        p.renamed_at = Some(tick);
+        self.roster_version += 1;
+    }
+
+    /// Changes whenever the roster does.
+    pub fn roster_version(&self) -> u32 {
+        self.roster_version
+    }
+
+    /// Every player's id and callsign.
+    pub fn roster(&self) -> Vec<(u8, String)> {
+        self.players.iter().map(|p| (p.id, p.name.clone())).collect()
     }
 
     /// Queue a client's input. Clients are untrusted, so the input is sanitized here.
@@ -191,7 +240,10 @@ impl Game {
                 }
             }
         } else {
-            self.players.clear();
+            if !self.players.is_empty() {
+                self.players.clear();
+                self.roster_version += 1;
+            }
             self.start_match();
         }
 

@@ -163,6 +163,25 @@ impl WasmNetClient {
         shot_floats(std::mem::take(&mut self.0.shots))
     }
 
+    /// Callsign of player `id`, or "" before the server has said.
+    pub fn name(&self, id: u8) -> String {
+        self.0.names.get(&id).cloned().unwrap_or_default()
+    }
+
+    /// Bytes setting our callsign to `raw` (the server sanitizes it).
+    pub fn set_name(&self, raw: &str) -> Vec<u8> {
+        self.0.name_msg(raw)
+    }
+
+    /// Six floats per player, us included, for the scoreboard: id, team, class, bot (0/1), kills, deaths.
+    pub fn board(&self) -> Vec<f32> {
+        self.0
+            .board()
+            .iter()
+            .flat_map(|p| [f32::from(p.id), f32::from(p.team), p.class.index() as f32, if p.bot { 1.0 } else { 0.0 }, f32::from(p.kills), f32::from(p.deaths)])
+            .collect()
+    }
+
     /// Index of the server's map, or -1 before the Welcome.
     pub fn map(&self) -> i32 {
         self.0.map.map_or(-1, |m| m as i32)

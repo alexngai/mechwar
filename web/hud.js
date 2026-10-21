@@ -111,15 +111,23 @@ export class Hud {
     ladder(g, u, cx + 340 * u, cy, f.speed * 3.6, 3 * u, 5, 10, 'SPD km/h', 1);
 
     // --- Target tags --------------------------------------------------------------------
+    // Teammates: chevron, name, health. Enemies: brackets, health, name, distance and status; the
+    // one under the crosshair also gets a card with class, hull and status.
     g.textAlign = 'center';
     for (const t of f.tags) {
+      const name = t.bot ? `${t.name} ·BOT` : t.name;
       if (!t.enemy) {
         g.fillStyle = g.strokeStyle = f.friendColor;
         g.globalAlpha = 0.85;
         tri(g, t.x, t.y, 6 * u, 1);
         g.font = font(12);
         g.textBaseline = 'bottom';
-        g.fillText(String(t.unit).padStart(2, '0'), t.x, t.y - 8 * u);
+        g.fillText(name, t.x, t.y - 14 * u);
+        bar(g, t.x - 22 * u, t.y - 12 * u, 44 * u, 2.5 * u, t.health, f.friendColor);
+        if (t.status) {
+          g.font = font(10);
+          g.fillText(t.status, t.x, t.y - 28 * u);
+        }
         g.globalAlpha = 1;
         continue;
       }
@@ -127,18 +135,45 @@ export class Hud {
       g.strokeStyle = g.fillStyle = f.enemyColor;
       g.lineWidth = (t.focus ? 2.5 : 1.5) * u;
       brackets(g, t.x, t.y, s, s * 0.35);
-      g.fillStyle = 'rgba(0,0,0,0.4)';
-      g.fillRect(t.x - s, t.y - s - 7 * u, 2 * s, 3 * u);
+      bar(g, t.x - s, t.y - s - 7 * u, 2 * s, 3 * u, t.health, f.enemyColor);
       g.fillStyle = f.enemyColor;
-      g.fillRect(t.x - s, t.y - s - 7 * u, 2 * s * t.health, 3 * u);
       g.font = font(12);
+      g.textBaseline = 'bottom';
+      g.fillText(name, t.x, t.y - s - 10 * u);
       g.textBaseline = 'top';
-      g.fillText(`${Math.round(t.dist)} m`, t.x, t.y + s + 4 * u);
+      g.fillText(`${Math.round(t.dist)} m${t.status ? ` · ${t.status}` : ''}`, t.x, t.y + s + 4 * u);
       if (t.focus) {
-        g.textBaseline = 'bottom';
-        g.fillText(t.label, t.x, t.y - s - 10 * u);
+        const x = t.x + s + 12 * u, y = t.y - s;
+        const lines = [[name, 13, 'bold'], [t.label.toUpperCase(), 11, ''], [`HULL ${t.hp}/${t.hpMax}`, 11, ''], [`${Math.round(t.dist)} m`, 11, '']];
+        if (t.status) lines.push([t.status, 11, 'bold']);
+        g.fillStyle = 'rgba(8,12,10,0.6)';
+        g.fillRect(x - 6 * u, y - 4 * u, 130 * u, lines.length * 16 * u + 8 * u);
+        g.textAlign = 'left';
+        lines.forEach(([text, px, weight], i) => {
+          g.fillStyle = i === 0 ? f.enemyColor : AMBER;
+          g.font = font(px, weight);
+          g.fillText(text, x, y + i * 16 * u);
+        });
+        g.textAlign = 'center';
       }
     }
+
+    // --- Kill feed, top right -------------------------------------------------------------
+    g.textAlign = 'right';
+    g.textBaseline = 'top';
+    g.font = font(13);
+    f.feed.forEach((k, i) => {
+      const age = (f.now - k.at) / 1000, y = 24 * u + i * 20 * u, x = W - 24 * u;
+      g.globalAlpha = Math.min(1, 6 - age) * (k.mine ? 1 : 0.75);
+      g.fillStyle = k.victimColor;
+      g.fillText(k.victim, x, y);
+      const vw = g.measureText(k.victim).width;
+      g.fillStyle = AMBER;
+      g.fillText(' ▸ ', x - vw, y);
+      g.fillStyle = k.killerColor;
+      g.fillText(k.killer, x - vw - g.measureText(' ▸ ').width, y);
+    });
+    g.globalAlpha = 1;
 
     // --- Reticle ------------------------------------------------------------------------
     if (f.aim) {
