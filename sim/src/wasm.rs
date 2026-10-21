@@ -2,7 +2,8 @@
 
 use crate::client::NetClient;
 use crate::net::Event;
-use crate::{ARENA, DT, Input, Mech, MechClass, Sim, Tuning};
+use crate::{Arena, DT, Input, Mech, MechClass, Sim, Tuning, Vector, map};
+use rapier3d::prelude::Ray;
 use wasm_bindgen::prelude::*;
 
 /// Layout matches `S` in web/main.js.
@@ -19,6 +20,12 @@ fn mech_state(m: &Mech) -> Vec<f32> {
     ]
 }
 
+/// Distance along a ray to the first arena surface, capped at `max` (for the chase camera).
+fn ray_distance(arena: &Arena, origin: [f32; 3], dir: [f32; 3], max: f32) -> f32 {
+    let dir = Vector::from_array(dir).normalize_or_zero();
+    arena.cast_ray(&Ray::new(Vector::from_array(origin), dir), max).unwrap_or(max)
+}
+
 /// Offline sandbox. The sliders edit the base (B) tuning; the chosen class's overrides sit on top.
 #[wasm_bindgen]
 pub struct WasmSim {
@@ -29,10 +36,12 @@ pub struct WasmSim {
 
 #[wasm_bindgen]
 impl WasmSim {
+    /// `map` indexes `map_name`'s list.
     #[wasm_bindgen(constructor)]
-    pub fn new(tuning_json: &str) -> Result<WasmSim, JsError> {
+    pub fn new(tuning_json: &str, map: u8) -> Result<WasmSim, JsError> {
         let base = Tuning::from_json(tuning_json)?;
-        Ok(WasmSim { sim: Sim::new(base.clone()), base, class: MechClass::B })
+        let map = usize::from(map).min(map::MAPS.len() - 1);
+        Ok(WasmSim { sim: Sim::with_map(base.clone(), map), base, class: MechClass::B })
     }
 
     pub fn set_tuning(&mut self, tuning_json: &str) -> Result<(), JsError> {
@@ -60,6 +69,11 @@ impl WasmSim {
     pub fn state(&self) -> Vec<f32> {
         mech_state(&self.sim.mech)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn cast_ray(&self, ox: f32, oy: f32, oz: f32, dx: f32, dy: f32, dz: f32, max: f32) -> f32 {
+        ray_distance(self.sim.arena(), [ox, oy, oz], [dx, dy, dz], max)
+    }
 }
 
 /// Online counterpart of `WasmSim`: same `state()` layout, but `tick` returns bytes to send.
@@ -85,6 +99,11 @@ impl WasmNetClient {
         self.0.receive(bytes, now);
     }
 
+    /// Index of the server's map, or -1 before the Welcome.
+    pub fn map(&self) -> i32 {
+        self.0.map.map_or(-1, |m| m as i32)
+    }
+
     /// Bytes asking for class 0 = A, 1 = B, 2 = C at the next spawn.
     pub fn pick_class(&self, class: u8) -> Vec<u8> {
         self.0.pick_class(MechClass::from_index(class).unwrap_or_default())
@@ -92,6 +111,11 @@ impl WasmNetClient {
 
     pub fn state(&self) -> Vec<f32> {
         mech_state(&self.0.mech)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn cast_ray(&self, ox: f32, oy: f32, oz: f32, dx: f32, dy: f32, dz: f32, max: f32) -> f32 {
+        ray_distance(self.0.arena(), [ox, oy, oz], [dx, dy, dz], max)
     }
 
     /// Thirteen floats per remote mech: id, team, class, feet xyz, yaw, pitch, health, boosting, hovering, bot,
@@ -144,13 +168,10 @@ impl WasmNetClient {
     }
 }
 
-/// Seven floats per block: center xyz, half extents xyz, tilt about X in radians.
+/// Name of compiled-in map `i` (matching a file in maps/), or "" past the end.
 #[wasm_bindgen]
-pub fn arena() -> Vec<f32> {
-    ARENA
-        .iter()
-        .flat_map(|b| [b.center[0], b.center[1], b.center[2], b.half[0], b.half[1], b.half[2], b.tilt_x_deg.to_radians()])
-        .collect()
+pub fn map_name(i: u8) -> String {
+    map::MAPS.get(usize::from(i)).map_or(String::new(), |(name, _)| (*name).into())
 }
 
 #[wasm_bindgen]

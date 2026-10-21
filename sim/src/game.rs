@@ -7,14 +7,12 @@ use std::collections::VecDeque;
 use rapier3d::parry::query::RayCast;
 use rapier3d::prelude::Pose;
 
-use crate::bot::{self, Bot};
+use crate::bot::{self, Bot, Nav};
 use crate::net::{Event, InputMsg, MatchState, MechView, PlayerNet, Snapshot};
-use crate::{Arena, Mech, MechClass, TICK_HZ, Tuning, Vector, aim_ray, mech_capsule, spawn_mech, step_mech};
+use crate::{Arena, Map, Mech, MechClass, TICK_HZ, Tuning, Vector, aim_ray, mech_capsule, spawn_mech, step_mech};
 
 pub const TEAM_SIZE: usize = 4;
 pub const MAX_PLAYERS: usize = 2 * TEAM_SIZE;
-/// Spawn x per team slot; team 0 spawns at z = +40, team 1 at z = -40.
-const SPAWN_X: [f32; TEAM_SIZE] = [0.0, -15.0, 15.0, -30.0];
 const POST_MATCH_SECONDS: f32 = 10.0;
 /// Inputs queued beyond this drop oldest first.
 const MAX_QUEUED: usize = 8;
@@ -65,7 +63,12 @@ pub struct Game {
     /// Team kills that win the match.
     pub score_limit: u16,
     pub match_seconds: f32,
+    /// Index into `map::MAPS`; clients load the same map from their Welcome.
+    pub map: usize,
     arena: Arena,
+    nav: &'static Nav,
+    /// Feet positions per team and slot, from the map.
+    spawns: [Vec<Vector>; 2],
     players: Vec<Player>,
     /// This tick's events; cleared at the start of each step.
     events: Vec<Event>,
@@ -74,14 +77,19 @@ pub struct Game {
 }
 
 impl Game {
-    pub fn new(tuning: Tuning) -> Self {
+    pub fn new(tuning: Tuning, map: usize) -> Self {
+        let data = Map::load(map);
+        assert!(data.spawns.iter().all(|s| s.len() >= TEAM_SIZE), "map needs {TEAM_SIZE} spawns per team");
         Self {
+            map,
+            arena: Arena::new(&data),
+            nav: Nav::for_map(map),
+            spawns: data.spawns.map(|team| team.iter().map(|p| Vector::from_array(*p)).collect()),
             classes: MechClass::ALL.map(|c| tuning.for_class(c)),
             tick: 0,
             bots: true,
             score_limit: 25,
             match_seconds: 600.0,
-            arena: Arena::default(),
             players: Vec::new(),
             events: Vec::new(),
             scores: [0; 2],
@@ -124,7 +132,7 @@ impl Game {
             slot,
             class,
             next_class: class,
-            mech: spawn(&self.classes, class, spawn_point(team, slot)),
+            mech: spawn(&self.classes, class, self.spawns[usize::from(team)][slot]),
             inputs: VecDeque::new(),
             credit: 0.0,
             ack_seq: 0,
@@ -207,7 +215,7 @@ impl Game {
                 .map(|p| p.mech);
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
-            let input = bot.think(&self.arena, t, &p.mech, target.as_ref(), self.tick);
+            let input = bot.think(&self.arena, self.nav, t, &p.mech, target.as_ref(), self.tick);
             bot.seq += 1;
             p.inputs.push_back(InputMsg { seq: bot.seq, input, view_tick: self.tick as f32 });
         }
@@ -246,7 +254,7 @@ impl Game {
         self.phase = Phase::Playing { started_at: self.tick };
         for p in &mut self.players {
             p.class = p.next_class;
-            p.mech = spawn(&self.classes, p.class, spawn_point(p.team, p.slot));
+            p.mech = spawn(&self.classes, p.class, self.spawns[usize::from(p.team)][p.slot]);
             p.respawn_at = None;
             p.kills = 0;
             p.deaths = 0;
@@ -272,8 +280,9 @@ impl Game {
                 .map(|p| p.mech.pos.distance(spawn))
                 .fold(f32::MAX, f32::min)
         };
-        (0..TEAM_SIZE)
-            .map(|slot| spawn_point(team, slot))
+        self.spawns[usize::from(team)]
+            .iter()
+            .copied()
             .max_by(|a, b| threat(*a).total_cmp(&threat(*b)))
             .expect("teams have spawns")
     }
@@ -368,10 +377,6 @@ impl Game {
 /// A fresh mech of `class` at `pos`.
 fn spawn(classes: &[Tuning; 3], class: MechClass, pos: Vector) -> Mech {
     Mech { class, ..spawn_mech(&classes[class.index()], pos) }
-}
-
-fn spawn_point(team: u8, slot: usize) -> Vector {
-    Vector::new(SPAWN_X[slot], 0.1, if team == 0 { 40.0 } else { -40.0 })
 }
 
 fn secs(s: f32) -> u32 {

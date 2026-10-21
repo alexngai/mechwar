@@ -1,9 +1,12 @@
 import * as THREE from 'three';
 import GUI from 'lil-gui';
-import init, { WasmNetClient, WasmSim, arena, tick_dt } from '../sim/pkg/sim.js';
+import init, { WasmNetClient, WasmSim, map_name, tick_dt } from '../sim/pkg/sim.js';
 import tuning from '../tuning.json';
 import classes from '../classes.json';
+import { buildArena } from './arena.js';
 import { Effects } from './fx.js';
+import saltworks from '../maps/saltworks.json';
+import blockout from '../maps/blockout.json';
 import { Mech } from './mech.js';
 
 await init();
@@ -20,7 +23,13 @@ const params = new URLSearchParams(location.search);
 const sameOrigin = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
 const server = params.get('server') ?? (import.meta.env.PROD && !params.has('offline') ? sameOrigin : null);
 const net = server ? new WasmNetClient() : null;
-const sim = net ? null : new WasmSim(JSON.stringify(tuning));
+// Maps by name; the sim's compiled-in list gives the index. Offline, ?map=<name> picks one.
+const MAPS = { saltworks, blockout };
+const mapIndex = (name) => {
+  for (let i = 0; map_name(i); i++) if (map_name(i) === name) return i;
+  return 0;
+};
+const sim = net ? null : new WasmSim(JSON.stringify(tuning), mapIndex(params.get('map') ?? 'saltworks'));
 const game = net ?? sim;
 let ws = null, connection = server ? 'connecting' : '', picked = null;
 if (net) {
@@ -51,21 +60,15 @@ scene.add(sun);
 const camera = new THREE.PerspectiveCamera(T('fov'), 1, 0.1, 500);
 camera.rotation.order = 'YXZ';
 
-const box = (w, h, d, color, emissive = 0) =>
-  new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshLambertMaterial({ color, emissive, flatShading: true }));
 
-// Arena geometry comes from the sim so collision and visuals share one source.
-const blocks = arena();
-for (let i = 0; i < blocks.length; i += 7) {
-  const [cx, cy, cz, hx, hy, hz, tilt] = blocks.subarray(i, i + 7);
-  const m = box(hx * 2, hy * 2, hz * 2, i === 0 ? 0x6b6f63 : 0xb8b2a0);
-  m.position.set(cx, cy, cz);
-  m.rotation.x = tilt;
-  scene.add(m);
-}
-const grid = new THREE.GridHelper(100, 50, 0x3d4038, 0x55594e);
-grid.position.y = 0.01;
-scene.add(grid);
+// The arena is built once its map is known: right away offline, after the Welcome online.
+let arenaMap = -1;
+const ensureArena = (index) => {
+  if (index < 0 || index === arenaMap) return;
+  arenaMap = index;
+  buildArena(scene, MAPS[map_name(index)]);
+};
+ensureArena(sim ? mapIndex(params.get('map') ?? 'saltworks') : -1);
 
 const fx = new Effects(scene);
 let me = new Mech(scene, fx, 'B'), meClass = 1;
@@ -191,6 +194,7 @@ function frame(now) {
   }
   const a = acc / DT;
   const lerp = (i) => prev[i] + (curr[i] - prev[i]) * a;
+  if (net) ensureArena(net.map());
   const hudState = net ? net.hud() : null;
   const [myId, myTeam] = hudState ? [hudState[0], hudState[6]] : [-1, -1];
   if (hudState) classIdx = hudState[12];
@@ -276,7 +280,13 @@ function frame(now) {
   eye.copy(pos).y += T('eye_height');
   camera.rotation.set(pitch, yaw, 0);
   camera.position.copy(eye);
-  if (!cockpit) camera.position.add(offset.set(0, T('chase_height'), T('chase_distance')).applyQuaternion(camera.quaternion));
+  if (!cockpit) {
+    // Pull the chase camera in front of any wall behind the mech.
+    offset.set(0, T('chase_height'), T('chase_distance')).applyQuaternion(camera.quaternion);
+    const want = offset.length();
+    const room = game.cast_ray(eye.x, eye.y, eye.z, offset.x, offset.y, offset.z, want + 0.5) - 0.5;
+    camera.position.addScaledVector(offset, Math.max(room, 0.5) / want);
+  }
   if (camera.fov !== T('fov')) { camera.fov = T('fov'); camera.updateProjectionMatrix(); }
   fx.update(dt, camera, renderer.domElement.height);
   hurt = Math.max(0, hurt - dt * 2.5);

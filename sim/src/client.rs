@@ -4,7 +4,7 @@
 use std::collections::VecDeque;
 
 use crate::net::{self, ClientMsg, Event, InputMsg, MatchState, PlayerNet, ServerMsg, Snapshot};
-use crate::{Arena, DT, Input, Mech, MechClass, Tuning, step_mech};
+use crate::{Arena, DT, Input, Map, Mech, MechClass, Tuning, map, step_mech};
 
 /// Remote mechs are drawn this many ticks behind the newest snapshot, to ride out jitter.
 pub const INTERP_TICKS: f32 = 3.0;
@@ -16,6 +16,8 @@ pub struct NetClient {
     /// Own class as the server last reported it; prediction uses its tuning.
     pub class: MechClass,
     arena: Arena,
+    /// Map the server runs, from the Welcome; None before it.
+    pub map: Option<usize>,
     pub id: Option<u8>,
     pub full: bool,
     /// Predicted local mech.
@@ -43,7 +45,8 @@ impl Default for NetClient {
         Self {
             classes: MechClass::ALL.map(|c| Tuning::default().for_class(c)),
             class: MechClass::B,
-            arena: Arena::default(),
+            arena: Arena::new(&Map::load(map::DEFAULT)),
+            map: None,
             id: None,
             full: false,
             mech: Mech::default(),
@@ -80,7 +83,14 @@ impl NetClient {
 
     pub fn receive(&mut self, bytes: &[u8], now_ms: f64) {
         match net::decode::<ServerMsg>(bytes) {
-            Some(ServerMsg::Welcome { id }) => self.id = Some(id),
+            Some(ServerMsg::Welcome { id, map }) => {
+                let map = usize::from(map).min(map::MAPS.len() - 1);
+                if map != map::DEFAULT {
+                    self.arena = Arena::new(&Map::load(map));
+                }
+                self.map = Some(map);
+                self.id = Some(id);
+            }
             Some(ServerMsg::Full) => self.full = true,
             Some(ServerMsg::Snapshot(s)) => self.apply(s, now_ms),
             None => {}
@@ -123,6 +133,10 @@ impl NetClient {
         if self.snapshots.len() > SNAPSHOT_BUFFER {
             self.snapshots.pop_front();
         }
+    }
+
+    pub fn arena(&self) -> &Arena {
+        &self.arena
     }
 
     /// Fractional server tick remote mechs are drawn at; also sent as each input's `view_tick`.

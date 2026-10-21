@@ -22,7 +22,8 @@ pub struct InputMsg {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ServerMsg {
-    Welcome { id: u8 },
+    /// `map` indexes `map::MAPS`; the client builds its arena from it.
+    Welcome { id: u8, map: u8 },
     Full,
     Snapshot(Snapshot),
 }

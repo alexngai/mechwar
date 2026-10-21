@@ -7,7 +7,12 @@ use std::ops::Range;
 use sim::client::NetClient;
 use sim::game::Game;
 use sim::net::{self, ClientMsg, Event, InputMsg, ServerMsg};
-use sim::{DT, Input, MechClass, TICK_HZ, Tuning, Vector};
+use sim::{DT, Input, Map, MechClass, TICK_HZ, Tuning, Vector};
+
+/// The original blockout arena: the duels below rely on its open line between the slot-0 spawns.
+fn blockout() -> usize {
+    Map::index("blockout").unwrap()
+}
 
 /// One-way latency: 67 ms each way, about 133 ms round trip.
 const LATENCY_TICKS: u32 = 2;
@@ -30,7 +35,7 @@ impl Harness {
 
     /// Classes are picked before any input, so both spawn in them.
     fn with_classes(classes: [MechClass; 2]) -> Self {
-        let mut game = Game::new(Tuning::default());
+        let mut game = Game::new(Tuning::default(), blockout());
         game.bots = false;
         let clients = classes
             .into_iter()
@@ -38,7 +43,7 @@ impl Harness {
                 let id = game.join().expect("room for two");
                 game.pick_class(id, class);
                 let mut c = NetClient::default();
-                c.receive(&net::encode(&ServerMsg::Welcome { id }), 0.0);
+                c.receive(&net::encode(&ServerMsg::Welcome { id, map: blockout() as u8 }), 0.0);
                 (id, c)
             })
             .collect();
@@ -185,7 +190,7 @@ fn send(game: &mut Game, id: u8, seq: &mut u32, n: u32, input: Input) {
 #[test]
 fn input_backlog_drains_and_rate_is_capped() {
     let t = Tuning::default();
-    let mut game = Game::new(t.clone());
+    let mut game = Game::new(t.clone(), blockout());
     game.bots = false;
     let id = game.join().unwrap();
     let (mut seq, idle) = (0, Input::default());
@@ -223,7 +228,7 @@ fn team_of(game: &Game, id: u8) -> u8 {
 
 #[test]
 fn teams_fill_and_balance() {
-    let mut game = Game::new(Tuning::default());
+    let mut game = Game::new(Tuning::default(), blockout());
     let a = game.join().unwrap();
     game.step();
     let s = game.snapshot(a);
@@ -249,7 +254,7 @@ fn teams_fill_and_balance() {
 #[test]
 fn no_friendly_fire() {
     let t = Tuning::default();
-    let mut game = Game::new(t.clone());
+    let mut game = Game::new(t.clone(), blockout());
     game.bots = false;
     let shooter = game.join().unwrap();
     let _enemy = game.join().unwrap();
@@ -281,7 +286,7 @@ fn no_friendly_fire() {
 #[test]
 fn match_ends_and_restarts() {
     let t = Tuning::default();
-    let mut game = Game::new(t.clone());
+    let mut game = Game::new(t.clone(), blockout());
     game.score_limit = 2;
     let human = game.join().unwrap();
     let mut seq = 0;
@@ -316,7 +321,7 @@ fn match_ends_and_restarts() {
     assert!(restarted.players.iter().all(|p| p.view.health == classes[p.class.index()].health_max && p.kills == 0 && p.deaths == 0));
 
     // Time limit with no kills is a draw.
-    let mut game = Game::new(t);
+    let mut game = Game::new(t, blockout());
     game.bots = false;
     game.match_seconds = 1.0;
     let human = game.join().unwrap();
@@ -329,7 +334,7 @@ fn match_ends_and_restarts() {
 
 #[test]
 fn second_human_replaces_a_bot() {
-    let mut game = Game::new(Tuning::default());
+    let mut game = Game::new(Tuning::default(), blockout());
     let human = game.join().unwrap();
     game.step();
     assert!(game.join().is_some(), "a bot should give up its slot");
@@ -375,7 +380,7 @@ fn shoot_until_kill(game: &mut Game, shooter: u8, victim: u8) -> u32 {
 }
 
 fn duel_game() -> (Game, u8, u8) {
-    let mut game = Game::new(Tuning::default());
+    let mut game = Game::new(Tuning::default(), blockout());
     game.bots = false;
     let shooter = game.join().unwrap();
     let victim = game.join().unwrap();
@@ -456,7 +461,7 @@ fn brace_cuts_damage() {
 #[test]
 fn hostile_inputs_are_sanitized() {
     let t = Tuning::default();
-    let mut game = Game::new(t.clone());
+    let mut game = Game::new(t.clone(), blockout());
     game.bots = false;
     let id = game.join().unwrap();
     let start = game.snapshot(id).me.pos;

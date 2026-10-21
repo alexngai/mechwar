@@ -1,6 +1,6 @@
 //! Serves the built client and the game WebSocket (`/ws`) on one port. One 30 Hz loop owns the
 //! match; each connection gets a reader and a writer task. Env: `PORT` (9001), `STATIC_DIR`
-//! (`dist`), `LAG_MS` (one-way delay for testing), `SCORE_LIMIT`, `MATCH_SECONDS`.
+//! (`dist`), `MAP` (`saltworks`), `LAG_MS` (one-way delay for testing), `SCORE_LIMIT`, `MATCH_SECONDS`.
 
 use std::future::IntoFuture;
 use std::{env, time::Duration};
@@ -13,7 +13,7 @@ use axum::routing::get;
 use futures_util::{SinkExt, StreamExt};
 use sim::game::Game;
 use sim::net::{self, ClientMsg, ServerMsg};
-use sim::{DT, Tuning};
+use sim::{DT, Map, Tuning};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, Instant};
@@ -66,7 +66,8 @@ async fn upgrade(ws: WebSocketUpgrade, State(app): State<App>) -> Response {
 }
 
 async fn game_loop(mut cmds: mpsc::UnboundedReceiver<Cmd>) {
-    let mut game = Game::new(Tuning::default());
+    let map = env::var("MAP").map_or(sim::map::DEFAULT, |name| Map::index(&name).expect("MAP must name a map in maps/"));
+    let mut game = Game::new(Tuning::default(), map);
     // Shorter matches for playtesting.
     if let Ok(v) = env::var("SCORE_LIMIT") {
         game.score_limit = v.parse().expect("SCORE_LIMIT must be a kill count");
@@ -82,7 +83,7 @@ async fn game_loop(mut cmds: mpsc::UnboundedReceiver<Cmd>) {
             match cmd {
                 Cmd::Join(out, reply) => {
                     let id = game.join();
-                    let msg = id.map_or(ServerMsg::Full, |id| ServerMsg::Welcome { id });
+                    let msg = id.map_or(ServerMsg::Full, |id| ServerMsg::Welcome { id, map: game.map as u8 });
                     let _ = out.send((Instant::now(), net::encode(&msg)));
                     if let Some(id) = id {
                         println!("player {id} joined");

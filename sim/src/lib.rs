@@ -8,10 +8,12 @@ use serde::{Deserialize, Serialize};
 pub mod bot;
 pub mod client;
 pub mod game;
+pub mod map;
 pub mod net;
 #[cfg(feature = "wasm")]
 mod wasm;
 
+pub use map::Map;
 pub use rapier3d::prelude::Vector;
 
 pub const TICK_HZ: f32 = 30.0;
@@ -208,49 +210,20 @@ pub struct Mech {
     pub shot: bool,
 }
 
-/// Blockout box: center, half extents, tilt about X in degrees (positive raises the -Z end).
-pub struct Block {
-    pub center: [f32; 3],
-    pub half: [f32; 3],
-    pub tilt_x_deg: f32,
-}
-
-const fn block(center: [f32; 3], half: [f32; 3]) -> Block {
-    Block { center, half, tilt_x_deg: 0.0 }
-}
-
-/// Original blockout arena, 100 x 100 m.
-pub const ARENA: &[Block] = &[
-    block([0.0, -0.5, 0.0], [50.0, 0.5, 50.0]), // floor, top at y=0
-    block([50.5, 4.0, 0.0], [0.5, 4.0, 51.0]),  // perimeter walls
-    block([-50.5, 4.0, 0.0], [0.5, 4.0, 51.0]),
-    block([0.0, 4.0, 50.5], [51.0, 4.0, 0.5]),
-    block([0.0, 4.0, -50.5], [51.0, 4.0, 0.5]),
-    block([20.0, 2.5, -20.0], [10.0, 2.5, 8.0]), // raised platform, top at y=5
-    // Ramp: top surface runs from (z=0, y=0) up to the platform edge (z=-12, y=5); 22.62 deg.
-    Block { center: [20.0, 2.269, -6.096], half: [6.0, 0.25, 6.5], tilt_x_deg: 22.62 },
-    block([-15.0, 2.0, 10.0], [4.0, 2.0, 1.5]), // cover
-    block([-25.0, 2.0, -15.0], [1.5, 2.0, 5.0]),
-    block([10.0, 1.5, 22.0], [3.0, 1.5, 3.0]),
-    block([-5.0, 3.0, -30.0], [2.0, 3.0, 2.0]),
-    block([30.0, 2.0, 20.0], [5.0, 2.0, 1.5]),
-];
-
-const SPAWN: Vector = Vector::new(0.0, 0.1, 25.0);
-
 /// Static arena colliders for scene queries. Shared by the offline sim, the server and the client.
 pub struct Arena {
     world: PhysicsWorld,
 }
 
-impl Default for Arena {
-    fn default() -> Self {
+impl Arena {
+    pub fn new(map: &Map) -> Self {
         let mut world = PhysicsWorld::default();
-        for b in ARENA {
+        for b in &map.solids {
             let [hx, hy, hz] = b.half;
+            let rotation = Rotation::from_rotation_y(b.yaw.to_radians()) * Rotation::from_rotation_x(b.tilt.to_radians());
             let collider = ColliderBuilder::cuboid(hx, hy, hz)
                 .translation(Vector::from_array(b.center))
-                .rotation(Vector::new(b.tilt_x_deg.to_radians(), 0.0, 0.0));
+                .rotation(rotation.to_scaled_axis());
             world.insert_collider(collider, None);
         }
         // Builds the broad phase so scene queries see the static colliders. No physics step runs.
@@ -289,21 +262,33 @@ pub struct Sim {
     pub class: MechClass,
     pub mech: Mech,
     arena: Arena,
+    /// Team 0's first spawn on the map.
+    spawn: Vector,
 }
 
 impl Sim {
     pub fn new(tuning: Tuning) -> Self {
-        let mut sim = Self { tuning, class: MechClass::B, mech: Mech::default(), arena: Arena::default() };
+        Self::with_map(tuning, map::DEFAULT)
+    }
+
+    pub fn with_map(tuning: Tuning, map: usize) -> Self {
+        let map = Map::load(map);
+        let spawn = Vector::from_array(map.spawns[0][0]);
+        let mut sim = Self { tuning, class: MechClass::B, mech: Mech::default(), arena: Arena::new(&map), spawn };
         sim.reset();
         sim
     }
 
     pub fn reset(&mut self) {
-        self.mech = Mech { class: self.class, ..spawn_mech(&self.tuning, SPAWN) };
+        self.mech = Mech { class: self.class, ..spawn_mech(&self.tuning, self.spawn) };
     }
 
     pub fn step(&mut self, input: &Input) {
         step_mech(&self.arena, &self.tuning, &mut self.mech, input);
+    }
+
+    pub fn arena(&self) -> &Arena {
+        &self.arena
     }
 }
 
@@ -511,7 +496,7 @@ mod tests {
     #[test]
     fn fuel_drain_regen_and_dodge_cooldown() {
         let t = Tuning::default();
-        let mut sim = Sim::new(t.clone());
+        let mut sim = Sim::with_map(t.clone(), map::Map::index("blockout").unwrap());
         let idle = Input::default();
         run(&mut sim, idle, 30);
         assert!(sim.mech.grounded, "mech should land on the floor");
@@ -553,7 +538,7 @@ mod tests {
 
     fn class_sim(class: MechClass) -> (Sim, Tuning) {
         let t = Tuning::default().for_class(class);
-        let mut sim = Sim::new(t.clone());
+        let mut sim = Sim::with_map(t.clone(), map::Map::index("blockout").unwrap());
         sim.class = class;
         sim.reset();
         // A long clear run down the middle of the arena.

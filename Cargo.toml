@@ -6,3 +6,10 @@ resolver = "3"
 opt-level = "s"
 lto = true
 codegen-units = 1
+
+# Physics in tests and nav generation is far too slow unoptimized.
+[profile.dev.package.rapier3d]
+opt-level = 3
+
+[profile.dev.package.parry3d]
+opt-level = 3
