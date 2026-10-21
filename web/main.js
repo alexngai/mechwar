@@ -249,13 +249,14 @@ function frame(now) {
   // The render offset slides server corrections (bumps) in instead of snapping.
   pos.set(lerp(S.POS) + lerp(S.OFFSET), lerp(S.POS + 1) + lerp(S.OFFSET + 1), lerp(S.POS + 2) + lerp(S.OFFSET + 2));
   me.setTeam(myTeam);
+  me.setUnit(myId);
   me.root.visible = !cockpit;
   me.update(dt, {
     pos, yaw, pitch, scale: T('mech_height') / me.height,
     vel: vel.set(lerp(S.VEL), lerp(S.VEL + 1), lerp(S.VEL + 2)),
     grounded: !!curr[S.GROUNDED], boosting: !!curr[S.BOOSTING], hovering: !!curr[S.HOVERING],
     health: curr[S.HEALTH], heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
-    ability: curr[S.ABILITY_T] > 0,
+    ability: curr[S.ABILITY_T] > 0, damage: 1 - curr[S.HEALTH] / T('health_max'),
   });
 
   if (net) {
@@ -276,10 +277,11 @@ function frame(now) {
       e.pos.copy(seen);
       e.team = team;
       e.mech.setTeam(team);
+      e.mech.setUnit(id);
       e.mech.update(dt, {
         pos: e.pos, yaw: ryaw, pitch: rpitch, scale: classValue(cls, 'mech_height') / e.mech.height, vel: e.vel,
         grounded: !hovering && Math.abs(e.vel.y) < 1.5, boosting: !!boosting, hovering: !!hovering, health,
-        ability: !!abilityOn,
+        ability: !!abilityOn, damage: 1 - health / classValue(cls, 'health_max'),
       });
     }
     for (const [id, e] of remotes) if (!live.has(id)) { e.mech.dispose(); remotes.delete(id); }
