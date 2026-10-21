@@ -120,6 +120,53 @@ fn prediction_matches_server() {
     }
 }
 
+#[test]
+fn prediction_matches_server_through_repair() {
+    let t = Tuning::default();
+    let mut h = Harness::new();
+    let a_id = h.clients[0].0;
+    let (mut max_correction, mut a_shots, mut repaired_for) = (0f32, 0, 0f32);
+    let (mut hurt, mut still_at) = (t.health_max, Vector::ZERO);
+    let mut last = h.clients[0].1.mech.pos;
+    let mut walked = 0.0;
+    for tick in 0..300u32 {
+        // B fires at A for a second; A waits it out, then holds repair with everything else
+        // pressed (all ignored) for 4.5 s, then walks off.
+        let now = h.now();
+        let b = &h.clients[1].1;
+        let b_input = b.remotes(now).first().map_or_else(Input::default, |a| {
+            let d = a.view.pos + Vector::Y * (t.mech_height * 0.5) - (b.mech.pos + Vector::Y * t.eye_height);
+            Input { yaw: (-d.x).atan2(-d.z), pitch: d.y.atan2(d.x.hypot(d.z)), fire: tick < 30, ..Input::default() }
+        });
+        let a_input = match tick {
+            0..45 => Input::default(),
+            45..180 => Input { repair: true, move_z: 1.0, boost: true, fire: true, alt_fire: true, dodge: i8::from(tick == 60), ..Input::default() },
+            _ => Input { move_z: 1.0, yaw: 0.6, ..Input::default() },
+        };
+        h.step([a_input, b_input]);
+        a_shots += h.game.snapshot(a_id).events.iter().filter(|e| matches!(e, Event::Shot { shooter, .. } if *shooter == a_id)).count();
+        max_correction = h.clients.iter().map(|c| c.1.correction).fold(max_correction, f32::max);
+        let a = &h.clients[0].1.mech;
+        repaired_for = repaired_for.max(a.repair_time);
+        if tick == 45 {
+            (hurt, still_at) = (a.health, a.pos);
+        }
+        if tick == 179 {
+            assert!(a.pos.distance(still_at) < 1e-3, "A moved {} m while repairing", a.pos.distance(still_at));
+            assert!(a.health > hurt + 20.0, "A only healed from {hurt} to {}", a.health);
+        }
+        if tick >= 180 {
+            walked += (a.pos - last).length();
+        }
+        last = a.pos;
+    }
+    assert!(hurt < t.health_max - 20.0, "B's shots didn't land, so the test proved little");
+    assert!(repaired_for > t.repair_windup + 2.0, "A only repaired for {repaired_for} s");
+    assert_eq!(a_shots, 0, "A fired while repairing");
+    assert!(walked > 10.0, "A only walked {walked} m after repairing");
+    assert!(max_correction < 1e-5, "prediction drifted from the server by {max_correction} m");
+}
+
 /// A stands still and fires at where it *sees* B during `fire`, while B strafes with `strafe(tick)`.
 /// Returns (hits before B's first death, shots before it, whether B died) and the harness.
 fn duel(no_rewind: bool, ticks: u32, fire: Range<u32>, strafe: impl Fn(u32) -> f32) -> (u32, u32, bool, Harness) {
@@ -456,6 +503,44 @@ fn brace_cuts_damage() {
     assert!(!braced.is_empty() && !unbraced.is_empty(), "no hits landed");
     assert!(braced.iter().all(|d| (d - hit * bulwark.brace_damage_mult).abs() < 1e-3), "braced hits: {braced:?}");
     assert!(unbraced.iter().all(|d| (d - hit).abs() < 1e-3), "unbraced hits: {unbraced:?}");
+}
+
+#[test]
+fn damage_cancels_repair() {
+    let t = Tuning::default();
+    let (mut game, shooter, victim) = duel_game();
+    let (mut shooter_seq, mut victim_seq) = (0, 0);
+    let repair = Input { repair: true, ..Input::default() };
+    let mut tick = |game: &mut Game, shoot: bool, victim_input: Input| {
+        let aim = aim_at(game, shooter, victim, shoot);
+        send(game, shooter, &mut shooter_seq, 1, aim);
+        send(game, victim, &mut victim_seq, 1, victim_input);
+        game.step();
+    };
+
+    for _ in 0..15 {
+        tick(&mut game, true, Input::default());
+    }
+    let hurt = game.snapshot(victim).me.health;
+    assert!(hurt < t.health_max, "no hits landed");
+    for _ in 0..((t.repair_windup + 1.0) * TICK_HZ) as u32 {
+        tick(&mut game, false, repair);
+    }
+    let healed = game.snapshot(victim).me.health;
+    assert!(healed > hurt + 0.5 * t.repair_rate, "repair healed {hurt} only to {healed}");
+    assert!(player(&game, victim).view.repairing, "others can't see the repair");
+
+    // One hit ends it, and holding on doesn't restart it during the cooldown.
+    tick(&mut game, true, repair);
+    let me = game.snapshot(victim).me;
+    assert!(me.health < healed, "the shot missed");
+    assert_eq!(me.repair_time, 0.0, "still repairing after a hit");
+    assert!(!player(&game, victim).view.repairing);
+    for _ in 0..(t.repair_cooldown * TICK_HZ) as u32 - 2 {
+        tick(&mut game, false, repair);
+    }
+    assert_eq!(game.snapshot(victim).me.health, me.health, "healed during the cooldown");
+    assert!(!player(&game, victim).view.repairing);
 }
 
 #[test]

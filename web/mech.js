@@ -106,6 +106,7 @@ const box = (w, h, d, mat) => new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat
 const cyl = (top, bottom, h, mat) => new THREE.Mesh(new THREE.CylinderGeometry(top, bottom, h, 8), mat);
 const damp = (from, to, rate, dt) => from + (to - from) * (1 - Math.exp(-rate * dt));
 const clamp = THREE.MathUtils.clamp;
+const REPAIR_GLOW = 0x6dff9a;
 
 /** Add `obj` to `parent` at (x, y, z) with pitch rx and roll rz. */
 function put(parent, obj, x, y, z, rx = 0, rz = 0) {
@@ -293,6 +294,7 @@ export class Mech {
     this.dodgeRoll = 0;
     this.nextGun = 0;
     this.brace = 0;
+    this.shutdown = 0;
 
     const root = (this.root = new THREE.Group());
     const body = (this.body = new THREE.Group());
@@ -360,6 +362,16 @@ export class Mech {
     this.plate = put(body, box(pw, ph, 2 * ph, this.plateMat), 0, py, pz);
     this.plate.receiveShadow = true;
     this.plate.visible = false;
+
+    // Repair drone: lifts off the back during the wind-up, then hovers over the hull and beams it.
+    this.drone = put(root, new THREE.Group(), 0, 0, 0);
+    put(this.drone, box(0.6, 0.16, 0.6, this.trim), 0, 0, 0);
+    for (const x of [-0.38, 0.38]) put(this.drone, box(0.16, 0.06, 0.7, this.trim), x, 0.02, 0);
+    this.drone.add(halo(REPAIR_GLOW, 1.3));
+    this.beamMat = new THREE.MeshBasicMaterial({ color: REPAIR_GLOW, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
+    // Unit length hanging down from the drone; scaled to reach the hull.
+    this.beam = put(this.drone, new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.35, 1, 8, 1, true).translate(0, -0.5, 0), this.beamMat), 0, 0, 0);
+    this.drone.visible = false;
     scene.add(root);
   }
 
@@ -388,8 +400,8 @@ export class Mech {
 
   /**
    * Pose from sim state: { pos, yaw, pitch, scale, vel, grounded, boosting, hovering, health,
-   * heat (0-1), overheated, ability (active), damage (0 full health to 1) }. Also emits thruster,
-   * footstep, smoke, spark and death effects.
+   * heat (0-1), overheated, ability (active), damage (0 full health to 1), repair (0 none, wind-up
+   * fraction, 1 healing) }. Also emits thruster, footstep, smoke, spark and death effects.
    */
   update(dt, s) {
     this.t += dt;
@@ -424,10 +436,13 @@ export class Mech {
     const sway = alive && s.hovering ? 0.06 * Math.sin(this.t * 5) : 0;
     // Brace sinks the Bulwark into a lower stance.
     this.brace = damp(this.brace, alive && s.ability && this.cls === 'C' ? 1 : 0, 8, dt);
-    body.position.y = spec.hipY - bob - this.squash * 0.6 - this.wreck * spec.sink + sway - this.brace * 0.3;
+    // Shut down for repair: the body settles and the guns droop.
+    const repair = alive ? s.repair ?? 0 : 0;
+    this.shutdown = damp(this.shutdown, repair > 0 ? 1 : 0, 4, dt);
+    body.position.y = spec.hipY - bob - this.squash * 0.6 - this.wreck * spec.sink + sway - this.brace * 0.3 - this.shutdown * 0.25;
     body.rotation.x = damp(body.rotation.x, alive ? clamp(local.z / 16, -1, 1) * 0.25 : -0.45 * this.wreck, 6, dt);
     body.rotation.z = damp(body.rotation.z, alive ? -clamp(local.x / 16, -1, 1) * 0.2 + this.dodgeRoll : 0.25 * this.wreck, 8, dt);
-    for (const gun of this.guns) gun.pod.rotation.x = alive ? s.pitch - body.rotation.x : -0.5;
+    for (const gun of this.guns) gun.pod.rotation.x = alive ? THREE.MathUtils.lerp(s.pitch - body.rotation.x, -0.4, this.shutdown) : -0.5;
 
     // Feet swing forward in the air and slide back while planted; knees bend per class.
     for (const leg of this.legs) {
@@ -484,7 +499,7 @@ export class Mech {
       if (this.flicker <= 0 && Math.random() < dt * 4) this.flicker = 0.05 + Math.random() * 0.15;
     }
     this.flicker -= dt;
-    const lit = !alive ? 0 : critical && this.flicker > 0 ? 0.15 : 1;
+    const lit = !alive ? 0 : repair > 0 ? 0.3 : critical && this.flicker > 0 ? 0.15 : 1;
     if (lit !== this.lit) {
       this.lit = lit;
       this.accent.color.setHex((TEAMS[this.team] ?? TEAMS[-1]).accent).multiplyScalar(lit);
@@ -496,6 +511,7 @@ export class Mech {
     }
     this.shell.visible = this.brace > 0.05;
     this.shellMat.opacity = this.brace * (0.12 + 0.05 * Math.sin(this.t * 8));
+    this.updateDrone(dt, repair);
     if (!alive) this.fx.smoke(world.copy(s.pos).addScaledVector(UP, 0.44 * spec.height * s.scale), dt, 0.18);
     if (alive && s.overheated) for (const gun of this.guns) this.fx.smoke(gun.tip.getWorldPosition(world), dt, 0.75);
 
@@ -505,6 +521,24 @@ export class Mech {
     this.wear.uWreck.value = this.wreck;
     this.wear.uFlash.value = this.flash;
     this.plateMat.color.setScalar(1 - 0.85 * this.wreck);
+  }
+
+  /** Drone over the backpack: rises with the wind-up, then circles and beams while healing. */
+  updateDrone(dt, repair) {
+    const { drone, spec } = this;
+    drone.visible = repair > 0;
+    if (!drone.visible) return;
+    const top = spec.height + 1.1, x = repair * repair * (3 - 2 * repair);
+    const orbit = 0.6 * x;
+    drone.position.set(orbit * Math.sin(this.t * 1.7), THREE.MathUtils.lerp(spec.hipY + 0.6, top, x) + 0.08 * Math.sin(this.t * 4), THREE.MathUtils.lerp(1.4, 0, x) + orbit * Math.cos(this.t * 1.7));
+    drone.rotation.y = this.t * 2;
+    this.beam.visible = repair >= 1;
+    if (!this.beam.visible) return;
+    const reach = drone.position.y - spec.height * 0.62;
+    this.beam.scale.set(1, reach, 1);
+    this.beamMat.opacity = 0.35 + 0.15 * Math.sin(this.t * 14);
+    drone.updateMatrixWorld(true);
+    this.fx.repair(this.beam.localToWorld(world.set(0, -1, 0)), dt);
   }
 
   /** Muzzle flash, light and a glowing beam from the next barrel to `end`, with sparks there. */
@@ -551,7 +585,7 @@ export class Mech {
     this.root.traverse((o) => o.geometry?.dispose());
     this.root.traverse((o) => o.isSprite && o.material.dispose());
     this.plateMat.map.dispose();
-    for (const m of [this.hull, this.pods, this.trim, this.hazard, this.accent, this.plateMat, this.barrels, this.nozzleMat, this.shellMat]) m.dispose();
+    for (const m of [this.hull, this.pods, this.trim, this.hazard, this.accent, this.plateMat, this.barrels, this.nozzleMat, this.shellMat, this.beamMat]) m.dispose();
   }
 }
 

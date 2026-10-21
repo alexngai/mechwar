@@ -45,7 +45,7 @@ if (net) {
 }
 
 // Index layout of state(); keep in sync with mech_state in sim/src/wasm.rs.
-const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, OFFSET: 22 };
+const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, REPAIR_CD: 23, OFFSET: 24 };
 
 // --- Scene ---------------------------------------------------------------
 // ?quality=low|high (default high). High drops to Low once if it can't hold 45 fps.
@@ -152,7 +152,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyQ') dodge = -1;
   if (e.code === 'KeyE') dodge = 1;
   if (e.code === 'KeyF') ability = true;
-  if (e.code === 'KeyR' && sim) { sim.reset(); prev = curr = sim.state(); }
+  if (e.code === 'KeyK' && sim) { sim.reset(); prev = curr = sim.state(); }
   if (e.code === 'KeyV') cockpit = !cockpit;
   if (e.code === 'KeyI') $('stats').hidden = !$('stats').hidden;
   if (e.code === 'KeyC' && picked !== null) pickerOpen = !pickerOpen;
@@ -210,6 +210,9 @@ function pick(i) {
   }
 }
 
+/** Seconds into a repair as Mech.update's `repair`: 0 none, wind-up fraction, then 1 healing. */
+const repairPhase = (t, cls = classIdx) => (t > 0 ? Math.min(t / Math.max(classValue(cls, 'repair_windup'), 1e-6), 1) : 0);
+
 // --- Fixed-step sim, interpolated render ----------------------------------
 let prev = game.state(), curr = prev, acc = 0, last = performance.now();
 const eye = new THREE.Vector3(), offset = new THREE.Vector3(), aim = new THREE.Vector3();
@@ -227,7 +230,7 @@ function frame(now) {
       continue;
     }
     const input = [axis('KeyD', 'KeyA'), axis('KeyW', 'KeyS'), yaw, pitch,
-      keys.has('ShiftLeft') || keys.has('ShiftRight'), keys.has('Space'), dodge, firing, altFiring, ability];
+      keys.has('ShiftLeft') || keys.has('ShiftRight'), keys.has('Space'), dodge, firing, altFiring, ability, keys.has('KeyR')];
     if (net) {
       const bytes = net.tick(...input, now);
       if (ws.readyState === WebSocket.OPEN) ws.send(bytes);
@@ -269,12 +272,13 @@ function frame(now) {
     grounded: !!curr[S.GROUNDED], boosting: !!curr[S.BOOSTING], hovering: !!curr[S.HOVERING],
     health: curr[S.HEALTH], heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     ability: curr[S.ABILITY_T] > 0, damage: 1 - curr[S.HEALTH] / T('health_max'),
+    repair: repairPhase(curr[S.REPAIR_T]),
   });
 
   if (net) {
     const r = net.remotes(now), live = new Set();
-    for (let i = 0; i < r.length; i += 13) {
-      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering, , abilityOn] = r.subarray(i, i + 13);
+    for (let i = 0; i < r.length; i += 14) {
+      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering, , abilityOn, repairing] = r.subarray(i, i + 14);
       let e = remotes.get(id);
       if (e && e.cls !== cls) {
         e.mech.dispose();
@@ -288,12 +292,15 @@ function frame(now) {
       else e.vel.lerp(step.subVectors(seen, e.pos).divideScalar(dt), 0.3);
       e.pos.copy(seen);
       e.team = team;
+      // Remotes only say whether they're repairing; time the wind-up from when it started.
+      e.repairAt = repairing ? e.repairAt ?? now : null;
       e.mech.setTeam(team);
       e.mech.setUnit(id);
       e.mech.update(dt, {
         pos: e.pos, yaw: ryaw, pitch: rpitch, scale: classValue(cls, 'mech_height') / e.mech.height, vel: e.vel,
         grounded: !hovering && Math.abs(e.vel.y) < 1.5, boosting: !!boosting, hovering: !!hovering, health,
         ability: !!abilityOn, damage: 1 - health / classValue(cls, 'health_max'),
+        repair: repairPhase(e.repairAt === null ? 0 : (now - e.repairAt) / 1000 + 1e-3, cls),
       });
     }
     for (const [id, e] of remotes) if (!live.has(id)) { e.mech.dispose(); remotes.delete(id); }
@@ -384,7 +391,9 @@ function frame(now) {
   hud.crosshair.style.top = `${(1 - aim.y) * 50}%`;
 
   const speed = Math.hypot(curr[S.VEL], curr[S.VEL + 2]);
-  const flags = [curr[S.BOOSTING] && 'BOOST', curr[S.HOVERING] && 'HOVER', !curr[S.GROUNDED] && 'AIR', curr[S.OVERHEATED] && 'OVERHEAT'].filter(Boolean);
+  const repair = repairPhase(curr[S.REPAIR_T]);
+  const repairFlag = repair >= 1 ? 'REPAIRING' : repair > 0 ? `REPAIR ${Math.round(100 * repair)}%` : curr[S.REPAIR_CD] > 0 && `REPAIR ${Math.ceil(curr[S.REPAIR_CD])}s`;
+  const flags = [curr[S.BOOSTING] && 'BOOST', curr[S.HOVERING] && 'HOVER', !curr[S.GROUNDED] && 'AIR', curr[S.OVERHEATED] && 'OVERHEAT', repairFlag].filter(Boolean);
   $('picker').hidden = !pickerOpen;
   $('picker-note').textContent = picked === null ? '' : alive ? 'Applies on your next respawn · C to close' : 'Applies on respawn';
   hud.status.textContent = `${classes[CLASS_KEYS[classIdx]].name}  ${speed.toFixed(1)} m/s  y ${curr[S.POS + 1].toFixed(1)}  ${flags.join(' ')}`;

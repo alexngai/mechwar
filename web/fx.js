@@ -207,6 +207,7 @@ const SPARK = [[1, 0.9, 0.5], [1, 0.3, 0.05]];
 const FLAME = [[0.85, 0.9, 1], [1, 0.45, 0.1]];
 const COOL_FLAME = [[0.85, 0.97, 1], [0.25, 0.55, 1]];
 const DUST = [[0.62, 0.58, 0.5], [0.5, 0.47, 0.42]];
+const REPAIR = [[0.75, 1, 0.8], [0.25, 1, 0.5]];
 
 export class Effects {
   constructor(scene) {
@@ -334,5 +335,10 @@ export class Effects {
 
   dust(p) {
     for (let i = 0; i < 4; i++) this.soft.spawn(p, scatter(UP, 0.8, 1.6), { life: rand(0.4, 0.8), size: [0.4, 1.4], color: DUST, alpha: 0.35, drag: 3 });
+  }
+
+  /** Repair beam landing on a hull: green motes drifting up off it. */
+  repair(p, dt) {
+    for (let i = count(40, dt); i > 0; i--) this.glow.spawn(p, scatter(UP, rand(0.5, 2), 1.5), { life: rand(0.3, 0.6), size: [0.3, 0.05], color: REPAIR, drag: 2 });
   }
 }
