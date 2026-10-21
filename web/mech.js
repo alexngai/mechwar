@@ -161,10 +161,10 @@ const LANCER = {
   },
 };
 
-// A (Wisp), light: stilt legs under a narrow pod, swept tail fins and one long rifle on the right arm.
+// A (Wisp), light: short legs under a narrow pod, swept tail fins and one long rifle on the right arm.
 const WISP = {
-  height: 4.2, hipY: 2.75, hipX: 0.5, thigh: 1.65, shin: 1.6, ankleY: 0.25, knee: 1,
-  stance: 0.62, stride: [0.14, 0.35, 1.7], bob: 0.04, lift: 0.6, sink: 1.5, dust: 1,
+  height: 3.5, hipY: 2.05, hipX: 0.5, thigh: 1.25, shin: 1.2, ankleY: 0.22, knee: 1,
+  stance: 0.62, stride: [0.12, 0.3, 1.35], bob: 0.04, lift: 0.45, sink: 1.1, dust: 1,
   nozzles: [[-0.22, 0.3, 1.05, 0.7], [0.22, 0.3, 1.05, 0.7]],
   strip: [1.24, 0.9, 0.15, 1.2], plate: [1.24, 0.25, 0.5, 0.55],
   guns: [1],

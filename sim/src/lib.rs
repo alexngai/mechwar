@@ -776,7 +776,8 @@ mod tests {
             let moved = sim.mech.pos.x - start.x;
             let widths = moved / (2.0 * t.mech_radius);
             assert!(speed(&sim) < 0.05, "{class:?} still sliding at {} m/s", speed(&sim));
-            assert!((2.0..=4.5).contains(&widths), "{class:?} dashed {moved} m, {widths} widths");
+            // The slim Wisp covers a few more of its own widths.
+            assert!((2.0..=5.5).contains(&widths), "{class:?} dashed {moved} m, {widths} widths");
             if class == MechClass::B {
                 assert!((7.0..=9.5).contains(&moved), "Lancer dashed {moved} m");
             }

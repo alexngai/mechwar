@@ -105,7 +105,7 @@ ensureArena(sim ? mapIndex(params.get('map') ?? 'saltworks') : -1);
 const fx = new Effects(scene);
 let me = new Mech(scene, fx, 'B'), meClass = 1;
 const cockpit = new Cockpit();
-cockpit.setWeapons('B', me, T('eye_height'));
+cockpit.setWeapons('B', me, T('eye_height'), T('mech_height') / me.height);
 
 function applyQuality() {
   const high = quality === 'high';
@@ -330,7 +330,7 @@ function frame(now) {
     me.dispose();
     me = new Mech(scene, fx, CLASS_KEYS[classIdx]);
     meClass = classIdx;
-    cockpit.setWeapons(CLASS_KEYS[classIdx], me, T('eye_height'));
+    cockpit.setWeapons(CLASS_KEYS[classIdx], me, T('eye_height'), T('mech_height') / me.height);
   }
   // Dying online opens the picker once; the pick applies on respawn.
   const alive = curr[S.HEALTH] > 0;

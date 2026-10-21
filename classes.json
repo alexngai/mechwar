@@ -3,7 +3,7 @@
     "name": "Wisp", "role": "fast, fragile, quick dodge", "source": "own tuning",
     "overrides": {
       "walk_speed": 14.5, "boost_speed": 28, "ground_accel": 75, "dodge_speed": 32, "dodge_cooldown": 0.9,
-      "health_max": 70, "mech_radius": 1.1, "mech_height": 4.2, "eye_height": 3.6,
+      "health_max": 70, "mech_radius": 0.95, "mech_height": 3.5, "eye_height": 3.0,
       "fire_rate": 14, "shot_damage": 3.4, "heat_per_shot": 2.9,
       "spread_deg": 0.6, "bloom_per_shot": 0.4, "bloom_max": 4.5, "bloom_recovery": 3,
       "falloff_start": 30, "falloff_end": 70, "falloff_floor": 0.4,

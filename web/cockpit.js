@@ -73,15 +73,17 @@ export class Cockpit {
 
   /**
    * The class's guns from its spec, painted with `mech`'s materials (so damage scorch and barrel
-   * heat glow match), placed where they sit relative to an eye `eyeHeight` above the feet.
+   * heat glow match), at the mech's `scale`, placed where they sit relative to an eye
+   * `eyeHeight` above the feet.
    */
-  setWeapons(cls, mech, eyeHeight) {
+  setWeapons(cls, mech, eyeHeight, scale = 1) {
     if (this.weapons) {
       this.scene.remove(this.weapons.group);
       this.weapons.group.traverse((o) => o.geometry?.dispose());
     }
     const spec = CLASSES[cls], group = new THREE.Group();
-    group.position.y = spec.hipY - eyeHeight;
+    group.scale.setScalar(scale);
+    group.position.y = spec.hipY * scale - eyeHeight;
     const guns = spec.guns.map((side) => {
       const pod = new THREE.Group();
       group.add(pod);
