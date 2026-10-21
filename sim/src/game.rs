@@ -8,6 +8,7 @@ use rapier3d::parry::query::RayCast;
 use rapier3d::prelude::Pose;
 
 use crate::bot::{self, Bot, Nav};
+use crate::collide;
 use crate::net::{Event, InputMsg, MatchState, MechView, PlayerNet, Snapshot};
 use crate::{Arena, Map, Mech, MechClass, TICK_HZ, Tuning, Vector, aim_ray, mech_capsule, spawn_mech, step_mech};
 
@@ -237,6 +238,17 @@ impl Game {
                 if p.mech.shot {
                     self.resolve_shot(i, msg.view_tick);
                 }
+            }
+        }
+
+        // Mechs block each other; heavier ones shove lighter ones. Pairs go in a fixed order.
+        for j in 1..self.players.len() {
+            let (earlier, rest) = self.players.split_at_mut(j);
+            let b = &mut rest[0];
+            for a in earlier {
+                let (ta, tb) = (&self.classes[a.class.index()], &self.classes[b.class.index()]);
+                let share = tb.mech_mass / (ta.mech_mass + tb.mech_mass);
+                collide::separate(&self.arena, ta, &mut a.mech, tb, &mut b.mech, share);
             }
         }
 

@@ -4,7 +4,7 @@
 use std::collections::VecDeque;
 
 use crate::net::{self, ClientMsg, Event, InputMsg, MatchState, PlayerNet, ServerMsg, Snapshot};
-use crate::{Arena, DT, Input, Map, Mech, MechClass, Tuning, map, step_mech};
+use crate::{Arena, DT, Input, Map, Mech, MechClass, Tuning, Vector, collide, map, step_mech};
 
 /// Remote mechs are drawn this many ticks behind the newest snapshot, to ride out jitter.
 pub const INTERP_TICKS: f32 = 3.0;
@@ -28,6 +28,11 @@ pub struct NetClient {
     pub state: MatchState,
     /// Last reconciliation's change to the predicted position. Zero when prediction is exact.
     pub correction: f32,
+    /// Drawn on top of the predicted position so a correction slides in instead of snapping;
+    /// decays each tick.
+    pub render_offset: Vector,
+    /// Other mechs at their latest server positions, treated as fixed when predicting contact.
+    obstacles: Vec<Mech>,
     pub ping_ms: f64,
     /// Server events not yet taken by the page.
     pub events: Vec<Event>,
@@ -55,6 +60,8 @@ impl Default for NetClient {
             team: 0,
             state: MatchState::default(),
             correction: 0.0,
+            render_offset: Vector::ZERO,
+            obstacles: Vec::new(),
             ping_ms: 0.0,
             events: Vec::new(),
             seq: 0,
@@ -71,9 +78,20 @@ impl NetClient {
     /// is a dead default, so prediction is a no-op and the server's state takes over.
     pub fn tick(&mut self, input: Input, now_ms: f64) -> Vec<u8> {
         self.seq += 1;
-        step_mech(&self.arena, &self.classes[self.class.index()], &mut self.mech, &input);
+        self.predict(&input);
+        self.render_offset *= 0.7;
         self.pending.push_back((self.seq, input, now_ms));
         net::encode(&ClientMsg::Input(InputMsg { seq: self.seq, input, view_tick: self.render_tick(now_ms) }))
+    }
+
+    /// One predicted step: move, then get blocked by other mechs where we last saw them.
+    fn predict(&mut self, input: &Input) {
+        let t = &self.classes[self.class.index()];
+        step_mech(&self.arena, t, &mut self.mech, input);
+        for other in &self.obstacles {
+            let mut other = *other;
+            collide::separate(&self.arena, t, &mut self.mech, &self.classes[other.class.index()], &mut other, 1.0);
+        }
     }
 
     /// Message asking for `class` at the next spawn (or now, before the first input).
@@ -113,14 +131,24 @@ impl NetClient {
             while self.pending.front().is_some_and(|p| p.0 <= s.ack_seq) {
                 self.pending.pop_front();
             }
+            let own = me.id;
+            self.obstacles = s
+                .players
+                .iter()
+                .filter(|p| p.id != own)
+                .map(|p| Mech { class: p.class, pos: p.view.pos, health: p.view.health, ..Mech::default() })
+                .collect();
             // Reconcile: take the server's state at ack_seq and replay what it hasn't seen yet.
             let predicted = self.mech.pos;
             self.mech = s.me;
             self.class = me.class;
-            for (_, input, _) in &self.pending {
-                step_mech(&self.arena, &self.classes[self.class.index()], &mut self.mech, input);
+            for (_, input, _) in self.pending.clone() {
+                self.predict(&input);
             }
-            self.correction = if self.synced { (self.mech.pos - predicted).length() } else { 0.0 };
+            let jump = predicted - self.mech.pos;
+            self.correction = if self.synced { jump.length() } else { 0.0 };
+            // Smooth small corrections (bumps); jump straight across teleports like respawns.
+            self.render_offset = if self.synced && jump.length() < 3.0 { self.render_offset + jump } else { Vector::ZERO };
             self.synced = true;
             self.kills = me.kills;
             self.deaths = me.deaths;

@@ -480,3 +480,56 @@ fn hostile_inputs_are_sanitized() {
     let max = t.boost_speed * ticks as f32 / TICK_HZ * 1.1;
     assert!((me.pos - start).length() <= max, "moved {} m, more than boost allows", (me.pos - start).length());
 }
+
+fn xz_gap(a: Vector, b: Vector) -> f32 {
+    Vector::new(a.x - b.x, 0.0, a.z - b.z).length()
+}
+
+#[test]
+fn head_on_mechs_block() {
+    let (mut game, north, south) = duel_game();
+    let touching = 2.0 * Tuning::default().mech_radius;
+    let (mut north_seq, mut south_seq, mut met) = (0, 0, false);
+    for _ in 0..(6.0 * TICK_HZ) as u32 {
+        send(&mut game, north, &mut north_seq, 1, Input { move_z: 1.0, ..Input::default() });
+        send(&mut game, south, &mut south_seq, 1, Input { move_z: 1.0, yaw: std::f32::consts::PI, ..Input::default() });
+        game.step();
+        let (n, s) = (player(&game, north).view.pos, player(&game, south).view.pos);
+        assert!(xz_gap(n, s) >= touching - 0.01, "mechs overlap: gap {}", xz_gap(n, s));
+        assert!(n.z > s.z, "mechs passed through each other");
+        met |= xz_gap(n, s) < touching + 0.1;
+    }
+    assert!(met, "the mechs never met, so the test proved nothing");
+}
+
+#[test]
+fn prediction_through_contact() {
+    let mut h = Harness::new();
+    let touching = 2.0 * Tuning::default().mech_radius;
+    let toward = |yaw| Input { move_z: 1.0, yaw, ..Input::default() };
+    let away = |yaw| Input { move_z: -1.0, yaw, ..Input::default() };
+    let pi = std::f32::consts::PI;
+    let (mut contact_correction, mut last_contact, mut first_contact) = (0f32, 0, None);
+    for tick in 0..(10.0 * TICK_HZ) as u32 {
+        // Walk into each other for 6 s, then back off.
+        let inputs = if tick < 180 { [toward(0.0), toward(pi)] } else { [away(0.0), away(pi)] };
+        h.step(inputs);
+        let s = h.game.snapshot(0);
+        let gap = xz_gap(s.players[0].view.pos, s.players[1].view.pos);
+        let correction = h.clients.iter().map(|c| c.1.correction).fold(0.0, f32::max);
+        if gap < touching + 0.5 {
+            first_contact.get_or_insert(tick);
+            last_contact = tick;
+            contact_correction = contact_correction.max(correction);
+        } else if first_contact.is_none() {
+            assert!(correction < 1e-5, "correction {correction} before any contact");
+        }
+        if first_contact.is_some() && tick > last_contact + 15 {
+            for (_, c) in &h.clients {
+                assert!(c.render_offset.length() < 0.01, "render offset {} 0.5 s after contact", c.render_offset.length());
+            }
+        }
+    }
+    assert!(first_contact.is_some(), "the mechs never met");
+    assert!(contact_correction < 0.5, "correction {contact_correction} m during contact");
+}

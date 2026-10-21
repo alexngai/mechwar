@@ -67,7 +67,9 @@ impl WasmSim {
     }
 
     pub fn state(&self) -> Vec<f32> {
-        mech_state(&self.sim.mech)
+        let mut state = mech_state(&self.sim.mech);
+        state.extend([0.0; 3]); // no render offset offline
+        state
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -109,8 +111,11 @@ impl WasmNetClient {
         self.0.pick_class(MechClass::from_index(class).unwrap_or_default())
     }
 
+    /// `mech_state` plus the render offset (3 floats) that smooths corrections.
     pub fn state(&self) -> Vec<f32> {
-        mech_state(&self.0.mech)
+        let mut state = mech_state(&self.0.mech);
+        state.extend(self.0.render_offset.to_array());
+        state
     }
 
     #[allow(clippy::too_many_arguments)]

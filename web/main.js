@@ -45,7 +45,7 @@ if (net) {
 }
 
 // Index layout of state(); keep in sync with mech_state in sim/src/wasm.rs.
-const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19 };
+const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, OFFSET: 20 };
 
 // --- Scene ---------------------------------------------------------------
 // ?quality=low|high (default high). High drops to Low once if it can't hold 45 fps.
@@ -246,7 +246,8 @@ function frame(now) {
   const alive = curr[S.HEALTH] > 0;
   if (net && picked !== null && !alive && prev[S.HEALTH] > 0) pickerOpen = true;
 
-  pos.set(lerp(S.POS), lerp(S.POS + 1), lerp(S.POS + 2));
+  // The render offset slides server corrections (bumps) in instead of snapping.
+  pos.set(lerp(S.POS) + lerp(S.OFFSET), lerp(S.POS + 1) + lerp(S.OFFSET + 1), lerp(S.POS + 2) + lerp(S.OFFSET + 2));
   me.setTeam(myTeam);
   me.root.visible = !cockpit;
   me.update(dt, {

@@ -44,6 +44,7 @@
   "mech_height":       { "value": 5,      "min": 1,     "max": 12,    "step": 0.1,    "unit": "m",       "group": "body",   "source": "own tuning" },
   "eye_height":        { "value": 4.2,    "min": 0.5,   "max": 12,    "step": 0.1,    "unit": "m",       "group": "body",   "source": "own tuning" },
   "pitch_limit_deg":   { "value": 70,     "min": 10,    "max": 89,    "step": 1,      "unit": "deg",     "group": "body",   "source": "own tuning" },
+  "mech_mass":         { "value": 50,     "min": 1,     "max": 200,   "step": 1,      "unit": "mass",    "group": "body",   "source": "own tuning" },
 
   "health_max":        { "value": 100,    "min": 1,     "max": 1000,  "step": 1,      "unit": "hp",      "group": "combat", "source": "own tuning" },
   "shot_damage":       { "value": 6,      "min": 0,     "max": 100,   "step": 0.5,    "unit": "hp",      "group": "combat", "source": "own tuning" },

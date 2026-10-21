@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod bot;
 pub mod client;
+pub mod collide;
 pub mod game;
 pub mod map;
 pub mod net;
@@ -69,6 +70,8 @@ pub struct Tuning {
     pub mech_height: f32,
     pub eye_height: f32,
     pub pitch_limit_deg: f32,
+    /// Shares out pushes when mechs collide: heavier mechs shove lighter ones.
+    pub mech_mass: f32,
 
     pub health_max: f32,
     pub shot_damage: f32,
@@ -212,7 +215,7 @@ pub struct Mech {
 
 /// Static arena colliders for scene queries. Shared by the offline sim, the server and the client.
 pub struct Arena {
-    world: PhysicsWorld,
+    pub(crate) world: PhysicsWorld,
 }
 
 impl Arena {
