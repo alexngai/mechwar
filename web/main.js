@@ -9,6 +9,7 @@ import saltworks from '../maps/saltworks.json';
 import blockout from '../maps/blockout.json';
 import { Mech, TEAMS } from './mech.js';
 import { Cockpit } from './cockpit.js';
+import { Sound } from './audio.js';
 import { Hud, hex } from './hud.js';
 import { createSky } from './sky.js';
 
@@ -103,7 +104,13 @@ const ensureArena = (index) => {
 ensureArena(sim ? mapIndex(params.get('map') ?? 'saltworks') : -1);
 
 const fx = new Effects(scene);
+// Sound starts on the first click or key press, as browsers require.
+const sound = new Sound();
+Mech.audio = sound;
+addEventListener('pointerdown', () => sound.unlock());
+addEventListener('keydown', () => sound.unlock());
 let me = new Mech(scene, fx, 'B'), meClass = 1;
+me.own = true;
 const cockpit = new Cockpit();
 cockpit.setWeapons('B', me, T('eye_height'), T('mech_height') / me.height);
 
@@ -180,6 +187,7 @@ addEventListener('keydown', (e) => {
     try { localStorage.setItem('webhawk.view', firstPerson ? 'cockpit' : 'chase'); } catch { /* private mode */ }
   }
   if (e.code === 'KeyI') $('stats').hidden = !$('stats').hidden;
+  if (e.code === 'KeyM') setMuted(!sound.muted);
   if (e.code === 'Tab') { e.preventDefault(); boardOpen = true; }
   if (e.code === 'KeyC' && picked !== null) pickerOpen = !pickerOpen;
   const digit = ['Digit1', 'Digit2', 'Digit3'].indexOf(e.code);
@@ -225,6 +233,20 @@ let pickerOpen = true, boardOpen = false, boardAt = 0;
 // --- Callsign ----------------------------------------------------------------
 // Typed on the picker, remembered locally, and sent (after a pause in typing) for the server to
 // sanitize and share. Others' names come from the server's roster.
+// Volume (picker slider) and mute (M), remembered between visits.
+const volumeInput = $('volume');
+volumeInput.value = stored('webhawk.volume') ?? '0.8';
+sound.setVolume(Number(volumeInput.value));
+volumeInput.addEventListener('input', () => {
+  sound.setVolume(Number(volumeInput.value));
+  try { localStorage.setItem('webhawk.volume', volumeInput.value); } catch { /* private mode */ }
+});
+function setMuted(muted) {
+  sound.setMuted(muted);
+  $('muted').hidden = !muted;
+  try { localStorage.setItem('webhawk.muted', muted ? '1' : ''); } catch { /* private mode */ }
+}
+setMuted(stored('webhawk.muted') === '1');
 const callsignInput = $('callsign');
 callsignInput.value = stored('webhawk.name') ?? '';
 const callsign = () => callsignInput.value.trim();
@@ -318,6 +340,7 @@ function frame(now) {
     const ends = game.take_shots();
     for (let k = 0; k < ends.length; k += 3) shots.push(new THREE.Vector3(ends[k], ends[k + 1], ends[k + 2]));
     // Own EMPs show as predicted; the server's Pulse for them only marks hits.
+    if (curr[S.PULSED]) sound.emp(null);
     if (curr[S.PULSED]) fx.pulse(toChest(new THREE.Vector3(curr[S.POS], curr[S.POS + 1], curr[S.POS + 2]), classIdx), T('emp_radius'));
   }
   const a = acc / DT;
@@ -329,6 +352,7 @@ function frame(now) {
   if (meClass !== classIdx) {
     me.dispose();
     me = new Mech(scene, fx, CLASS_KEYS[classIdx]);
+    me.own = true;
     meClass = classIdx;
     cockpit.setWeapons(CLASS_KEYS[classIdx], me, T('eye_height'), T('mech_height') / me.height);
   }
@@ -371,7 +395,7 @@ function frame(now) {
       e.health = health;
       // Remotes only say whether they're repairing; time the wind-up from when it started.
       e.repairAt = repairing ? e.repairAt ?? now : null;
-      Object.assign(e, { bot: !!bot, ability: !!abilityOn, repairing: !!repairing });
+      Object.assign(e, { bot: !!bot, ability: !!abilityOn, repairing: !!repairing, boosting: !!boosting, hovering: !!hovering });
       e.mech.setTeam(team);
       e.mech.setUnit(id);
       e.mech.update(dt, {
@@ -397,11 +421,18 @@ function frame(now) {
       }
     }
     if ((kind === 0 && b >= 0) || kind === 3) {
-      if (a === myId) hits.push({ at: now, kill: false });
+      if (a === myId) {
+        hits.push({ at: now, kill: false });
+        sound.hitConfirm();
+      }
       if (b === myId) tookHit(a, now);
       else remotes.get(b)?.mech.hit();
     }
-    if (kind === 1 && a === myId) hits.push({ at: now, kill: true });
+    if (kind === 1 && a === myId) {
+      hits.push({ at: now, kill: true });
+      sound.kill();
+    }
+    if (kind === 1 && b === myId) sound.died();
     if (kind === 1) {
       const teamOf = (id) => (id === myId ? myTeam : remotes.get(id)?.team ?? -1);
       const color = (id) => hex((TEAMS[teamOf(id)] ?? TEAMS[-1]).accent);
@@ -412,12 +443,16 @@ function frame(now) {
     if (kind === 2) {
       blastAt.set(x, y, z);
       fx.explosion(blastAt, b / 5);
+      sound.blast(b, blastAt);
       fx.muzzleLight(blastAt);
     }
     if (kind === 4) {
       // EMP: b is a bitmask of who it jammed. Our own jam shows from our predicted state.
       const cls = a === myId ? classIdx : remotes.get(a)?.cls ?? 1;
-      if (a !== myId) fx.pulse(blastAt.set(x, y, z), classValue(cls, 'emp_radius'));
+      if (a !== myId) {
+        fx.pulse(blastAt.set(x, y, z), classValue(cls, 'emp_radius'));
+        sound.emp(blastAt);
+      }
       if (a === myId && b) hits.push({ at: now, kill: false });
       for (const [id, e] of remotes) if (b & (1 << id)) e.jammedUntil = now + 1000 * classValue(cls, 'emp_jam');
     }
@@ -441,6 +476,7 @@ function frame(now) {
       } else {
         from = mech?.launcher.getWorldPosition(new THREE.Vector3());
         if (n === 0) mech?.launch();
+        if (n === GRENADE_N) sound.grenade(predicted ? null : { x, y, z });
       }
       launches.set(key, (shot = { from: from ?? new THREE.Vector3(x, y, z) }));
       if (!predicted) lastFired.set(owner, now);
@@ -499,6 +535,17 @@ function frame(now) {
   shots.length = 0;
 
   placeSun(pos);
+  // Sound follows the camera; thrusters for us and the nearest others, and the cockpit loops.
+  sound.listen(camera);
+  const others = [];
+  for (const e of remotes.values()) {
+    if (e.mech.alive) others.push({ x: e.pos.x, y: e.pos.y + 1, z: e.pos.z, level: e.boosting ? 2 : e.hovering ? 1 : 0 });
+  }
+  sound.thrusters(alive ? (curr[S.BOOSTING] ? 2 : curr[S.HOVERING] ? 1 : 0) : 0, others);
+  sound.cockpit({
+    alive, heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
+    hull: curr[S.HEALTH] / T('health_max'), repairing: repairPhase(curr[S.REPAIR_T]), jammed: curr[S.JAMMED] > 0,
+  }, dt);
   fx.update(dt, camera, renderer.domElement.height);
   hurt = Math.max(0, hurt - dt * 2.5);
   hud.damage.style.opacity = hurt;
@@ -534,6 +581,7 @@ function frame(now) {
 /** We were hit by `attacker`: shake, flash, and a damage arc toward where they stood. */
 function tookHit(attacker, now) {
   me.hit();
+  sound.hurt();
   hurt = 1;
   shake = Math.min(shake + 0.5, 1);
   const from = remotes.get(attacker);

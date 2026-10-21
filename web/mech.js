@@ -100,12 +100,14 @@ function stencil(canvas, id) {
 const UP = new THREE.Vector3(0, 1, 0);
 const ALONG_Z = Math.PI / 2; // pitch that lays a cylinder along Z
 const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), local = new THREE.Vector3(), moveDir = new THREE.Vector3();
-const pole = new THREE.Vector3(), world = new THREE.Vector3(), flame = new THREE.Vector3();
+const pole = new THREE.Vector3(), world = new THREE.Vector3(), flame = new THREE.Vector3(), stretch = new THREE.Vector3();
 
 const box = (w, h, d, mat) => new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
 const cyl = (top, bottom, h, mat) => new THREE.Mesh(new THREE.CylinderGeometry(top, bottom, h, 8), mat);
 const damp = (from, to, rate, dt) => from + (to - from) * (1 - Math.exp(-rate * dt));
 const clamp = THREE.MathUtils.clamp;
+const DASH_TRAIL = 0.2; // s of smoke laid behind a dash
+const DASH_SPOT = 22; // m/s sideways, and mostly sideways: only a dash does that (a diagonal boost doesn't)
 const REPAIR_GLOW = 0x6dff9a;
 
 /** Add `obj` to `parent` at (x, y, z) with pitch rx and roll rz. */
@@ -118,7 +120,8 @@ function put(parent, obj, x, y, z, rx = 0, rz = 0) {
 
 // Class specs. Model space is meters at the class's nominal `height`, feet at y = 0, facing -Z.
 // Legs: hip height and spacing, bone lengths, ankle height, `knee` +1 bends back and -1 forward.
-// Gait: foot `stance` x, stride = clamp(speed * k, min, max), bob and foot-lift amplitudes, wreck
+// Gait: foot `stance` x, stride = clamp(speed * k, min, max) (steps per second come to
+// speed / (2 * stride), so longer strides lumber), bob and foot-lift amplitudes, wreck
 // `sink`, dust puffs per footfall. `hull` builds the body, `gun` fills one pod per `guns` side and
 // returns its muzzle, `leg` builds one leg's parts, `nozzles` are [x, y, z, size?] on the body.
 // `strip` [width, y, z, length] is the accent light line and `plate` [width, height, y, z] the
@@ -130,7 +133,7 @@ function put(parent, obj, x, y, z, rx = 0, rz = 0) {
 // B (Lancer), medium: the original reverse-joint walker with twin side pods.
 const LANCER = {
   height: 5, hipY: 2.9, hipX: 0.72, thigh: 1.75, shin: 1.7, ankleY: 0.3, knee: 1,
-  stance: 0.85, stride: [0.12, 0.3, 1.4], bob: 0.08, lift: 0.5, sink: 1.5, dust: 1,
+  stance: 0.85, stride: [0.2, 0.3, 2.4], bob: 0.12, lift: 0.6, sink: 1.5, dust: 1,
   nozzles: [[-0.4, 0.35, 1.55], [0.4, 0.35, 1.55]],
   strip: [2.24, 1.27, 0.1, 1.6], plate: [1.34, 0.3, 0.9, 1.3],
   guns: [-1, 1],
@@ -163,8 +166,8 @@ const LANCER = {
 
 // A (Wisp), light: short legs under a narrow pod, swept tail fins and one long rifle on the right arm.
 const WISP = {
-  height: 3.5, hipY: 2.05, hipX: 0.5, thigh: 1.25, shin: 1.2, ankleY: 0.22, knee: 1,
-  stance: 0.62, stride: [0.12, 0.3, 1.35], bob: 0.04, lift: 0.45, sink: 1.1, dust: 1,
+  height: 3.5, hipY: 2.05, hipX: 0.5, thigh: 1.35, shin: 1.3, ankleY: 0.22, knee: 1,
+  stance: 0.62, stride: [0.167, 0.3, 2.42], bob: 0.12, lift: 0.5, sink: 1.1, dust: 1,
   nozzles: [[-0.22, 0.3, 1.05, 0.7], [0.22, 0.3, 1.05, 0.7]],
   strip: [1.24, 0.9, 0.15, 1.2], plate: [1.24, 0.25, 0.5, 0.55],
   guns: [1],
@@ -204,7 +207,7 @@ const WISP = {
 // twin cannons on the shoulders.
 const BULWARK = {
   height: 5.8, hipY: 2.7, hipX: 1.15, thigh: 1.75, shin: 1.65, ankleY: 0.35, knee: -1,
-  stance: 1.35, stride: [0.12, 0.3, 1.0], bob: 0.14, lift: 0.35, sink: 1.3, dust: 2,
+  stance: 1.35, stride: [0.24, 0.3, 2.2], bob: 0.2, lift: 0.5, sink: 1.3, dust: 2,
   nozzles: [[-0.65, 0.35, 2.1, 1.3], [0.65, 0.35, 2.1, 1.3]],
   strip: [3.58, 1.15, 0.1, 1.7], plate: [3.58, 0.45, 0.78, 0.2],
   guns: [-1, 1],
@@ -272,6 +275,8 @@ export class Mech {
     this.fx = fx;
     this.team = -1;
     this.unit = -1;
+    /** The player's own mech: its sounds play flat, as heard from the cockpit. */
+    this.own = false;
     this.wear = { uDamage: { value: 0 }, uWreck: { value: 0 }, uFlash: { value: 0 } };
     const scheme = SCHEMES[0];
     this.hull = paintMaterial(this.wear, scheme.base, scheme.second, scheme.pattern);
@@ -294,6 +299,9 @@ export class Mech {
     this.nextGun = 0;
     this.brace = 0;
     this.glide = 0;
+    this.boosting = false;
+    this.dashTrail = 0; // seconds of dash smoke left to lay
+    this.dashDir = new THREE.Vector3();
     this.shutdown = 0;
 
     const root = (this.root = new THREE.Group());
@@ -411,12 +419,18 @@ export class Mech {
     root.scale.setScalar(s.scale);
 
     const alive = s.health > 0;
-    if (this.alive && !alive) this.fx.explosion(world.copy(s.pos).addScaledVector(UP, 0.6 * spec.height * s.scale));
+    if (this.alive && !alive) {
+      this.fx.explosion(world.copy(s.pos).addScaledVector(UP, 0.6 * spec.height * s.scale));
+      Mech.audio?.death(this.own ? null : world);
+    }
     this.alive = alive;
     this.wreck = alive ? 0 : Math.min(1, this.wreck + dt * 2);
 
     // Gait: one full step cycle covers two strides; stride grows with speed so feet don't slide.
     local.copy(s.vel).applyAxisAngle(UP, -s.yaw).divideScalar(s.scale);
+    // Our dashes start from dodge(); others' show as a sideways speed only a dash reaches.
+    const dashing = Math.abs(local.x) > DASH_SPOT && Math.abs(local.x) > 1.5 * Math.abs(local.z);
+    if (!this.own && alive && dashing && this.dashTrail <= 0) this.dodge(Math.sign(local.x));
     const speed = Math.hypot(local.x, local.z);
     const grounded = alive && s.grounded;
     // Boosting on the ground, the thrusters carry the mech: legs hold a crouched glide.
@@ -427,14 +441,21 @@ export class Mech {
     if (moving) this.phase += ((Math.PI * speed) / (2 * stride)) * dt;
     moveDir.set(local.x, 0, local.z).normalize();
 
-    if (grounded && !this.grounded && this.airTime > 0.3) this.squash = Math.min(0.5, this.airTime * 0.3);
-    this.airTime = grounded ? 0 : this.airTime + dt;
+    if (grounded && !this.grounded && this.airTime > 0.3) {
+      this.squash = Math.min(0.5, this.airTime * 0.3);
+      Mech.audio?.land(this.cls, this.own ? null : s.pos, this.airTime);
+    }
+    // Thrusters lighting up for a boost.
+    if (alive && s.boosting && !this.boosting) Mech.audio?.ignite(this.cls, this.own ? null : s.pos);
+    this.boosting = alive && s.boosting;
+    this.airTime = grounded || !alive ? 0 : this.airTime + dt; // a respawn is no landing
     this.grounded = grounded;
     this.squash = Math.max(0, this.squash - dt * 2);
     this.flash = Math.max(0, this.flash - dt * 6);
 
     // Body bobs with the gait, leans into motion, sinks on landing and slumps when destroyed.
-    const bob = moving ? spec.bob * (1 - Math.cos(2 * this.phase)) * Math.min(speed / 6, 1) : 0;
+    // Lowest when the feet are spread, highest as they pass: as a walker does, and it lends reach.
+    const bob = moving ? spec.bob * (1 + Math.cos(2 * this.phase)) * Math.min(speed / 6, 1) : 0;
     const sway = alive && s.hovering ? 0.06 * Math.sin(this.t * 5) : 0;
     // Brace sinks the Bulwark into a lower stance.
     this.brace = damp(this.brace, alive && s.ability && this.cls === 'C' ? 1 : 0, 8, dt);
@@ -468,13 +489,23 @@ export class Mech {
         x += moveDir.x * reach;
         z += moveDir.z * reach;
         y = lift * spec.lift * Math.min(speed / 4, 1);
-        if (leg.lifted && lift === 0) for (let n = 0; n < spec.dust; n++) this.fx.dust(leg.foot.getWorldPosition(world));
+        if (leg.lifted && lift === 0) {
+          for (let n = 0; n < spec.dust; n++) this.fx.dust(leg.foot.getWorldPosition(world));
+          Mech.audio?.step(this.cls, this.own ? null : world);
+        }
         leg.lifted = lift > 0;
       }
       const rate = moving ? 30 : 10;
       leg.target.set(damp(leg.target.x, x, rate, dt), damp(leg.target.y, y, rate, dt), damp(leg.target.z, z, rate, dt));
       leg.hip.set(leg.side * spec.hipX, body.position.y, 0);
       leg.ankle.copy(leg.target).y += spec.ankleY;
+      // Past full reach, pull the foot in toward the hip (it slides a touch) rather than letting
+      // the leg come apart.
+      const reach = (spec.thigh + spec.shin) * 0.99;
+      if (stretch.subVectors(leg.ankle, leg.hip).length() > reach) {
+        leg.ankle.copy(leg.hip).addScaledVector(stretch.normalize(), reach);
+        leg.target.copy(leg.ankle).y -= spec.ankleY;
+      }
       solveJoint(leg.hip, leg.ankle, spec.thigh, spec.shin, pole.set(leg.side * 0.2, 0, spec.knee), leg.joint);
       place(leg.thigh, leg.hip, leg.joint);
       place(leg.shin, leg.joint, leg.ankle);
@@ -517,6 +548,10 @@ export class Mech {
       h.visible = Mech.halos && thrusting;
       h.material.color.setHex(slipstream ? 0x80c0ff : 0xffa040);
     }
+    if (this.dashTrail > 0) {
+      this.fx.dashTrail(body.getWorldPosition(world), this.dashDir, dt, this.dashTrail > DASH_TRAIL - 0.15);
+      this.dashTrail -= dt;
+    }
     this.shell.visible = this.brace > 0.05;
     this.shellMat.opacity = this.brace * (0.12 + 0.05 * Math.sin(this.t * 8));
     this.updateDrone(dt, repair);
@@ -556,6 +591,7 @@ export class Mech {
   fire(end, from = null) {
     const gun = this.guns[(this.nextGun = (this.nextGun + 1) % this.guns.length)];
     from ??= gun.tip.getWorldPosition(world);
+    Mech.audio?.shot(this.cls, this.own ? null : from);
     this.fx.beam(from, end);
     this.fx.muzzleLight(from);
     this.fx.muzzle(from, flame.subVectors(end, from).normalize());
@@ -571,6 +607,7 @@ export class Mech {
     const tip = this.launcher.getWorldPosition(world);
     this.fx.burst(tip, flame.set(0, 0.3, -1).normalize().applyQuaternion(this.root.quaternion));
     this.fx.muzzleLight(tip);
+    Mech.audio?.launch(this.cls, this.own ? null : tip);
   }
 
   /** A projectile primary leaving the next barrel along `dir`: flash and light. Returns the muzzle; `from` as in `fire`. */
@@ -579,11 +616,13 @@ export class Mech {
     from ??= gun.tip.getWorldPosition(new THREE.Vector3());
     this.fx.muzzleLight(from);
     this.fx.muzzle(from, dir);
+    Mech.audio?.shot(this.cls, this.own ? null : from);
     return from;
   }
 
   /** One-off cue when the class ability fires: Vent steam, a Slipstream kick, or a Brace pulse. */
   ability() {
+    Mech.audio?.ability(this.cls, this.own ? null : this.body.getWorldPosition(world));
     if (this.cls === 'B') {
       this.fx.steam(this.body.getWorldPosition(world));
       for (const gun of this.guns) this.fx.steam(gun.tip.getWorldPosition(world));
@@ -596,7 +635,10 @@ export class Mech {
 
   /** Side-jet burst for a dash toward `dir` (-1 left, +1 right). */
   dodge(dir) {
-    this.fx.burst(this.body.getWorldPosition(world), flame.set(-dir, 0, 0).applyQuaternion(this.root.quaternion));
+    Mech.audio?.dash(this.own ? null : this.body.getWorldPosition(world));
+    this.dashDir.set(-dir, 0, 0).applyQuaternion(this.root.quaternion);
+    this.fx.burst(this.body.getWorldPosition(world), this.dashDir);
+    this.dashTrail = DASH_TRAIL;
   }
 
   dispose() {
@@ -610,3 +652,5 @@ export class Mech {
 
 /** Halos on (High quality) or off (Low). */
 Mech.halos = true;
+/** Sound cues (`audio.js`), once the page sets them up. */
+Mech.audio = null;

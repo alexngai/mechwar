@@ -366,6 +366,19 @@ export class Effects {
     }
   }
 
+  /**
+   * Dash exhaust at `p` this frame, blowing along `dir`: lingering grey smoke that spreads as it
+   * fades, so a dash leaves a trail along its path; `hot` adds jet flame (the first moments).
+   */
+  dashTrail(p, dir, dt, hot) {
+    for (let i = count(130, dt); i > 0; i--) {
+      this.soft.spawn(p, scatter(dir, rand(0.4, 1.2), 0.5), {
+        life: rand(0.42, 0.58), size: [rand(1.4, 2), rand(4.5, 6.5)], color: [[0.78, 0.78, 0.76], [0.55, 0.55, 0.55]], alpha: 0.6, drag: 1.5,
+      });
+    }
+    if (hot) for (let i = count(60, dt); i > 0; i--) this.glow.spawn(p, scatter(dir, rand(6, 12), 1.5), { life: rand(0.06, 0.12), size: [0.8, 0.2], color: FLAME, drag: 5 });
+  }
+
   dust(p) {
     for (let i = 0; i < 4; i++) this.soft.spawn(p, scatter(UP, 0.8, 1.6), { life: rand(0.4, 0.8), size: [0.4, 1.4], color: DUST, alpha: 0.35, drag: 3 });
   }
