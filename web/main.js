@@ -53,7 +53,7 @@ let quality = params.get('quality') === 'low' ? 'low' : 'high';
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 document.body.prepend(renderer.domElement);
 const scene = new THREE.Scene();
 scene.add(new THREE.HemisphereLight(0xdfe8f0, 0x4a4238, 1.4));
