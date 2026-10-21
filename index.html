@@ -7,23 +7,11 @@
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #1c2026; font: 12px/1.4 ui-monospace, Menlo, monospace; color: #e8e4d8; }
     canvas { display: block; }
-    #hud { position: fixed; left: 16px; bottom: 16px; width: 240px; pointer-events: none; }
-    .bar { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-    .bar span { width: 44px; }
-    .bar div { flex: 1; height: 10px; overflow: hidden; background: #0008; border: 1px solid #fff4; }
-    .bar i { display: block; height: 100%; width: 0; }
-    #fuel { background: #5fc4e8; }
-    #heat { background: #f0a040; }
-    #heat.over { background: #ff3b30; }
-    #dodge { background: #b8e070; }
-    #hp { background: #e8665f; }
-    #ability { background: #b9a2e8; }
-    #alt { background: #e8a25a; }
-    #ability.active { background: #7fe0ff; }
-    .bar span.wide { width: auto; min-width: 44px; }
+    #hud { position: fixed; left: 16px; top: 16px; pointer-events: none; }
+    #glass { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    #glass.glow { filter: drop-shadow(0 0 2px rgba(255, 170, 80, 0.7)); }
     .card p { margin: 10px 0 0; opacity: 0.85; }
     .card p b { font-size: 12px; margin-bottom: 2px; }
-    #crosshair.hit { border-color: #ff3b30; }
     #score { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); padding: 4px 12px; background: #0009; font-size: 14px; white-space: pre; pointer-events: none; }
     #banner { position: fixed; top: 30%; left: 0; right: 0; text-align: center; font-size: 28px; letter-spacing: 2px; text-shadow: 0 2px 6px #000; pointer-events: none; }
     #score:empty, #banner:empty { display: none; }
@@ -39,25 +27,15 @@
     .card dd { margin: 0; text-align: right; }
     #stats { position: fixed; right: 16px; bottom: 16px; padding: 4px 8px; background: #0009; pointer-events: none; }
     #damage { position: fixed; inset: 0; box-shadow: inset 0 0 140px 30px #ff2a1a; opacity: 0; pointer-events: none; }
-    #crosshair { position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -4px 0 0 -4px; border: 1px solid #fff; border-radius: 50%; pointer-events: none; }
-    #help { position: fixed; left: 16px; top: 16px; padding: 6px 10px; background: #0009; pointer-events: none; max-width: calc(100vw - 300px); }
+    #help { position: fixed; left: 16px; top: 40px; padding: 6px 10px; background: #0009; pointer-events: none; max-width: calc(100vw - 300px); }
     body.locked #help { display: none; }
   </style>
 </head>
 <body>
-  <div id="hud">
-    <div id="net"></div>
-    <div id="status"></div>
-    <div class="bar"><span>HP</span><div><i id="hp"></i></div></div>
-    <div class="bar"><span>FUEL</span><div><i id="fuel"></i></div></div>
-    <div class="bar"><span>HEAT</span><div><i id="heat"></i></div></div>
-    <div class="bar"><span>DODGE</span><div><i id="dodge"></i></div></div>
-    <div class="bar"><span id="alt-name" class="wide">SECONDARY</span><div><i id="alt"></i></div></div>
-    <div class="bar"><span id="ability-name" class="wide">ABILITY</span><div><i id="ability"></i></div></div>
-  </div>
+  <div id="hud"><div id="net"></div></div>
   <div id="damage"></div>
+  <canvas id="glass"></canvas>
   <div id="stats" hidden></div>
-  <div id="crosshair"></div>
   <div id="score"></div>
   <div id="banner"></div>
   <div id="picker">

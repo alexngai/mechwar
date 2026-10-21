@@ -5,7 +5,7 @@ import { halo } from './fx.js';
 
 // Team color lives in the accents (visor, light strip) and the weapon pods; the hull carries a
 // personal scheme picked from the player id. -1 is offline.
-const TEAMS = {
+export const TEAMS = {
   '-1': { accent: 0x7fe0ff, paint: 0x6f7552 },
   0: { accent: 0x4fb4ff, paint: 0x3d6894 },
   1: { accent: 0xff5a36, paint: 0x9c4538 },
@@ -242,7 +242,7 @@ const BULWARK = {
   },
 };
 
-const CLASSES = { A: WISP, B: LANCER, C: BULWARK };
+export const CLASSES = { A: WISP, B: LANCER, C: BULWARK };
 
 /** Stretch a segment mesh (built along Y) from a to b. */
 function place(mesh, a, b) {
@@ -507,10 +507,13 @@ export class Mech {
     this.plateMat.color.setScalar(1 - 0.85 * this.wreck);
   }
 
-  /** Muzzle flash, light and a glowing beam from the next barrel to `end`, with sparks there. */
-  fire(end) {
+  /**
+   * Muzzle flash, light and a glowing beam from the next barrel to `end`, with sparks there.
+   * `from` overrides the muzzle (the cockpit's own guns in first person).
+   */
+  fire(end, from = null) {
     const gun = this.guns[(this.nextGun = (this.nextGun + 1) % this.guns.length)];
-    const from = gun.tip.getWorldPosition(world);
+    from ??= gun.tip.getWorldPosition(world);
     this.fx.beam(from, end);
     this.fx.muzzleLight(from);
     this.fx.muzzle(from, flame.subVectors(end, from).normalize());
