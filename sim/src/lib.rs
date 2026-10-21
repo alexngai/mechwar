@@ -12,6 +12,7 @@ pub mod game;
 pub mod map;
 pub mod net;
 pub mod projectile;
+pub mod weapon;
 #[cfg(feature = "wasm")]
 mod wasm;
 
@@ -66,6 +67,20 @@ pub struct Tuning {
     pub overheat_decay: f32,
     pub overheat_release: f32,
     pub weapon_range: f32,
+
+    /// Primary weapon: spread cone and bloom (deg), pellets per shot, hitscan falloff, and
+    /// projectile primaries when `shot_speed > 0`; see `weapon.rs`.
+    pub spread_deg: f32,
+    pub bloom_per_shot: f32,
+    pub bloom_max: f32,
+    pub bloom_recovery: f32,
+    pub pellets: f32,
+    pub falloff_start: f32,
+    pub falloff_end: f32,
+    pub falloff_floor: f32,
+    pub shot_speed: f32,
+    pub shot_gravity: f32,
+    pub shot_radius: f32,
 
     pub mech_radius: f32,
     pub mech_height: f32,
@@ -225,6 +240,8 @@ pub struct Mech {
     pub fire_wait: f32,
     /// Seconds until the secondary can fire again.
     pub alt_wait: f32,
+    /// Degrees the primary's cone has grown from firing, on top of `spread_deg`.
+    pub bloom: f32,
     /// Where the aim ray from the eye lands (for the crosshair).
     pub aim_point: Vector,
     /// Set on ticks a shot fired.
@@ -291,8 +308,12 @@ pub struct Sim {
     pub mech: Mech,
     /// Secondary fire in flight; offline it only meets the arena.
     pub projectiles: Vec<projectile::Projectile>,
-    /// Where projectiles burst since the page last took them.
-    pub blasts: Vec<Vector>,
+    /// Where projectiles burst (and whether they were primary fire) since the page last took them.
+    pub blasts: Vec<(bool, Vector)>,
+    /// Where hitscan pellets stopped since the page last took them.
+    pub shots: Vec<Vector>,
+    /// Stands in for the input seq that seeds the spread online.
+    seq: u32,
     arena: Arena,
     /// Team 0's first spawn on the map.
     spawn: Vector,
@@ -306,7 +327,7 @@ impl Sim {
     pub fn with_map(tuning: Tuning, map: usize) -> Self {
         let map = Map::load(map);
         let spawn = Vector::from_array(map.spawns[0][0]);
-        let mut sim = Self { tuning, class: MechClass::B, mech: Mech::default(), projectiles: Vec::new(), blasts: Vec::new(), arena: Arena::new(&map), spawn };
+        let mut sim = Self { tuning, class: MechClass::B, mech: Mech::default(), projectiles: Vec::new(), blasts: Vec::new(), shots: Vec::new(), seq: 0, arena: Arena::new(&map), spawn };
         sim.reset();
         sim
     }
@@ -316,14 +337,22 @@ impl Sim {
     }
 
     pub fn step(&mut self, input: &Input) {
-        step_mech(&self.arena, &self.tuning, &mut self.mech, input);
+        self.seq += 1;
+        let t = &self.tuning;
+        step_mech(&self.arena, t, &mut self.mech, input);
         if self.mech.launched {
-            self.projectiles.extend(projectile::volley(&self.tuning, &self.mech, 0, 0));
+            self.projectiles.extend(projectile::volley(t, &self.mech, 0, self.seq));
         }
-        let (arena, t, blasts) = (&self.arena, &self.tuning, &mut self.blasts);
+        if self.mech.shot && t.shot_speed > 0.0 {
+            self.projectiles.extend(weapon::volley(t, &self.mech, 0, self.seq));
+        } else if self.mech.shot {
+            let arena = &self.arena;
+            self.shots.extend(weapon::pellets(t, &self.mech, self.seq).iter().map(|r| r.point_at(arena.cast_ray(r, t.weapon_range).unwrap_or(t.weapon_range))));
+        }
+        let (arena, blasts) = (&self.arena, &mut self.blasts);
         self.projectiles.retain_mut(|p| match projectile::fly(arena, t, p, |_, _| None) {
             Some(at) => {
-                blasts.push(at);
+                blasts.push((p.primary, at));
                 false
             }
             None => true,
@@ -338,6 +367,10 @@ impl Sim {
 /// One fixed tick of one mech. The client predicts with this and the server replays the same inputs
 /// through it, so both must see identical inputs, tuning and arena.
 pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
+    // Last tick's shot widens the cone from now on; its own pellets used the cone before the kick.
+    if m.shot {
+        m.bloom = (m.bloom + t.bloom_per_shot).min(t.bloom_max);
+    }
     m.shot = false;
     m.launched = false;
     if m.health <= 0.0 {
@@ -500,6 +533,7 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     // ponytail: one shot per tick max, so fire_rate above TICK_HZ caps at 30/s.
     m.fire_wait -= DT;
     m.alt_wait = (m.alt_wait - DT).max(0.0);
+    m.bloom = (m.bloom - t.bloom_recovery * DT).max(0.0);
     m.shot = input.fire && !m.overheated && m.fire_wait <= 0.0;
     m.launched = input.alt_fire && !m.overheated && m.alt_wait <= 0.0;
     if m.shot {

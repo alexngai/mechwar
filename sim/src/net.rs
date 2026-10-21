@@ -93,10 +93,10 @@ pub struct MatchState {
 pub enum Event {
     Shot { shooter: u8, end: Vector, hit: Option<u8> },
     Kill { killer: u8, victim: u8 },
-    /// Secondary fire leaving its owner, before its first tick of flight; clients replay it.
+    /// A projectile (secondary, or a projectile primary) leaving its owner, before its first tick of flight; clients replay it.
     Launch(Projectile),
     /// A projectile burst at `pos`. `hits` has bit `id` set for each player its splash hurt.
-    Blast { owner: u8, seq: u32, n: u8, class: MechClass, pos: Vector, hits: u16 },
+    Blast { owner: u8, seq: u32, n: u8, primary: bool, class: MechClass, pos: Vector, hits: u16 },
 }
 
 pub fn encode<T: Serialize>(msg: &T) -> Vec<u8> {

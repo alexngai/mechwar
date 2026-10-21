@@ -1,4 +1,4 @@
-//! Secondary-weapon projectiles: launched from the eye, flown one tick at a time against the
+//! Projectiles, for the secondary and for projectile primaries (`weapon.rs`): launched from the eye, flown one tick at a time against the
 //! arena and whatever mechs the caller supplies, bursting with splash damage. Pure and
 //! deterministic, so the server, the predicting client and remote replays fly identical paths
 //! through the arena; only mech contacts can differ between them.
@@ -19,9 +19,11 @@ const STANDOFF: f32 = 0.1;
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Projectile {
     pub owner: u8,
-    /// The owner's input that launched it, and its index in the volley: with `owner`, its id.
+    /// The owner's input that launched it, its index in the volley, and which weapon fired it:
+    /// with `owner`, its id.
     pub seq: u32,
     pub n: u8,
+    pub primary: bool,
     /// The owner's class at launch, which picks the tuning it flies with.
     pub class: MechClass,
     pub pos: Vector,
@@ -30,8 +32,29 @@ pub struct Projectile {
 }
 
 impl Projectile {
-    pub fn id(&self) -> (u8, u32, u8) {
-        (self.owner, self.seq, self.n)
+    pub fn id(&self) -> Id {
+        (self.owner, self.seq, self.n, self.primary)
+    }
+}
+
+/// (owner, seq, n, primary).
+pub type Id = (u8, u32, u8, bool);
+
+/// What a projectile flies and bursts with: the secondary's `alt_*` values, or the primary's
+/// `shot_*` ones (no bounce, bursting at `weapon_range`).
+struct Ballistics {
+    gravity: f32,
+    bounce: f32,
+    fuse: f32,
+    damage: f32,
+    radius: f32,
+}
+
+fn ballistics(t: &Tuning, primary: bool) -> Ballistics {
+    if primary {
+        Ballistics { gravity: t.shot_gravity, bounce: 0.0, fuse: t.weapon_range / t.shot_speed.max(1.0), damage: t.shot_damage, radius: t.shot_radius }
+    } else {
+        Ballistics { gravity: t.alt_gravity, bounce: t.alt_bounce, fuse: t.alt_fuse, damage: t.alt_damage, radius: t.alt_radius }
     }
 }
 
@@ -45,18 +68,19 @@ pub fn volley(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Vec<Projectile> {
         .map(|n| {
             let fan = (f32::from(n) - f32::from(count - 1) * 0.5) * t.alt_spread_deg.to_radians();
             let dir = Rotation::from_rotation_y(m.yaw + fan) * Rotation::from_rotation_x(pitch) * Vector::NEG_Z;
-            Projectile { owner, seq, n, class: m.class, pos: eye, vel: dir * t.alt_speed, age: 0.0 }
+            Projectile { owner, seq, n, primary: false, class: m.class, pos: eye, vel: dir * t.alt_speed, age: 0.0 }
         })
         .collect()
 }
 
 /// Advances `p` one tick: gravity, then this tick's path against the arena and `hit_mech`, which
 /// gives how far along a ray (up to a limit) the nearest mech stops it. Off the arena it bounces
-/// if `alt_bounce` is set, else bursts; it always bursts on a mech or once its fuse runs out.
+/// if its weapon bounces, else bursts; it always bursts on a mech or once its fuse runs out.
 /// Returns where it burst.
 pub fn fly(arena: &Arena, t: &Tuning, p: &mut Projectile, mut hit_mech: impl FnMut(&Ray, f32) -> Option<f32>) -> Option<Vector> {
+    let b = ballistics(t, p.primary);
     p.age += DT;
-    p.vel.y -= t.alt_gravity * DT;
+    p.vel.y -= b.gravity * DT;
     let step = p.vel * DT;
     let len = step.length();
     if len > 1e-6 {
@@ -66,17 +90,17 @@ pub fn fly(arena: &Arena, t: &Tuning, p: &mut Projectile, mut hit_mech: impl FnM
             return Some(ray.point_at((toi - STANDOFF).max(0.0)));
         }
         match wall {
-            Some((toi, _)) if t.alt_bounce <= 0.0 => return Some(ray.point_at((toi - STANDOFF).max(0.0))),
+            Some((toi, _)) if b.bounce <= 0.0 => return Some(ray.point_at((toi - STANDOFF).max(0.0))),
             Some((toi, normal)) => {
                 // The rest of this tick's travel is dropped; the shell leaves the surface next tick.
                 p.pos = ray.point_at(toi) + normal * STANDOFF;
-                p.vel = (p.vel - normal * (2.0 * p.vel.dot(normal))) * t.alt_bounce;
+                p.vel = (p.vel - normal * (2.0 * p.vel.dot(normal))) * b.bounce;
             }
             None => p.pos += step,
         }
     }
     // Half a tick of slack so the fuse lands on a whole tick despite float sums.
-    (p.age >= t.alt_fuse - DT * 0.5).then_some(p.pos)
+    (p.age >= b.fuse - DT * 0.5).then_some(p.pos)
 }
 
 /// How far along `ray`, within `max`, the nearest of `mechs` stops a projectile.
@@ -94,9 +118,11 @@ pub fn first_mech<'a>(ray: &Ray, mut max: f32, mechs: impl IntoIterator<Item = (
     best
 }
 
-/// Damage a burst at `at` from a weapon tuned by `t` does to mech `m` (tuned by `tm`): full at
-/// contact, falling linearly to EDGE_DAMAGE at `alt_radius`, none beyond it or through the arena.
-pub fn splash(arena: &Arena, t: &Tuning, at: Vector, tm: &Tuning, m: &Mech) -> f32 {
+/// Damage a burst at `at` from a weapon tuned by `t` (the primary if `primary`) does to mech `m`
+/// (tuned by `tm`): full at contact, falling linearly to EDGE_DAMAGE at the weapon's radius, none
+/// beyond it or through the arena.
+pub fn splash(arena: &Arena, t: &Tuning, primary: bool, at: Vector, tm: &Tuning, m: &Mech) -> f32 {
+    let b = ballistics(t, primary);
     let c = mech_capsule(tm);
     let center = m.pos + Vector::Y * (tm.mech_height * 0.5);
     let h = c.half_height();
@@ -104,13 +130,13 @@ pub fn splash(arena: &Arena, t: &Tuning, at: Vector, tm: &Tuning, m: &Mech) -> f
     let to = axis - at;
     let dist = to.length();
     let surface = (dist - c.radius).max(0.0);
-    if surface >= t.alt_radius {
+    if surface >= b.radius {
         return 0.0;
     }
     if surface > 0.0 && arena.cast_ray(&Ray::new(at, to / dist), surface).is_some() {
         return 0.0;
     }
-    t.alt_damage * (1.0 - (1.0 - EDGE_DAMAGE) * surface / t.alt_radius)
+    b.damage * (1.0 - (1.0 - EDGE_DAMAGE) * surface / b.radius)
 }
 
 #[cfg(test)]
@@ -181,13 +207,13 @@ mod tests {
         let (tm, target) = mech(MechClass::B, [0.0, 0.0, 30.0], 0.0, 0.0);
         let r = mech_capsule(&tm).radius;
         let at = |surface: f32| Vector::new(r + surface, 2.5, 30.0);
-        assert!((splash(&arena, &t, at(0.0), &tm, &target) - t.alt_damage).abs() < 1e-3);
-        let edge = splash(&arena, &t, at(t.alt_radius - 1e-3), &tm, &target);
+        assert!((splash(&arena, &t, false, at(0.0), &tm, &target) - t.alt_damage).abs() < 1e-3);
+        let edge = splash(&arena, &t, false, at(t.alt_radius - 1e-3), &tm, &target);
         assert!((edge - EDGE_DAMAGE * t.alt_damage).abs() < 0.01, "edge damage {edge}");
-        assert_eq!(splash(&arena, &t, at(t.alt_radius + 0.1), &tm, &target), 0.0);
+        assert_eq!(splash(&arena, &t, false, at(t.alt_radius + 0.1), &tm, &target), 0.0);
 
         // In range, but the east wall (x 50 to 51) stands between.
         let (tm, inside) = mech(MechClass::B, [48.0, 0.0, 0.0], 0.0, 0.0);
-        assert_eq!(splash(&arena, &t, Vector::new(51.5, 2.5, 0.0), &tm, &inside), 0.0);
+        assert_eq!(splash(&arena, &t, false, Vector::new(51.5, 2.5, 0.0), &tm, &inside), 0.0);
     }
 }
