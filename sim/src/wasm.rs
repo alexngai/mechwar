@@ -21,7 +21,8 @@ fn mech_state(m: &Mech) -> Vec<f32> {
     ]
 }
 
-/// Twelve floats per projectile: owner, seq, n, class, xyz, velocity xyz, age, predicted (0/1).
+/// Thirteen floats per projectile: owner, seq, n, class, xyz, velocity xyz, age, predicted (0/1),
+/// primary fire (0/1).
 fn projectile_floats(drawn: impl IntoIterator<Item = Drawn>) -> Vec<f32> {
     drawn
         .into_iter()
@@ -29,14 +30,20 @@ fn projectile_floats(drawn: impl IntoIterator<Item = Drawn>) -> Vec<f32> {
             [
                 f32::from(p.owner), p.seq as f32, f32::from(p.n), p.class.index() as f32,
                 p.pos.x, p.pos.y, p.pos.z, p.vel.x, p.vel.y, p.vel.z, p.age, if predicted { 1.0 } else { 0.0 },
+                if p.primary { 1.0 } else { 0.0 },
             ]
         })
         .collect()
 }
 
-/// Blast event floats (kind 2): owner, class, where.
-fn blast_floats(out: &mut Vec<f32>, (owner, class, at): (u8, MechClass, Vector)) {
-    out.extend([2.0, f32::from(owner), class.index() as f32, at.x, at.y, at.z]);
+/// Blast event floats (kind 2, or 4 for primary fire): owner, class, where.
+fn blast_floats(out: &mut Vec<f32>, (owner, class, primary, at): (u8, MechClass, bool, Vector)) {
+    out.extend([if primary { 4.0 } else { 2.0 }, f32::from(owner), class.index() as f32, at.x, at.y, at.z]);
+}
+
+/// xyz per own hitscan pellet end.
+fn shot_floats(shots: Vec<Vector>) -> Vec<f32> {
+    shots.iter().flat_map(|v| v.to_array()).collect()
 }
 
 /// Distance along a ray to the first arena surface, capped at `max` (for the chase camera).
@@ -94,10 +101,15 @@ impl WasmSim {
     pub fn take_events(&mut self) -> Vec<f32> {
         let mut out = Vec::new();
         let class = self.class;
-        for at in std::mem::take(&mut self.sim.blasts) {
-            blast_floats(&mut out, (0, class, at));
+        for (primary, at) in std::mem::take(&mut self.sim.blasts) {
+            blast_floats(&mut out, (0, class, primary, at));
         }
         out
+    }
+
+    /// Where this tick's hitscan pellets stopped against the arena; see `shot_floats`.
+    pub fn take_shots(&mut self) -> Vec<f32> {
+        shot_floats(std::mem::take(&mut self.sim.shots))
     }
 
     pub fn state(&self) -> Vec<f32> {
@@ -142,6 +154,11 @@ impl WasmNetClient {
         self.0.receive(bytes, now);
     }
 
+    /// Where own predicted hitscan pellets stopped against the arena; see `shot_floats`.
+    pub fn take_shots(&mut self) -> Vec<f32> {
+        shot_floats(std::mem::take(&mut self.0.shots))
+    }
+
     /// Index of the server's map, or -1 before the Welcome.
     pub fn map(&self) -> i32 {
         self.0.map.map_or(-1, |m| m as i32)
@@ -180,8 +197,8 @@ impl WasmNetClient {
 
     /// Six floats per event since the last call: kind, a, b, x, y, z.
     /// Shot (kind 0): a = shooter, b = hit id or -1, xyz = where it stopped. Kill (kind 1): a = killer,
-    /// b = victim. Blast (kind 2): a = owner, b = class, xyz = where. Splash hit (kind 3): a = attacker,
-    /// b = victim.
+    /// b = victim. Blast (kind 2, or 4 for primary fire): a = owner, b = class, xyz = where. Splash hit
+    /// (kind 3): a = attacker, b = victim.
     pub fn take_events(&mut self) -> Vec<f32> {
         let mut out = Vec::new();
         for e in std::mem::take(&mut self.0.events) {

@@ -180,9 +180,9 @@ class Beams {
     }
   }
 }
-/** Secondary-fire projectiles, pooled: a dark body along the flight with a glowing core. */
+/** Projectiles, pooled: a dark body along the flight with a glowing core. */
 class Shells {
-  constructor(scene, count = 24) {
+  constructor(scene, count = 64) {
     const geometry = new THREE.CylinderGeometry(0.1, 0.13, 0.8, 6).rotateX(Math.PI / 2); // along Z
     const material = new THREE.MeshLambertMaterial({ color: 0x2a2c30, flatShading: true });
     this.items = Array.from({ length: count }, () => {
@@ -297,8 +297,9 @@ export class Effects {
   }
 
   /**
-   * This frame's projectiles, each { pos, vel, cls, age }: rockets and darts burn with a smoke
-   * trail, mortar shells (C) tumble dark with a blinking light.
+   * This frame's projectiles, each { pos, vel, cls, age, primary }: primary fire is a small hot
+   * slug with a short glow streak, rockets and darts burn with a smoke trail, mortar shells (C)
+   * tumble dark with a blinking light.
    */
   projectiles(list, dt) {
     this.shells.items.forEach((item, i) => {
@@ -307,10 +308,15 @@ export class Effects {
       if (!p) return;
       item.mesh.position.copy(p.pos);
       item.mesh.lookAt(v.copy(p.pos).add(p.vel));
-      const shell = p.cls === 'C', dart = p.cls === 'A';
-      item.mesh.scale.setScalar(dart ? 0.6 : shell ? 1.6 : 1);
+      const shell = !p.primary && p.cls === 'C', dart = !p.primary && p.cls === 'A';
+      item.mesh.scale.setScalar(p.primary ? 0.6 : dart ? 0.6 : shell ? 1.6 : 1);
       item.core.visible = !shell || (p.age * 6) % 1 < 0.5;
-      item.core.material.color.setHex(shell ? 0xff4020 : 0xffb060);
+      item.core.material.color.setHex(p.primary ? 0xffe2a0 : shell ? 0xff4020 : 0xffb060);
+      if (p.primary) {
+        dir.copy(p.vel).normalize();
+        for (let k = count(60, dt); k > 0; k--) this.glow.spawn(p.pos, scatter(dir, -2, 0.3), { life: 0.05, size: [0.5, 0.1], color: SPARK, drag: 4 });
+        return;
+      }
       if (shell) {
         if (Math.random() < dt * 8) this.soft.spawn(p.pos, scatter(UP, 0.3, 0.3), { life: 0.6, size: [0.4, 1.2], color: DUST, alpha: 0.3, drag: 2 });
         return;

@@ -4,18 +4,22 @@
     "overrides": {
       "walk_speed": 11, "boost_speed": 19, "ground_accel": 40, "dodge_cooldown": 1.1,
       "health_max": 70, "mech_radius": 1.1, "mech_height": 4.2, "eye_height": 3.6,
-      "fire_rate": 10, "shot_damage": 4.5, "heat_per_shot": 4,
+      "fire_rate": 14, "shot_damage": 3.4, "heat_per_shot": 2.9,
+      "spread_deg": 0.6, "bloom_per_shot": 0.4, "bloom_max": 4.5, "bloom_recovery": 3,
+      "falloff_start": 30, "falloff_end": 70, "falloff_floor": 0.4,
       "ability_cooldown": 20, "ability_duration": 4, "mech_mass": 35,
       "alt_cooldown": 3, "alt_heat": 12, "alt_count": 3, "alt_spread_deg": 4, "alt_speed": 80,
       "alt_fuse": 1.5, "alt_damage": 7, "alt_radius": 2
     },
     "ability": { "name": "Slipstream", "desc": "4 s of boost that burns no fuel and runs 25% faster" },
+    "primary": { "name": "Stitcher", "desc": "Rapid vulcan; the spread blooms while held, and hits fade past 30 m" },
     "secondary": { "name": "Dart rack", "desc": "Three fast darts in a tight fan" }
   },
   "B": {
     "name": "Lancer", "role": "balanced", "source": "own tuning",
     "overrides": {},
     "ability": { "name": "Vent", "desc": "Dump all heat at once, even when overheated" },
+    "primary": { "name": "Pike", "desc": "Accurate rifle with mild bloom and long reach" },
     "secondary": { "name": "Rocket", "desc": "Straight-flying rocket with a 4 m blast" }
   },
   "C": {
@@ -23,12 +27,15 @@
     "overrides": {
       "walk_speed": 7, "boost_speed": 13, "ground_accel": 22, "dodge_speed": 14, "dodge_cooldown": 2.0,
       "health_max": 150, "mech_radius": 1.8, "mech_height": 5.8, "eye_height": 4.9,
-      "fire_rate": 5, "shot_damage": 11, "heat_per_shot": 7, "heat_max": 120,
+      "fire_rate": 1.6, "shot_damage": 7, "heat_per_shot": 16, "heat_max": 120, "weapon_range": 60,
+      "pellets": 5, "spread_deg": 2.5, "bloom_per_shot": 0, "bloom_max": 0,
+      "shot_speed": 110, "shot_gravity": 4, "shot_radius": 1,
       "ability_cooldown": 25, "ability_duration": 5, "mech_mass": 80,
       "alt_cooldown": 5, "alt_heat": 25, "alt_speed": 36, "alt_loft_deg": 10, "alt_gravity": 18,
       "alt_bounce": 0.45, "alt_fuse": 1.4, "alt_damage": 40, "alt_radius": 5.5
     },
     "ability": { "name": "Brace", "desc": "5 s of 40% less damage, at 60% speed and no boost" },
+    "primary": { "name": "Squall", "desc": "Flak cannon: five slow pellets in a cone, bursting at 60 m" },
     "secondary": { "name": "Mortar", "desc": "Lobbed shell that bounces once or twice, then bursts wide" }
   }
 }

@@ -531,6 +531,15 @@ export class Mech {
     this.fx.muzzleLight(tip);
   }
 
+  /** A projectile primary leaving the next barrel along `dir`: flash and light. Returns the muzzle; `from` as in `fire`. */
+  muzzle(dir, from = null) {
+    const gun = this.guns[(this.nextGun = (this.nextGun + 1) % this.guns.length)];
+    from ??= gun.tip.getWorldPosition(new THREE.Vector3());
+    this.fx.muzzleLight(from);
+    this.fx.muzzle(from, dir);
+    return from;
+  }
+
   /** One-off cue when the class ability fires: Vent steam, a Slipstream kick, or a Brace pulse. */
   ability() {
     if (this.cls === 'B') {

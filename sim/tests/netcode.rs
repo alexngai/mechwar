@@ -28,14 +28,24 @@ struct Harness {
     no_rewind: bool,
 }
 
+/// Base tuning with the primary narrowed to one exact ray at full damage, for tests that count
+/// hits. Server side only: the clients still predict with the compiled-in tuning.
+fn laser() -> Tuning {
+    Tuning { spread_deg: 0.0, bloom_per_shot: 0.0, falloff_start: 1000.0, falloff_end: 1000.0, ..Tuning::default() }
+}
+
 impl Harness {
     fn new() -> Self {
-        Self::with_classes([MechClass::B; 2])
+        Self::tuned(laser(), [MechClass::B; 2])
+    }
+
+    fn with_classes(classes: [MechClass; 2]) -> Self {
+        Self::tuned(Tuning::default(), classes)
     }
 
     /// Classes are picked before any input, so both spawn in them.
-    fn with_classes(classes: [MechClass; 2]) -> Self {
-        let mut game = Game::new(Tuning::default(), blockout());
+    fn tuned(tuning: Tuning, classes: [MechClass; 2]) -> Self {
+        let mut game = Game::new(tuning, blockout());
         game.bots = false;
         let clients = classes
             .into_iter()
@@ -380,7 +390,11 @@ fn shoot_until_kill(game: &mut Game, shooter: u8, victim: u8) -> u32 {
 }
 
 fn duel_game() -> (Game, u8, u8) {
-    let mut game = Game::new(Tuning::default(), blockout());
+    duel_game_with(laser())
+}
+
+fn duel_game_with(tuning: Tuning) -> (Game, u8, u8) {
+    let mut game = Game::new(tuning, blockout());
     game.bots = false;
     let shooter = game.join().unwrap();
     let victim = game.join().unwrap();
@@ -618,10 +632,10 @@ fn predicted_blast_matches_server() {
             Event::Blast { pos, .. } => Some(pos),
             _ => None,
         }));
-        local.extend(h.clients[0].1.blasts.drain(..).map(|b| b.2));
+        local.extend(h.clients[0].1.blasts.drain(..).map(|b| b.3));
         let now = h.now();
         h.clients[watcher].1.projectiles(now);
-        seen.extend(h.clients[watcher].1.blasts.drain(..).map(|b| b.2));
+        seen.extend(h.clients[watcher].1.blasts.drain(..).map(|b| b.3));
     }
     assert_eq!(server.len(), 1, "server blasts: {server:?}");
     assert_eq!(local, server, "the predicted burst should land exactly where the server's did");
@@ -647,4 +661,105 @@ fn bots_use_secondaries() {
         assert!(launched[class.index()], "{class:?} bots never fired their secondary");
     }
     assert!(present.iter().any(|c| *c != present[0]), "all bots were {:?}, so the test proved little", present[0]);
+}
+
+#[test]
+fn spread_matches_server() {
+    // A sprays and C fires flak at the floor ahead; the enemy is far beyond either.
+    let mut h = Harness::with_classes([MechClass::A, MechClass::C]);
+    let (wisp, bulwark) = (h.clients[0].0, h.clients[1].0);
+    let aim = Input { pitch: -0.35, ..Input::default() };
+    let (mut server_shots, mut local_shots, mut server_flak, mut local_flak, mut seen_flak) = (vec![], vec![], vec![], vec![], vec![]);
+    let (mut max_bloom, mut max_correction) = (0f32, 0f32);
+    for tick in 0..(3.0 * TICK_HZ) as u32 {
+        let fire = (5..65).contains(&tick);
+        h.step([Input { fire, ..aim }, Input { fire, ..aim }]);
+        for e in h.game.snapshot(wisp).events {
+            match e {
+                Event::Shot { shooter, end, .. } if shooter == wisp => server_shots.push(end),
+                Event::Blast { owner, primary: true, pos, .. } if owner == bulwark => server_flak.push(pos),
+                _ => {}
+            }
+        }
+        local_shots.append(&mut h.clients[0].1.shots);
+        local_flak.extend(h.clients[1].1.blasts.drain(..).filter(|b| b.2).map(|b| b.3));
+        let now = h.now();
+        h.clients[0].1.projectiles(now);
+        seen_flak.extend(h.clients[0].1.blasts.drain(..).filter(|b| b.0 == bulwark && b.2).map(|b| b.3));
+        max_bloom = max_bloom.max(h.clients[0].1.mech.bloom);
+        max_correction = h.clients.iter().map(|c| c.1.correction).fold(max_correction, f32::max);
+    }
+    assert!(server_shots.len() > 20 && local_shots == server_shots, "predicted tracers differ from the server's shots");
+    assert!(max_bloom > 2.0, "bloom only reached {max_bloom} deg");
+    let spread = server_shots.iter().map(|p| p.distance(server_shots[0])).fold(0.0, f32::max);
+    assert!(spread > 0.3, "shots all landed within {spread} m, so the spread did nothing");
+    let pellets = Tuning::default().for_class(MechClass::C).pellets as usize;
+    assert!(server_flak.len() >= 3 * pellets, "only {} flak bursts", server_flak.len());
+    assert_eq!(local_flak, server_flak, "predicted flak burst somewhere else");
+    assert_eq!(seen_flak, server_flak, "the other client's flak replay burst somewhere else");
+    assert!(max_correction < 1e-5, "prediction drifted by {max_correction} m");
+}
+
+#[test]
+fn falloff_scales_hit_damage() {
+    // One exact shot across the 80 m between the slot-0 spawns, with falloff ranges that make
+    // that distance near, mid and far.
+    let t = Tuning::default();
+    let mut dealt = vec![];
+    for (start, end) in [(200.0, 300.0), (40.0, 120.0), (10.0, 20.0)] {
+        let (mut game, shooter, victim) = duel_game_with(Tuning { falloff_start: start, falloff_end: end, ..laser() });
+        game.step();
+        let eye = player(&game, shooter).view.pos + Vector::Y * t.eye_height;
+        let aim = aim_at(&game, shooter, victim, true);
+        send(&mut game, shooter, &mut 0, 1, aim);
+        game.step();
+        let Some(Event::Shot { end: hit_at, hit: Some(_), .. }) = game.snapshot(shooter).events.into_iter().find(|e| matches!(e, Event::Shot { .. })) else {
+            panic!("the shot missed");
+        };
+        dealt.push((t.health_max - game.snapshot(victim).me.health, hit_at.distance(eye)));
+    }
+    let [(near, _), (mid, dist), (far, _)] = dealt[..] else { unreachable!() };
+    assert_eq!(near, t.shot_damage);
+    let want = t.shot_damage * (1.0 - (1.0 - t.falloff_floor) * (dist - 40.0) / 80.0);
+    assert!((mid - want).abs() < 1e-3 && mid < near, "mid-range hit did {mid}, want {want}");
+    assert!((far - t.shot_damage * t.falloff_floor).abs() < 1e-4, "far hit did {far}");
+}
+
+#[test]
+fn flak_hits() {
+    let classes = class_tunings();
+    let flak = &classes[MechClass::C.index()];
+    let (mut game, shooter, victim) = duel_game_with(Tuning::default());
+    game.pick_class(shooter, MechClass::C);
+    game.step();
+    // The victim walks up to about 25 m and stops.
+    let (mut shooter_seq, mut victim_seq) = (0, 0);
+    while player(&game, victim).view.pos.distance(player(&game, shooter).view.pos) > 25.0 {
+        send(&mut game, victim, &mut victim_seq, 1, Input { move_z: 1.0, yaw: std::f32::consts::PI, ..Input::default() });
+        game.step();
+    }
+    for _ in 0..10 {
+        send(&mut game, victim, &mut victim_seq, 1, Input { yaw: std::f32::consts::PI, ..Input::default() });
+        game.step();
+    }
+    let before = game.snapshot(victim).me.health;
+    let (mut launched, mut hit) = (0, 0);
+    for tick in 0..TICK_HZ as u32 {
+        let aim = aim_at(&game, shooter, victim, tick == 0);
+        send(&mut game, shooter, &mut shooter_seq, 1, aim);
+        send(&mut game, victim, &mut victim_seq, 1, Input { yaw: std::f32::consts::PI, ..Input::default() });
+        game.step();
+        for e in game.snapshot(shooter).events {
+            match e {
+                Event::Launch(p) if p.primary && p.owner == shooter => launched += 1,
+                Event::Blast { owner, primary: true, hits, .. } if owner == shooter && hits & 1 << victim != 0 => hit += 1,
+                _ => {}
+            }
+        }
+    }
+    let dealt = before - game.snapshot(victim).me.health;
+    assert_eq!(launched, flak.pellets as u32);
+    assert!(hit >= launched - 1, "{hit} of {launched} pellets hit at 25 m");
+    let full = flak.pellets * flak.shot_damage;
+    assert!(dealt > 0.7 * full && dealt <= full, "a flak shot did {dealt} of {full}");
 }

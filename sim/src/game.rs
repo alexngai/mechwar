@@ -11,7 +11,8 @@ use crate::bot::{self, Bot, Nav};
 use crate::collide;
 use crate::net::{Event, InputMsg, MatchState, MechView, PlayerNet, Snapshot};
 use crate::projectile::{self, Projectile};
-use crate::{Arena, Map, Mech, MechClass, TICK_HZ, Tuning, Vector, aim_ray, mech_capsule, spawn_mech, step_mech};
+use crate::weapon;
+use crate::{Arena, Map, Mech, MechClass, TICK_HZ, Tuning, Vector, mech_capsule, spawn_mech, step_mech};
 
 pub const TEAM_SIZE: usize = 4;
 pub const MAX_PLAYERS: usize = 2 * TEAM_SIZE;
@@ -246,14 +247,19 @@ impl Game {
                 p.ack_seq = msg.seq;
                 let t = &self.classes[p.class.index()];
                 step_mech(&self.arena, t, &mut p.mech, &msg.input);
+                let mut shells = Vec::new();
                 if p.mech.launched {
-                    for shell in projectile::volley(t, &p.mech, p.id, msg.seq) {
-                        self.events.push(Event::Launch(shell));
-                        self.projectiles.push(Flying { p: shell, team: p.team });
-                    }
+                    shells = projectile::volley(t, &p.mech, p.id, msg.seq);
                 }
-                if p.mech.shot {
-                    self.resolve_shot(i, msg.view_tick);
+                if p.mech.shot && t.shot_speed > 0.0 {
+                    shells.extend(weapon::volley(t, &p.mech, p.id, msg.seq));
+                }
+                for shell in shells {
+                    self.events.push(Event::Launch(shell));
+                    self.projectiles.push(Flying { p: shell, team: p.team });
+                }
+                if p.mech.shot && t.shot_speed <= 0.0 {
+                    self.resolve_shot(i, msg.seq, msg.view_tick);
                 }
             }
         }
@@ -343,37 +349,40 @@ impl Game {
             .expect("teams have spawns")
     }
 
-    /// Hitscan from the shooter's eye against enemies rewound to where the shooter saw them.
-    /// Teammates are passed through: no friendly fire.
-    fn resolve_shot(&mut self, shooter: usize, view_tick: f32) {
-        let shooter_class = self.players[shooter].class;
-        let t = &self.classes[shooter_class.index()];
-        let (m, team) = (&self.players[shooter].mech, self.players[shooter].team);
-        let ray = aim_ray(t, m);
-        // step_mech already cast this ray against the arena; aim_point is where it stopped.
-        let mut best = (m.aim_point - ray.origin).length();
-        let mut hit = None;
+    /// Hitscan pellets from the shooter's eye (seeded by input `seq`) against enemies rewound to
+    /// where the shooter saw them, each dealing `shot_damage` scaled by falloff. Teammates are
+    /// passed through: no friendly fire.
+    fn resolve_shot(&mut self, shooter: usize, seq: u32, view_tick: f32) {
+        let t = &self.classes[self.players[shooter].class.index()];
+        let (m, team, shooter_id) = (&self.players[shooter].mech, self.players[shooter].team, self.players[shooter].id);
         let view = view_tick.clamp(self.tick as f32 - MAX_REWIND_TICKS, self.tick as f32);
-        for (j, target) in self.players.iter().enumerate() {
-            if target.team == team || target.mech.health <= 0.0 {
-                continue;
+        let targets: Vec<(usize, Pose, &Tuning)> = self
+            .players
+            .iter()
+            .enumerate()
+            .filter(|(_, q)| q.team != team && q.mech.health > 0.0)
+            .filter_map(|(j, q)| {
+                let tt = &self.classes[q.class.index()];
+                rewind(&q.history, view).map(|pos| (j, Pose::from_translation(pos + Vector::Y * (tt.mech_height * 0.5)), tt))
+            })
+            .collect();
+        let mut hits = Vec::new();
+        for ray in weapon::pellets(t, m, seq) {
+            let mut best = self.arena.cast_ray(&ray, t.weapon_range).unwrap_or(t.weapon_range);
+            let mut hit = None;
+            for (j, pose, tt) in &targets {
+                if let Some(toi) = mech_capsule(tt).cast_ray(pose, &ray, best, true) {
+                    best = toi;
+                    hit = Some(*j);
+                }
             }
-            let Some(pos) = rewind(&target.history, view) else { continue };
-            let tt = &self.classes[target.class.index()];
-            let pose = Pose::from_translation(pos + Vector::Y * (tt.mech_height * 0.5));
-            if let Some(toi) = mech_capsule(tt).cast_ray(&pose, &ray, best, true) {
-                best = toi;
-                hit = Some(j);
-            }
+            // After the match ends shots still fly, but don't hit anyone.
+            let hit = hit.filter(|_| matches!(self.phase, Phase::Playing { .. }));
+            self.events.push(Event::Shot { shooter: shooter_id, end: ray.point_at(best), hit: hit.map(|j| self.players[j].id) });
+            hits.extend(hit.map(|j| (j, t.shot_damage * weapon::falloff(t, best))));
         }
-        // After the match ends shots still fly, but don't hit anyone.
-        let hit = hit.filter(|_| matches!(self.phase, Phase::Playing { .. }));
-
-        let shooter_id = self.players[shooter].id;
-        let end = ray.point_at(best);
-        self.events.push(Event::Shot { shooter: shooter_id, end, hit: hit.map(|j| self.players[j].id) });
-        if let Some(j) = hit {
-            self.apply_damage(Some(shooter), j, self.classes[shooter_class.index()].shot_damage);
+        for (j, damage) in hits {
+            self.apply_damage(Some(shooter), j, damage);
         }
     }
 
@@ -385,7 +394,7 @@ impl Game {
             .iter()
             .enumerate()
             .filter(|(_, q)| q.team != team && q.mech.health > 0.0)
-            .map(|(j, q)| (j, projectile::splash(&self.arena, t, at, &self.classes[q.class.index()], &q.mech)))
+            .map(|(j, q)| (j, projectile::splash(&self.arena, t, p.primary, at, &self.classes[q.class.index()], &q.mech)))
             .filter(|&(_, damage)| damage > 0.0)
             .collect();
         let attacker = self.players.iter().position(|q| q.id == p.owner);
@@ -396,7 +405,7 @@ impl Game {
                 self.apply_damage(attacker, j, damage);
             }
         }
-        self.events.push(Event::Blast { owner: p.owner, seq: p.seq, n: p.n, class: p.class, pos: at, hits });
+        self.events.push(Event::Blast { owner: p.owner, seq: p.seq, n: p.n, primary: p.primary, class: p.class, pos: at, hits });
     }
 
     /// Damages player `j` (less while braced) while the match is on. A kill scores for

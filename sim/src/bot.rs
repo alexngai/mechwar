@@ -195,7 +195,9 @@ impl Bot {
             let alt_range = if t.alt_gravity > 0.0 { MORTAR_RANGE } else { 0.8 * t.alt_speed * t.alt_fuse };
             let alt = me.alt_wait <= 0.0 && dist < alt_range && dist > t.alt_radius + 2.0;
             let alt_cool = !me.overheated && me.heat + t.alt_heat < t.heat_max;
-            let (yaw, mut pitch) = look_at(eye, if alt { chest + target.vel * (dist / t.alt_speed) } else { chest });
+            // Projectile primaries are led by their flight time too.
+            let lead = if alt { dist / t.alt_speed } else if t.shot_speed > 0.0 { dist / t.shot_speed } else { 0.0 };
+            let (yaw, mut pitch) = look_at(eye, chest + target.vel * lead);
             if alt && t.alt_gravity > 0.0 {
                 // Range d on flat ground: sin(2θ) = g d / v².
                 let s = (t.alt_gravity * flat(chest - eye).length() / (t.alt_speed * t.alt_speed)).min(1.0);

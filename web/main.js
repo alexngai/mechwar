@@ -207,7 +207,8 @@ CLASS_KEYS.forEach((key, i) => {
   card.className = 'card';
   card.innerHTML = `<span class="key">${i + 1}</span><b>${c.name}</b>${c.role}<dl>
     <dt>HP</dt><dd>${v('health_max')}</dd><dt>Speed</dt><dd>${v('walk_speed')} m/s</dd>
-    <dt>DPS</dt><dd>${Math.round(v('fire_rate') * v('shot_damage'))}</dd></dl>
+    <dt>DPS</dt><dd>${Math.round(v('fire_rate') * v('shot_damage') * v('pellets'))}</dd></dl>
+    <p><b>LMB · ${c.primary.name}</b>${c.primary.desc}</p>
     <p><b>RMB · ${c.secondary.name}</b>${c.secondary.desc}</p>
     <p><b>F · ${c.ability.name}</b>${c.ability.desc}</p>`;
   card.addEventListener('click', () => pick(i));
@@ -231,7 +232,7 @@ let prev = game.state(), curr = prev, acc = 0, last = performance.now();
 const eye = new THREE.Vector3(), offset = new THREE.Vector3(), aim = new THREE.Vector3();
 const pos = new THREE.Vector3(), vel = new THREE.Vector3(), seen = new THREE.Vector3(), step = new THREE.Vector3();
 const ray = new THREE.Ray(), sphere = new THREE.Sphere(), crossing = new THREE.Vector3();
-const chest = new THREE.Vector3(), to = new THREE.Vector3(), look = new THREE.Vector3(), ndc = new THREE.Vector3(), muzzle = new THREE.Vector3();
+const heading = new THREE.Vector3(), chest = new THREE.Vector3(), to = new THREE.Vector3(), look = new THREE.Vector3(), ndc = new THREE.Vector3(), muzzle = new THREE.Vector3();
 
 function frame(now) {
   renderer.info.reset();
@@ -259,7 +260,9 @@ function frame(now) {
     dodge = 0;
     ability = false;
     acc -= DT;
-    if (curr[S.SHOT]) shots.push(new THREE.Vector3(curr[S.AIM], curr[S.AIM + 1], curr[S.AIM + 2]));
+    // Hitscan pellets, where each stopped against the arena.
+    const ends = game.take_shots();
+    for (let k = 0; k < ends.length; k += 3) shots.push(new THREE.Vector3(ends[k], ends[k + 1], ends[k + 2]));
   }
   const a = acc / DT;
   const lerp = (i) => prev[i] + (curr[i] - prev[i]) * a;
@@ -337,31 +340,40 @@ function frame(now) {
     }
     if (kind === 1 && a === myId) hits.push({ at: now, kill: true });
     if (kind === 1 && (a === myId || b === myId)) { message = a === myId ? 'ENEMY DESTROYED' : 'DESTROYED'; messageUntil = now + 2500; }
-    if (kind === 2) {
+    if (kind === 2 || kind === 4) {
       blastAt.set(x, y, z);
-      fx.explosion(blastAt, classValue(b, 'alt_radius') / 5);
+      fx.explosion(blastAt, classValue(b, kind === 4 ? 'shot_radius' : 'alt_radius') / 5);
       fx.muzzleLight(blastAt);
     }
   }
 
   // Projectiles: own ones extrapolated like the own mech, others already at render time. Each is
-  // drawn leaving its launcher and eases onto its sim path (which starts at the eye).
+  // drawn leaving its launcher (primary fire: a gun) and eases onto its sim path (which starts at
+  // the eye). A primary shot's pellets all leave the barrel its first pellet picked.
   const pr = game.projectiles(now), drawn = [], live = new Set();
-  for (let i = 0; i < pr.length; i += 12) {
-    const [owner, seq, n, cls, x, y, z, vx, vy, vz, age, predicted] = pr.subarray(i, i + 12);
-    const key = `${owner}:${seq}:${n}`, ahead = predicted ? a * DT : 0;
+  let gunAt = null;
+  for (let i = 0; i < pr.length; i += 13) {
+    const [owner, seq, n, cls, x, y, z, vx, vy, vz, age, predicted, primary] = pr.subarray(i, i + 13);
+    const key = `${owner}:${seq}:${n}:${primary}`, ahead = predicted ? a * DT : 0;
     const mech = predicted ? me : remotes.get(owner)?.mech;
     let shot = launches.get(key);
     if (!shot) {
-      launches.set(key, (shot = { from: mech ? mech.launcher.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3(x, y, z) }));
-      if (n === 0) mech?.launch();
+      let from = null;
+      if (primary) {
+        if (n === 0) gunAt = mech?.muzzle(heading.set(vx, vy, vz).normalize(), predicted && firstPerson ? cockpit.fire(camera, new THREE.Vector3()) : null) ?? null;
+        from = gunAt;
+      } else {
+        from = mech?.launcher.getWorldPosition(new THREE.Vector3());
+        if (n === 0) mech?.launch();
+      }
+      launches.set(key, (shot = { from: from ?? new THREE.Vector3(x, y, z) }));
       if (!predicted) lastFired.set(owner, now);
     }
     live.add(key);
     const p = new THREE.Vector3(x + vx * ahead, y + vy * ahead, z + vz * ahead);
     const blend = Math.min((age + ahead) / LAUNCH_BLEND, 1);
     if (blend < 1) p.lerp(shot.from, 1 - blend);
-    drawn.push({ pos: p, vel: new THREE.Vector3(vx, vy, vz), cls: CLASS_KEYS[cls], age: age + ahead });
+    drawn.push({ pos: p, vel: new THREE.Vector3(vx, vy, vz), cls: CLASS_KEYS[cls], age: age + ahead, primary: !!primary });
   }
   for (const key of launches.keys()) if (!live.has(key)) launches.delete(key);
   fx.projectiles(drawn, dt);
