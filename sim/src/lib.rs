@@ -161,6 +161,21 @@ pub struct Input {
     pub ability: bool,
 }
 
+impl Input {
+    /// Untrusted input reduced to what a real client can send: finite, axes in [-1, 1], dodge a direction.
+    pub fn sanitized(self) -> Input {
+        let finite = |v: f32| if v.is_finite() { v } else { 0.0 };
+        Input {
+            move_x: finite(self.move_x).clamp(-1.0, 1.0),
+            move_z: finite(self.move_z).clamp(-1.0, 1.0),
+            yaw: finite(self.yaw),
+            pitch: finite(self.pitch),
+            dodge: self.dodge.signum(),
+            ..self
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct Mech {
     /// Picks the ability `step_mech` applies.

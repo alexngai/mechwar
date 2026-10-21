@@ -1,16 +1,26 @@
-//! WebSocket glue around `sim::game::Game`: one 30 Hz loop owns the match, and each connection
-//! gets a reader and a writer task. `LAG_MS` adds a constant one-way delay in both directions.
+//! Serves the built client and the game WebSocket (`/ws`) on one port. One 30 Hz loop owns the
+//! match; each connection gets a reader and a writer task. Env: `PORT` (9001), `STATIC_DIR`
+//! (`dist`), `LAG_MS` (one-way delay for testing), `SCORE_LIMIT`, `MATCH_SECONDS`.
 
+use std::future::IntoFuture;
 use std::{env, time::Duration};
 
+use axum::Router;
+use axum::extract::State;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::response::Response;
+use axum::routing::get;
 use futures_util::{SinkExt, StreamExt};
 use sim::game::Game;
 use sim::net::{self, ClientMsg, ServerMsg};
 use sim::{DT, Tuning};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, Instant};
-use tokio_tungstenite::tungstenite::Message;
+use tower_http::services::{ServeDir, ServeFile};
+
+/// Clients send ~40-byte inputs; anything bigger is hostile.
+const MAX_MESSAGE_BYTES: usize = 1024;
 
 /// Outgoing bytes, stamped when queued so `LAG_MS` delays every message by the same amount.
 type Outbox = mpsc::UnboundedSender<(Instant, Vec<u8>)>;
@@ -21,20 +31,38 @@ enum Cmd {
     Leave(u8),
 }
 
+#[derive(Clone)]
+struct App {
+    cmds: mpsc::UnboundedSender<Cmd>,
+    lag: Duration,
+}
+
 #[tokio::main]
 async fn main() {
     let port: u16 = env::var("PORT").map_or(9001, |p| p.parse().expect("PORT must be a port number"));
     let lag = Duration::from_millis(env::var("LAG_MS").map_or(0, |v| v.parse().expect("LAG_MS must be milliseconds")));
-    let listener = TcpListener::bind(("0.0.0.0", port)).await.expect("bind port");
-    println!("listening on ws://localhost:{port} (LAG_MS={})", lag.as_millis());
+    let static_dir = env::var("STATIC_DIR").unwrap_or_else(|_| "dist".into());
 
     let (cmds, cmd_rx) = mpsc::unbounded_channel();
-    tokio::spawn(game_loop(cmd_rx));
-    loop {
-        if let Ok((stream, _)) = listener.accept().await {
-            tokio::spawn(connection(stream, cmds.clone(), lag));
-        }
+    let game = tokio::spawn(game_loop(cmd_rx));
+    let client = ServeDir::new(&static_dir).fallback(ServeFile::new(format!("{static_dir}/index.html")));
+    let app = Router::new().route("/ws", get(upgrade)).fallback_service(client).with_state(App { cmds, lag });
+
+    let listener = TcpListener::bind(("0.0.0.0", port)).await.expect("bind port");
+    println!("serving {static_dir}/ and ws://localhost:{port}/ws (LAG_MS={})", lag.as_millis());
+    // A dead game loop would leave a server that accepts players but never ticks: exit so the
+    // host restarts us instead.
+    tokio::select! {
+        served = axum::serve(listener, app).into_future() => eprintln!("server stopped: {served:?}"),
+        ended = game => eprintln!("game loop stopped: {ended:?}"),
     }
+    std::process::exit(1);
+}
+
+async fn upgrade(ws: WebSocketUpgrade, State(app): State<App>) -> Response {
+    ws.max_message_size(MAX_MESSAGE_BYTES)
+        .max_frame_size(MAX_MESSAGE_BYTES)
+        .on_upgrade(move |socket| connection(socket, app.cmds, app.lag))
 }
 
 async fn game_loop(mut cmds: mpsc::UnboundedReceiver<Cmd>) {
@@ -79,15 +107,14 @@ async fn game_loop(mut cmds: mpsc::UnboundedReceiver<Cmd>) {
     }
 }
 
-async fn connection(stream: TcpStream, cmds: mpsc::UnboundedSender<Cmd>, lag: Duration) {
-    let Ok(ws) = tokio_tungstenite::accept_async(stream).await else { return };
-    let (mut sink, mut source) = ws.split();
+async fn connection(socket: WebSocket, cmds: mpsc::UnboundedSender<Cmd>, lag: Duration) {
+    let (mut sink, mut source) = socket.split();
 
     let (out, mut outbox) = mpsc::unbounded_channel::<(Instant, Vec<u8>)>();
     let writer = tokio::spawn(async move {
         while let Some((queued, bytes)) = outbox.recv().await {
             time::sleep_until(queued + lag).await;
-            if sink.send(Message::binary(bytes)).await.is_err() {
+            if sink.send(Message::Binary(bytes.into())).await.is_err() {
                 break;
             }
         }

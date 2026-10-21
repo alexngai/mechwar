@@ -17,19 +17,54 @@ WASD move · Shift boost · Space hover · Q/E dodge · LMB fire · V chase/cock
 
 `npm test` runs the Rust tests, including the netcode checks. After editing Rust while `vite` is running, run `npm run wasm` and the page reloads.
 
-## Run online (1v1)
+## Run online
 
 ```bash
 npm run server
 ```
 
-Then open two tabs at `http://localhost:5173/?server=ws://localhost:9001`. Set `LAG_MS=40` on the server to add 40 ms each way (about 80 ms round trip); `PORT` changes the port. The HUD shows K/D, ping and `corr`, how far the last server correction moved your mech (0.000 when prediction is exact). Online, only camera sliders are live: both ends use the compiled-in `tuning.json`.
+With `npm run dev` running, open tabs at `http://localhost:5173/?server=ws://localhost:9001/ws`. You get 4v4 team deathmatch, with bots filling empty slots. Server env vars:
+- `LAG_MS=40` adds 40 ms each way (about 80 ms round trip).
+- `PORT` changes the port (default 9001).
+- `SCORE_LIMIT` and `MATCH_SECONDS` shorten matches.
+
+The HUD shows K/D, ping and `corr`, which is how far the last server correction moved your mech (0.000 when prediction is exact). Online, only camera sliders are live, because both ends use the compiled-in `tuning.json`.
+
+To play the production build the way it's hosted, run `npm run build`, then `npm run server`, and open `http://localhost:9001`. The server serves `dist/` and the WebSocket on one port; `?offline` opens the sandbox.
+
+## Deploy (Fly.io)
+
+One-time setup: log in with `fly auth login`, then create the app. The name becomes `https://<name>.fly.dev`.
+
+```bash
+fly launch --no-deploy --name <name> --region iad --ha=false --copy-config
+```
+
+Deploy and watch:
+
+```bash
+fly deploy --ha=false
+```
+
+```bash
+fly logs
+```
+
+- Pushes to `main` also deploy automatically (`.github/workflows/deploy.yml`, after the tests pass). That needs a deploy token stored as the `FLY_API_TOKEN` repo secret:
+
+  ```bash
+  fly tokens create deploy -a webhawk -x 8760h | gh secret set FLY_API_TOKEN --repo alexngai/webhawk
+  ```
+
+- Keep exactly one machine: match state lives in memory. `--ha=false` ensures that; `fly scale count 1` fixes it if needed.
+- The machine stops when idle and wakes on the next visit in a few seconds.
+- Cost: a shared-cpu-1x, 256 MB machine is about $2/month if it runs all month, less with auto-stop.
 
 ## Layout
 
 - `tuning.json` — every constant, with slider range and `source` (`capture`, `default property` or `own tuning`). The Rust sim reads it at compile time; the page loads it for the sliders. "Copy tuning.json" in the panel copies the current slider values in the same format, ready to paste back over the file.
 - `sim/` — shared Rust sim (Rapier, `enhanced-determinism`). `lib.rs` steps a mech; `net.rs` is the wire protocol, `game.rs` the authoritative match (lag-compensated hitscan, respawn), `client.rs` prediction, reconciliation and interpolation. All pure Rust with no IO; browser bindings in `wasm.rs` behind the `wasm` feature.
-- `server/` — WebSocket glue (tokio) running `sim::game::Game` at 30 Hz.
+- `server/` — axum: serves the built client and the `/ws` WebSocket, running `sim::game::Game` at 30 Hz.
 - `web/main.js` — Three.js client: fixed 30 Hz sim steps, interpolated render, HUD, lil-gui panel.
 
 ## Troubleshooting

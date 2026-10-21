@@ -1,0 +1,8 @@
+target
+node_modules
+dist
+sim/pkg
+.git
+.claude
+.omc
+.sessionlog

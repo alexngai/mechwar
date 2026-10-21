@@ -452,3 +452,26 @@ fn brace_cuts_damage() {
     assert!(braced.iter().all(|d| (d - hit * bulwark.brace_damage_mult).abs() < 1e-3), "braced hits: {braced:?}");
     assert!(unbraced.iter().all(|d| (d - hit).abs() < 1e-3), "unbraced hits: {unbraced:?}");
 }
+
+#[test]
+fn hostile_inputs_are_sanitized() {
+    let t = Tuning::default();
+    let mut game = Game::new(t.clone());
+    game.bots = false;
+    let id = game.join().unwrap();
+    let start = game.snapshot(id).me.pos;
+    let ticks = 60u32;
+    for seq in 1..=ticks {
+        let input = if seq % 2 == 0 {
+            Input { move_x: f32::NAN, move_z: f32::INFINITY, yaw: f32::NAN, pitch: f32::NEG_INFINITY, dodge: i8::MIN, ..Input::default() }
+        } else {
+            Input { move_z: 1e9, boost: true, ..Input::default() }
+        };
+        game.push_input(id, InputMsg { seq, input, view_tick: f32::NAN });
+        game.step();
+    }
+    let me = game.snapshot(id).me;
+    assert!(me.pos.is_finite() && me.vel.is_finite() && me.yaw.is_finite() && me.pitch.is_finite(), "non-finite state: {me:?}");
+    let max = t.boost_speed * ticks as f32 / TICK_HZ * 1.1;
+    assert!((me.pos - start).length() <= max, "moved {} m, more than boost allows", (me.pos - start).length());
+}

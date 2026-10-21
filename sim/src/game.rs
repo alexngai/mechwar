@@ -141,7 +141,12 @@ impl Game {
         self.players.retain(|p| p.id != id);
     }
 
-    pub fn push_input(&mut self, id: u8, msg: InputMsg) {
+    /// Queue a client's input. Clients are untrusted, so the input is sanitized here.
+    pub fn push_input(&mut self, id: u8, mut msg: InputMsg) {
+        msg.input = msg.input.sanitized();
+        if !msg.view_tick.is_finite() {
+            msg.view_tick = 0.0;
+        }
         if let Some(p) = self.players.iter_mut().find(|p| p.id == id) {
             p.inputs.push_back(msg);
             if p.inputs.len() > MAX_QUEUED {

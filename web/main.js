@@ -14,8 +14,11 @@ let classIdx = 1; // offline: the picked class; online: what the server says we 
 const classValue = (cls, name) => classes[CLASS_KEYS[cls]].overrides[name] ?? tuning[name].value;
 const T = (name) => classValue(classIdx, name);
 
-// ?server=ws://host:port plays online against the authoritative server; otherwise offline sandbox.
-const server = new URLSearchParams(location.search).get('server');
+// Dev (Vite): ?server=ws://host:port/ws plays online, otherwise the offline sandbox. A production
+// build plays online against the server that served it, unless ?offline.
+const params = new URLSearchParams(location.search);
+const sameOrigin = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
+const server = params.get('server') ?? (import.meta.env.PROD && !params.has('offline') ? sameOrigin : null);
 const net = server ? new WasmNetClient() : null;
 const sim = net ? null : new WasmSim(JSON.stringify(tuning));
 const game = net ?? sim;
