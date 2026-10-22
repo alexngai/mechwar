@@ -87,8 +87,9 @@ if (net) {
 const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, SPIN: 31, CHARGE: 32, BLOOM: 33, FIRE_WAIT: 34, OFFSET: 35 };
 // Volley index of thrown grenades; matches projectile::GRENADE in sim/src/projectile.rs.
 const GRENADE_N = 255;
-// A shell turning more than this between frames (cos of ~35 degrees) has bounced off something.
-const BOUNCE_COS = 0.82;
+// A shell whose velocity jumps more than this (m/s) between frames has bounced: gravity alone moves
+// it under 1 m/s a frame, and a bounce at least halves its speed, glancing off a floor or square off a wall.
+const BOUNCE_JUMP = 4;
 // Seconds before a second RMB can burst an own shell; matches projectile::ARM.
 const ARM = 0.2;
 
@@ -679,10 +680,11 @@ function frame(now) {
     const blend = Math.min((age + ahead) / LAUNCH_BLEND, 1);
     if (blend < 1) p.lerp(shot.from, 1 - blend);
     const look = (primary ? weapons.primaries[weapon] : secondary)?.projectile, vel = new THREE.Vector3(vx, vy, vz);
-    // A shell or grenade whose flight turns sharply between frames has bounced: it clanks.
+    // A shell or grenade whose velocity jumps between frames has bounced: it clanks, as hard as the
+    // jump (one that stops dead, a mine sticking, doesn't).
     if (!primary && shot.vel) {
-      const before = shot.vel.length(), after = vel.length();
-      if (before > 2 && after > 1 && shot.vel.dot(vel) < BOUNCE_COS * before * after) sound.clank(p, before, n === GRENADE_N);
+      const jump = shot.vel.distanceTo(vel);
+      if (jump > BOUNCE_JUMP && vel.length() > 1) sound.clank(p, jump, n === GRENADE_N);
     }
     shot.vel = vel;
     if (look === 'rocket' || look === 'dart') jets.push({ x: p.x, y: p.y, z: p.z, dart: look === 'dart' });
