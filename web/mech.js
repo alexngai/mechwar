@@ -354,22 +354,22 @@ const KITS = {
     pod.userData.loaded = loaded;
     return put(pod, new THREE.Object3D(), -0.04, 0.16, -1.4);
   } },
-  // A two-by-two missile pod on a slim forearm under a lock-on sensor; the missiles' noses show in
+  // A two-by-four missile pod on a slim forearm under a lock-on sensor; the missiles' noses show in
   // its cells while it's loaded.
   hornet: { home: 'A', build(pod, m) {
     pod.add(box(0.34, 0.34, 0.34, jointMat)); // shoulder
     put(pod, box(0.28, 0.36, 0.9, m.pods), -0.04, -0.12, -0.4); // forearm
-    put(pod, box(0.44, 0.44, 1.0, m.trim), -0.04, 0.2, -0.85); // missile pod
+    put(pod, box(0.44, 0.84, 1.0, m.trim), -0.04, 0.4, -0.85); // missile pod
     const loaded = [];
     for (const x of [-0.14, 0.06]) {
-      for (const y of [0.1, 0.3]) {
+      for (const y of [0.1, 0.3, 0.5, 0.7]) {
         put(pod, cyl(0.075, 0.075, 0.06, m.barrels), x, y, -1.36, ALONG_Z); // cell mouth
         loaded.push(put(pod, cyl(0, 0.06, 0.16, warheadMat), x, y, -1.42, -ALONG_Z)); // missile nose
       }
     }
-    put(pod, box(0.14, 0.1, 0.14, m.accent), -0.04, 0.47, -0.6); // lock-on sensor
+    put(pod, box(0.14, 0.1, 0.14, m.accent), -0.04, 0.87, -0.6); // lock-on sensor
     pod.userData.loaded = loaded;
-    return put(pod, new THREE.Object3D(), -0.04, 0.2, -1.45);
+    return put(pod, new THREE.Object3D(), -0.04, 0.4, -1.45);
   } },
   // A beam projector on the forearm: a tapered housing ending in a dish between two prongs, its
   // lens glowing the mending green.
