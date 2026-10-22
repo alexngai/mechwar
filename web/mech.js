@@ -98,6 +98,7 @@ function stencil(canvas, id) {
 }
 
 const UP = new THREE.Vector3(0, 1, 0);
+const CROUCH = 0.8; // repairing mechs crouch to this much of their height; matches sim/src/lib.rs
 const ALONG_Z = Math.PI / 2; // pitch that lays a cylinder along Z
 const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), local = new THREE.Vector3(), moveDir = new THREE.Vector3();
 const pole = new THREE.Vector3(), world = new THREE.Vector3(), flame = new THREE.Vector3(), stretch = new THREE.Vector3();
@@ -453,10 +454,12 @@ export class Mech {
     const sway = alive && s.hovering ? 0.06 * Math.sin(this.t * 5) : 0;
     // Brace sinks the Bulwark into a lower stance.
     this.brace = damp(this.brace, alive && s.ability && this.cls === 'C' ? 1 : 0, 8, dt);
-    // Shut down for repair: the body settles and the guns droop.
+    // Shut down for repair: it crouches as low as its hit shape does (CROUCH in sim/src/lib.rs)
+    // and the guns droop.
     const repair = alive ? s.repair ?? 0 : 0;
     this.shutdown = damp(this.shutdown, repair > 0 ? 1 : 0, 4, dt);
-    body.position.y = spec.hipY - bob - this.squash * 0.6 - this.wreck * spec.sink + sway - this.brace * 0.3 - this.shutdown * 0.25 - this.glide * 0.35;
+    const crouch = this.shutdown * (1 - CROUCH) * spec.height;
+    body.position.y = spec.hipY - bob - this.squash * 0.6 - this.wreck * spec.sink + sway - this.brace * 0.3 - crouch - this.glide * 0.35;
     body.rotation.x = damp(body.rotation.x, alive ? clamp(local.z / 16, -1, 1) * 0.25 : -0.45 * this.wreck, 6, dt);
     // No roll into strafes or dashes (it was disorienting); only a wreck keels over.
     body.rotation.z = damp(body.rotation.z, alive ? 0 : 0.25 * this.wreck, 8, dt);

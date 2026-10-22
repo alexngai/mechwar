@@ -18,7 +18,7 @@ fn mech_state(m: &Mech) -> Vec<f32> {
         m.aim_point.x, m.aim_point.y, m.aim_point.z,
         m.health, m.ability_time, m.ability_cooldown,
         m.alt_wait, b(m.launched),
-        m.repair_time, m.repair_cooldown,
+        m.repair_time, m.stand_up,
         f32::from(m.grenades), m.grenade_wait, f32::from(m.emps), m.emp_wait, m.jammed, b(m.threw), b(m.pulsed),
     ]
 }
@@ -180,6 +180,11 @@ impl WasmNetClient {
             .iter()
             .flat_map(|p| [f32::from(p.id), f32::from(p.team), p.class.index() as f32, if p.bot { 1.0 } else { 0.0 }, f32::from(p.kills), f32::from(p.deaths)])
             .collect()
+    }
+
+    /// Four floats per health orb: xyz and the health it has left.
+    pub fn orbs(&self) -> Vec<f32> {
+        self.0.orbs().iter().flat_map(|o| [o.pos.x, o.pos.y, o.pos.z, o.health]).collect()
     }
 
     /// Index of the server's map, or -1 before the Welcome.

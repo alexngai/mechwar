@@ -5,15 +5,15 @@
 use std::collections::VecDeque;
 
 use rapier3d::parry::query::RayCast;
-use rapier3d::prelude::Pose;
+use rapier3d::prelude::{Pose, Ray};
 
 use crate::bot::{self, Bot, Nav};
 use crate::collide;
 use crate::item;
-use crate::net::{Event, InputMsg, MatchState, MechView, PlayerNet, Snapshot};
+use crate::net::{Event, InputMsg, MatchState, MechView, Orb, PlayerNet, Snapshot};
 use crate::projectile::{self, Projectile};
 use crate::weapon;
-use crate::{Arena, Map, Mech, MechClass, TICK_HZ, Tuning, Vector, mech_capsule, spawn_mech, step_mech};
+use crate::{Arena, DT, Map, Mech, MechClass, TICK_HZ, Tuning, Vector, hit_shape, spawn_mech, step_mech};
 
 pub const TEAM_SIZE: usize = 4;
 pub const MAX_PLAYERS: usize = 2 * TEAM_SIZE;
@@ -35,6 +35,15 @@ pub const NAME_MAX: usize = 16;
 /// A player may rename this often.
 const RENAME_SECONDS: f32 = 2.0;
 /// Bots' callsigns, by player id.
+/// A destroyed mech drops a health orb holding ORB_HEALTH, floating ORB_HEIGHT over the ground
+/// where it fell. It heals every mech whose chest is within ORB_RADIUS at ORB_RATE (either team)
+/// until it runs dry, or fades after ORB_SECONDS.
+pub const ORB_HEALTH: f32 = 25.0;
+pub const ORB_RADIUS: f32 = 6.0;
+const ORB_RATE: f32 = 10.0;
+const ORB_SECONDS: f32 = 30.0;
+const ORB_HEIGHT: f32 = 1.5;
+
 const BOT_NAMES: [&str; 8] = ["Kestrel", "Vane", "Cinder", "Ashlar", "Gantry", "Flint", "Sable", "Harrow"];
 
 /// A typed callsign reduced to what others may see: ASCII letters, digits, space, `-`, `_` and
@@ -99,6 +108,7 @@ pub struct Game {
     spawns: [Vec<Vector>; 2],
     players: Vec<Player>,
     projectiles: Vec<Flying>,
+    orbs: Vec<Orb>,
     /// This tick's events; cleared at the start of each step.
     events: Vec<Event>,
     scores: [u16; 2],
@@ -123,6 +133,7 @@ impl Game {
             match_seconds: 600.0,
             players: Vec::new(),
             projectiles: Vec::new(),
+            orbs: Vec::new(),
             events: Vec::new(),
             scores: [0; 2],
             phase: Phase::Playing { started_at: 0 },
@@ -372,6 +383,20 @@ impl Game {
             self.burst(p, team, at);
         }
 
+        // Orbs heal everyone alive around them, a tick's worth each, until they run dry or fade.
+        for orb in &mut self.orbs {
+            for p in self.players.iter_mut().filter(|p| p.mech.health > 0.0) {
+                let t = &self.classes[p.class.index()];
+                if (p.mech.pos + Vector::Y * (t.mech_height * 0.5)).distance(orb.pos) <= ORB_RADIUS {
+                    let heal = (ORB_RATE * DT).min(orb.health).min(t.health_max - p.mech.health);
+                    p.mech.health += heal;
+                    orb.health -= heal;
+                }
+            }
+        }
+        let tick = self.tick;
+        self.orbs.retain(|o| o.health > 1e-3 && tick < o.fades_at);
+
         for p in &mut self.players {
             p.history.push_back((self.tick, p.mech.pos, p.mech.health > 0.0));
             if p.history.len() > HISTORY_TICKS {
@@ -384,6 +409,7 @@ impl Game {
     fn start_match(&mut self) {
         self.scores = [0; 2];
         self.projectiles.clear();
+        self.orbs.clear();
         self.phase = Phase::Playing { started_at: self.tick };
         for p in &mut self.players {
             p.class = p.next_class;
@@ -430,22 +456,24 @@ impl Game {
         let t = &self.classes[self.players[shooter].class.index()];
         let (m, team, shooter_id) = (&self.players[shooter].mech, self.players[shooter].team, self.players[shooter].id);
         let view = view_tick.clamp(self.tick as f32 - MAX_REWIND_TICKS, self.tick as f32);
-        let targets: Vec<(usize, Pose, &Tuning)> = self
+        // ponytail: the crouch is as of now, not rewound; it only differs for the 0.3 s at most
+        // that a repair has been starting or ending. Rewind it too if that shows.
+        let targets: Vec<_> = self
             .players
             .iter()
             .enumerate()
             .filter(|(_, q)| q.team != team && q.mech.health > 0.0)
             .filter_map(|(j, q)| {
-                let tt = &self.classes[q.class.index()];
-                rewind(&q.history, view).map(|pos| (j, Pose::from_translation(pos + Vector::Y * (tt.mech_height * 0.5)), tt))
+                let (shape, center) = hit_shape(&self.classes[q.class.index()], &Mech { pos: rewind(&q.history, view)?, ..q.mech });
+                Some((j, Pose::from_translation(center), shape))
             })
             .collect();
         let mut hits = Vec::new();
         for ray in weapon::pellets(t, m, seq) {
             let mut best = self.arena.cast_ray(&ray, t.weapon_range).unwrap_or(t.weapon_range);
             let mut hit = None;
-            for (j, pose, tt) in &targets {
-                if let Some(toi) = mech_capsule(tt).cast_ray(pose, &ray, best, true) {
+            for (j, pose, shape) in &targets {
+                if let Some(toi) = shape.cast_ray(pose, &ray, best, true) {
                     best = toi;
                     hit = Some(*j);
                 }
@@ -504,7 +532,7 @@ impl Game {
     }
 
     /// Damages player `j` (less while braced) while the match is on, ending any repair. A kill
-    /// scores for `attacker`, if they're still here.
+    /// drops a health orb, and scores for `attacker`, if they're still here.
     fn apply_damage(&mut self, attacker: Option<usize>, j: usize, amount: f32) {
         let target = &self.players[j];
         if !matches!(self.phase, Phase::Playing { .. }) || target.mech.health <= 0.0 {
@@ -515,7 +543,7 @@ impl Game {
         let damage = amount * if braced { tt.brace_damage_mult } else { 1.0 };
         let respawn_at = self.tick + secs(tt.respawn_delay);
         let target = &mut self.players[j];
-        target.mech.stop_repair(tt);
+        target.mech.end_repair(tt);
         target.mech.health -= damage;
         if target.mech.health > 0.0 {
             return;
@@ -523,7 +551,10 @@ impl Game {
         target.mech.health = 0.0;
         target.deaths += 1;
         target.respawn_at = Some(respawn_at);
-        let victim = target.id;
+        let (victim, fell) = (target.id, target.mech.pos);
+        // Over the ground below, if it went down in the air.
+        let ground = self.arena.cast_ray(&Ray::new(fell + Vector::Y * 0.5, Vector::NEG_Y), 60.0).map_or(fell, |d| fell + Vector::Y * (0.5 - d));
+        self.orbs.push(Orb { pos: ground + Vector::Y * ORB_HEIGHT, health: ORB_HEALTH, fades_at: self.tick + secs(ORB_SECONDS) });
         let Some(a) = attacker else { return };
         let (killer, team) = (self.players[a].id, self.players[a].team);
         self.players[a].kills += 1;
@@ -559,6 +590,7 @@ impl Game {
                 })
                 .collect(),
             events: self.events.clone(),
+            orbs: self.orbs.clone(),
             state: MatchState {
                 scores: self.scores,
                 seconds_left: (until.saturating_sub(self.tick) as f32 / TICK_HZ).ceil() as u16,
@@ -605,6 +637,52 @@ mod tests {
 
     fn mech(game: &Game, id: u8) -> Mech {
         game.players.iter().find(|p| p.id == id).unwrap().mech
+    }
+
+    #[test]
+    fn destroyed_mechs_drop_orbs_that_heal_until_dry() {
+        let t = Tuning::default();
+        let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+        game.bots = false;
+        let (killer, victim, far) = (game.join().unwrap(), game.join().unwrap(), game.join().unwrap());
+        let at = |game: &Game, id| game.players.iter().position(|p| p.id == id).unwrap();
+        for (id, x) in [(killer, 3.0), (victim, 0.0), (far, 20.0)] {
+            let i = at(&game, id);
+            game.players[i].mech.pos = Vector::new(x, 0.05, 0.0);
+        }
+        // Killed in mid-air, it drops its orb over the floor below.
+        let v = at(&game, victim);
+        game.players[v].mech.pos.y = 10.0;
+        game.apply_damage(Some(at(&game, killer)), v, 1e3);
+        let orb = game.orbs[0];
+        assert!(orb.pos.distance(Vector::new(0.0, ORB_HEIGHT, 0.0)) < 0.05, "orb at {}", orb.pos);
+        assert_eq!(game.snapshot(killer).orbs.len(), 1);
+
+        for id in [killer, far] {
+            let i = at(&game, id);
+            game.players[i].mech.health = 40.0;
+        }
+        for _ in 0..(3.0 * TICK_HZ) as u32 {
+            game.step();
+        }
+        // The killer, beside it, takes all 25 over 2.5 s; the one 20 m off gets none.
+        assert!((mech(&game, killer).health - (40.0 + ORB_HEALTH)).abs() < 1e-3, "killer at {}", mech(&game, killer).health);
+        assert_eq!(mech(&game, far).health, 40.0);
+        assert!(game.orbs.is_empty(), "a dry orb lingers");
+    }
+
+    #[test]
+    fn untouched_orbs_fade() {
+        let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
+        game.bots = false;
+        game.join().unwrap();
+        game.orbs.push(Orb { pos: Vector::new(30.0, ORB_HEIGHT, 30.0), health: ORB_HEALTH, fades_at: game.tick + secs(ORB_SECONDS) });
+        for _ in 0..secs(ORB_SECONDS) - 1 {
+            game.step();
+        }
+        assert_eq!(game.orbs.len(), 1, "faded early");
+        game.step();
+        assert!(game.orbs.is_empty(), "never faded");
     }
 
     #[test]

@@ -256,8 +256,9 @@ export class Hud {
     for (const c of f.contacts) {
       const p = relative(f.me.x, f.me.z, f.yaw, c.x, c.z);
       const px = rx + p.right * k, py = ry - p.ahead * k;
-      g.fillStyle = c.enemy ? f.enemyColor : f.friendColor;
-      if (c.enemy) diamond(g, px, py, 5 * u);
+      g.fillStyle = c.orb ? REPAIR : c.enemy ? f.enemyColor : f.friendColor;
+      if (c.orb) g.fillRect(px - 2.5 * u, py - 2.5 * u, 5 * u, 5 * u); // health orb
+      else if (c.enemy) diamond(g, px, py, 5 * u);
       else {
         g.beginPath();
         g.arc(px, py, 3.5 * u, 0, TAU);
@@ -292,12 +293,12 @@ export class Hud {
     g.beginPath();
     g.arc(cx - 140 * u, dy + 30 * u, 5 * u, 0, TAU);
     g.fill();
-    const repairKey = f.repair.phase >= 1 ? 'ON' : f.repair.phase > 0 ? '…' : f.repair.ready >= 1 ? 'R' : '';
+    const repairKey = f.repair >= 1 ? 'ON' : f.repair > 0 ? '…' : 'R';
     const rows = [
       // While an own shell is armed in flight, RMB bursts it.
       [`${f.altName}`, f.alt, f.altBurst ? 'RMB BURST' : f.altReady ? 'RMB' : '', f.altBurst],
       [`${f.abilityName}`, f.ability, f.abilityActive ? 'ON' : f.ability >= 1 ? 'F' : ''],
-      ['Repair', f.repair.phase > 0 ? f.repair.phase : f.repair.ready, repairKey],
+      ['Repair', f.repair > 0 ? f.repair : 1, repairKey],
     ];
     g.textAlign = 'left';
     rows.forEach(([name, fill, key, lit], i) => {
@@ -323,9 +324,9 @@ export class Hud {
     // Shutdown and jamming warnings over the hull numeral.
     g.textAlign = 'center';
     g.font = font(16, 'bold');
-    if (f.repair.phase > 0) {
+    if (f.repair > 0 || f.standing) {
       g.fillStyle = REPAIR;
-      g.fillText(f.repair.phase >= 1 ? 'REPAIRING · SYSTEMS OFFLINE' : 'SHUTTING DOWN', cx, dy - 52 * u);
+      g.fillText(f.standing ? 'SYSTEMS RESTARTING' : f.repair >= 1 ? 'REPAIRING · SYSTEMS OFFLINE' : 'SHUTTING DOWN', cx, dy - 52 * u);
     } else if (f.jammed && Math.floor(f.now / 200) % 2 === 0) {
       g.fillStyle = WARN;
       g.fillText('BOOST JAMMED', cx, dy - 52 * u);

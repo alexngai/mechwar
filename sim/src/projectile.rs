@@ -9,7 +9,7 @@ use rapier3d::parry::query::RayCast;
 use rapier3d::prelude::{Capsule, Pose, Ray, Rotation};
 use serde::{Deserialize, Serialize};
 
-use crate::{Arena, DT, Mech, MechClass, Tuning, Vector, aim_ray, mech_capsule};
+use crate::{Arena, DT, Mech, MechClass, Tuning, Vector, aim_ray, hit_shape};
 
 /// Added to mech capsules for contact: projectiles aren't points.
 pub const PROJECTILE_RADIUS: f32 = 0.25;
@@ -145,9 +145,9 @@ pub fn fly(arena: &Arena, t: &Tuning, p: &mut Projectile, mut hit_mech: impl FnM
 pub fn first_mech<'a>(ray: &Ray, mut max: f32, mechs: impl IntoIterator<Item = (&'a Tuning, &'a Mech)>) -> Option<f32> {
     let mut best = None;
     for (t, m) in mechs {
-        let c = mech_capsule(t);
+        let (c, center) = hit_shape(t, m);
         let shape = Capsule::new_y(c.half_height(), c.radius + PROJECTILE_RADIUS);
-        let pose = Pose::from_translation(m.pos + Vector::Y * (t.mech_height * 0.5));
+        let pose = Pose::from_translation(center);
         if let Some(toi) = shape.cast_ray(&pose, ray, max, true) {
             max = toi;
             best = Some(toi);
@@ -161,8 +161,7 @@ pub fn first_mech<'a>(ray: &Ray, mut max: f32, mechs: impl IntoIterator<Item = (
 /// beyond it or through the arena.
 pub fn splash(arena: &Arena, t: &Tuning, primary: bool, at: Vector, tm: &Tuning, m: &Mech) -> f32 {
     let b = ballistics(t, primary);
-    let c = mech_capsule(tm);
-    let center = m.pos + Vector::Y * (tm.mech_height * 0.5);
+    let (c, center) = hit_shape(tm, m);
     let h = c.half_height();
     let axis = Vector::new(center.x, at.y.clamp(center.y - h, center.y + h), center.z);
     let to = axis - at;
@@ -180,8 +179,19 @@ pub fn splash(arena: &Arena, t: &Tuning, primary: bool, at: Vector, tm: &Tuning,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Map, spawn_mech};
+    use crate::{Map, mech_capsule, spawn_mech};
     use std::f32::consts::FRAC_PI_2;
+
+    #[test]
+    fn repairing_mechs_crouch_under_head_high_shots() {
+        let t = Tuning::default();
+        let mut m = spawn_mech(&t, Vector::ZERO);
+        // Level, at 90% of the mech's height: over a crouch (80%), into a standing mech.
+        let ray = Ray::new(Vector::new(0.0, 0.9 * t.mech_height, 20.0), Vector::NEG_Z);
+        assert!(first_mech(&ray, 50.0, [(&t, &m)]).is_some(), "missed a standing mech");
+        m.repair_time = DT;
+        assert!(first_mech(&ray, 50.0, [(&t, &m)]).is_none(), "hit a crouched mech over its head");
+    }
 
     fn blockout() -> Arena {
         Arena::new(&Map::load(Map::index("blockout").unwrap()))

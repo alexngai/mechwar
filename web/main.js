@@ -8,7 +8,7 @@ import init, { WasmNetClient, WasmSim, map_name, tick_dt } from '../sim/pkg/sim.
 import tuning from '../tuning.json';
 import classes from '../classes.json';
 import { buildArena, HIGH_ONLY, LOW_ONLY } from './arena.js';
-import { Effects, HOT } from './fx.js';
+import { Effects, HOT, halo, hot } from './fx.js';
 import saltworks from '../maps/saltworks.json';
 import foundry from '../maps/foundry.json';
 import blockout from '../maps/blockout.json';
@@ -54,7 +54,7 @@ if (net) {
 }
 
 // Index layout of state(); keep in sync with mech_state in sim/src/wasm.rs.
-const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, REPAIR_CD: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, OFFSET: 31 };
+const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, OFFSET: 31 };
 // Volley index of thrown grenades; matches projectile::GRENADE in sim/src/projectile.rs.
 const GRENADE_N = 255;
 // Seconds before a second RMB can burst an own shell; matches projectile::ARM.
@@ -191,8 +191,9 @@ const hits = [], damageFrom = [], lastFired = new Map();
 // --- Input ---------------------------------------------------------------
 const keys = new Set();
 let yaw = 0, pitch = 0, dodge = 0, ability = false, grenade = false, emp = false, firing = false, altFiring = false;
-// First-person cockpit unless the player last chose the chase camera (V).
-let firstPerson = stored('webhawk.view') !== 'chase';
+// Always the cockpit, except while repairing: the camera pulls back to watch the mech shut down
+// and returns once it has stood back up. `chase` eases from 0 (cockpit) to 1 (full chase distance).
+let firstPerson = true, chase = 0;
 const locked = () => document.pointerLockElement === renderer.domElement;
 // Chrome rejects a re-lock right after Esc; the next click simply tries again.
 renderer.domElement.addEventListener('click', () => renderer.domElement.requestPointerLock()?.catch?.(() => {}));
@@ -230,10 +231,6 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyG') grenade = true;
   if (e.code === 'KeyT') emp = true;
   if (e.code === 'KeyK' && sim) { sim.reset(); prev = curr = sim.state(); }
-  if (e.code === 'KeyV') {
-    firstPerson = !firstPerson;
-    try { localStorage.setItem('webhawk.view', firstPerson ? 'cockpit' : 'chase'); } catch { /* private mode */ }
-  }
   if (e.code === 'KeyI') $('stats').hidden = !$('stats').hidden;
   if (e.code === 'KeyM') setMuted(!sound.muted);
   if (e.code === 'Tab') { e.preventDefault(); boardOpen = true; }
@@ -421,6 +418,8 @@ function frame(now) {
   pos.set(lerp(S.POS) + lerp(S.OFFSET), lerp(S.POS + 1) + lerp(S.OFFSET + 1), lerp(S.POS + 2) + lerp(S.OFFSET + 2));
   me.setTeam(myTeam);
   me.setUnit(myId);
+  chase += ((curr[S.REPAIR_T] > 0 || curr[S.STAND] > 0 ? 1 : 0) - chase) * (1 - Math.exp(-5 * dt));
+  firstPerson = chase < 0.02;
   me.root.visible = !firstPerson;
   me.update(dt, {
     pos, yaw, pitch, scale: T('mech_height') / me.height,
@@ -548,6 +547,7 @@ function frame(now) {
   }
   for (const key of launches.keys()) if (!live.has(key)) launches.delete(key);
   fx.projectiles(drawn, dt);
+  drawOrbs(now, dt, alive);
 
   // Look is applied at render rate for responsiveness; position is interpolated. In the cockpit
   // the view bobs with the gait and shakes when hit, but stays level (no roll).
@@ -563,7 +563,7 @@ function frame(now) {
     offset.set(0, T('chase_height'), T('chase_distance')).applyQuaternion(camera.quaternion);
     const want = offset.length();
     const room = game.cast_ray(eye.x, eye.y, eye.z, offset.x, offset.y, offset.z, want + 0.5) - 0.5;
-    camera.position.addScaledVector(offset, Math.max(room, 0.5) / want);
+    camera.position.addScaledVector(offset, (Math.max(room, 0.5) / want) * chase);
   }
   shake *= Math.exp(-6 * dt);
   // A small FOV kick while boosting sells the speed.
@@ -692,10 +692,41 @@ function renderBoard(myId, hudState) {
  * Fills and draws the glass HUD: tags for teammates always and for enemies in sight, radar
  * contacts (enemies only while seen or just after firing), the reticle at the aim point.
  */
+// Health orbs (online only: nothing dies offline). Radius and full health match ORB_RADIUS and
+// ORB_HEALTH in sim/src/game.rs.
+const ORB_RADIUS = 6, ORB_HEALTH = 25, ORB_COLOR = 0x6dff9a;
+const orbGeometry = new THREE.IcosahedronGeometry(0.7, 1), orbMaterial = hot(new THREE.MeshBasicMaterial({ color: ORB_COLOR }));
+const orbMeshes = [];
+let orbs = new Float32Array(0); // xyz and health left, per orb
+/** Bobbing green cores that shrink as they give out, and repair motes on every hurt mech in reach. */
+function drawOrbs(now, dt, alive) {
+  orbs = net ? net.orbs() : orbs;
+  const n = orbs.length / 4;
+  for (let k = 0; k < Math.max(n, orbMeshes.length); k++) {
+    let o = orbMeshes[k];
+    if (!o && k < n) {
+      o = new THREE.Mesh(orbGeometry, orbMaterial);
+      const h = o.add(halo(ORB_COLOR, 3)).children[0];
+      h.layers.set(LOW_ONLY); // bloom does this in High
+      scene.add(o);
+      orbMeshes.push(o);
+    }
+    o.visible = k < n;
+    if (!o.visible) continue;
+    const [x, y, z, left] = orbs.subarray(4 * k, 4 * k + 4);
+    o.position.set(x, y + 0.15 * Math.sin(now / 400 + k), z);
+    o.scale.setScalar((0.4 + 0.6 * Math.sqrt(left / ORB_HEALTH)) * (1 + 0.1 * Math.sin(now / 130)));
+    const heals = (p, h, health, max) => health > 0 && health < max && chest.copy(p).setY(p.y + h * 0.5).distanceTo(o.position) <= ORB_RADIUS && fx.repair(chest, dt);
+    if (alive) heals(pos, T('mech_height'), curr[S.HEALTH], T('health_max'));
+    for (const e of remotes.values()) heals(e.pos, classValue(e.cls, 'mech_height'), e.health, classValue(e.cls, 'health_max'));
+  }
+}
+
 function drawGlass(now, myTeam) {
   const W = glass.canvas.width, H = glass.canvas.height;
   const toScreen = (p) => ({ x: ((p.x + 1) / 2) * W, y: ((1 - p.y) / 2) * H });
   const tags = [], contacts = [];
+  for (let i = 0; i < orbs.length; i += 4) contacts.push({ x: orbs[i], z: orbs[i + 2], orb: true });
   let focus = null, focusAngle = THREE.MathUtils.degToRad(4);
   camera.getWorldDirection(look);
   for (const [id, e] of remotes) {
@@ -738,7 +769,7 @@ function drawGlass(now, myTeam) {
     dodge: 1 - curr[S.DODGE_CD] / Math.max(T('dodge_cooldown'), 1e-6),
     health: curr[S.HEALTH], healthMax: T('health_max'), fuel: curr[S.FUEL] / T('fuel_max'), className: c.name,
     friendColor: hex((TEAMS[myTeam] ?? TEAMS[-1]).accent), enemyColor: hex((TEAMS[1 - myTeam] ?? TEAMS[1]).accent),
-    repair: { phase: repairPhase(curr[S.REPAIR_T]), ready: 1 - curr[S.REPAIR_CD] / Math.max(T('repair_cooldown'), 1e-6) },
+    repair: repairPhase(curr[S.REPAIR_T]), standing: curr[S.STAND] > 0,
     items: [
       { key: 'G', name: 'Tumbler', charges: curr[S.GRENADES], max: T('grenade_charges'), recharge: 1 - curr[S.GRENADE_WAIT] / Math.max(T('grenade_recharge'), 1e-6) },
       { key: 'T', name: 'Brownout', charges: curr[S.EMPS], max: T('emp_charges'), recharge: 1 - curr[S.EMP_WAIT] / Math.max(T('emp_recharge'), 1e-6) },

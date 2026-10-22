@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use crate::net::{self, ClientMsg, Event, InputMsg, MatchState, PlayerNet, ServerMsg, Snapshot};
+use crate::net::{self, ClientMsg, Event, InputMsg, MatchState, Orb, PlayerNet, ServerMsg, Snapshot};
 use crate::projectile::{self, Id, Projectile};
 use crate::{Arena, DT, Input, Map, Mech, MechClass, Tuning, Vector, collide, map, step_mech, weapon};
 
@@ -192,6 +192,11 @@ impl NetClient {
         self.snapshots.back().map_or_else(Vec::new, |s| s.players.clone())
     }
 
+    /// Health orbs as of the latest snapshot (they don't move, so no interpolation).
+    pub fn orbs(&self) -> Vec<Orb> {
+        self.snapshots.back().map_or_else(Vec::new, |s| s.orbs.clone())
+    }
+
     pub fn pick_class(&self, class: MechClass) -> Vec<u8> {
         net::encode(&ClientMsg::Class(class))
     }
@@ -234,7 +239,8 @@ impl NetClient {
                 .players
                 .iter()
                 .filter(|p| p.id != own)
-                .map(|p| (p.team, Mech { class: p.class, pos: p.view.pos, health: p.view.health, ..Mech::default() }))
+                // Repairing ones crouch (`hit_shape`); any repair time will do.
+                .map(|p| (p.team, Mech { class: p.class, pos: p.view.pos, health: p.view.health, repair_time: if p.view.repairing { DT } else { 0.0 }, ..Mech::default() }))
                 .collect();
             // Reconcile: take the server's state at ack_seq and replay what it hasn't seen yet.
             let predicted = self.mech.pos;

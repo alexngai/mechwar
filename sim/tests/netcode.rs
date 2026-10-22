@@ -544,17 +544,16 @@ fn damage_cancels_repair() {
     assert!(healed > hurt + 0.5 * t.repair_rate, "repair healed {hurt} only to {healed}");
     assert!(player(&game, victim).view.repairing, "others can't see the repair");
 
-    // One hit ends it, and holding on doesn't restart it during the cooldown.
+    // One hit ends it; held on, it starts over at once, wind-up first.
     tick(&mut game, true, repair);
     let me = game.snapshot(victim).me;
     assert!(me.health < healed, "the shot missed");
-    assert_eq!(me.repair_time, 0.0, "still repairing after a hit");
-    assert!(!player(&game, victim).view.repairing);
-    for _ in 0..(t.repair_cooldown * TICK_HZ) as u32 - 2 {
+    assert!(me.repair_time <= DT * 1.01, "the hit didn't restart the wind-up ({} s in)", me.repair_time);
+    for _ in 0..(t.repair_windup * TICK_HZ) as u32 - 2 {
         tick(&mut game, false, repair);
     }
-    assert_eq!(game.snapshot(victim).me.health, me.health, "healed during the cooldown");
-    assert!(!player(&game, victim).view.repairing);
+    assert_eq!(game.snapshot(victim).me.health, me.health, "healed during the wind-up");
+    assert!(player(&game, victim).view.repairing, "didn't start over");
 }
 
 #[test]

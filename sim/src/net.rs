@@ -43,6 +43,18 @@ pub struct Snapshot {
     pub players: Vec<PlayerNet>,
     pub events: Vec<Event>,
     pub state: MatchState,
+    pub orbs: Vec<Orb>,
+}
+
+/// A health orb, dropped where a mech was destroyed: it heals every mech near it until it runs
+/// dry or fades.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct Orb {
+    pub pos: Vector,
+    /// Health left to give.
+    pub health: f32,
+    /// Tick it fades at.
+    pub fades_at: u32,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
