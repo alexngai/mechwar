@@ -464,9 +464,9 @@ function bar(g, x, y, w, h, fill, color) {
 }
 
 /**
- * Vitals: the fuel tube on the left (it drains with boost, hover and dodges; the tick is what a boost
- * needs), the hull number and bar in the middle, a red wash when hit, and lamps down the right, or
- * the repair cycle's state under the hull.
+ * Vitals: the hull's number and bar on top, the fuel bar under it (it drains with boost, hover and
+ * dodges; the tick is what a boost needs), the repair cycle's state at the bottom, and a red wash
+ * when hit.
  */
 function vitalsScreen(s, f) {
   const [g, W, H] = blank(s);
@@ -474,46 +474,28 @@ function vitalsScreen(s, f) {
     g.fillStyle = `rgba(255,60,40,${0.3 * f.hurt})`;
     g.fillRect(0, 0, W, H);
   }
-  const tx = 22, ty = 20, tw = 44, th = H - 40, fill = clamp01(f.fuel), short = f.fuel < f.boostMin;
-  g.fillStyle = 'rgba(127,216,255,0.08)';
-  g.fillRect(tx, ty, tw, th);
-  g.fillStyle = short ? WARN : FUEL;
-  g.fillRect(tx, ty + th * (1 - fill), tw, th * fill);
-  g.strokeStyle = DIM;
-  g.lineWidth = 3;
-  g.strokeRect(tx, ty, tw, th);
-  const tick = ty + th * (1 - f.boostMin);
-  g.strokeStyle = AMBER;
-  g.beginPath();
-  g.moveTo(tx - 8, tick);
-  g.lineTo(tx + tw + 8, tick);
-  g.stroke();
-  const low = f.health / f.healthMax < 0.3, color = low ? WARN : AMBER, left = 88, right = 372, mid = (left + right) / 2;
-  g.textAlign = 'center';
+  const x = 176, w = W - x - 24, hull = f.health / f.healthMax, color = hull < 0.3 ? WARN : AMBER;
   g.fillStyle = DIM;
-  g.font = font(24);
-  g.fillText(`HULL · ${f.className.toUpperCase()}`, mid, 14);
+  g.font = font(22);
+  g.fillText(`HULL · ${f.className.toUpperCase()}`, x, 22);
   g.fillStyle = color;
-  g.font = font(104, 'bold');
-  g.fillText(String(Math.ceil(f.health)), mid, 36);
-  bar(g, left, 140, right - left, 16, f.health / f.healthMax, color);
+  g.font = font(72, 'bold');
+  g.fillText(String(Math.ceil(f.health)), 24, 36);
+  bar(g, x, 52, w, 36, hull, color);
+  const short = f.fuel < f.boostMin;
+  g.fillStyle = short ? WARN : FUEL;
+  g.font = font(30);
+  g.fillText('FUEL', 24, 132);
+  bar(g, x, 128, w, 30, f.fuel, short ? WARN : FUEL);
+  const tick = x + w * f.boostMin;
+  g.fillStyle = AMBER;
+  g.fillRect(tick - 2, 120, 4, 46);
   const status = f.standing ? 'RESTARTING' : f.repair >= 1 ? 'REPAIRING' : f.repair > 0 ? 'SHUTTING DOWN' : '';
   if (status) {
     g.fillStyle = REPAIR;
     g.font = font(26, 'bold');
-    g.fillText(status, mid, 168);
+    g.fillText(status, x, 178);
   }
-  g.textAlign = 'left';
-  [['DODGE', f.dodge >= 1, AMBER], ['BOOST', f.boosting, FUEL], ['JAM', f.jammed, WARN]].forEach(([name, on, lit], i) => {
-    const x = 394, y = 26 + i * 58;
-    g.fillStyle = on ? lit : FAINT;
-    g.beginPath();
-    g.arc(x + 9, y + 12, 9, 0, TAU);
-    g.fill();
-    g.fillStyle = on ? lit : DIM;
-    g.font = font(24);
-    g.fillText(name, x + 24, y);
-  });
 }
 
 /** Radar: the glass's radar (hud.js), drawn large for the round scope. */

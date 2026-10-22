@@ -848,7 +848,6 @@ function drawGlass(now, myTeam) {
     alt: 1 - curr[S.ALT_WAIT] / Math.max(T('alt_cooldown'), 1e-6), altReady: curr[S.ALT_WAIT] <= 0,
     altBurst: burstable,
     ability: 1 - curr[S.ABILITY_CD] / Math.max(T('ability_cooldown'), 1e-6), abilityActive: curr[S.ABILITY_T] > 0, abilityName: c.ability.name,
-    dodge: 1 - curr[S.DODGE_CD] / Math.max(T('dodge_cooldown'), 1e-6),
     health: curr[S.HEALTH], healthMax: T('health_max'), fuel: curr[S.FUEL] / T('fuel_max'), className: c.name, hurt,
     boostMin: T('boost_min_fuel') / T('fuel_max'), boosting: !!curr[S.BOOSTING], hovering: !!curr[S.HOVERING],
     friendColor: hex((TEAMS[myTeam] ?? TEAMS[-1]).accent), enemyColor: hex((TEAMS[1 - myTeam] ?? TEAMS[1]).accent),
