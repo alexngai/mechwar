@@ -1,7 +1,7 @@
 // The arena's look, built from map data (maps/*.json): solids with kitbashed trim, decor props, a
-// generated ground texture and baked ambient occlusion (plus lamp and furnace light on night maps),
-// merged into three meshes. Only `solids` collide (the sim reads the same file); everything added
-// here is visual.
+// generated ground texture and baked ambient occlusion (plus lamp, furnace and sign light on night
+// maps), merged into three meshes. A map's `palette` tints it and colors its lamps. Only `solids`
+// collide (the sim reads the same file); everything added here is visual.
 import * as THREE from 'three';
 import { halo, hot } from './fx.js';
 
@@ -11,13 +11,19 @@ export const LOW_ONLY = 1, HIGH_ONLY = 2;
 const COLORS = {
   ground: 0x9a9384, concrete: 0xa8a08e, metal: 0x6f7880, panel: 0x8f969a, salt: 0xe8e4d8, tank: 0xb9ac8e,
   trim: 0x55585b, rail: 0xd3a23a, pipe: 0x7d7262, pole: 0x3a3c3f, rust: 0x8a5634, soot: 0x4f4c49, stack: 0x6e5a4c,
+  tower: 0x6c7470,
 };
+// Lit windows on `tower` solids, unless the palette names its own; and how many slots are lit.
+const WINDOWS = ['#ffd890', '#9dffc0', '#7fe8ff'];
+const LIT = 0.3;
 const TILE = 8; // ground texture repeat, meters
 // Baked night lights: color, reach (m) and strength. Lamps light pools; furnaces glow orange.
 const LAMP = { color: 0xffc98a, radius: 16, power: 1.4 };
 const FURNACE = { color: 0xff8a3a, radius: 15, power: 4 };
+const SIGN = { radius: 12, power: 2 };
 const AO_STEPS = [0.4, 0.9, 1.6, 2.5, 3.6]; // sample distances along the normal, meters
-const UP = new THREE.Vector3(0, 1, 0);
+const UP = new THREE.Vector3(0, 1, 0), WHITE = new THREE.Color(1, 1, 1);
+const tint = new THREE.Color(1, 1, 1); // the building map's palette tint, for `paint`
 const color = new THREE.Color(), v = new THREE.Vector3(), n = new THREE.Vector3(), local = new THREE.Vector3(), sample = new THREE.Vector3(), to = new THREE.Vector3();
 
 const solidMatrix = (s) =>
@@ -36,8 +42,10 @@ function boxGeometry([hx, hy, hz], cell = 2) {
 /** Small deterministic hash so each solid gets a stable color variation. */
 const jitter = (i) => 1 + (((Math.sin(i * 12.9898) * 43758.5453) % 1) - 0.5) * 0.1;
 
-function paint(geometry, hex, shade = 1) {
-  color.setHex(hex).multiplyScalar(shade);
+/** Colors `geometry` `hex` times `shade`, tinted by the palette unless it's a light (`glows`). */
+function paint(geometry, hex, shade = 1, glows = false) {
+  color.set(hex).multiplyScalar(shade);
+  if (!glows) color.multiply(tint);
   const count = geometry.attributes.position.count;
   const colors = new Float32Array(count * 3);
   for (let i = 0; i < count; i++) color.toArray(colors, i * 3);
@@ -61,7 +69,7 @@ function kitbash(s, parts) {
     add(0.2, 0.25, 2 * hz + 0.2, hx, hy - 0.12, 0);
     add(0.2, 0.25, 2 * hz + 0.2, -hx, hy - 0.12, 0);
   }
-  if (tall && Math.max(hx, hz) > 3) {
+  if (tall && Math.max(hx, hz) > 3 && s.mat !== 'tower') {
     // Vertical ribs every ~4 m on the long faces.
     const alongX = hx >= hz, long = alongX ? hx : hz, short = alongX ? hz : hx;
     for (let p = -long + 2; p <= long - 2 + 1e-3; p += 4) {
@@ -85,7 +93,8 @@ function kitbash(s, parts) {
   }
 }
 
-function decorParts(d, parts, glow) {
+/** `lamp` is the lamps' { light, head } colors. */
+function decorParts(d, parts, glow, lamp) {
   const segment = (from, to, thickness, hex) => {
     const a = new THREE.Vector3(...from), b = new THREE.Vector3(...to), dir = new THREE.Vector3().subVectors(b, a);
     const len = dir.length();
@@ -120,10 +129,17 @@ function decorParts(d, parts, glow) {
     segment([x, y, z], [x, y + 3.2, z], 0.16, COLORS.pole);
     const head = new THREE.BoxGeometry(0.7, 0.22, 0.7);
     head.translate(x, y + 3.25, z);
-    glow.push(paint(head, 0xffd9a0));
+    glow.push(paint(head, lamp.head, 1, true));
     glow.lamps.push(new THREE.Vector3(x, y + 3.1, z));
     // Its light shaft, down to the deck it stands on.
-    glow.shafts.push(paint(new THREE.CylinderGeometry(0.3, 2.6, 3.1, 16, 1, true).translate(x, y + 1.55, z), LAMP.color, 0.25));
+    glow.shafts.push(paint(new THREE.CylinderGeometry(0.3, 2.6, 3.1, 16, 1, true).translate(x, y + 1.55, z), lamp.light, 0.25, true));
+  } else if (d.kind === 'sign') {
+    // A neon panel set on a wall (`from`/`to` corners), lighting the street from `at`.
+    const a = new THREE.Vector3(...d.from), b = new THREE.Vector3(...d.to);
+    const g = new THREE.BoxGeometry(...new THREE.Vector3().subVectors(b, a).toArray().map(Math.abs));
+    g.translate(...a.add(b).multiplyScalar(0.5).toArray());
+    glow.push(paint(g, d.color, 1, true));
+    glow.signs.push({ at: new THREE.Vector3(...d.at), color: d.color });
   } else if (d.kind === 'furnace') {
     // A furnace mouth: a glowing slab set into a wall (`from`/`to` corners), lit from `at`.
     const a = new THREE.Vector3(...d.from), b = new THREE.Vector3(...d.to), at = new THREE.Vector3(...d.at);
@@ -131,7 +147,7 @@ function decorParts(d, parts, glow) {
     const g = new THREE.BoxGeometry(...size);
     const center = a.add(b).multiplyScalar(0.5);
     g.translate(...center.toArray());
-    glow.push(paint(g, 0xffa050));
+    glow.push(paint(g, 0xffa050, 1, true));
     glow.furnaces.push(at);
     // Its glow: a square shaft flaring 5 m out of the mouth, off the wall toward `at`.
     const thin = size[0] < size[2] ? 0 : 2;
@@ -139,7 +155,7 @@ function decorParts(d, parts, glow) {
     const across = new THREE.Vector3().crossVectors(UP, out).multiplyScalar(size[2 - thin] / 2);
     const shaft = new THREE.CylinderGeometry(Math.SQRT2, 1.6 * Math.SQRT2, 1, 4, 1, true, Math.PI / 4);
     shaft.applyMatrix4(new THREE.Matrix4().makeBasis(across, out.clone().multiplyScalar(-5), UP.clone().multiplyScalar(size[1] / 2)).setPosition(center.addScaledVector(out, 2.5)));
-    glow.shafts.push(paint(shaft, FURNACE.color, 0.3));
+    glow.shafts.push(paint(shaft, FURNACE.color, 0.3, true));
   }
 }
 
@@ -291,6 +307,27 @@ function shaftMaterial() {
   });
 }
 
+/**
+ * Lit window panes on the faces of a `tower` solid, in its local space: rows every 4 m from 8 m up
+ * (street level stays dark, no glare at eye height), a slot every 3 m, LIT of them lit (seeded by
+ * `seed`, so a tower always looks the same).
+ */
+function towerWindows(s, seed, colors, out) {
+  const [hx, hy, hz] = s.half;
+  let k = seed * 9301 + 49297;
+  const rand = () => ((k = (k * 16807) % 2147483647) / 2147483647);
+  for (const [w, d, face] of [[hx, hz, (a, y) => [a, y, hz + 0.05, 0]], [hx, hz, (a, y) => [a, y, -hz - 0.05, Math.PI]], [hz, hx, (a, y) => [hx + 0.05, y, -a, Math.PI / 2]], [hz, hx, (a, y) => [-hx - 0.05, y, a, -Math.PI / 2]]]) {
+    for (let y = -hy + 8; y < hy - 2; y += 4) {
+      for (let a = -w + 2; a < w - 1; a += 3) {
+        if (rand() > LIT) continue;
+        const [x, wy, z, turn] = face(a, y);
+        const pane = new THREE.PlaneGeometry(1.2, 1).rotateY(turn).translate(x, wy, z);
+        out.push(paint(pane, colors[Math.floor(rand() * colors.length)], 0.2 + rand() * 0.25, true));
+      }
+    }
+  }
+}
+
 /** Concrete slabs with seams, grit and salt stains; drawn once, no file download. */
 function groundTexture() {
   const size = 256, canvas = document.createElement('canvas');
@@ -332,6 +369,9 @@ function groundTexture() {
  */
 export function buildArena(scene, map) {
   const started = performance.now();
+  const palette = map.palette ?? {};
+  tint.set(palette.tint ?? 0xffffff);
+  const lamp = palette.lamp ? { light: palette.lamp, head: new THREE.Color(palette.lamp).lerp(WHITE, 0.4).getHex() } : { light: LAMP.color, head: 0xffd9a0 };
   const boxes = map.solids.map((s) => {
     const matrix = solidMatrix(s);
     const [hx, hy, hz] = s.half;
@@ -341,6 +381,7 @@ export function buildArena(scene, map) {
   const ground = [], solid = [], glow = [];
   glow.lamps = [];
   glow.furnaces = [];
+  glow.signs = [];
   glow.shafts = [];
   map.solids.forEach((s, i) => {
     const g = paint(boxGeometry(s.half), COLORS[s.mat] ?? COLORS.concrete, jitter(i));
@@ -357,12 +398,21 @@ export function buildArena(scene, map) {
     const parts = [];
     kitbash(s, parts);
     for (const p of parts) solid.push(p.applyMatrix4(boxes[i].matrix));
+    if (s.mat === 'tower') {
+      const panes = [];
+      towerWindows(s, i, palette.windows ?? WINDOWS, panes);
+      for (const p of panes) glow.push(p.applyMatrix4(boxes[i].matrix));
+    }
   });
-  for (const d of map.decor ?? []) decorParts(d, solid, glow);
+  for (const d of map.decor ?? []) decorParts(d, solid, glow, lamp);
   const lit = (m) => (map.night ? glowing(m) : m);
   if (map.night) {
     const light = (at, l) => ({ at, ...l, rgb: new THREE.Color(l.color) });
-    const lights = [...glow.lamps.map((p) => light(p, LAMP)), ...glow.furnaces.map((p) => light(p, FURNACE))];
+    const lights = [
+      ...glow.lamps.map((p) => light(p, { ...LAMP, color: lamp.light })),
+      ...glow.furnaces.map((p) => light(p, FURNACE)),
+      ...glow.signs.map(({ at, color }) => light(at, { ...SIGN, color })),
+    ];
     for (const g of [...ground, ...solid]) bakeLights(g, lights, boxes);
   }
 
@@ -375,7 +425,7 @@ export function buildArena(scene, map) {
   meshes[0].receiveShadow = true;
   meshes[1].castShadow = meshes[1].receiveShadow = true;
   for (const p of glow.lamps) {
-    const h = halo(0xffd29a, map.night ? 4 : 2.6);
+    const h = halo(palette.lamp ?? 0xffd29a, map.night ? 4 : 2.6);
     h.position.copy(p);
     h.layers.set(LOW_ONLY);
     meshes.push(h);
@@ -383,6 +433,12 @@ export function buildArena(scene, map) {
   for (const p of glow.furnaces) {
     const h = halo(0xff8a3a, 7);
     h.position.copy(p);
+    h.layers.set(LOW_ONLY);
+    meshes.push(h);
+  }
+  for (const { at, color: c } of glow.signs) {
+    const h = halo(c, 5);
+    h.position.copy(at);
     h.layers.set(LOW_ONLY);
     meshes.push(h);
   }

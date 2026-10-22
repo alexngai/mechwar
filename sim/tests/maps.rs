@@ -84,15 +84,45 @@ fn bot_reaches_the_far_catwalk_on_saltworks() {
     panic!("bot never got line of sight; ended at {}", me.pos);
 }
 
-#[test]
-fn foundry_has_four_levels() {
-    let index = Map::index("foundry").unwrap();
+/// At least four connected waypoints at each of `levels` (m).
+fn has_levels(name: &str, levels: [f32; 4]) {
+    let index = Map::index(name).unwrap();
     let map = Map::load(index);
     let reachable = Nav::for_map(index).reachable(0);
-    for level in [-5.0, 0.0, 7.0, 14.0] {
+    for level in levels {
         let count = map.nav.iter().zip(&reachable).filter(|(p, r)| **r && (p[1] - level).abs() < 0.5).count();
-        assert!(count >= 4, "only {count} connected waypoints at {level} m");
+        assert!(count >= 4, "{name}: only {count} connected waypoints at {level} m");
     }
+}
+
+#[test]
+fn foundry_has_four_levels() {
+    has_levels("foundry", [-5.0, 0.0, 7.0, 14.0]);
+}
+
+#[test]
+fn verdigris_has_four_levels() {
+    has_levels("verdigris", [-7.0, 0.0, 7.0, 14.0]);
+}
+
+#[test]
+fn bot_climbs_to_the_viaduct_on_verdigris() {
+    let index = Map::index("verdigris").unwrap();
+    let map = Map::load(index);
+    // Short-sighted, so it has to get up there to see: the target stands on the far side of the ring.
+    let t = Tuning { weapon_range: 10.0, ..Tuning::default() };
+    let (arena, nav) = (Arena::new(&map), Nav::for_map(index));
+    let mut me = spawn_mech(&t, Vector::from_array(map.spawns[0][0]));
+    let target = spawn_mech(&t, Vector::new(0.0, 14.1, -32.0));
+    let mut bot = Bot::new(7);
+    for tick in 0..(40.0 * TICK_HZ) as u32 {
+        if me.grounded && me.pos.y > 13.5 {
+            return;
+        }
+        let input = bot.think(&arena, nav, &t, &me, Some(&target), tick);
+        step_mech(&arena, &t, &mut me, &input);
+    }
+    panic!("bot never reached the viaduct; ended at {}", me.pos);
 }
 
 #[test]

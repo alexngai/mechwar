@@ -13,6 +13,7 @@ import { buildArena, HIGH_ONLY, LOW_ONLY } from './arena.js';
 import { Effects, HOT, halo, hot } from './fx.js';
 import saltworks from '../maps/saltworks.json';
 import foundry from '../maps/foundry.json';
+import verdigris from '../maps/verdigris.json';
 import blockout from '../maps/blockout.json';
 import { CROUCH, Mech, TEAMS } from './mech.js';
 import { Debug } from './debug.js';
@@ -36,7 +37,7 @@ const sameOrigin = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${locatio
 const server = params.get('server') ?? (import.meta.env.PROD && !params.has('offline') ? sameOrigin : null);
 const net = server ? new WasmNetClient() : null;
 // Maps by name; the sim's compiled-in list gives the index. Offline, ?map=<name> picks one.
-const MAPS = { saltworks, blockout, foundry };
+const MAPS = { saltworks, blockout, foundry, verdigris };
 const mapIndex = (name) => {
   for (let i = 0; map_name(i); i++) if (map_name(i) === name) return i;
   return 0;
@@ -143,7 +144,7 @@ let arenaMap = -1, arena = Object.assign([], { vents: [], furnaces: [] });
 const ensureArena = (index) => {
   if (index < 0 || index === arenaMap) return;
   arenaMap = index;
-  const map = MAPS[map_name(index)], light = map.night ? LIGHTS.night : LIGHTS.day;
+  const map = MAPS[map_name(index)], light = { ...(map.night ? LIGHTS.night : LIGHTS.day), ...map.palette?.light };
   for (const m of arena) {
     scene.remove(m);
     m.geometry?.dispose();
@@ -153,10 +154,10 @@ const ensureArena = (index) => {
   arena = buildArena(scene, map);
   sky.fit(map);
   glass.setMap(map);
-  hemi.color.setHex(light.sky);
-  hemi.groundColor.setHex(light.ground);
+  hemi.color.set(light.sky);
+  hemi.groundColor.set(light.ground);
   hemi.intensity = light.ambient;
-  sun.color.setHex(light.sun);
+  sun.color.set(light.sun);
   sun.intensity = light.direct;
   cockpit.light(hemi, sun);
   fx.setNight(!!map.night);

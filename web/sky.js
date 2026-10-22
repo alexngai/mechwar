@@ -1,6 +1,7 @@
 // The world past the arena walls: a gradient sky dome with a soft sun, matching fog, and one merged
-// skyline mesh of desert mesas, a refinery and salt storage domes on the flats. All procedural and
-// purely visual: nothing here collides or casts shadows.
+// skyline mesh: desert mesas, a refinery and salt storage domes on the flats, or a city's tower
+// blocks with lit windows. All procedural and purely visual: nothing here collides or casts shadows.
+// A map's `palette` overrides any of the day or night look.
 import * as THREE from 'three';
 
 // `haze` is low-lying mist: color, density at the map's lowest floor (1/m) and the height (m) over
@@ -13,7 +14,11 @@ const SKY = {
 const COLORS = {
   flat: 0xd3ccbb, talus: 0xb5a58e, scree: 0xab9882, cliff: 0x9f8774, cap: 0xbcae96,
   concrete: 0xa49d8f, steel: 0x8a8984, dark: 0x6e6b66, rust: 0x8c6550, tank: 0xc4bcaa, salt: 0xcbc3b0,
+  street: 0x2a302d, block: 0x3a423e, blockDark: 0x2c3330,
 };
+// Lit windows on a city skyline, unless the palette names its own.
+const WINDOWS = ['#ffd890', '#9dffc0', '#7fe8ff'];
+const FOG = [70, 230]; // near and far, meters
 // Scales the skyline's fog depth. At full strength fog 70–230 m would erase the 150–260 m ring;
 // this keeps the far mesas as pale silhouettes while the arena itself gets the real fog.
 const SKYLINE_FOG = 0.85;
@@ -106,8 +111,12 @@ function skyMaterial(sunDir) {
   });
 }
 
-/** All skyline triangles, written straight into one non-indexed geometry, `push` meters farther out. */
-function skylineGeometry(push) {
+/**
+ * All skyline triangles, written straight into one non-indexed geometry, `push` meters farther out:
+ * the desert, or for `kind` 'city' tower blocks, whose lit windows come back as `windows` (unlit
+ * specks in `windowColors`, so they read through fog at night).
+ */
+function skylineGeometry(push, kind = 'desert', windowColors = WINDOWS) {
   const rand = mulberry32(0x5a175a17);
   const positions = [], colors = [], color = new THREE.Color();
   const tri = (a, b, c, hex) => {
@@ -151,6 +160,39 @@ function skylineGeometry(push) {
     }
     lathe(x, z, rings, rings.map(() => hex), { sides: 10 });
   };
+
+  const build = (positions, colors) => {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    return geometry;
+  };
+
+  if (kind === 'city') {
+    lathe(0, 0, [[400 + push, -0.1], [58 + push, -0.1]], [COLORS.street], { sides: 32 });
+    // Tower blocks, taller farther out, each turned to face the arena with its lit windows.
+    const lit = { positions: [], colors: [] }, glow = new THREE.Color();
+    for (let i = 0; i < 110; i++) {
+      const angle = rand() * Math.PI * 2, dist = 135 + rand() * 190;
+      const w = 14 + rand() * 26, d = 14 + rand() * 26, h = 35 + rand() * (dist - 90);
+      const [x, z] = at(angle, dist), yaw = angle + Math.PI;
+      box([x, z], w, d, h, rand() < 0.5 ? COLORS.block : COLORS.blockDark, yaw);
+      // The local +x face looks at the arena: a grid of window slots on it, a quarter of them lit.
+      const cy = Math.cos(yaw), sy = Math.sin(yaw), world = (lx, lz) => [x + lx * cy - lz * sy, z + lx * sy + lz * cy];
+      for (let ly = 3; ly < h - 2; ly += 4) {
+        for (let lz = -d / 2 + 2; lz < d / 2 - 1; lz += 3) {
+          if (rand() > 0.25) continue;
+          glow.set(windowColors[Math.floor(rand() * windowColors.length)]).multiplyScalar(0.5 + rand() * 0.5);
+          const [ax, az] = world(w / 2 + 0.3, lz - 0.7), [bx, bz] = world(w / 2 + 0.3, lz + 0.7);
+          lit.positions.push(ax, ly, az, bx, ly, bz, bx, ly + 1.2, bz, ax, ly, az, bx, ly + 1.2, bz, ax, ly + 1.2, az);
+          for (let k = 0; k < 6; k++) lit.colors.push(glow.r, glow.g, glow.b);
+        }
+      }
+    }
+    const geometry = build(positions, colors);
+    geometry.computeVertexNormals();
+    return { geometry, windows: build(lit.positions, lit.colors) };
+  }
 
   // Salt flat from the arena wall out to the haze, just under the arena floor. Rings run outer to inner so it faces up.
   lathe(0, 0, [[400 + push, -0.1], [58 + push, -0.1]], [COLORS.flat], { sides: 32 });
@@ -200,11 +242,9 @@ function skylineGeometry(push) {
   // A pair of lonely stacks across the flats.
   for (const [angle, dist, h] of [[5.6, 240, 34], [5.63, 244, 28]]) lathe(...at(angle, dist), [[1.4, 0], [1.2, h]], [COLORS.dark, COLORS.dark], { sides: 6 });
 
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  const geometry = build(positions, colors);
   geometry.computeVertexNormals(); // non-indexed, so these are flat facet normals
-  return geometry;
+  return { geometry, windows: null };
 }
 
 /** `push` is a uniform: pushed-out pieces fog as if they were still where they were laid out. */
@@ -223,41 +263,51 @@ function skylineMaterial(push) {
 /**
  * Adds the sky dome and distant skyline to `scene`, and sets its fog and background to the horizon color.
  * `sunDir` points toward the sun (normalized), or the moon at night. Returns `{ fit(map), setHaze(on) }`:
- * `fit` moves the skyline clear of the map's `size`, sets the sky for its `night` and lays the haze
- * on its lowest floor.
+ * `fit` moves the skyline clear of the map's `size`, sets the sky for its `night` (and `palette`:
+ * `sky`, `fog`, `haze`, `skyline`, `windows`) and lays the haze on its lowest floor.
  */
 export function createSky(scene, sunDir) {
   scene.background = new THREE.Color(SKY.day.horizon);
-  scene.fog = new THREE.Fog(SKY.day.horizon, 70, 230);
+  scene.fog = new THREE.Fog(SKY.day.horizon, ...FOG);
 
   const dome = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 16), skyMaterial(sunDir));
   dome.renderOrder = -1; // drawn first; without depth writes everything else draws over it
   dome.frustumCulled = false;
   const push = { value: 0 };
-  const skyline = new THREE.Mesh(skylineGeometry(0), skylineMaterial(push));
+  const skyline = new THREE.Mesh(skylineGeometry(0).geometry, skylineMaterial(push));
   skyline.matrixAutoUpdate = false;
-  scene.add(dome, skyline);
+  // A city skyline's lit windows: unlit, unfogged specks.
+  const windows = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ vertexColors: true, fog: false }));
+  windows.matrixAutoUpdate = false;
+  windows.frustumCulled = false;
+  scene.add(dome, skyline, windows);
   const color = new THREE.Color();
-  let density = 0, hazy = true;
+  let density = 0, hazy = true, built = '';
   const fit = (map) => {
-    const { size: [w, d], night } = map;
-    const look = night ? SKY.night : SKY.day, u = dome.material.uniforms;
-    u.horizon.value.setHex(look.horizon);
-    u.zenith.value.setHex(look.zenith);
-    u.sunColor.value.setHex(look.sun);
+    const { size: [w, d], night, palette = {} } = map;
+    const look = { ...(night ? SKY.night : SKY.day), ...palette.sky }, u = dome.material.uniforms;
+    u.horizon.value.set(look.horizon);
+    u.zenith.value.set(look.zenith);
+    u.sunColor.value.set(look.sun);
     u.stars.value = look.stars;
-    scene.fog.color.setHex(look.horizon);
-    scene.background.setHex(look.horizon);
-    const [haze, , falloff] = look.haze;
-    density = look.haze[1];
+    scene.fog.color.set(look.horizon);
+    [scene.fog.near, scene.fog.far] = palette.fog ?? FOG;
+    scene.background.set(look.horizon);
+    const [haze, , falloff] = palette.haze ?? look.haze;
+    density = (palette.haze ?? look.haze)[1];
     const floor = Math.min(...map.solids.filter((s) => s.mat === 'ground').map((s) => s.box[1] + s.half[1]));
     HAZE.set([hazy ? density : 0, falloff, floor, 0.85]);
-    color.setHex(haze).convertLinearToSRGB().toArray(HAZE_COLOR);
-    const value = Math.max(0, (Math.hypot(w, d) - LAID_OUT_FOR) / 2);
-    if (value === push.value) return;
+    color.set(haze).convertLinearToSRGB().toArray(HAZE_COLOR);
+    const value = Math.max(0, (Math.hypot(w, d) - LAID_OUT_FOR) / 2), kind = palette.skyline ?? 'desert';
+    const key = `${value} ${kind} ${palette.windows}`;
+    if (key === built) return;
+    built = key;
     push.value = value;
+    const next = skylineGeometry(value, kind, palette.windows);
     skyline.geometry.dispose();
-    skyline.geometry = skylineGeometry(value);
+    skyline.geometry = next.geometry;
+    windows.geometry.dispose();
+    windows.geometry = next.windows ?? new THREE.BufferGeometry();
   };
   const setHaze = (on) => { hazy = on; HAZE[0] = on ? density : 0; };
   return { fit, setHaze };
