@@ -20,7 +20,7 @@ import riftline from '../maps/riftline.json';
 import sump from '../maps/sump.json';
 import sinkhole from '../maps/sinkhole.json';
 import blockout from '../maps/blockout.json';
-import { CROUCH, Mech, TEAMS, armament, ownLoadout, showRound, stoke, windUp } from './mech.js';
+import { CROUCH, Mech, TEAMS, armament, ownLoadout, showRound, windUp } from './mech.js';
 import { Debug } from './debug.js';
 import { Cockpit } from './cockpit.js';
 import { Sound } from './audio.js';
@@ -726,7 +726,6 @@ function frame(now) {
   cockpit.windUp(curr[S.SPIN], curr[S.CHARGE], curr[S.ALT_WAIT] <= 0, dt);
   windUp(me.guns[0].pod, curr[S.SPIN], curr[S.CHARGE], dt);
   showRound(me.arms[1], curr[S.ALT_WAIT] <= 0);
-  for (const pod of [me.arms[1], cockpit.weapons?.launcher.pod]) if (pod) stoke(pod, curr[S.HEAT] / T('heat_max'));
   // ...and light it from the night lamps and flashes nearby (not our own guns': the cockpit flashes those).
   if (firstPerson) {
     const flashes = fx.lights
