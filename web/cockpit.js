@@ -6,7 +6,7 @@
 // palette, nearby lamps and flashes), shades under cover, and flashes with the guns.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CLASSES, TEAMS, mountWeapon, windUp } from './mech.js';
+import { CLASSES, TEAMS, mountWeapon, showRound, windUp } from './mech.js';
 import { radar } from './hud.js';
 
 const frameMat = new THREE.MeshLambertMaterial({ color: 0x5a5f66, flatShading: true });
@@ -75,13 +75,14 @@ function bolt(x, y, z, r = 0.007) {
 }
 
 /**
- * Slides gun `pod` (in `group`, camera space) outward, then up if that isn't enough, so none of it
- * hangs over the dash or the lower middle of the view: what's below `line` stays outside `span`.
+ * Slides gun `pod` (in `group`, camera space) outward so none of it hangs over the dash or the
+ * lower middle of the view: what's below `line` stays outside `span`. Only ever sideways, so every
+ * weapon on an arm keeps the class's height.
  */
 function clearDash(group, pod) {
   const line = -0.27, span = 0.95; // slopes per meter ahead
   const out = Math.sign(pod.position.x) || 1, scale = group.scale.x;
-  let slide = 0, lift = 0;
+  let slide = 0;
   group.updateMatrixWorld(true);
   pod.traverse((o) => {
     if (!o.isMesh) return;
@@ -90,11 +91,9 @@ function clearDash(group, pod) {
       v.fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld);
       if (v.z > -0.05 || v.y > line * -v.z) continue;
       slide = Math.max(slide, span * -v.z - out * v.x);
-      lift = Math.max(lift, line * -v.z - v.y);
     }
   });
-  if (slide <= 0.6) pod.position.x += (out * slide) / scale;
-  else pod.position.y += lift / scale;
+  pod.position.x += (out * slide) / scale;
 }
 
 /** Bends console point `p` around the pilot (see BEND), in place. */
@@ -361,9 +360,14 @@ export class Cockpit {
     if (guns) guns.visible = true;
   }
 
-  /** Spins the primary's barrels by `spin` and lights its coils by `charge` (see mech.js `windUp`). */
-  windUp(spin, charge, dt) {
-    if (this.weapons) windUp(this.weapons.guns[0].pod, spin, charge, dt);
+  /**
+   * Spins the primary's barrels by `spin` and lights its coils by `charge` (see mech.js `windUp`),
+   * and shows the secondary's round while it's `ready`.
+   */
+  windUp(spin, charge, ready, dt) {
+    if (!this.weapons) return;
+    windUp(this.weapons.guns[0].pod, spin, charge, dt);
+    showRound(this.weapons.launcher.pod, ready);
   }
 
   /** Matches the world's `hemi` and `sun` lights, a little dimmer: the canopy is under a roof. */

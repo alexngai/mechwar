@@ -20,7 +20,7 @@ import riftline from '../maps/riftline.json';
 import sump from '../maps/sump.json';
 import sinkhole from '../maps/sinkhole.json';
 import blockout from '../maps/blockout.json';
-import { CROUCH, Mech, TEAMS, armament, ownLoadout, windUp } from './mech.js';
+import { CROUCH, Mech, TEAMS, armament, ownLoadout, showRound, windUp } from './mech.js';
 import { Debug } from './debug.js';
 import { Cockpit } from './cockpit.js';
 import { Sound } from './audio.js';
@@ -711,8 +711,9 @@ function frame(now) {
   // Shade the cockpit when anything stands between the eye and the sun.
   const shaded = firstPerson && game.cast_ray(eye.x, eye.y, eye.z, SUN_DIR.x, SUN_DIR.y, SUN_DIR.z, 150) < 150;
   cockpit.update(dt, camera, SUN_DIR, T('fov'), shaded);
-  cockpit.windUp(curr[S.SPIN], curr[S.CHARGE], dt);
+  cockpit.windUp(curr[S.SPIN], curr[S.CHARGE], curr[S.ALT_WAIT] <= 0, dt);
   windUp(me.guns[0].pod, curr[S.SPIN], curr[S.CHARGE], dt);
+  showRound(me.arms[1], curr[S.ALT_WAIT] <= 0);
   // ...and light it from the night lamps and flashes nearby (not our own guns': the cockpit flashes those).
   if (firstPerson) {
     const flashes = fx.lights

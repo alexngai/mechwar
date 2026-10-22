@@ -23,6 +23,9 @@ const SCHEMES = [
 ];
 const PATTERNS = { plain: 0, camo: 1, splinter: 2, stripes: 3, hazard: 4 };
 const jointMat = new THREE.MeshPhongMaterial({ color: 0x1b1d20, specular: 0x5a5a5a, shininess: 50, flatShading: true });
+// Live rounds showing in a secondary's mouth: warheads and shells, and the darts' brass tips.
+const warheadMat = new THREE.MeshLambertMaterial({ color: 0xb8442c, flatShading: true });
+const dartMat = new THREE.MeshLambertMaterial({ color: 0xd8a640, flatShading: true });
 
 // Paint for box parts, patched into Lambert. Patterns live in each part's own space so they ride
 // with it as legs re-pose. Every vertex of a one-segment box is a corner, so abs(position) is the
@@ -215,17 +218,19 @@ const BULWARK = {
 
 export const CLASSES = { A: WISP, B: LANCER, C: BULWARK };
 
-// Weapon models by weapons.json id, each built in a pod at its class's arm mount, facing -Z, and
-// returning its muzzle. Each is sized for a `home` class and scaled to fit any other.
+// Weapon models by weapons.json id, each built in a pod facing -Z and returning its muzzle. Each is
+// sized for a `home` class and scaled to fit any other, and set so its bore (the barrel's line:
+// its muzzle, or a raised tube's pivot, `bore`) runs through its class's arm mount, so every
+// weapon on an arm sits at the same height.
 const KITS = {
   // A long rifle on a slim forearm.
   stitcher: { home: 'A', build(pod, m) {
     pod.add(box(0.34, 0.34, 0.34, jointMat)); // shoulder
     put(pod, box(0.28, 0.36, 1.1, m.pods), 0.04, -0.12, -0.45); // forearm
     put(pod, box(0.08, 0.12, 0.55, m.trim), 0.04, 0.12, -0.7); // scope
-    put(pod, cyl(0.055, 0.075, 2.1, m.barrels), 0.04, -0.12, -1.95, ALONG_Z); // long barrel
-    put(pod, box(0.15, 0.15, 0.25, m.trim), 0.04, -0.12, -3.0); // muzzle brake
-    return put(pod, new THREE.Object3D(), 0.04, -0.12, -3.2);
+    put(pod, cyl(0.055, 0.075, 1.0, m.barrels), 0.04, -0.12, -1.45, ALONG_Z); // barrel
+    put(pod, box(0.15, 0.15, 0.25, m.trim), 0.04, -0.12, -2.0); // muzzle brake
+    return put(pod, new THREE.Object3D(), 0.04, -0.12, -2.15);
   } },
   // Three short barrels stacked over a receiver on a slim forearm.
   triplet: { home: 'A', build(pod, m) {
@@ -267,37 +272,66 @@ const KITS = {
   kiln: { home: 'C', build(pod, m) {
     put(pod, box(0.5, 0.4, 0.6, jointMat), 0, -0.3, 0.1); // turret ring
     put(pod, box(0.8, 0.65, 1.5, m.pods), 0, 0.1, 0); // housing
-    put(pod, cyl(0.13, 0.15, 2.4, m.barrels), 0, 0.1, -1.9, ALONG_Z); // barrel
+    put(pod, cyl(0.13, 0.15, 2.0, m.barrels), 0, 0.1, -1.7, ALONG_Z); // barrel
     const glow = hot(new THREE.MeshBasicMaterial({ color: COILS_COLD }));
-    for (const z of [-1.1, -1.5, -1.9, -2.3]) {
+    for (const z of [-1.0, -1.35, -1.7, -2.05]) {
       put(pod, cyl(0.26, 0.26, 0.09, m.trim), 0, 0.1, z, ALONG_Z); // coil
       put(pod, cyl(0.22, 0.22, 0.14, glow), 0, 0.1, z - 0.15, ALONG_Z); // its glow
     }
-    put(pod, box(0.36, 0.36, 0.25, m.trim), 0, 0.1, -3.15); // muzzle
+    put(pod, box(0.36, 0.36, 0.25, m.trim), 0, 0.1, -2.8); // muzzle
     pod.userData.charge = glow;
-    return put(pod, new THREE.Object3D(), 0, 0.1, -3.3);
+    return put(pod, new THREE.Object3D(), 0, 0.1, -2.95);
   } },
-  // A rack of three tubes on a slim forearm.
+  // Three tubes splayed in a fan on a slim forearm, as the darts fly, each with a dart's tip in
+  // its mouth while the rack's loaded (`userData.loaded`).
   darts: { home: 'A', build(pod, m) {
     pod.add(box(0.34, 0.34, 0.34, jointMat)); // shoulder
     put(pod, box(0.28, 0.36, 0.9, m.pods), -0.04, -0.12, -0.4); // forearm
-    put(pod, box(0.34, 0.2, 0.55, m.trim), -0.04, 0.12, -0.6); // dart rack
-    for (const x of [-0.14, -0.04, 0.06]) put(pod, cyl(0.035, 0.035, 0.6, m.barrels), x, 0.12, -0.62, ALONG_Z); // dart tubes
-    return put(pod, new THREE.Object3D(), -0.04, 0.12, -0.95);
+    put(pod, box(0.42, 0.1, 0.8, m.trim), -0.04, 0.06, -0.65); // rack bed
+    const loaded = [];
+    for (const [x, fan] of [[-0.15, 0.06], [-0.04, 0], [0.07, -0.06]]) {
+      const tube = put(pod, new THREE.Group(), x, 0.16, -0.3);
+      tube.rotation.y = fan;
+      put(tube, cyl(0.045, 0.045, 1.05, m.barrels), 0, 0, -0.525, ALONG_Z); // tube
+      put(tube, cyl(0.058, 0.058, 0.05, m.trim), 0, 0, -1.05, ALONG_Z); // muzzle ring
+      loaded.push(put(tube, cyl(0, 0.035, 0.16, dartMat), 0, 0, -1.1, -ALONG_Z)); // dart tip
+    }
+    put(pod, box(0.06, 0.1, 0.25, m.accent), -0.04, 0.26, -0.15); // sight
+    pod.userData.loaded = loaded;
+    return put(pod, new THREE.Object3D(), -0.04, 0.16, -1.4);
   } },
-  // A pod with one wide launch tube.
+  // A long launch tube through a pod, flared at the back to vent the blast and banded with hazard
+  // stripes, under a sight; the rocket's warhead shows in its mouth while it's loaded.
   rocket: { home: 'B', build(pod, m) {
-    pod.add(box(0.55, 0.6, 1.1, m.pods));
-    put(pod, cyl(0.17, 0.17, 1.2, m.barrels), 0, 0.05, -0.9, ALONG_Z); // rocket tube
-    put(pod, box(0.42, 0.42, 0.12, m.trim), 0, 0.05, -1.45); // muzzle collar
-    return put(pod, new THREE.Object3D(), 0, 0.05, -1.55);
+    pod.add(box(0.55, 0.6, 1.0, m.pods));
+    put(pod, cyl(0.17, 0.17, 1.5, m.barrels), 0, 0.05, -0.75, ALONG_Z); // tube
+    put(pod, cyl(0.27, 0.18, 0.3, m.trim), 0, 0.05, 0.6, ALONG_Z); // back-blast vent, wide at the back
+    put(pod, cyl(0.19, 0.19, 0.14, m.hazard), 0, 0.05, -1.1, ALONG_Z); // hazard band
+    put(pod, cyl(0.22, 0.22, 0.1, m.trim), 0, 0.05, -1.5, ALONG_Z); // muzzle collar
+    put(pod, box(0.08, 0.14, 0.35, m.trim), 0.18, 0.42, -0.35); // sight
+    pod.userData.loaded = [put(pod, cyl(0, 0.15, 0.32, warheadMat), 0, 0.05, -1.6, -ALONG_Z)]; // warhead
+    return put(pod, new THREE.Object3D(), 0, 0.05, -1.65);
   } },
-  // A short, fat tube out of a turret housing, raised 0.3 rad to lob.
-  mortar: { home: 'C', build(pod, m) {
+  // A short, fat tube raised 0.3 rad on a turret to lob, its mouth flared, banded and braced by
+  // recoil springs, with spare shells racked down the housing's side; a shell's nose shows in the
+  // mouth while it's loaded.
+  mortar: { home: 'C', bore: [0, 0.15], build(pod, m) {
     put(pod, box(0.5, 0.4, 0.6, jointMat), 0, -0.3, 0.1); // turret ring
     put(pod, box(0.85, 0.7, 1.6, m.pods), 0, 0.05, -0.2); // breech housing
-    put(pod, cyl(0.3, 0.27, 1.1, m.barrels), 0, 0.15 + 0.55 * Math.sin(0.3), -0.9 - 0.55 * Math.cos(0.3), ALONG_Z + 0.3); // tube
-    return put(pod, new THREE.Object3D(), 0, 0.15 + 1.15 * Math.sin(0.3), -0.9 - 1.15 * Math.cos(0.3));
+    for (const z of [-0.65, -0.25, 0.15]) {
+      put(pod, cyl(0.1, 0.1, 0.42, m.hazard), 0.52, 0, z); // spare shell
+      put(pod, cyl(0.04, 0.1, 0.1, warheadMat), 0.52, 0.26, z); // its nose
+    }
+    const tube = put(pod, new THREE.Group(), 0, 0.15, -0.9);
+    tube.rotation.x = 0.3;
+    put(tube, cyl(0.3, 0.27, 1.1, m.barrels), 0, 0, -0.55, ALONG_Z); // tube
+    put(tube, cyl(0.33, 0.33, 0.12, m.hazard), 0, 0, -0.7, ALONG_Z); // band
+    put(tube, cyl(0.29, 0.37, 0.2, m.trim), 0, 0, -1.12, ALONG_Z); // flared mouth
+    for (const x of [-0.28, 0.28]) put(tube, cyl(0.05, 0.05, 0.75, m.trim), x, -0.2, -0.3, ALONG_Z); // recoil springs
+    const shell = put(tube, new THREE.Mesh(new THREE.SphereGeometry(0.21, 10, 6), warheadMat), 0, 0, -1.12);
+    shell.scale.z = 1.4;
+    pod.userData.loaded = [shell];
+    return put(tube, new THREE.Object3D(), 0, 0, -1.25);
   } },
 };
 
@@ -308,6 +342,11 @@ export function windUp(pod, spin, charge, dt) {
   const { spinner, charge: coils } = pod.userData;
   if (spinner) spinner.rotation.z += spin * 30 * dt;
   coils?.color.lerpColors(COILS_COLD, COILS_HOT, charge);
+}
+
+/** Shows weapon `pod`'s loaded round (`userData.loaded`) while its secondary is `ready`. */
+export function showRound(pod, ready) {
+  for (const round of pod.userData.loaded ?? []) round.visible = ready;
 }
 
 /** Class `cls`'s own weapons as a loadout: indices into weapons.json's primaries and secondaries. */
@@ -326,7 +365,10 @@ export function mountWeapon(pod, cls, side, id, m) {
   const spec = CLASSES[cls] ?? LANCER, kit = KITS[id] ?? KITS.pike;
   pod.position.set(side * spec.arm[0], spec.arm[1], spec.arm[2]);
   pod.scale.setScalar(spec.height / CLASSES[kit.home].height);
-  return kit.build(pod, m);
+  const tip = kit.build(pod, m);
+  const [x, y] = kit.bore ?? [tip.position.x, tip.position.y];
+  for (const part of pod.children) part.position.x -= x, part.position.y -= y;
+  return tip;
 }
 
 /** Stretch a segment mesh (built along Y) from a to b. */
