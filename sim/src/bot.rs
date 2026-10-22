@@ -119,6 +119,21 @@ impl Nav {
             .map(|(i, _)| i)
     }
 
+    /// The waypoint nearest by route from `from`, within `reach` of it, where a mech's chest is
+    /// hidden from `threat` (another mech's eye).
+    fn cover(&self, arena: &Arena, t: &Tuning, from: usize, threat: Vector, reach: f32) -> Option<usize> {
+        let hidden = |i: usize| {
+            let d = self.nodes[i] + Vector::Y * (t.mech_height * 0.5) - threat;
+            arena.cast_ray(&Ray::new(threat, d / d.length()), d.length()).is_some()
+        };
+        let mut found = None;
+        self.path(from, |cost| {
+            found = (0..cost.len()).filter(|&i| cost[i] <= reach && hidden(i)).min_by(|&a, &b| cost[a].total_cmp(&cost[b]));
+            found.unwrap_or(from)
+        });
+        found
+    }
+
     /// A mech standing on waypoint `i` would see `target` within VANTAGE_RANGE.
     fn overlooks(&self, arena: &Arena, t: &Tuning, i: usize, target: &Mech) -> bool {
         self.nodes[i].distance(target.pos) < VANTAGE_RANGE && sees(arena, t, &Mech { pos: self.nodes[i], ..Mech::default() }, target)
@@ -188,6 +203,36 @@ const STICKY_M: f32 = 5.0;
 const PATROL_FOR: f32 = 40.0;
 /// A last known position this close is watched while walking to it, not the way ahead.
 const WATCH: f32 = 50.0;
+
+// Tactics.
+/// Hull fraction a bot breaks off below, to mend at an orb or in cover, and stops mending at.
+const RETREAT_HULL: f32 = 0.35;
+const MENDED_HULL: f32 = 0.9;
+/// Farthest by route a bot goes for cover, and straight off for an orb.
+const COVER_RANGE: f32 = 35.0;
+const ORB_RANGE: f32 = 45.0;
+/// Close enough to an orb to be healed by it (its radius, less a margin).
+const AT_ORB: f32 = 4.0;
+/// A bot holds a retreat this long at most, and breaks it to fight an enemy this close in view.
+const HOLD_FOR: f32 = 12.0;
+const CORNERED: f32 = 15.0;
+/// A target that ducked out of view this recently gets a grenade lobbed at its last spot.
+const FLUSH_AFTER: f32 = 2.0;
+
+/// Why a bot fell back: to cool off, or to mend.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Why {
+    Cool,
+    Mend,
+}
+
+/// Falling back to `spot` (cover, or an orb) until `until` at the latest.
+#[derive(Clone, Copy, Debug)]
+struct Retreat {
+    spot: Vector,
+    why: Why,
+    until: u32,
+}
 
 /// What a bot knows of one enemy: where it was last perceived and when, whether it's in view
 /// now, its hull fraction then, and when it last hit us.
@@ -299,6 +344,9 @@ pub struct Bot {
     focus: Option<u8>,
     patrol: Option<usize>,
     patrol_until: u32,
+    /// Falling back to cover or an orb, and the health orbs about (they glow: always known).
+    retreat: Option<Retreat>,
+    pub orbs: Vec<Vector>,
 }
 
 impl Bot {
@@ -324,6 +372,8 @@ impl Bot {
             focus: None,
             patrol: None,
             patrol_until: 0,
+            retreat: None,
+            orbs: Vec::new(),
         };
         bot.respawned();
         bot
@@ -344,8 +394,56 @@ impl Bot {
         };
         (self.path_goal, self.vantage) = (None, None);
         self.cooling = false;
-        (self.focus, self.patrol) = (None, None);
+        (self.focus, self.patrol, self.retreat) = (None, None, None);
         self.contacts.clear();
+    }
+
+    /// Somewhere to fall back to from an enemy at `threat` (its eye): an orb in reach to mend
+    /// at, else the nearest cover. None when there's neither.
+    #[allow(clippy::too_many_arguments)]
+    fn shelter(&self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, threat: Vector, why: Why, tick: u32) -> Option<Retreat> {
+        let orb = (why == Why::Mend).then(|| self.orbs.iter().copied().filter(|o| o.distance(me.pos) < ORB_RANGE).min_by(|a, b| a.distance(me.pos).total_cmp(&b.distance(me.pos)))).flatten();
+        let spot = orb.or_else(|| nav.cover(arena, t, nav.nearest(arena, me.pos), threat, COVER_RANGE).map(|i| nav.node(i)))?;
+        Some(Retreat { spot, why, until: tick + secs(HOLD_FOR) })
+    }
+
+    /// Falling back: to the spot, then holding it, out of sight of `target` if any. A mending bot
+    /// repairs once there and hidden (an orb mends by itself), a Light speed boosts away, and a
+    /// Heavy raises its bulwark when hit on the way; a Medium vents if it can.
+    #[allow(clippy::too_many_arguments)]
+    fn hold(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, r: Retreat, target: Option<&Mech>, hit: bool, tick: u32) -> Input {
+        let spot = Mech { pos: r.spot, ..Mech::default() };
+        let here = flat(r.spot - me.pos).length() < ARRIVE && (r.spot.y - me.pos.y).abs() < 2.0;
+        let mut input = self.walk(arena, nav, t, me, &spot, false, tick);
+        if here {
+            (input.move_x, input.move_z, input.boost) = (0.0, 0.0, false);
+        }
+        let seen = target.is_some_and(|m| sees(arena, t, me, m));
+        let at_orb = self.orbs.iter().any(|o| flat(*o - me.pos).length() < AT_ORB);
+        input.repair = r.why == Why::Mend && here && !seen && !at_orb;
+        input.ability = match me.class {
+            MechClass::A => r.why == Why::Mend && !here,
+            MechClass::B => me.overheated,
+            MechClass::C => r.why == Why::Mend && hit,
+        };
+        input
+    }
+
+    /// Aims a grenade's arc at `spot` and throws once on it.
+    fn lob(&mut self, t: &Tuning, me: &Mech, spot: Vector, tick: u32) -> Input {
+        let g = t.grenade();
+        let eye = me.pos + Vector::Y * t.eye_height;
+        let (yaw, _) = look_at(eye, spot);
+        let r = (g.alt_gravity * flat(spot - eye).length() / (g.alt_speed * g.alt_speed)).min(1.0);
+        let pitch = 0.5 * asinf(r) - g.alt_loft_deg.to_radians();
+        let max_turn = t.bot_turn_rate_deg.to_radians() * DT;
+        let new_yaw = me.yaw + wrap(yaw - me.yaw).clamp(-max_turn, max_turn);
+        let new_pitch = me.pitch + (pitch - me.pitch).clamp(-max_turn, max_turn);
+        let on = wrap(yaw - new_yaw).abs() < AIM_TOLERANCE && (pitch - new_pitch).abs() < AIM_TOLERANCE;
+        if on {
+            self.grenade_at = tick + secs(4.0 + 4.0 * self.rand());
+        }
+        Input { yaw: new_yaw, pitch: new_pitch, grenade: on, ..Input::default() }
     }
 
     /// Updates what this bot knows of `enemies` (id, mech, hull fraction) as of `tick`, and picks
@@ -447,13 +545,34 @@ impl Bot {
             return idle;
         }
         let max_turn = t.bot_turn_rate_deg.to_radians() * DT;
+        // Falling back: until cooled or mended, or out of time, or cornered (then fight).
+        if let Some(r) = self.retreat {
+            let cornered = target.is_some_and(|m| m.health > 0.0 && m.pos.distance(me.pos) < CORNERED && sees(arena, t, me, m));
+            let done = match r.why {
+                Why::Cool => !me.overheated && me.heat <= 0.4 * t.heat_max,
+                Why::Mend => me.health >= MENDED_HULL * t.health_max,
+            };
+            if done || cornered || tick >= r.until {
+                self.retreat = None;
+            } else {
+                return self.hold(arena, nav, t, me, r, target, took_damage, tick);
+            }
+        }
         if let Some(mate) = heal.filter(|_| alt_use(t) == AltUse::Beam && !target.is_some_and(|m| m.health > 0.0 && sees(arena, t, me, m))) {
             return mend(t, me, mate, max_turn);
         }
         let Some(target) = target.filter(|m| m.health > 0.0) else {
-            // Nothing to fight in view: go where an enemy was last known to be, watching that spot
+            // Nothing to fight in view. One that just ducked out of view nearby gets a grenade at
+            // its last spot; otherwise go where an enemy was last known to be, watching that spot
             // when it's near, or patrol.
             self.seen.clear();
+            let ducked = self.contacts.iter().find(|c| !c.seen && c.seen_at.is_some_and(|at| tick - at < secs(FLUSH_AFTER))).map(|c| c.pos);
+            if let Some(spot) = ducked.filter(|s| (t.grenade_radius + 2.0..GRENADE_RANGE).contains(&s.distance(me.pos)))
+                && me.grenades > 0
+                && tick >= self.grenade_at
+            {
+                return self.lob(t, me, spot, tick);
+            }
             let spot = Mech { pos: self.goal(arena, nav, me, tick), ..Mech::default() };
             let watch = !self.contacts.is_empty() && spot.pos.distance(me.pos) < WATCH;
             return self.walk(arena, nav, t, me, &spot, watch, tick);
@@ -517,6 +636,21 @@ impl Bot {
             } else if me.heat <= 0.4 * t.heat_max {
                 self.cooling = false;
             }
+            // Badly hurt, or too hot with no vent to hand: fall back, to an orb or out of sight.
+            let vent = me.class == MechClass::B && me.ability_cooldown <= 0.0;
+            let why = if me.health < RETREAT_HULL * t.health_max {
+                Some(Why::Mend)
+            } else if self.cooling && !vent {
+                Some(Why::Cool)
+            } else {
+                None
+            };
+            if let Some(why) = why
+                && let Some(r) = self.shelter(arena, nav, t, me, target.pos + Vector::Y * t.eye_height, why, tick)
+            {
+                self.retreat = Some(r);
+                return self.hold(arena, nav, t, me, r, Some(target), took_damage, tick);
+            }
             let throw = throw && on_target;
             if throw {
                 self.grenade_at = tick + secs(4.0 + 4.0 * self.rand());
@@ -555,13 +689,18 @@ impl Bot {
                 aux: use_ == AltUse::Lock && alt && me.lock == 0 && !me.aux_held,
                 grenade: throw,
                 hover: tick < self.hover_until,
-                // When it would land (taking the target for our size), and they aren't jammed already.
-                emp: me.emps > 0 && target.jammed <= 0.0 && item::emp_reaches(arena, t, me, t, target),
-                // Mediums vent before stalling; Heavies raise their bulwark once hurt and under fire.
+                // When it would land (taking the target for our size) on one not jammed already, and
+                // it counts: they're on thrusters (it grounds them), or we're hurt (it slows pursuit).
+                emp: me.emps > 0
+                    && target.jammed <= 0.0
+                    && (target.boosting || target.hovering || target.dodge_time > 0.0 || me.health < 0.5 * t.health_max)
+                    && item::emp_reaches(arena, t, me, t, target),
+                // Lights speed boost to close on a far target; Mediums vent before stalling;
+                // Heavies raise their bulwark once hurt and under fire.
                 ability: match me.class {
+                    MechClass::A => range > far,
                     MechClass::B => me.overheated || me.heat >= 0.8 * t.heat_max,
-                    MechClass::C => took_damage && me.health < 0.6 * t.health_max,
-                    MechClass::A => false,
+                    MechClass::C => took_damage && me.health < 0.75 * t.health_max,
                 },
                 ..Input::default()
             };
@@ -779,7 +918,8 @@ mod tests {
         // thrown, and whether it pulsed.
         let engage = |range: f32| {
             let mut me = spawn_mech(&t, Vector::new(0.0, 0.1, 40.0));
-            let target = spawn_mech(&t, Vector::new(0.0, 0.1, 40.0 - range));
+            // On thrusters, so a pulse is worth it.
+            let target = Mech { boosting: true, ..spawn_mech(&t, Vector::new(0.0, 0.1, 40.0 - range)) };
             let mut bot = Bot::new(1);
             let (mut grenade, mut pulsed) = (None, false);
             for tick in 0..secs(4.0) {
@@ -876,6 +1016,85 @@ mod tests {
         assert!(searched, "never gave up on the empty spot; at {}", me.pos);
         bot.goal(&arena, nav, &me, secs(8.0));
         assert!(bot.patrol.is_some(), "didn't go on patrol");
+    }
+
+    /// Steps `me` driven by `bot` against a static `enemy` it perceives itself, until `done`.
+    fn fight(arena: &Arena, nav: &Nav, t: &Tuning, bot: &mut Bot, me: &mut Mech, enemy: Mech, secs_: f32, mut done: impl FnMut(&Bot, &Mech) -> bool) -> bool {
+        (0..secs(secs_)).any(|tick| {
+            let target = bot.perceive(arena, t, me, &[(1, enemy, 1.0)], tick).map(|_| enemy);
+            let input = bot.think(arena, nav, t, me, target.as_ref(), tick);
+            step_mech(arena, t, me, &input);
+            done(bot, me)
+        })
+    }
+
+    #[test]
+    fn overheated_bots_duck_into_cover_then_come_back() {
+        let (arena, nav, t) = blockout();
+        // In the open north of the wall at (-15, 10), an enemy south of it in plain view; too
+        // hot to fire, and no vent to hand.
+        let mut me = Mech { overheated: true, heat: t.heat_max, ability_cooldown: 30.0, ..spawn_mech(&t, Vector::new(-5.0, 0.1, 18.0)) };
+        let enemy = spawn_mech(&t, Vector::new(-15.0, 0.1, -5.0));
+        assert!(sees(&arena, &t, &enemy, &me), "starts out in view");
+        let mut bot = Bot::new(1);
+        let hid = fight(&arena, nav, &t, &mut bot, &mut me, enemy, 6.0, |_, me| !sees(&arena, &t, &enemy, me));
+        assert!(hid, "never got out of sight; at {}", me.pos);
+        let back = fight(&arena, nav, &t, &mut bot, &mut me, enemy, 10.0, |bot, _| bot.retreat.is_none());
+        assert!(back, "never came back out once cool (heat {})", me.heat);
+    }
+
+    #[test]
+    fn hurt_bots_mend_at_an_orb_or_in_cover() {
+        let (arena, nav, t) = blockout();
+        let enemy = spawn_mech(&t, Vector::new(-15.0, 0.1, -5.0));
+        let start = || Mech { health: 0.25 * t.health_max, ..spawn_mech(&t, Vector::new(-5.0, 0.1, 18.0)) };
+        // An orb close by: it goes there.
+        let (mut me, mut bot) = (start(), Bot::new(1));
+        let orb = Vector::new(5.0, 1.0, 30.0);
+        bot.orbs.push(orb);
+        let healed = fight(&arena, nav, &t, &mut bot, &mut me, enemy, 6.0, |_, me| flat(orb - me.pos).length() < AT_ORB);
+        assert!(healed, "never reached the orb; at {}", me.pos);
+        // None: it hides and repairs.
+        let (mut me, mut bot) = (start(), Bot::new(1));
+        let mended = fight(&arena, nav, &t, &mut bot, &mut me, enemy, 8.0, |_, me| me.repair_time > 0.0 && !sees(&arena, &t, &enemy, me));
+        assert!(mended, "never repaired out of sight; at {}", me.pos);
+    }
+
+    #[test]
+    fn bots_use_abilities_and_items_in_context() {
+        let (arena, nav, t) = blockout();
+        // EMP: none for a target standing in reach, one for a target on thrusters.
+        let pulses = |boosting: bool| {
+            let mut me = spawn_mech(&t, Vector::new(0.0, 0.1, 40.0));
+            let target = Mech { boosting, ..spawn_mech(&t, Vector::new(0.0, 0.1, 31.0)) };
+            let mut bot = Bot::new(1);
+            (0..secs(2.0)).any(|tick| {
+                let input = bot.think(&arena, nav, &t, &me, Some(&target), tick);
+                step_mech(&arena, &t, &mut me, &input);
+                me.pulsed
+            })
+        };
+        assert!(!pulses(false), "pulsed a target standing still");
+        assert!(pulses(true), "never pulsed a boosting target");
+
+        // A Light speed boosts to close on a target beyond its band.
+        let light = t.for_class(MechClass::A);
+        let me = Mech { class: MechClass::A, ..spawn_mech(&light, Vector::new(0.0, 0.1, 40.0)) };
+        let far = spawn_mech(&light, Vector::new(0.0, 0.1, 40.0 - band(&light).1 - 4.0));
+        assert!(Bot::new(1).think(&arena, nav, &light, &me, Some(&far), 0).ability, "no speed boost toward a far target");
+
+        // A target seen 21 m off that ducks behind the wall gets a grenade at its last spot.
+        let mut me = spawn_mech(&t, Vector::new(-5.0, 0.1, 18.0));
+        let mut bot = Bot::new(1);
+        let (seen, hidden) = (spawn_mech(&t, Vector::new(-12.0, 0.1, -2.0)), spawn_mech(&t, Vector::new(-17.0, 0.1, 4.0)));
+        assert_eq!(bot.perceive(&arena, &t, &me, &[(1, seen, 1.0)], 0), Some(1));
+        let threw = (1..secs(1.5)).any(|tick| {
+            assert_eq!(bot.perceive(&arena, &t, &me, &[(1, hidden, 1.0)], tick), None, "saw through the wall");
+            let input = bot.think(&arena, nav, &t, &me, None, tick);
+            step_mech(&arena, &t, &mut me, &input);
+            me.threw
+        });
+        assert!(threw, "never lobbed a grenade after the target that ducked away");
     }
 
     fn build(arsenal: &Arsenal, primary: u8, secondary: u8) -> &Tuning {

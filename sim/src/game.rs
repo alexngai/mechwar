@@ -351,6 +351,8 @@ impl Game {
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
             let focus = bot.perceive(&self.arena, t, &p.mech, &enemies, self.tick);
+            bot.orbs.clear();
+            bot.orbs.extend(self.orbs.iter().map(|o| o.pos));
             let target = focus.and_then(|id| enemies.iter().find(|e| e.0 == id)).map(|e| e.1);
             let mut input = bot.think_with(&self.arena, self.nav, t, &p.mech, target.as_ref(), heal.as_ref(), self.tick);
             // Burst a shell that has flown past the target with the target inside its blast.
