@@ -217,7 +217,7 @@ impl Bot {
     }
 
     /// A fresh life: a new role, and a route planned from wherever it starts.
-    fn respawned(&mut self) {
+    pub fn respawned(&mut self) {
         let r = self.rand();
         let side = if self.rand() < 0.5 { -1.0 } else { 1.0 };
         self.role = if r < 0.4 {
@@ -229,7 +229,7 @@ impl Bot {
         } else {
             Role::Sneak
         };
-        self.path_goal = None;
+        (self.path_goal, self.vantage) = (None, None);
     }
 
     /// xorshift64, uniform in [0, 1).
@@ -245,14 +245,14 @@ impl Bot {
         let idle = Input { yaw: me.yaw, pitch: me.pitch, ..Input::default() };
         let took_damage = me.health < self.last_health;
         self.last_health = me.health;
-        let Some(target) = target.filter(|m| m.health > 0.0) else {
-            self.seen.clear();
-            return idle;
-        };
         if me.health <= 0.0 {
             self.respawned();
             return idle;
         }
+        let Some(target) = target.filter(|m| m.health > 0.0) else {
+            self.seen.clear();
+            return idle;
+        };
 
         self.seen.push_back(target.pos + Vector::Y * (t.mech_height * 0.5));
         let reaction_ticks = (t.bot_reaction_s * TICK_HZ).round() as usize;
@@ -406,7 +406,7 @@ impl Bot {
         }
         // A flanker or sneak in position goes in.
         if self.path.is_empty() && matches!(self.role, Role::Flank(_) | Role::Sneak) && self.vantage.is_some() {
-            (self.role, self.vantage) = (Role::Hunt, None);
+            (self.role, self.vantage, self.path_goal) = (Role::Hunt, None, None);
         }
         if self.perched(nav, me) {
             return Vector::ZERO;

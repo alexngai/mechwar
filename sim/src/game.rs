@@ -376,6 +376,9 @@ impl Game {
         for p in &mut self.players {
             p.class = p.next_class;
             p.mech = spawn(&self.classes, p.class, self.spawns[usize::from(p.team)][p.slot]);
+            if let Some(bot) = &mut p.bot {
+                bot.respawned();
+            }
             p.respawn_at = None;
             p.kills = 0;
             p.deaths = 0;
