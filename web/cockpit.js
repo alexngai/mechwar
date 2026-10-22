@@ -31,6 +31,14 @@ const SCREEN_AT = { vitals: [0, 0.185], radar: [-0.53, 0.16], systems: [0.58, 0.
 const SEAM = 0.34; // panel seams between the middle and the sides
 const RIM = 0.035, RIM_DEPTH = 0.07; // bezel around each screen: bar width, how far it stands out
 const LOCAL = 3; // world lights (lamps, flashes) the cockpit takes at once
+// Each class's canopy: frame paint, top bar depth, rib and brow thickness, how far the brow dips
+// at the middle, and whether it has hydraulic rams, a second glazing rib or armored rib sleeves.
+// The Wisp's is slim, pale and pointed; the Bulwark's squat, dark and armored.
+const CANOPY = {
+  A: { paint: 0x6c737d, bar: 0.1, rib: 0.03, brow: 0.018, dip: 0.13, rams: false, glazing: 2, armor: false },
+  B: { paint: 0x5a5f66, bar: 0.12, rib: 0.042, brow: 0.026, dip: 0.09, rams: true, glazing: 1, armor: false },
+  C: { paint: 0x55534b, bar: 0.16, rib: 0.056, brow: 0.034, dip: 0.05, rams: true, glazing: 1, armor: true },
+};
 const GLOW = { vitals: 0xffc46a, radar: 0xffc46a, systems: 0xffc46a }; // light each screen throws on its housing
 const FLASH = 1.2, FLASH_LIFE = 0.06; // a shot's light on the cockpit: intensity, seconds
 const INSTRUMENT_HZ = 20; // redraws per second
@@ -144,6 +152,7 @@ export class Cockpit {
     this.frame = new THREE.Group();
     this.scene.add(this.frame);
     this.aspect = 0;
+    this.cls = 'B';
     this.team = -1;
     this.weapons = null;
     this.next = 0;
@@ -177,22 +186,34 @@ export class Cockpit {
     const halfW = halfH * aspect;
     const z = -DEPTH;
     const top = -halfH * 0.75, width = 2 * halfW + 0.6;
-    // The canopy: a top bar with a curved brow under it, lit along its edge in the team's color;
-    // ribs that rise from the dash, bow out along the view's edges and curve in to meet the brow;
-    // thin glazing ribs across the upper corners; braces into the dash; a hydraulic ram per side.
+    // The canopy, styled per class (CANOPY): a top bar with a curved brow under it, lit along its
+    // edge in the team's color; ribs that rise from the dash, bow out along the view's edges and
+    // curve in to meet the brow; thin glazing ribs across the upper corners; braces into the dash;
+    // then the class's rams or armor.
+    const style = CANOPY[this.cls] ?? CANOPY.B;
+    frameMat.color.setHex(style.paint);
     const curve = (points) => new THREE.CatmullRomCurve3(points.map(([x, y, dz]) => new THREE.Vector3(x, y, z + dz)));
     const tube = (points, r, mat) => new THREE.Mesh(new THREE.TubeGeometry(curve(points), 40, r, 6), mat);
-    this.frame.add(box(2 * halfW + 1, 0.12, 0.3, frameMat).translateY(halfH + 0.015).translateZ(z));
-    const brow = [[-halfW * 0.74, halfH - 0.03, 0.03], [-halfW * 0.3, halfH - 0.09, 0.05], [halfW * 0.3, halfH - 0.09, 0.05], [halfW * 0.74, halfH - 0.03, 0.03]];
-    this.frame.add(tube(brow, 0.026, frameMat), tube(brow.map(([x, y, dz]) => [x, y - 0.028, dz + 0.014]), 0.005, this.accent));
+    this.frame.add(box(2 * halfW + 1, style.bar, 0.3, frameMat).translateY(halfH + 0.075 - style.bar / 2).translateZ(z));
+    const brow = [[-halfW * 0.74, halfH - 0.03, 0.03], [-halfW * 0.3, halfH - style.dip, 0.05], [halfW * 0.3, halfH - style.dip, 0.05], [halfW * 0.74, halfH - 0.03, 0.03]];
+    this.frame.add(tube(brow, style.brow, frameMat), tube(brow.map(([x, y, dz]) => [x, y - style.brow - 0.002, dz + 0.014]), 0.005, this.accent));
+    if (style.armor) for (let t = 0.08; t < 0.95; t += 0.12) this.frame.add(bolt(...curve(brow).getPoint(t).add(new THREE.Vector3(0, 0.012, style.brow)).toArray(), 0.009));
     for (const side of [-1, 1]) {
       const rib = [[side * halfW * 0.98, -halfH * 0.62, -0.1], [side * halfW * 1.0, -halfH * 0.05, -0.03], [side * halfW * 0.95, halfH * 0.6, 0], [side * halfW * 0.74, halfH - 0.03, 0.03]];
-      this.frame.add(tube(rib, 0.042, frameMat));
+      this.frame.add(tube(rib, style.rib, frameMat));
       this.frame.add(tube([[side * halfW * 0.42, halfH - 0.08, 0.05], [side * halfW * 0.74, halfH * 0.62, 0.0], [side * halfW * 0.95, halfH * 0.22, -0.02]], 0.012, trimMat));
+      if (style.glazing > 1) this.frame.add(tube([[side * halfW * 0.6, halfH - 0.05, 0.04], [side * halfW * 0.86, halfH * 0.72, 0.0], [side * halfW * 0.97, halfH * 0.48, -0.01]], 0.008, trimMat));
       this.frame.add(tube([[side * halfW * 0.98, -halfH * 0.5, -0.08], [side * halfW * 0.9, top + 0.03, 0.02], [side * halfW * 0.72, top + 0.01, 0.12]], 0.028, frameMat));
       const path = curve(rib), at = (t) => path.getPoint(t).add(new THREE.Vector3(-side * 0.08, 0, 0.045));
-      this.frame.add(rod(at(0.15), at(0.45), 0.024, cableMat), rod(at(0.4), at(0.72), 0.011, boltMat));
-      for (const t of [0.15, 0.72]) this.frame.add(strut(at(t).add(new THREE.Vector3(side * 0.05, 0, -0.03)), at(t), 0.03, trimMat));
+      if (style.armor) {
+        // Armored sleeves bolted over the ribs.
+        const on = (t) => path.getPoint(t).add(new THREE.Vector3(-side * 0.01, 0, 0.02));
+        for (const [a, b] of [[0.2, 0.36], [0.44, 0.6]]) this.frame.add(strut(on(a), on(b), 2.2 * style.rib, trimMat));
+      }
+      if (style.rams) {
+        this.frame.add(rod(at(0.15), at(0.45), 0.024, cableMat), rod(at(0.4), at(0.72), 0.011, boltMat));
+        for (const t of [0.15, 0.72]) this.frame.add(strut(at(t).add(new THREE.Vector3(side * 0.05, 0, -0.03)), at(t), 0.03, trimMat));
+      }
     }
     // The dash: a sloped shelf with a bolted rubber front edge, and on it one console that wraps
     // around the pilot: hull and fuel in the middle under a hood, the radar scope lower left,
@@ -303,6 +324,8 @@ export class Cockpit {
    * `eyeHeight` above the feet.
    */
   setWeapons(cls, mech, eyeHeight, scale = 1) {
+    this.cls = cls;
+    this.aspect = 0; // rebuild the canopy in the class's style
     if (this.weapons) {
       this.scene.remove(this.weapons.group);
       this.weapons.group.traverse((o) => o.geometry?.dispose());
@@ -310,15 +333,17 @@ export class Cockpit {
     const spec = CLASSES[cls], group = new THREE.Group();
     group.scale.setScalar(scale);
     group.position.y = spec.hipY * scale - eyeHeight;
-    const guns = spec.guns.map((side) => {
+    const arm = (build) => {
       const pod = new THREE.Group();
       group.add(pod);
-      const tip = spec.gun(pod, side, mech);
+      const tip = build(pod);
       clearDash(group, pod, this.camera.fov);
       return { pod, tip, rest: pod.position.clone(), kick: 0 };
-    });
+    };
+    const guns = spec.guns.map((side) => arm((pod) => spec.gun(pod, side, mech)));
+    const launcher = arm((pod) => spec.launcher(pod, mech));
     this.scene.add(group);
-    this.weapons = { group, guns };
+    this.weapons = { group, guns, launcher, arms: [...guns, launcher] };
     this.next = 0;
   }
 
@@ -338,12 +363,12 @@ export class Cockpit {
   }
 
   /**
-   * Kicks the next gun back (alternating like the mech's own) and returns its muzzle in world
-   * space, given the world camera this cockpit rides with.
+   * Kicks the next primary gun back (in turn like the mech's own), or the launcher for `secondary`
+   * fire, and returns its muzzle in world space, given the world camera this cockpit rides with.
    */
-  fire(worldCamera, out) {
-    const guns = this.weapons.guns;
-    const gun = guns[(this.next = (this.next + 1) % guns.length)];
+  fire(worldCamera, out, secondary = false) {
+    const { guns, launcher } = this.weapons;
+    const gun = secondary ? launcher : guns[(this.next = (this.next + 1) % guns.length)];
     gun.kick = RECOIL;
     this.scene.updateMatrixWorld();
     gun.tip.getWorldPosition(out);
@@ -397,7 +422,7 @@ export class Cockpit {
     this.sun.intensity = this.sunBase * (1 - 0.8 * this.shade);
     this.flashLife = Math.max(0, this.flashLife - dt);
     this.flash.intensity = (FLASH * this.flashLife) / FLASH_LIFE;
-    for (const gun of this.weapons?.guns ?? []) {
+    for (const gun of this.weapons?.arms ?? []) {
       gun.kick *= Math.exp(-RECOIL_RECOVER * dt);
       gun.pod.position.copy(gun.rest).z += gun.kick;
     }

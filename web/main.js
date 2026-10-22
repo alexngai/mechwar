@@ -593,8 +593,8 @@ function frame(now) {
         if (n === 0) gunAt = mech?.muzzle(heading.set(vx, vy, vz).normalize(), predicted && firstPerson ? cockpit.fire(camera, new THREE.Vector3()) : null) ?? null;
         from = gunAt;
       } else {
-        from = mech?.launcher.getWorldPosition(new THREE.Vector3());
-        if (n === 0) mech?.launch();
+        from = predicted && firstPerson && n === 0 ? cockpit.fire(camera, new THREE.Vector3(), true) : mech?.launcher.getWorldPosition(new THREE.Vector3());
+        if (n === 0) mech?.launch(from);
         if (n === GRENADE_N) sound.grenade(predicted ? null : { x, y, z });
       }
       launches.set(key, (shot = { from: from ?? new THREE.Vector3(x, y, z) }));
@@ -642,7 +642,7 @@ function frame(now) {
   // ...and light it from the night lamps and flashes nearby (not our own guns': the cockpit flashes those).
   if (firstPerson) {
     const flashes = fx.lights
-      .filter(({ light, life }) => light.visible && life > 0 && light.position.distanceTo(eye) > 2)
+      .filter(({ light, life, own }) => light.visible && life > 0 && !own)
       .map(({ light }) => ({ at: light.position, rgb: light.color, radius: light.distance, power: light.intensity / 20 }));
     cockpit.local(camera, [...arena.lights, ...flashes], (at) => {
       const d = to.subVectors(at, eye).length();

@@ -297,11 +297,13 @@ export class Effects {
     this.beams.spawn(from, to);
   }
 
-  muzzleLight(p) {
+  /** A flash's light at `p`; `own` marks the player's own guns (the cockpit lights those itself). */
+  muzzleLight(p, own = false) {
     const l = this.lights[this.nextLight];
     this.nextLight = (this.nextLight + 1) % this.lights.length;
     l.light.position.copy(p);
     l.life = LIGHT_LIFE;
+    l.own = own;
   }
 
   muzzle(p, dir) {
