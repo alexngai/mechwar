@@ -25,6 +25,8 @@ const AO_STEPS = [0.4, 0.9, 1.6, 2.5, 3.6]; // sample distances along the normal
 const UP = new THREE.Vector3(0, 1, 0), WHITE = new THREE.Color(1, 1, 1);
 const tint = new THREE.Color(1, 1, 1); // the building map's palette tint, for `paint`
 const color = new THREE.Color(), v = new THREE.Vector3(), n = new THREE.Vector3(), local = new THREE.Vector3(), sample = new THREE.Vector3(), to = new THREE.Vector3();
+const off = new THREE.Vector3(), sky = new THREE.Vector3(); // a sky-cover ray's ends (`blocks` uses `local` and `sample`)
+const COVER_REACH = 30; // meters: anything this close overhead counts as a roof
 
 const solidMatrix = (s) =>
   new THREE.Matrix4().compose(
@@ -190,8 +192,11 @@ function boxDistance(p, inv, [hx, hy, hz]) {
   return outside + Math.min(Math.max(qx, qy, qz), 0);
 }
 
-/** Darkens a solid's vertex colors where nearby solids crowd the space above each vertex. */
-function bakeAO(geometry, boxes) {
+/**
+ * Darkens a solid's vertex colors where nearby solids crowd the space above each vertex, and by
+ * `cover` (the palette's) where anything stands overhead, so a street under a deck lies in shade.
+ */
+function bakeAO(geometry, boxes, cover = 1) {
   const pos = geometry.attributes.position, nor = geometry.attributes.normal, col = geometry.attributes.color;
   geometry.computeBoundingSphere();
   const { center, radius } = geometry.boundingSphere;
@@ -211,6 +216,11 @@ function bakeAO(geometry, boxes) {
         occlusion += (step - Math.max(d, 0)) / step / AO_STEPS.length;
       }
       light = THREE.MathUtils.clamp(1 - 1.3 * occlusion, 0.35, 1);
+      if (cover < 1) {
+        off.copy(v).addScaledVector(n, 0.05);
+        sky.copy(off).y += COVER_REACH;
+        if (near.some((b) => blocks(off, sky, b.inv, b.half))) light *= cover;
+      }
     }
     col.setXYZ(i, col.getX(i) * light, col.getY(i) * light, col.getZ(i) * light);
   }
@@ -386,7 +396,7 @@ export function buildArena(scene, map) {
   map.solids.forEach((s, i) => {
     const g = paint(boxGeometry(s.half), COLORS[s.mat] ?? COLORS.concrete, jitter(i));
     g.applyMatrix4(boxes[i].matrix);
-    bakeAO(g, boxes);
+    bakeAO(g, boxes, palette.cover);
     if (s.mat === 'ground') {
       // World-space UVs so the slab texture tiles evenly across the whole floor.
       const pos = g.attributes.position, uv = g.attributes.uv;

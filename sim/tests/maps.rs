@@ -142,6 +142,25 @@ fn bot_climbs_out_of_the_rift() {
 }
 
 #[test]
+fn sump_has_three_levels() {
+    has_levels("sump", &[-8.0, 0.0, 7.0]);
+}
+
+#[test]
+fn bot_crosses_sump() {
+    let map = Map::load(Map::index("sump").unwrap());
+    let ended = bot_reaches("sump", Vector::from_array(map.spawns[0][0]), Vector::new(15.0, 0.1, -58.0), 45.0);
+    assert!(ended.is_ok(), "bot never got across the deck; ended at {}", ended.unwrap_err());
+}
+
+#[test]
+fn bot_climbs_out_of_the_sump() {
+    // From the west end of the undercity's z = 28 street to the east roof, by a ramp well.
+    let ended = bot_reaches("sump", Vector::new(-70.0, -7.9, 28.0), Vector::new(55.0, 7.1, 41.0), 40.0);
+    assert!(ended.is_ok(), "bot never climbed out of the undercity; ended at {}", ended.unwrap_err());
+}
+
+#[test]
 fn bot_climbs_to_the_viaduct_on_verdigris() {
     let index = Map::index("verdigris").unwrap();
     let map = Map::load(index);
