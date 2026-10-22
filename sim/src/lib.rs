@@ -344,7 +344,7 @@ pub struct Mech {
     /// Set on ticks the secondary launched a volley.
     pub launched: bool,
     /// The secondary trigger as of the last tick, and set on ticks it went down: a press bursts
-    /// the mech's armed shells in flight (`projectile::detonate`).
+    /// the mech's armed shells in flight (`projectile::detonate`). A mine layer's is `aux`'s.
     pub alt_held: bool,
     pub alt_pressed: bool,
     /// The same for the secondary's second control (`Input::aux`).
@@ -801,8 +801,8 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     let beam = t.alt_beam > 0.0;
     m.launched = !beam && pulled && (t.alt_heat_fed > 0.0 || !m.overheated) && m.alt_wait <= 0.0;
     m.beaming = beam && input.alt_fire && !m.overheated;
-    // Mines go off by themselves: a press lays more rather than bursting those down.
-    m.alt_pressed = input.alt_fire && !m.alt_held && t.alt_stick < 0.5 && t.alt_release < 0.5 && !beam;
+    // Mines go off by themselves: a press lays more, and the middle button bursts all those down.
+    m.alt_pressed = if t.alt_stick > 0.5 { input.aux && !m.aux_held } else { input.alt_fire && !m.alt_held && t.alt_release < 0.5 && !beam };
     m.alt_held = input.alt_fire;
     m.aux_pressed = input.aux && !m.aux_held;
     m.aux_held = input.aux;
@@ -997,7 +997,7 @@ mod tests {
     }
 
     #[test]
-    fn mines_stick_go_off_near_enemies_and_cap() {
+    fn mines_stick_go_off_near_enemies_cap_and_burst_on_aux() {
         let mut sim = weapon_sim(|t| {
             (t.alt_stick, t.alt_trigger, t.alt_max, t.alt_fuse, t.alt_count, t.alt_cooldown, t.alt_heat) = (1.0, 3.0, 2.0, 20.0, 1.0, 0.1, 0.0);
             (t.alt_speed, t.alt_gravity, t.alt_loft_deg, t.alt_bounce) = (30.0, 18.0, 0.0, 0.0);
@@ -1021,6 +1021,10 @@ mod tests {
         }
         assert_eq!(sim.projectiles.len(), 2);
         assert!(sim.projectiles.iter().all(|p| p.seq != mine.seq), "the oldest mine is still down");
+        // The middle button sets off every one down at once.
+        sim.step(&Input { aux: true, ..down });
+        run(&mut sim, down, 2);
+        assert!(sim.projectiles.is_empty(), "{} mines still down", sim.projectiles.len());
     }
 
     #[test]

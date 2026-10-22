@@ -72,8 +72,8 @@
     {
       "id": "spindle", "name": "Rail gun", "desc": "Middle-click toggles the scope; let go of the trigger to fire one fast, flat, heavy slug", "sound": "spindle", "projectile": "rail", "zoom": 2.5,
       "stats": {
-        "alt_release": 1, "alt_count": 1, "alt_speed": 320, "alt_gravity": 0, "alt_loft_deg": 0, "alt_bounce": 0,
-        "alt_fuse": 1.2, "alt_damage": 34, "alt_radius": 0.8, "alt_cooldown": 3.5, "alt_heat": 22
+        "alt_release": 1, "alt_count": 1, "alt_speed": 1000, "alt_gravity": 0, "alt_loft_deg": 0, "alt_bounce": 0,
+        "alt_fuse": 0.4, "alt_damage": 34, "alt_radius": 0.8, "alt_cooldown": 3.5, "alt_heat": 22
       }
     },
     {
@@ -86,7 +86,7 @@
     {
       "id": "mortar", "name": "Grenade launcher", "desc": "Lobbed shell that bounces once or twice, then bursts wide", "sound": "mortar", "projectile": "shell",
       "stats": {
-        "alt_cooldown": 5, "alt_heat": 25, "alt_speed": 36, "alt_loft_deg": 10, "alt_gravity": 18,
+        "alt_cooldown": 5, "alt_heat": 25, "alt_speed": 42, "alt_loft_deg": 10, "alt_gravity": 18,
         "alt_bounce": 0.45, "alt_fuse": 1.4, "alt_damage": 40, "alt_radius": 5.5
       }
     },
@@ -98,10 +98,10 @@
       }
     },
     {
-      "id": "warren", "name": "Mine layer", "desc": "Three sticky mines that burst when an enemy comes within 3.5 m; six down at most", "sound": "mines", "projectile": "mine",
+      "id": "warren", "name": "Mine layer", "desc": "A sticky mine a second that bursts when an enemy comes within 3.5 m; ten down at most, and middle-click sets them all off", "sound": "mines", "projectile": "mine",
       "stats": {
-        "alt_cooldown": 3, "alt_heat": 10, "alt_count": 3, "alt_spread_deg": 10, "alt_speed": 28, "alt_loft_deg": 10, "alt_gravity": 18,
-        "alt_bounce": 0, "alt_stick": 1, "alt_trigger": 3.5, "alt_max": 6, "alt_fuse": 20, "alt_damage": 22, "alt_radius": 3.5
+        "alt_cooldown": 1, "alt_heat": 6, "alt_count": 1, "alt_spread_deg": 0, "alt_speed": 28, "alt_loft_deg": 10, "alt_gravity": 18,
+        "alt_bounce": 0, "alt_stick": 1, "alt_trigger": 3.5, "alt_max": 10, "alt_fuse": 20, "alt_damage": 22, "alt_radius": 3.5
       }
     }
   ]

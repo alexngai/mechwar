@@ -744,6 +744,9 @@ function frame(now) {
     const blend = Math.min((age + ahead) / LAUNCH_BLEND, 1);
     if (blend < 1) p.lerp(shot.from, 1 - blend);
     const look = bomblet ? 'bomblet' : (primary ? weapons.primaries[weapon] : secondary)?.projectile, vel = new THREE.Vector3(vx, vy, vz);
+    // A rail slug outruns the eye, gone a frame or two after it leaves: trace its path from the
+    // launcher, like a hitscan round's.
+    if (look === 'rail') fx.beam(shot.from, new THREE.Vector3(x + vx * ahead, y + vy * ahead, z + vz * ahead));
     // A shell or grenade whose velocity jumps between frames has bounced: it clanks, as hard as the
     // jump (one that stops dead, a mine sticking, doesn't).
     if (!primary && shot.vel) {
