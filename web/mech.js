@@ -393,9 +393,10 @@ const KITS = {
     put(pod, box(0.85, 0.7, 1.6, m.pods), 0, 0.05, -0.1); // housing
     put(pod, cyl(0.32, 0.32, 1.5, m.barrels), 0, 0.05, -1.5, ALONG_Z); // canister tube
     put(pod, cyl(0.36, 0.36, 0.14, m.hazard), 0, 0.05, -1.2, ALONG_Z); // band
+    put(pod, cyl(0.46, 0.46, 0.12, m.trim), 0, 0.05, -2.1, ALONG_Z); // collar at the mouth, holding the bomblets
     for (let k = 0; k < 6; k++) {
       const a = (k / 6) * Math.PI * 2;
-      put(pod, new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 4), warheadMat), Math.cos(a) * 0.4, 0.05 + Math.sin(a) * 0.4, -2.15); // bomblet
+      put(pod, new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 4), warheadMat), Math.cos(a) * 0.39, 0.05 + Math.sin(a) * 0.39, -2.17); // bomblet, half sunk in the collar
     }
     const nose = put(pod, new THREE.Mesh(new THREE.SphereGeometry(0.26, 10, 6), warheadMat), 0, 0.05, -2.25);
     nose.scale.z = 0.8;
