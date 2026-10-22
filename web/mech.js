@@ -316,6 +316,8 @@ export class Mech {
     this.dashTrail = 0; // seconds of dash smoke left to lay
     this.dashDir = new THREE.Vector3();
     this.shutdown = 0;
+    this.facing = null; // the heading drawn: the view's, except held while shut down
+    this.held = false;
 
     const root = (this.root = new THREE.Group());
     const body = (this.body = new THREE.Group());
@@ -428,10 +430,19 @@ export class Mech {
     this.t += dt;
     const { root, body, spec } = this;
     root.position.copy(s.pos);
-    root.rotation.y = s.yaw;
     root.scale.setScalar(s.scale);
 
     const alive = s.health > 0;
+    // Shut down for repair, the mech holds its heading while the pilot looks around, then turns
+    // back to the view once the repair ends.
+    if (this.facing === null || !alive) this.facing = s.yaw;
+    else if (s.repair > 0) this.held = true;
+    else if (this.held) {
+      const off = Math.atan2(Math.sin(s.yaw - this.facing), Math.cos(s.yaw - this.facing));
+      this.facing += off * (1 - Math.exp(-8 * dt));
+      this.held = Math.abs(off) > 0.02;
+    } else this.facing = s.yaw;
+    root.rotation.y = this.facing;
     if (this.alive && !alive) {
       this.fx.explosion(world.copy(s.pos).addScaledVector(UP, 0.6 * spec.height * s.scale));
       Mech.audio?.death(this.own ? null : world);
@@ -440,7 +451,7 @@ export class Mech {
     this.wreck = alive ? 0 : Math.min(1, this.wreck + dt * 2);
 
     // Gait: one full step cycle covers two strides; stride grows with speed so feet don't slide.
-    local.copy(s.vel).applyAxisAngle(UP, -s.yaw).divideScalar(s.scale);
+    local.copy(s.vel).applyAxisAngle(UP, -this.facing).divideScalar(s.scale);
     // Our dashes start from dodge(); others' show as a sideways speed only a dash reaches.
     const dashing = Math.abs(local.x) > DASH_SPOT && Math.abs(local.x) > 1.5 * Math.abs(local.z);
     if (!this.own && alive && dashing && this.dashTrail <= 0) this.dodge(Math.sign(local.x));
