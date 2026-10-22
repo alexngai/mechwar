@@ -6,7 +6,7 @@
 // The north half (z > 0), the east half of the z = 0 street and the center are authored here;
 // `write` (maps/kit.mjs) adds the 180-degree twin. Metrics as the other maps': 10 m streets, 7.5 m
 // under the deck, ramps near 24 degrees, 3 m hover-up crates. Bots walk, so every way up is a ramp.
-import { box, branch, lamp, once, pad, point, railing, ramp, sign, write } from './kit.mjs';
+import { box, coral, lamp, once, pad, point, railing, ramp, sign, write } from './kit.mjs';
 
 const CYAN = '#3de0ff', BLUE = '#5a8cff', AMBER = '#ffb347';
 
@@ -75,9 +75,9 @@ ramp([55, 0, 20], [55, 7, 36], 7);
 railing([46, 7, 46], [64, 7, 46]);
 railing([46, 7, 36], [51.5, 7, 36]);
 railing([58.5, 7, 36], [64, 7, 36]);
-box([-65, 0, 36], [-48, 22, 46], 'tower'); // a tower over the west blocks, its arms braced out
-branch([-56, 15, 36], [0, -1], 7, { lit: true }); // over the deck
-branch([-48, 17, 41], [1, 0], 7, { lit: true }); // over the ramp slot
+box([-65, 0, 36], [-48, 22, 46], 'tower'); // a tower over the west blocks, coral grown off it
+coral([-56, 15, 36], [0, -1], 7); // over the deck
+coral([-48, 17, 41], [1, 0], 7); // over the ramp slot
 sign([-56, 8, 35.8], [-50, 14, 36], [-53, 3, 33], CYAN);
 box([20, 0, 38], [26, 3, 44], 'rust'); // 3 m crates and vents: cover and hover-ups
 box([-24, 0, 10], [-18, 3, 16], 'panel');

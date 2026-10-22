@@ -47,17 +47,48 @@ export function beam(a, b, w, t, mat = 'metal') {
 }
 
 /**
- * A branch off a tower: a beam whose top runs level from `root` (a point on the trunk's face)
- * `reach` m out along `dir` ([dx, dz], unit), braced underneath back into the trunk. With `deck`
- * it carries a square platform that wide at its tip (top level with the beam); with `lit`, a lamp
- * there. Clearance under a branch is the caller's: keep it 6.5 m+ over anywhere mechs walk.
+ * Coral grown onto a structure: from `root`, a point on its face, a chunky limb of lumps reaches
+ * `reach` m out along `dir` ([dx, dz], unit), wandering and curling upward, with a finger forking
+ * off each joint; `size` scales its girth. It hangs up to 2.5 * `size` m under `root` at the face
+ * and rises from there, but clearance under it is the caller's: keep it 6.5 m+ over anywhere mechs
+ * walk. With `shelf`, a table coral instead: slabs overlapping at odd angles, their tops level
+ * with `root` so mechs can walk out on them, `shelf` m across at the tip, lumps hanging under; with
+ * `lit`, a lamp on it. The shape is random but seeded by `root`, so a rerun writes the same map.
  */
-export function branch(root, dir, reach, { w = 2.4, t = 0.8, deck = 0, lit = false, mat = 'metal' } = {}) {
-  const [x, y, z] = root, [dx, dz] = dir, at = (d, h) => [r3(x + dx * d), r3(h), r3(z + dz * d)];
-  beam(at(-0.3, y - t / 2), at(reach, y - t / 2), w, t, mat);
-  beam(at(-0.3, y - t - 0.55 * reach), at(0.6 * reach, y - t), 0.5, 0.5, mat);
-  if (deck) beam(at(reach - deck / 2, y - 0.25), at(reach + deck / 2, y - 0.25), deck, 0.5, mat);
-  if (lit) lamp(at(reach, y));
+export function coral(root, dir, reach, { size = 1, shelf = 0, lit = false, mat = 'rock' } = {}) {
+  const [x, y, z] = root, [dx, dz] = dir, k = size;
+  let seed = (Math.abs(Math.round(x * 73 + y * 151 + z * 283)) % 2147483646) + 1;
+  const rand = (lo, hi) => lo + (hi - lo) * (((seed = (seed * 16807) % 2147483647) - 1) / 2147483646);
+  // Distance `d` along dir, `l` to its left, at height `h`.
+  const at = (d, l, h) => [r3(x + dx * d - dz * l), r3(h), r3(z + dz * d + dx * l)];
+  const lump = (c, r, tilt = 20) => turned(c, [r3(r * rand(0.8, 1.1)), r3(r * rand(0.7, 0.9)), r3(r * rand(0.8, 1.1))], r3(rand(0, 90)), mat, r3(rand(-tilt, tilt)));
+  if (shelf) {
+    const T = 1.4, top = y - T / 2;
+    beam(at(-0.8, 0, top), at(reach, rand(-0.5, 0.5), top), Math.max(5, shelf), T, mat);
+    turned(at(reach, 0, top), [shelf / 2, T / 2, shelf / 2], r3(rand(15, 35)), mat);
+    turned(at(rand(0.45, 0.6) * reach, rand(1, 2) * (rand(0, 1) < 0.5 ? -1 : 1), top), [r3(0.35 * shelf), T / 2, r3(0.4 * shelf)], r3(rand(0, 90)), mat);
+    // Lumps under it, low enough that none breaks the walking surface.
+    for (const [d, r] of [[0, 1.6], [0.35, 1.4], [0.8, 1.1]]) lump(at(d * reach, rand(-0.8, 0.8), y - 0.4 - 1.4 * r), r);
+    if (lit) lamp(at(reach + 1.2, 0, y));
+    return;
+  }
+  // A segment from `from` ([d, l, h]) `len` m along `heading` (degrees off dir), `pitch` up, `t`
+  // thick, capped with a lump; returns its end.
+  const grow = (from, heading, pitch, len, t) => {
+    const [a, b] = [heading, pitch].map((g) => (g * Math.PI) / 180);
+    const end = [from[0] + len * Math.cos(b) * Math.cos(a), from[1] + len * Math.cos(b) * Math.sin(a), from[2] + len * Math.sin(b)];
+    beam(at(...from), at(...end), r3(1.15 * t), r3(t), mat);
+    lump(at(...end), 0.8 * t);
+    return end;
+  };
+  // The limb: three segments, each thinner and steeper, a finger forking off each of the first two.
+  let p = [-0.8 * k, 0, y + 1.3 * k], heading = 0;
+  for (const [len, pitch, t, finger] of [[0.42, rand(4, 14), 2.6, 0.4], [0.34, rand(24, 38), 2, 0.3], [0.28, rand(48, 66), 1.4, 0]]) {
+    p = grow(p, (heading += rand(-14, 14)), pitch, len * reach, t * k);
+    if (finger) grow(p, heading + rand(40, 65) * (rand(0, 1) < 0.5 ? -1 : 1), rand(35, 60), finger * reach, 0.6 * t * k);
+  }
+  // A crust of lumps where it grips the face.
+  for (let i = 0; i < 4; i++) lump(at(rand(-0.3, 0.8) * k, rand(-2, 2) * k, y + rand(-0.5, 2.5) * k), rand(1, 1.5) * k, 25);
 }
 
 /** A smokestack: two boxes, square and diamond, whose union is a fluted, eight-pointed shaft. */

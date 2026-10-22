@@ -7,7 +7,7 @@
 // (maps/kit.mjs) adds the 180-degree twin. Metrics as the other maps': 9-10 m lanes and gates,
 // 6.5 m+ under decks, ramps near 24 degrees, 3 m hover ledges. Hover lasts about 5 s and a dash is
 // 8.5 m, so a 12 m gap takes a hover; there's no fall damage, so the chasm is a slow road, not a pit.
-import { box, branch, lamp, once, pad, point, railing, ramp, sign, turned, write } from './kit.mjs';
+import { box, coral, lamp, once, pad, point, railing, ramp, sign, turned, write } from './kit.mjs';
 
 const BASE = -25; // bottom of every rock mass
 const MAGENTA = '#ff6be0', LILAC = '#c9a2ff';
@@ -92,14 +92,14 @@ box([44, 0, 50], [60, 7, 64], 'panel'); // pump house, roof by ramp
 ramp([52, 0, 80], [52, 7, 64], 7);
 railing([44, 7, 50], [60, 7, 50]);
 sign([48, 3, 49.8], [56, 5, 50], [52, 3, 47], LILAC);
-box([-96, 0, 58], [-94, 26, 60], 'metal'); // cable pylon, its arms braced out both ways
+box([-96, 0, 58], [-94, 26, 60], 'metal'); // cable pylon, coral grown out both ways
 lamp([-95, 26, 59]);
-branch([-94, 20, 59], [1, 0], 5, { w: 1.2, t: 0.5, lit: true });
-branch([-96, 20, 59], [-1, 0], 5, { w: 1.2, t: 0.5, lit: true });
-// Platforms cantilevered off the rim over the chasm, level with it and wide enough to walk out on:
+coral([-94, 20, 59], [1, 0], 5, { size: 0.8 });
+coral([-96, 20, 59], [-1, 0], 5, { size: 0.8 });
+// Table coral grown off the rim over the chasm, level with it and wide enough to walk out on:
 // exposed lookouts over the bridge and the terraces (7 m clear over the -8 terrace below).
 for (const x of [-20, 92]) {
-  branch([x, 0, 36], [0, -1], 8, { w: 4, deck: 5, lit: true });
+  coral([x, 0, 36], [0, -1], 8, { shelf: 5, lit: true });
   point([x, 0, 29]);
 }
 box([-30.5, 0, 85.5], [-20, 9, 86.5], 'concrete'); // base front wall, gates at x +-15
