@@ -6,7 +6,7 @@
 // palette, nearby lamps and flashes), shades under cover, and flashes with the guns.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CLASSES, TEAMS } from './mech.js';
+import { CLASSES, TEAMS, mountWeapon } from './mech.js';
 import { radar } from './hud.js';
 
 const frameMat = new THREE.MeshLambertMaterial({ color: 0x5a5f66, flatShading: true });
@@ -317,8 +317,8 @@ export class Cockpit {
   }
 
   /**
-   * The class's guns from its spec, painted with `mech`'s materials (so damage scorch and barrel
-   * heat glow match), at the mech's `scale`, placed where they sit relative to an eye
+   * `mech`'s weapons on class `cls`'s arms, painted with its materials (so damage scorch and
+   * barrel heat glow match), at the mech's `scale`, placed where they sit relative to an eye
    * `eyeHeight` above the feet.
    */
   setWeapons(cls, mech, eyeHeight, scale = 1) {
@@ -331,15 +331,15 @@ export class Cockpit {
     const spec = CLASSES[cls], group = new THREE.Group();
     group.scale.setScalar(scale);
     group.position.y = spec.hipY * scale - eyeHeight;
-    const arm = (build) => {
+    const arm = (side, weapon) => {
       const pod = new THREE.Group();
       group.add(pod);
-      const tip = build(pod);
+      const tip = mountWeapon(pod, cls, side, weapon.id, mech);
       clearDash(group, pod);
       return { pod, tip, rest: pod.position.clone(), kick: 0 };
     };
-    const guns = spec.guns.map((side) => arm((pod) => spec.gun(pod, side, mech)));
-    const launcher = arm((pod) => spec.launcher(pod, mech));
+    const guns = [arm(-1, mech.weapons.primary)];
+    const launcher = arm(1, mech.weapons.secondary);
     this.scene.add(group);
     this.weapons = { group, guns, launcher, arms: [...guns, launcher] };
     this.next = 0;

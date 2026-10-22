@@ -5,7 +5,7 @@ use std::collections::{HashMap, VecDeque};
 
 use crate::net::{self, ClientMsg, Event, InputMsg, MatchState, Orb, PlayerNet, ServerMsg, Snapshot};
 use crate::projectile::{self, Id, Projectile};
-use crate::{Arena, DT, Input, Map, Mech, MechClass, Tuning, Vector, collide, map, step_mech, weapon};
+use crate::{Arena, Arsenal, DT, Input, Loadout, Map, Mech, MechClass, Tuning, Vector, collide, map, step_mech, weapon};
 
 /// Remote mechs are drawn this many ticks behind the newest snapshot, to ride out jitter.
 pub const INTERP_TICKS: f32 = 3.0;
@@ -34,10 +34,12 @@ pub struct Drawn {
 }
 
 pub struct NetClient {
-    /// Compiled-in tuning.json per class, the same as the server's: prediction needs identical values.
-    classes: [Tuning; 3],
-    /// Own class as the server last reported it; prediction uses its tuning.
+    /// Compiled-in tuning per class and loadout, the same as the server's: prediction needs
+    /// identical values.
+    arsenal: Arsenal,
+    /// Own class and weapons as the server last reported them.
     pub class: MechClass,
+    pub loadout: Loadout,
     arena: Arena,
     /// Map the server runs, from the Welcome; None before it.
     pub map: Option<usize>,
@@ -88,8 +90,9 @@ pub struct NetClient {
 impl Default for NetClient {
     fn default() -> Self {
         Self {
-            classes: MechClass::ALL.map(|c| Tuning::default().for_class(c)),
+            arsenal: Arsenal::new(&Tuning::default()),
             class: MechClass::B,
+            loadout: Loadout::of(MechClass::B),
             arena: Arena::new(&Map::load(map::DEFAULT)),
             map: None,
             id: None,
@@ -128,7 +131,7 @@ impl NetClient {
         self.seq += 1;
         self.predict(&input);
         // Only the first prediction of an input fires; reconciliation replays never do.
-        let (t, m) = (&self.classes[self.class.index()], &self.mech);
+        let (t, m) = (self.arsenal.of(&self.mech), &self.mech);
         if let (true, Some(id)) = (m.launched, self.id) {
             self.projectiles.extend(projectile::volley(t, m, id, self.seq));
         }
@@ -141,7 +144,7 @@ impl NetClient {
             }
         }
         if let (true, Some(id)) = (self.mech.threw, self.id) {
-            self.projectiles.push(projectile::grenade(&self.classes[self.class.index()], &self.mech, id, self.seq));
+            self.projectiles.push(projectile::grenade(self.arsenal.of(&self.mech), &self.mech, id, self.seq));
         }
         if let (true, Some(id)) = (self.mech.alt_pressed, self.id) {
             projectile::detonate(id, &mut self.projectiles);
@@ -154,25 +157,25 @@ impl NetClient {
 
     /// One predicted step: move, then get blocked by other mechs where we last saw them.
     fn predict(&mut self, input: &Input) {
-        let t = &self.classes[self.class.index()];
+        let t = self.arsenal.of(&self.mech);
         step_mech(&self.arena, t, &mut self.mech, input);
         for (_, other) in &self.obstacles {
             let mut other = *other;
-            collide::separate(&self.arena, t, &mut self.mech, &self.classes[other.class.index()], &mut other, 1.0);
+            collide::separate(&self.arena, t, &mut self.mech, self.arsenal.of(&other), &mut other, 1.0);
         }
     }
 
     /// Flies own projectiles one tick against the arena and enemies where they were last seen.
     fn fly_own(&mut self) {
-        let (classes, arena, obstacles, team) = (&self.classes, &self.arena, &self.obstacles, self.team);
+        let (arsenal, arena, obstacles, team) = (&self.arsenal, &self.arena, &self.obstacles, self.team);
         let (burst, blasts) = (&mut self.burst, &mut self.blasts);
         self.projectiles.retain_mut(|p| {
-            let enemies = || obstacles.iter().filter(|(t, m)| *t != team && m.health > 0.0).map(|(_, m)| (&classes[m.class.index()], m));
-            let t = projectile::tuning_for(&classes[p.class.index()], p.n);
+            let enemies = || obstacles.iter().filter(|(t, m)| *t != team && m.health > 0.0).map(|(_, m)| (arsenal.of(m), m));
+            let t = projectile::tuning_for(arsenal.get(p.class, p.loadout), p.n);
             let Some(at) = projectile::fly(arena, &t, p, |ray, max| projectile::first_mech(ray, max, enemies())) else {
                 return true;
             };
-            blasts.push((p.owner, projectile::radius(&classes[p.class.index()], p), at));
+            blasts.push((p.owner, projectile::radius(arsenal.get(p.class, p.loadout), p), at));
             burst.push_back((p.id(), at));
             if burst.len() > BURSTS_KEPT {
                 burst.pop_front();
@@ -181,7 +184,6 @@ impl NetClient {
         });
     }
 
-    /// Message asking for `class` at the next spawn (or now, before the first input).
     /// Message setting our callsign to `raw`; the server sanitizes it.
     pub fn name_msg(&self, raw: &str) -> Vec<u8> {
         net::encode(&ClientMsg::Name(raw.into()))
@@ -197,8 +199,9 @@ impl NetClient {
         self.snapshots.back().map_or_else(Vec::new, |s| s.orbs.clone())
     }
 
-    pub fn pick_class(&self, class: MechClass) -> Vec<u8> {
-        net::encode(&ClientMsg::Class(class))
+    /// Message asking for `class` carrying `loadout` at the next spawn (or now, before the first input).
+    pub fn pick(&self, class: MechClass, loadout: Loadout) -> Vec<u8> {
+        net::encode(&ClientMsg::Pick(class, loadout))
     }
 
     pub fn receive(&mut self, bytes: &[u8], now_ms: f64) {
@@ -248,12 +251,12 @@ impl NetClient {
                 .iter()
                 .filter(|p| p.id != own)
                 // Repairing ones crouch (`hit_shape`); any repair time will do.
-                .map(|p| (p.team, Mech { class: p.class, pos: p.view.pos, health: p.view.health, repair_time: if p.view.repairing { DT } else { 0.0 }, ..Mech::default() }))
+                .map(|p| (p.team, Mech { class: p.class, loadout: p.loadout, pos: p.view.pos, health: p.view.health, repair_time: if p.view.repairing { DT } else { 0.0 }, ..Mech::default() }))
                 .collect();
             // Reconcile: take the server's state at ack_seq and replay what it hasn't seen yet.
             let predicted = self.mech.pos;
             self.mech = s.me;
-            self.class = me.class;
+            (self.class, self.loadout) = (me.class, me.loadout);
             for (_, input, _) in self.pending.clone() {
                 self.predict(&input);
             }
@@ -272,10 +275,10 @@ impl NetClient {
             match *e {
                 Event::Launch(p) if Some(p.owner) != self.id => self.replays.push(Replay { launched: s.tick, p, flown: 0, done: false }),
                 Event::Launch(_) => {}
-                Event::Blast { owner, seq, n, primary, class, pos, hits } => {
+                Event::Blast { owner, seq, n, primary, class, loadout, pos, hits } => {
                     let id = (owner, seq, n, primary);
-                    let shape = Projectile { owner, seq, n, primary, class, pos, vel: Vector::ZERO, age: 0.0 };
-                    let radius = projectile::radius(&self.classes[class.index()], &shape);
+                    let shape = Projectile { owner, seq, n, primary, class, loadout, pos, vel: Vector::ZERO, age: 0.0 };
+                    let radius = projectile::radius(self.arsenal.get(class, loadout), &shape);
                     self.hits.extend((0..16).filter(|v| hits & 1 << v != 0).map(|v| (owner, v)));
                     if Some(owner) != self.id {
                         self.held.push((s.tick, id, radius, pos));
@@ -323,7 +326,7 @@ impl NetClient {
         });
         let mut drawn: Vec<Drawn> = self.projectiles.iter().map(|&p| Drawn { p, predicted: true }).collect();
         for r in &mut self.replays {
-            let t = projectile::tuning_for(&self.classes[r.p.class.index()], r.p.n);
+            let t = projectile::tuning_for(self.arsenal.get(r.p.class, r.p.loadout), r.p.n);
             // State after `flown` ticks is as of tick `launched - 1 + flown`.
             let due = (at - r.launched as f32 + 1.0).floor().max(0.0) as u32;
             while r.flown < due && !r.done {

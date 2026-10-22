@@ -2,14 +2,14 @@
 //! format can't drift between client and server.
 
 use crate::projectile::Projectile;
-use crate::{Input, Mech, MechClass, Vector};
+use crate::{Input, Loadout, Mech, MechClass, Vector};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ClientMsg {
     Input(InputMsg),
-    /// Mech class for the next spawn (or right away, before the player's first input).
-    Class(MechClass),
+    /// Mech class and weapons for the next spawn (or right away, before the player's first input).
+    Pick(MechClass, Loadout),
     /// The player's callsign, as typed; the server sanitizes it (`game::sanitize_name`).
     Name(String),
 }
@@ -62,6 +62,7 @@ pub struct PlayerNet {
     pub id: u8,
     pub team: u8,
     pub class: MechClass,
+    pub loadout: Loadout,
     pub bot: bool,
     pub kills: u16,
     pub deaths: u16,
@@ -117,7 +118,7 @@ pub enum Event {
     /// A projectile (secondary, or a projectile primary) leaving its owner, before its first tick of flight; clients replay it.
     Launch(Projectile),
     /// A projectile burst at `pos`. `hits` has bit `id` set for each player its splash hurt.
-    Blast { owner: u8, seq: u32, n: u8, primary: bool, class: MechClass, pos: Vector, hits: u16 },
+    Blast { owner: u8, seq: u32, n: u8, primary: bool, class: MechClass, loadout: Loadout, pos: Vector, hits: u16 },
     /// An EMP went off at `pos`. `hits` has bit `id` set for each player it jammed.
     Pulse { owner: u8, pos: Vector, hits: u16 },
 }

@@ -1,0 +1,44 @@
+{
+  "primaries": [
+    {
+      "id": "stitcher", "name": "Stitcher", "desc": "Rapid vulcan; the spread blooms while held, and hits fade past 30 m", "sound": "vulcan",
+      "stats": {
+        "fire_rate": 14, "shot_damage": 3.4, "heat_per_shot": 2.9,
+        "spread_deg": 0.6, "bloom_per_shot": 0.4, "bloom_max": 4.5, "bloom_recovery": 3,
+        "falloff_start": 30, "falloff_end": 70, "falloff_floor": 0.4
+      }
+    },
+    {
+      "id": "pike", "name": "Pike", "desc": "Accurate rifle with mild bloom and long reach", "sound": "rifle",
+      "stats": {}
+    },
+    {
+      "id": "squall", "name": "Squall", "desc": "Flak cannon: five slow pellets in a cone, bursting at 60 m", "sound": "flak",
+      "stats": {
+        "fire_rate": 1.6, "shot_damage": 7, "heat_per_shot": 16, "weapon_range": 60,
+        "pellets": 5, "spread_deg": 2.5, "bloom_per_shot": 0, "bloom_max": 0,
+        "shot_speed": 110, "shot_gravity": 4, "shot_radius": 1
+      }
+    }
+  ],
+  "secondaries": [
+    {
+      "id": "darts", "name": "Dart rack", "desc": "Three fast darts in a tight fan", "sound": "darts", "projectile": "dart",
+      "stats": {
+        "alt_cooldown": 3, "alt_heat": 12, "alt_count": 3, "alt_spread_deg": 4, "alt_speed": 80,
+        "alt_fuse": 1.5, "alt_damage": 7, "alt_radius": 2
+      }
+    },
+    {
+      "id": "rocket", "name": "Rocket", "desc": "Straight-flying rocket with a 4 m blast", "sound": "rocket", "projectile": "rocket",
+      "stats": {}
+    },
+    {
+      "id": "mortar", "name": "Mortar", "desc": "Lobbed shell that bounces once or twice, then bursts wide", "sound": "mortar", "projectile": "shell",
+      "stats": {
+        "alt_cooldown": 5, "alt_heat": 25, "alt_speed": 36, "alt_loft_deg": 10, "alt_gravity": 18,
+        "alt_bounce": 0.45, "alt_fuse": 1.4, "alt_damage": 40, "alt_radius": 5.5
+      }
+    }
+  ]
+}

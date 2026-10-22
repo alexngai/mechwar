@@ -13,7 +13,7 @@ use crate::item;
 use crate::net::{Event, InputMsg, MatchState, MechView, Orb, PlayerNet, Snapshot};
 use crate::projectile::{self, Projectile};
 use crate::weapon;
-use crate::{Arena, DT, Map, Mech, MechClass, TICK_HZ, Tuning, Vector, hit_shape, spawn_mech, step_mech};
+use crate::{Arena, Arsenal, DT, Loadout, Map, Mech, MechClass, TICK_HZ, Tuning, Vector, hit_shape, spawn_mech, step_mech};
 
 pub const TEAM_SIZE: usize = 4;
 pub const MAX_PLAYERS: usize = 2 * TEAM_SIZE;
@@ -60,8 +60,10 @@ struct Player {
     /// Index into the team's spawn points, used for the first spawn of each match.
     slot: usize,
     class: MechClass,
-    /// Class to take at the next spawn.
+    loadout: Loadout,
+    /// Class and weapons to take at the next spawn.
     next_class: MechClass,
+    next_loadout: Loadout,
     mech: Mech,
     inputs: VecDeque<InputMsg>,
     /// Inputs this player may still apply; see CREDIT_PER_TICK.
@@ -92,8 +94,8 @@ enum Phase {
 }
 
 pub struct Game {
-    /// Tuning per class, indexed by `MechClass::index`.
-    classes: [Tuning; 3],
+    /// Tuning per class and loadout.
+    arsenal: Arsenal,
     pub tick: u32,
     /// Fill empty slots with bots while at least one human is connected.
     pub bots: bool,
@@ -135,7 +137,7 @@ impl Game {
             arena: Arena::new(&data),
             nav: Nav::for_map(map),
             spawns: data.spawns.map(|team| team.iter().map(|p| Vector::from_array(*p)).collect()),
-            classes: MechClass::ALL.map(|c| tuning.for_class(c)),
+            arsenal: Arsenal::new(&tuning),
             tick: 0,
             bots: true,
             score_limit: 25,
@@ -163,14 +165,20 @@ impl Game {
         self.add_player(team, None, MechClass::B)
     }
 
-    /// Class for this player's next spawn; immediate if they haven't moved yet.
-    pub fn pick_class(&mut self, id: u8, class: MechClass) {
+    /// Class and weapons for this player's next spawn; immediate if they haven't moved yet.
+    pub fn pick(&mut self, id: u8, class: MechClass, loadout: Loadout) {
+        let loadout = self.arsenal.clamp(loadout);
         let Some(p) = self.players.iter_mut().find(|p| p.id == id) else { return };
-        p.next_class = class;
+        (p.next_class, p.next_loadout) = (class, loadout);
         if p.ack_seq == 0 && p.mech.health > 0.0 {
-            p.class = class;
-            p.mech = spawn(&self.classes, class, p.mech.pos);
+            (p.class, p.loadout) = (class, loadout);
+            p.mech = spawn(&self.arsenal, class, loadout, p.mech.pos);
         }
+    }
+
+    /// `pick` with the class's own weapons.
+    pub fn pick_class(&mut self, id: u8, class: MechClass) {
+        self.pick(id, class, Loadout::of(class));
     }
 
     fn team_count(&self, team: u8) -> usize {
@@ -185,8 +193,10 @@ impl Game {
             team,
             slot,
             class,
+            loadout: Loadout::of(class),
             next_class: class,
-            mech: spawn(&self.classes, class, self.spawns[usize::from(team)][slot]),
+            next_loadout: Loadout::of(class),
+            mech: spawn(&self.arsenal, class, Loadout::of(class), self.spawns[usize::from(team)][slot]),
             inputs: VecDeque::new(),
             credit: 0.0,
             ack_seq: 0,
@@ -280,8 +290,8 @@ impl Game {
             if self.players[i].respawn_at.is_some_and(|at| self.tick >= at) {
                 let pos = self.respawn_point(self.players[i].team);
                 let p = &mut self.players[i];
-                p.class = p.next_class;
-                p.mech = spawn(&self.classes, p.class, pos);
+                (p.class, p.loadout) = (p.next_class, p.next_loadout);
+                p.mech = spawn(&self.arsenal, p.class, p.loadout, pos);
                 p.respawn_at = None;
             }
         }
@@ -293,7 +303,7 @@ impl Game {
             if me.bot.is_none() {
                 continue;
             }
-            let t = &self.classes[me.class.index()];
+            let t = self.arsenal.of(&me.mech);
             let enemies = || self.players.iter().filter(|p| p.team != me.team && p.mech.health > 0.0);
             let dist = |p: &&Player| p.mech.pos.distance(me.mech.pos);
             let target = enemies()
@@ -306,10 +316,10 @@ impl Game {
             let mut input = bot.think(&self.arena, self.nav, t, &p.mech, target.as_ref(), self.tick);
             // Burst a shell that has flown past the target with the target inside its blast.
             if let Some(tm) = &target {
-                let tt = &self.classes[tm.class.index()];
+                let tt = self.arsenal.of(tm);
                 let chest = tm.pos + Vector::Y * (tt.mech_height * 0.5);
                 input.alt_fire |= self.projectiles.iter().any(|f| {
-                    let ts = &self.classes[f.p.class.index()];
+                    let ts = self.arsenal.get(f.p.class, f.p.loadout);
                     f.p.owner == p.id && projectile::armed(&f.p) && f.p.vel.dot(chest - f.p.pos) < 0.0 && projectile::splash(&self.arena, ts, false, f.p.pos, tt, tm) > 0.0
                 });
             }
@@ -330,7 +340,7 @@ impl Game {
                 let p = &mut self.players[i];
                 p.credit -= 1.0;
                 p.ack_seq = msg.seq;
-                let t = &self.classes[p.class.index()];
+                let t = self.arsenal.of(&p.mech);
                 step_mech(&self.arena, t, &mut p.mech, &msg.input);
                 if p.mech.alt_pressed {
                     projectile::detonate(p.id, self.projectiles.iter_mut().map(|f| &mut f.p));
@@ -363,7 +373,7 @@ impl Game {
             let (earlier, rest) = self.players.split_at_mut(j);
             let b = &mut rest[0];
             for a in earlier {
-                let (ta, tb) = (&self.classes[a.class.index()], &self.classes[b.class.index()]);
+                let (ta, tb) = (self.arsenal.of(&a.mech), self.arsenal.of(&b.mech));
                 let share = tb.mech_mass / (ta.mech_mass + tb.mech_mass);
                 collide::separate(&self.arena, ta, &mut a.mech, tb, &mut b.mech, share);
             }
@@ -379,9 +389,9 @@ impl Game {
                 self.players
                     .iter()
                     .filter(|q| q.team != f.team && q.mech.health > 0.0)
-                    .map(|q| (&self.classes[q.class.index()], &q.mech))
+                    .map(|q| (self.arsenal.of(&q.mech), &q.mech))
             };
-            let t = projectile::tuning_for(&self.classes[f.p.class.index()], f.p.n);
+            let t = projectile::tuning_for(self.arsenal.get(f.p.class, f.p.loadout), f.p.n);
             match projectile::fly(&self.arena, &t, &mut f.p, |ray, max| projectile::first_mech(ray, max, enemies())) {
                 Some(at) => {
                     bursts.push((f.p, f.team, at));
@@ -398,7 +408,7 @@ impl Game {
         // Orbs heal everyone alive around them, a tick's worth each, until they run dry or fade.
         for orb in &mut self.orbs {
             for p in self.players.iter_mut().filter(|p| p.mech.health > 0.0) {
-                let t = &self.classes[p.class.index()];
+                let t = self.arsenal.of(&p.mech);
                 if (p.mech.pos + Vector::Y * (t.mech_height * 0.5)).distance(orb.pos) <= ORB_RADIUS {
                     let heal = (ORB_RATE * DT).min(orb.health).min(t.health_max - p.mech.health);
                     p.mech.health += heal;
@@ -424,8 +434,8 @@ impl Game {
         self.orbs.clear();
         self.phase = Phase::Playing { started_at: self.tick };
         for p in &mut self.players {
-            p.class = p.next_class;
-            p.mech = spawn(&self.classes, p.class, self.spawns[usize::from(p.team)][p.slot]);
+            (p.class, p.loadout) = (p.next_class, p.next_loadout);
+            p.mech = spawn(&self.arsenal, p.class, p.loadout, self.spawns[usize::from(p.team)][p.slot]);
             if let Some(bot) = &mut p.bot {
                 bot.respawned();
             }
@@ -494,7 +504,7 @@ impl Game {
     /// where the shooter saw them, each dealing `shot_damage` scaled by falloff. Teammates are
     /// passed through: no friendly fire.
     fn resolve_shot(&mut self, shooter: usize, seq: u32, view_tick: f32) {
-        let t = &self.classes[self.players[shooter].class.index()];
+        let t = self.arsenal.of(&self.players[shooter].mech);
         let (m, team, shooter_id) = (&self.players[shooter].mech, self.players[shooter].team, self.players[shooter].id);
         let view = view_tick.clamp(self.tick as f32 - MAX_REWIND_TICKS, self.tick as f32);
         // ponytail: the crouch is as of now, not rewound; it only differs for the 0.3 s at most
@@ -505,7 +515,7 @@ impl Game {
             .enumerate()
             .filter(|(_, q)| q.team != team && q.mech.health > 0.0)
             .filter_map(|(j, q)| {
-                let (shape, center) = hit_shape(&self.classes[q.class.index()], &Mech { pos: rewind(&q.history, view)?, ..q.mech });
+                let (shape, center) = hit_shape(self.arsenal.of(&q.mech), &Mech { pos: rewind(&q.history, view)?, ..q.mech });
                 Some((j, Pose::from_translation(center), shape))
             })
             .collect();
@@ -531,13 +541,13 @@ impl Game {
 
     /// Splash from projectile `p` (fired by `team`) bursting at `at`, and its Blast event.
     fn burst(&mut self, p: Projectile, team: u8, at: Vector) {
-        let t = projectile::tuning_for(&self.classes[p.class.index()], p.n);
+        let t = projectile::tuning_for(self.arsenal.get(p.class, p.loadout), p.n);
         let hurt: Vec<(usize, f32)> = self
             .players
             .iter()
             .enumerate()
             .filter(|(_, q)| q.team != team && q.mech.health > 0.0)
-            .map(|(j, q)| (j, projectile::splash(&self.arena, &t, p.primary, at, &self.classes[q.class.index()], &q.mech)))
+            .map(|(j, q)| (j, projectile::splash(&self.arena, &t, p.primary, at, self.arsenal.of(&q.mech), &q.mech)))
             .filter(|&(_, damage)| damage > 0.0)
             .collect();
         let attacker = self.players.iter().position(|q| q.id == p.owner);
@@ -548,7 +558,7 @@ impl Game {
                 self.apply_damage(attacker, j, damage);
             }
         }
-        self.events.push(Event::Blast { owner: p.owner, seq: p.seq, n: p.n, primary: p.primary, class: p.class, pos: at, hits });
+        self.events.push(Event::Blast { owner: p.owner, seq: p.seq, n: p.n, primary: p.primary, class: p.class, loadout: p.loadout, pos: at, hits });
     }
 
     /// Player `user`'s EMP: jams every living enemy it reaches, and its Pulse event.
@@ -556,11 +566,11 @@ impl Game {
     /// the radius can be out of it by now; rewind with `history` if that shows in play.
     fn pulse(&mut self, user: usize) {
         let u = &self.players[user];
-        let t = &self.classes[u.class.index()];
+        let t = self.arsenal.of(&u.mech);
         let reached: Vec<usize> = (0..self.players.len())
             .filter(|&j| {
                 let q = &self.players[j];
-                q.team != u.team && q.mech.health > 0.0 && item::emp_reaches(&self.arena, t, &u.mech, &self.classes[q.class.index()], &q.mech)
+                q.team != u.team && q.mech.health > 0.0 && item::emp_reaches(&self.arena, t, &u.mech, self.arsenal.of(&q.mech), &q.mech)
             })
             .collect();
         let (owner, pos) = (u.id, item::emp_center(t, &u.mech));
@@ -579,7 +589,7 @@ impl Game {
         if !matches!(self.phase, Phase::Playing { .. }) || target.mech.health <= 0.0 {
             return;
         }
-        let tt = &self.classes[target.class.index()];
+        let tt = self.arsenal.of(&target.mech);
         let braced = target.mech.class == MechClass::C && target.mech.ability_time > 0.0;
         let damage = amount * if braced { tt.brace_damage_mult } else { 1.0 };
         let respawn_at = self.tick + secs(tt.respawn_delay);
@@ -624,6 +634,7 @@ impl Game {
                     id: p.id,
                     team: p.team,
                     class: p.class,
+                    loadout: p.loadout,
                     bot: p.bot.is_some(),
                     kills: p.kills,
                     deaths: p.deaths,
@@ -644,9 +655,9 @@ impl Game {
     }
 }
 
-/// A fresh mech of `class` at `pos`.
-fn spawn(classes: &[Tuning; 3], class: MechClass, pos: Vector) -> Mech {
-    Mech { class, ..spawn_mech(&classes[class.index()], pos) }
+/// A fresh mech of `class` carrying `loadout` at `pos`.
+fn spawn(arsenal: &Arsenal, class: MechClass, loadout: Loadout, pos: Vector) -> Mech {
+    Mech { class, loadout, ..spawn_mech(arsenal.get(class, loadout), pos) }
 }
 
 fn secs(s: f32) -> u32 {
@@ -734,6 +745,27 @@ mod tests {
         assert!((mech(&game, killer).health - (40.0 + ORB_HEALTH)).abs() < 1e-3, "killer at {}", mech(&game, killer).health);
         assert_eq!(mech(&game, far).health, 40.0);
         assert!(game.orbs.is_empty(), "a dry orb lingers");
+    }
+
+    #[test]
+    fn a_picked_loadout_fires_its_weapons() {
+        // A Wisp carrying the Bulwark's weapons fires flak pellets and a mortar shell, not the
+        // Stitcher's hitscan or the darts.
+        let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
+        game.bots = false;
+        let id = game.join().unwrap();
+        let heavy = Loadout::of(MechClass::C);
+        game.pick(id, MechClass::A, heavy);
+        send(&mut game, id, Input { fire: true, alt_fire: true, ..Input::default() });
+        game.step();
+        let m = mech(&game, id);
+        assert_eq!((m.class, m.loadout), (MechClass::A, heavy));
+        let t = game.arsenal.get(MechClass::C, heavy);
+        let launched: Vec<Projectile> = game.events.iter().filter_map(|e| if let Event::Launch(p) = e { Some(*p) } else { None }).collect();
+        assert_eq!(launched.iter().filter(|p| p.primary).count(), t.pellets as usize, "flak pellets");
+        assert_eq!(launched.iter().filter(|p| !p.primary).count(), t.alt_count.max(1.0) as usize, "mortar shells");
+        assert!(launched.iter().all(|p| (p.class, p.loadout) == (MechClass::A, heavy)));
+        assert!(!game.events.iter().any(|e| matches!(e, Event::Shot { .. })), "hitscan fired");
     }
 
     #[test]
@@ -863,7 +895,7 @@ mod tests {
         }
         // The bot's rocket, 2 m past the human's chest and flying on.
         let chest = Vector::new(0.0, 0.1 + t.mech_height * 0.5, 0.0);
-        let p = Projectile { owner: bot, seq: 1, n: 0, primary: false, class: MechClass::B, pos: chest + Vector::Z * 2.0, vel: Vector::Z * t.alt_speed, age: 0.5 };
+        let p = Projectile { owner: bot, seq: 1, n: 0, primary: false, class: MechClass::B, loadout: Loadout::of(MechClass::B), pos: chest + Vector::Z * 2.0, vel: Vector::Z * t.alt_speed, age: 0.5 };
         game.projectiles.push(Flying { p, team: 1 });
         game.step();
         let hits = game.events.iter().find_map(|e| if let Event::Blast { owner, hits, .. } = *e { Some((owner, hits)) } else { None });

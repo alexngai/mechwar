@@ -371,10 +371,10 @@ export class Effects {
   }
 
   /**
-   * This frame's projectiles, each { pos, vel, cls, age, primary, grenade }: primary fire is a
-   * small hot slug with a short glow streak, rockets and darts burn with a smoke trail, mortar
-   * shells (C) tumble dark with a blinking light, and grenades tumble small with a light that
-   * blinks faster as the fuse runs down.
+   * This frame's projectiles, each { pos, vel, look, age, primary, grenade }, `look` a secondary's
+   * weapons.json `projectile`: primary fire is a small hot slug with a short glow streak, rockets
+   * and darts burn with a smoke trail, shells tumble dark with a blinking light, and grenades
+   * tumble small with a light that blinks faster as the fuse runs down.
    */
   projectiles(list, dt) {
     this.shells.items.forEach((item, i) => {
@@ -390,7 +390,7 @@ export class Effects {
         item.core.material.color.setHex(0x70ffa0);
         return;
       }
-      const shell = !p.primary && p.cls === 'C', dart = !p.primary && p.cls === 'A';
+      const shell = p.look === 'shell', dart = p.look === 'dart';
       item.mesh.scale.setScalar(p.primary ? 0.6 : dart ? 0.6 : shell ? 1.6 : 1);
       item.core.visible = !shell || (p.age * 6) % 1 < 0.5;
       item.core.material.color.setHex(p.primary ? 0xffe2a0 : shell ? 0xff4020 : 0xffb060);

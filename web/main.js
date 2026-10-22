@@ -7,8 +7,10 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import init, { WasmNetClient, WasmSim, map_name, tick_dt } from '../sim/pkg/sim.js';
 import tuning from '../tuning.json';
 import classes from '../classes.json';
+import weapons from '../weapons.json';
 import tuningText from '../tuning.json?raw';
 import classesText from '../classes.json?raw';
+import weaponsText from '../weapons.json?raw';
 import { buildArena, HIGH_ONLY, LOW_ONLY } from './arena.js';
 import { Effects, HOT, halo, hot } from './fx.js';
 import saltworks from '../maps/saltworks.json';
@@ -18,7 +20,7 @@ import riftline from '../maps/riftline.json';
 import sump from '../maps/sump.json';
 import sinkhole from '../maps/sinkhole.json';
 import blockout from '../maps/blockout.json';
-import { CROUCH, Mech, TEAMS } from './mech.js';
+import { CROUCH, Mech, TEAMS, armament, ownLoadout } from './mech.js';
 import { Debug } from './debug.js';
 import { Cockpit } from './cockpit.js';
 import { Sound } from './audio.js';
@@ -27,11 +29,19 @@ import { createSky } from './sky.js';
 
 await init();
 const DT = tick_dt();
-// Mech classes A, B, C by index. tuning.json is B; classes.json overrides values per class.
+// Mech classes A, B, C by index. tuning.json is B with its own weapons; classes.json overrides
+// values per class and weapons.json per weapon. A loadout indexes weapons.json's primaries and
+// secondaries.
 const CLASS_KEYS = ['A', 'B', 'C'];
 let classIdx = 1; // offline: the picked class; online: what the server says we are
+let loadout = ownLoadout('B'); // likewise, the weapons carried
 const classValue = (cls, name) => classes[CLASS_KEYS[cls]].overrides[name] ?? tuning[name].value;
-const T = (name) => classValue(classIdx, name);
+/** Value `name` for class `cls` carrying `l`: its weapons' if they set it, else its class's. */
+const valueOf = (cls, l, name) => {
+  const { primary, secondary } = armament(l);
+  return secondary.stats[name] ?? primary.stats[name] ?? classValue(cls, name);
+};
+const T = (name) => valueOf(classIdx, loadout, name);
 
 // Dev (Vite): ?server=ws://host:port/ws plays online, otherwise the offline sandbox. A production
 // build plays online against the server that served it, unless ?offline.
@@ -47,13 +57,21 @@ const mapIndex = (name) => {
 };
 const sim = net ? null : new WasmSim(JSON.stringify(tuning), mapIndex(params.get('map') ?? 'foundry'));
 const game = net ?? sim;
+// Until there's a loadout picker, ?primary=<id>&secondary=<id> (weapons.json ids) arm any class.
+const urlLoadout = Object.fromEntries(
+  [['primary', 'primaries'], ['secondary', 'secondaries']]
+    .map(([slot, list]) => [slot, weapons[list].findIndex((w) => w.id === params.get(slot))])
+    .filter(([, i]) => i >= 0),
+);
+/** The loadout picking class `i` spawns with. */
+const loadoutFor = (i) => ({ ...ownLoadout(CLASS_KEYS[i]), ...urlLoadout });
 let ws = null, connection = server ? 'connecting' : '', picked = null;
 if (net) {
   ws = new WebSocket(server);
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => {
     connection = '';
-    if (picked !== null) ws.send(net.pick_class(picked));
+    if (picked !== null) ws.send(net.pick(picked, loadoutFor(picked).primary, loadoutFor(picked).secondary));
     if (callsign()) ws.send(net.set_name(callsign()));
   };
   ws.onmessage = (e) => net.receive(new Uint8Array(e.data), performance.now());
@@ -136,7 +154,7 @@ const sound = new Sound();
 Mech.audio = sound;
 addEventListener('pointerdown', () => sound.unlock());
 addEventListener('keydown', () => sound.unlock());
-let me = new Mech(scene, fx, 'B'), meClass = 1;
+let me = new Mech(scene, fx, 'B'), meKit = '1:' + JSON.stringify(ownLoadout('B'));
 me.own = true;
 const cockpit = new Cockpit();
 cockpit.setWeapons('B', me, T('eye_height'), T('mech_height') / me.height);
@@ -266,14 +284,19 @@ const turnAbout = () => { if (turnT < 0) turnT = 0; };
 const ease = (x) => x * x * (3 - 2 * x);
 
 // --- Tuning panel ----------------------------------------------------------
-// The sliders show and edit the class being played: the Lancer's values are tuning.json itself,
-// the others' are their classes.json overrides (• marks one; moving any slider adds one).
+// The sliders show and edit what's being played: the primary and secondary groups its weapons'
+// weapons.json entries, the rest its class's classes.json overrides. The Lancer's own weapons and
+// body are tuning.json itself (• marks an override; moving any slider adds one).
 const gui = new GUI({ title: 'Tuning' });
 const folders = {}, sliders = [], values = {};
 const push = () => {
   sim?.set_tuning(JSON.stringify(tuning));
   sim?.set_classes(JSON.stringify(classes));
+  sim?.set_weapons(JSON.stringify(weapons));
 };
+/** The weapons.json entry slider group `group` edits, if it's a weapon's. */
+const weaponFor = (group) => (group === 'primary' || group === 'secondary' ? armament(loadout)[group] : null);
+const lancers = (w) => Object.values(classes.B.weapons).includes(w.id);
 for (const [name, p] of Object.entries(tuning)) {
   // Online the sim runs on compiled-in tuning.json on both ends, so only camera values are live.
   // Bot values only matter to the server.
@@ -282,7 +305,9 @@ for (const [name, p] of Object.entries(tuning)) {
     get: () => T(name),
     set: (v) => {
       v = +v.toFixed(6); // no float dust from step snapping
-      if (classIdx === 1) p.value = v;
+      const w = weaponFor(p.group);
+      if (w && !lancers(w)) w.stats[name] = v;
+      else if (w || classIdx === 1) p.value = v;
       else classes[CLASS_KEYS[classIdx]].overrides[name] = v;
     },
   });
@@ -291,11 +316,14 @@ for (const [name, p] of Object.entries(tuning)) {
 }
 (folders.move ?? folders.camera).open();
 if (net) gui.close(); // online only camera values are live; keep the corner for the kill feed
-/** Points the panel at the class being played: its values, its override marks, its name. */
+/** Points the panel at the class and weapons being played: their values, override marks, names. */
 function retune() {
-  const c = classes[CLASS_KEYS[classIdx]];
-  gui.title(`Tuning · ${c.name} (${classIdx === 1 ? 'tuning.json' : 'classes.json'})`);
-  for (const [name, p, slider] of sliders) slider.name(`${name} (${p.unit})${classIdx !== 1 && name in c.overrides ? ' •' : ''}`).updateDisplay();
+  const c = classes[CLASS_KEYS[classIdx]], { primary, secondary } = armament(loadout);
+  gui.title(`Tuning · ${c.name} · ${primary.name} · ${secondary.name}`);
+  for (const [name, p, slider] of sliders) {
+    const w = weaponFor(p.group), marked = w ? name in w.stats : classIdx !== 1 && name in c.overrides;
+    slider.name(`${name} (${p.unit})${marked ? ' •' : ''}`).updateDisplay();
+  }
 }
 // The copies are the repo's files with the panel's numbers swapped in, so a paste diffs only
 // what changed. A value that's still equal keeps its original spelling (3.0 stays 3.0).
@@ -305,16 +333,23 @@ const tuningFile = () =>
     const now = swap(old, tuning[name].value);
     return `${head}${now},${' '.repeat(Math.max(1, old.length + gap.length - now.length))}`;
   });
+/** A JSON object's body `list` with `values`' numbers swapped in and new ones added on a line at `indent`. */
+const swapBody = (list, values, indent) => {
+  const body = list.replace(/"(\w+)": ([-\d.e]+)/g, (_, name, old) => `"${name}": ${swap(old, values[name])}`);
+  const added = Object.keys(values).filter((name) => !list.includes(`"${name}":`)).map((name) => `"${name}": ${values[name]}`);
+  if (!added.length) return body;
+  return list.trim() ? body.replace(/\s*$/, (end) => `,\n${indent}${added.join(', ')}${end}`) : ` ${added.join(', ')} `;
+};
 const classesFile = () =>
-  classesText.replace(/("(\w)": \{[^]*?"overrides": \{)([^}]*)\}/g, (_, head, key, list) => {
-    const overrides = classes[key].overrides;
-    let body = list.replace(/"(\w+)": ([-\d.e]+)/g, (_, name, old) => `"${name}": ${swap(old, overrides[name])}`);
-    const added = Object.keys(overrides).filter((name) => !list.includes(`"${name}":`)).map((name) => `"${name}": ${overrides[name]}`);
-    if (added.length) body = list.trim() ? body.replace(/\s*$/, (end) => `,\n      ${added.join(', ')}${end}`) : ` ${added.join(', ')} `;
-    return `${head}${body}}`;
+  classesText.replace(/("(\w)": \{[^]*?"overrides": \{)([^}]*)\}/g, (_, head, key, list) => `${head}${swapBody(list, classes[key].overrides, '      ')}}`);
+const weaponsFile = () =>
+  weaponsText.replace(/("id": "(\w+)"[^]*?"stats": \{)([^}]*)\}/g, (_, head, id, list) => {
+    const stats = [...weapons.primaries, ...weapons.secondaries].find((w) => w.id === id).stats;
+    return `${head}${swapBody(list, stats, '        ')}}`;
   });
 gui.add({ copy: () => navigator.clipboard.writeText(tuningFile()) }, 'copy').name('Copy tuning.json');
 gui.add({ copy: () => navigator.clipboard.writeText(classesFile()) }, 'copy').name('Copy classes.json');
+gui.add({ copy: () => navigator.clipboard.writeText(weaponsFile()) }, 'copy').name('Copy weapons.json');
 
 // --- HUD -------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
@@ -378,14 +413,14 @@ const esc = (text) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 // Recent kills for the feed: names and team colors when they happened.
 const feed = [];
 CLASS_KEYS.forEach((key, i) => {
-  const c = classes[key], v = (name) => classValue(i, name);
+  const c = classes[key], own = ownLoadout(key), { primary, secondary } = armament(own), v = (name) => valueOf(i, own, name);
   const card = document.createElement('button');
   card.className = 'card';
   card.innerHTML = `<span class="key">${i + 1}</span><b>${c.name}</b>${c.role}<dl>
     <dt>HP</dt><dd>${v('health_max')}</dd><dt>Speed</dt><dd>${v('walk_speed')} m/s</dd>
     <dt>DPS</dt><dd>${Math.round(v('fire_rate') * v('shot_damage') * v('pellets'))}</dd></dl>
-    <p><b>LMB · ${c.primary.name}</b>${c.primary.desc}</p>
-    <p><b>RMB · ${c.secondary.name}</b>${c.secondary.desc}</p>
+    <p><b>LMB · ${primary.name}</b>${primary.desc}</p>
+    <p><b>RMB · ${secondary.name}</b>${secondary.desc}</p>
     <p><b>F · ${c.ability.name}</b>${c.ability.desc}</p>`;
   card.addEventListener('click', () => pick(i));
   $('cards').append(card);
@@ -393,11 +428,13 @@ CLASS_KEYS.forEach((key, i) => {
 function pick(i) {
   pickerOpen = false;
   picked = i;
+  const l = loadoutFor(i);
   if (net) {
-    if (ws.readyState === WebSocket.OPEN) ws.send(net.pick_class(i));
+    if (ws.readyState === WebSocket.OPEN) ws.send(net.pick(i, l.primary, l.secondary));
   } else {
     classIdx = i;
-    sim.set_class(i);
+    loadout = l;
+    sim.set_class(i, l.primary, l.secondary);
     sim.reset();
     prev = curr = sim.state();
   }
@@ -462,12 +499,12 @@ function frame(now) {
   if (net) ensureArena(net.map());
   const hudState = net ? net.hud() : null;
   const [myId, myTeam] = hudState ? [hudState[0], hudState[6]] : [-1, -1];
-  if (hudState) classIdx = hudState[12];
-  if (meClass !== classIdx) {
+  if (hudState) [classIdx, loadout] = [hudState[12], { primary: hudState[14], secondary: hudState[15] }];
+  if (meKit !== `${classIdx}:${JSON.stringify(loadout)}`) {
     me.dispose();
-    me = new Mech(scene, fx, CLASS_KEYS[classIdx]);
+    me = new Mech(scene, fx, CLASS_KEYS[classIdx], loadout);
     me.own = true;
-    meClass = classIdx;
+    meKit = `${classIdx}:${JSON.stringify(loadout)}`;
     cockpit.setWeapons(CLASS_KEYS[classIdx], me, T('eye_height'), T('mech_height') / me.height);
     retune();
   }
@@ -494,14 +531,14 @@ function frame(now) {
 
   if (net) {
     const r = net.remotes(now), live = new Set();
-    for (let i = 0; i < r.length; i += 14) {
-      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering, bot, abilityOn, repairing] = r.subarray(i, i + 14);
+    for (let i = 0; i < r.length; i += 16) {
+      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering, bot, abilityOn, repairing, primary, secondary] = r.subarray(i, i + 16);
       let e = remotes.get(id);
-      if (e && e.cls !== cls) {
+      if (e && (e.cls !== cls || e.mech.loadout.primary !== primary || e.mech.loadout.secondary !== secondary)) {
         e.mech.dispose();
         e = null;
       }
-      if (!e) remotes.set(id, (e = { mech: new Mech(scene, fx, CLASS_KEYS[cls]), cls, team, pos: new THREE.Vector3(x, y, z), vel: new THREE.Vector3() }));
+      if (!e) remotes.set(id, (e = { mech: new Mech(scene, fx, CLASS_KEYS[cls], { primary, secondary }), cls, team, pos: new THREE.Vector3(x, y, z), vel: new THREE.Vector3() }));
       live.add(id);
       // Gait speed comes from interpolated motion; a jump (respawn, slot reuse) resets it.
       seen.set(x, y, z);
@@ -583,8 +620,9 @@ function frame(now) {
   const pr = game.projectiles(now), drawn = [], live = new Set();
   let gunAt = null;
   burstable = false;
-  for (let i = 0; i < pr.length; i += 13) {
-    const [owner, seq, n, cls, x, y, z, vx, vy, vz, age, predicted, primary] = pr.subarray(i, i + 13);
+  for (let i = 0; i < pr.length; i += 14) {
+    const [owner, seq, n, , x, y, z, vx, vy, vz, age, predicted, primary, weapon] = pr.subarray(i, i + 14);
+    const secondary = primary ? null : weapons.secondaries[weapon];
     const key = `${owner}:${seq}:${n}:${primary}`, ahead = predicted ? a * DT : 0;
     const mech = predicted ? me : remotes.get(owner)?.mech;
     let shot = launches.get(key);
@@ -606,8 +644,8 @@ function frame(now) {
     const p = new THREE.Vector3(x + vx * ahead, y + vy * ahead, z + vz * ahead);
     const blend = Math.min((age + ahead) / LAUNCH_BLEND, 1);
     if (blend < 1) p.lerp(shot.from, 1 - blend);
-    drawn.push({ pos: p, vel: new THREE.Vector3(vx, vy, vz), cls: CLASS_KEYS[cls], age: age + ahead, primary: !!primary, grenade: n === GRENADE_N });
-    if (!primary) debug.shell(key, n === GRENADE_N ? 'Tumbler' : classes[CLASS_KEYS[cls]].secondary.name, p, age + ahead);
+    drawn.push({ pos: p, vel: new THREE.Vector3(vx, vy, vz), look: secondary?.projectile, age: age + ahead, primary: !!primary, grenade: n === GRENADE_N });
+    if (!primary) debug.shell(key, n === GRENADE_N ? 'Tumbler' : secondary.name, p, age + ahead);
   }
   for (const key of launches.keys()) if (!live.has(key)) launches.delete(key);
   debug.endShells(live);

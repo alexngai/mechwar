@@ -9,7 +9,7 @@ use rapier3d::parry::query::RayCast;
 use rapier3d::prelude::{Capsule, Pose, Ray, Rotation};
 use serde::{Deserialize, Serialize};
 
-use crate::{Arena, DT, Mech, MechClass, Tuning, Vector, aim_ray, hit_shape};
+use crate::{Arena, DT, Loadout, Mech, MechClass, Tuning, Vector, aim_ray, hit_shape};
 
 /// Added to mech capsules for contact: projectiles aren't points.
 pub const PROJECTILE_RADIUS: f32 = 0.25;
@@ -29,8 +29,9 @@ pub struct Projectile {
     pub seq: u32,
     pub n: u8,
     pub primary: bool,
-    /// The owner's class at launch, which picks the tuning it flies with.
+    /// The owner's class and loadout at launch, which pick the tuning it flies with.
     pub class: MechClass,
+    pub loadout: Loadout,
     pub pos: Vector,
     pub vel: Vector,
     pub age: f32,
@@ -73,7 +74,7 @@ pub fn volley(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Vec<Projectile> {
         .map(|n| {
             let fan = (f32::from(n) - f32::from(count - 1) * 0.5) * t.alt_spread_deg.to_radians();
             let dir = Rotation::from_rotation_y(m.yaw + fan) * Rotation::from_rotation_x(pitch) * Vector::NEG_Z;
-            Projectile { owner, seq, n, primary: false, class: m.class, pos: eye, vel: dir * t.alt_speed, age: 0.0 }
+            Projectile { owner, seq, n, primary: false, class: m.class, loadout: m.loadout, pos: eye, vel: dir * t.alt_speed, age: 0.0 }
         })
         .collect()
 }

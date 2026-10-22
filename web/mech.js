@@ -2,6 +2,8 @@
 // sim state. They're rigid parts on joints, so there's no skinned mesh; legs use two-bone IK.
 import * as THREE from 'three';
 import { halo, hot } from './fx.js';
+import classes from '../classes.json';
+import weapons from '../weapons.json';
 
 // Team color lives in the accents (visor, light strip) and the weapon pods; the hull carries a
 // personal scheme picked from the player id. -1 is offline.
@@ -123,12 +125,11 @@ function put(parent, obj, x, y, z, rx = 0, rz = 0) {
 // Legs: hip height and spacing, bone lengths, ankle height, `knee` +1 bends back and -1 forward.
 // Gait: foot `stance` x, stride = clamp(speed * k, min, max) (steps per second come to
 // speed / (2 * stride), so longer strides lumber), bob and foot-lift amplitudes, wreck
-// `sink`, dust puffs per footfall. `hull` builds the body, `gun` fills one pod per `guns` side (the
-// primary, on the left arm) and returns its muzzle, `leg` builds one leg's parts, `nozzles` are
-// [x, y, z, size?] on the body.
+// `sink`, dust puffs per footfall. `hull` builds the body, `leg` builds one leg's parts, `nozzles`
+// are [x, y, z, size?] on the body, and `arm` [x, y, z] is the right arm's weapon mount (the left
+// mirrors it): the primary goes on the left, the secondary on the right (see KITS).
 // `strip` [width, y, z, length] is the accent light line and `plate` [width, height, y, z] the
 // unit-number plate; each is a box just wider than the body there, so it shows on both flanks.
-// `launcher` fills the right arm's pod with the secondary weapon and returns its tip.
 // Materials: `m.hull` personal paint, `m.pods` team paint, `m.trim` metal, `m.hazard` stripes,
 // `m.accent` team-colored lights.
 
@@ -138,7 +139,7 @@ const LANCER = {
   stance: 0.85, stride: [0.2, 0.3, 2.4], bob: 0.12, lift: 0.6, sink: 1.5, dust: 1,
   nozzles: [[-0.4, 0.35, 1.55], [0.4, 0.35, 1.55]],
   strip: [2.24, 1.27, 0.1, 1.6], plate: [1.34, 0.3, 0.9, 1.3],
-  guns: [-1],
+  arm: [1.45, 0.9, -0.1],
   hull(body, m) {
     put(body, box(1.5, 0.5, 1.2, m.hazard), 0, 0, 0.05); // hip block
     put(body, box(2.2, 1.1, 1.8, m.hull), 0, 0.8, 0.1); // main hull
@@ -148,19 +149,6 @@ const LANCER = {
     put(body, box(1.3, 1.0, 0.7, m.trim), 0, 0.85, 1.3); // backpack
     put(body, box(0.06, 0.9, 0.06, m.trim), -0.75, 1.95, 0.7); // antenna
   },
-  launcher(pod, m) {
-    pod.position.set(1.45, 0.9, -0.1);
-    pod.add(box(0.55, 0.6, 1.1, m.pods));
-    put(pod, cyl(0.17, 0.17, 1.2, m.barrels), 0, 0.05, -0.9, ALONG_Z); // rocket tube
-    put(pod, box(0.42, 0.42, 0.12, m.trim), 0, 0.05, -1.45); // muzzle collar
-    return put(pod, new THREE.Object3D(), 0, 0.05, -1.55);
-  },
-  gun(pod, side, m) {
-    pod.position.set(side * 1.45, 0.9, -0.1);
-    pod.add(box(0.55, 0.6, 1.3, m.pods));
-    put(pod, cyl(0.1, 0.13, 1.4, m.barrels), 0, -0.05, -1.3, ALONG_Z);
-    return put(pod, new THREE.Object3D(), 0, -0.05, -2.0);
-  },
   leg(m) {
     const foot = new THREE.Group();
     put(foot, box(0.75, 0.24, 1.3, m.trim), 0, 0.12, -0.2); // sole
@@ -169,14 +157,13 @@ const LANCER = {
   },
 };
 
-// A (Wisp), light: short legs under a narrow pod, swept tail fins, a long rifle on the left arm and a
-// dart rack on the right.
+// A (Wisp), light: short legs under a narrow pod, swept tail fins and slim arms.
 const WISP = {
   height: 3.5, hipY: 2.05, hipX: 0.5, thigh: 1.35, shin: 1.3, ankleY: 0.22, knee: 1,
   stance: 0.62, stride: [0.167, 0.3, 2.42], bob: 0.12, lift: 0.5, sink: 1.1, dust: 1,
   nozzles: [[-0.22, 0.3, 1.05, 0.7], [0.22, 0.3, 1.05, 0.7]],
   strip: [1.24, 0.9, 0.15, 1.2], plate: [1.24, 0.25, 0.5, 0.55],
-  guns: [-1],
+  arm: [0.78, 0.6, -0.05],
   hull(body, m) {
     put(body, box(0.95, 0.4, 0.8, m.hazard), 0, 0, 0.05); // hip block
     put(body, box(1.2, 0.8, 1.4, m.hull), 0, 0.6, 0.15); // main hull
@@ -188,23 +175,6 @@ const WISP = {
     put(body, box(0.12, 0.08, 0.04, m.accent), -0.36, 1.14, -0.64); // sensor lens
     for (const side of [-1, 1]) put(body, box(0.05, 0.9, 0.5, m.pods), side * 0.4, 1.3, 0.7, 0.7, -side * 0.4); // swept fin
   },
-  launcher(pod, m) {
-    pod.position.set(0.78, 0.6, -0.05);
-    pod.add(box(0.34, 0.34, 0.34, jointMat)); // shoulder
-    put(pod, box(0.28, 0.36, 0.9, m.pods), -0.04, -0.12, -0.4); // forearm
-    put(pod, box(0.34, 0.2, 0.55, m.trim), -0.04, 0.12, -0.6); // dart rack
-    for (const x of [-0.14, -0.04, 0.06]) put(pod, cyl(0.035, 0.035, 0.6, m.barrels), x, 0.12, -0.62, ALONG_Z); // dart tubes
-    return put(pod, new THREE.Object3D(), -0.04, 0.12, -0.95);
-  },
-  gun(pod, side, m) {
-    pod.position.set(side * 0.78, 0.6, -0.05);
-    pod.add(box(0.34, 0.34, 0.34, jointMat)); // shoulder
-    put(pod, box(0.28, 0.36, 1.1, m.pods), 0.04, -0.12, -0.45); // forearm
-    put(pod, box(0.08, 0.12, 0.55, m.trim), 0.04, 0.12, -0.7); // scope
-    put(pod, cyl(0.055, 0.075, 2.1, m.barrels), 0.04, -0.12, -1.95, ALONG_Z); // long barrel
-    put(pod, box(0.15, 0.15, 0.25, m.trim), 0.04, -0.12, -3.0); // muzzle brake
-    return put(pod, new THREE.Object3D(), 0.04, -0.12, -3.2);
-  },
   leg(m) {
     const foot = new THREE.Group();
     for (const x of [-0.13, 0.13]) put(foot, box(0.14, 0.16, 0.95, m.trim), x, 0.08, -0.3); // split toes
@@ -213,14 +183,14 @@ const WISP = {
   },
 };
 
-// C (Bulwark), heavy: a wide armored box behind a front slab on thick forward-kneed legs, with a
-// cannon on the left shoulder and a mortar on the right.
+// C (Bulwark), heavy: a wide armored box behind a front slab on thick forward-kneed legs, with its
+// weapons on shoulder turrets.
 const BULWARK = {
   height: 5.8, hipY: 2.7, hipX: 1.15, thigh: 1.75, shin: 1.65, ankleY: 0.35, knee: -1,
   stance: 1.35, stride: [0.24, 0.3, 2.2], bob: 0.2, lift: 0.5, sink: 1.3, dust: 2,
   nozzles: [[-0.65, 0.35, 2.1, 1.3], [0.65, 0.35, 2.1, 1.3]],
   strip: [3.58, 1.15, 0.1, 1.7], plate: [3.58, 0.45, 0.78, 0.2],
-  guns: [-1],
+  arm: [1.15, 2.55, 0.2],
   hull(body, m) {
     put(body, box(2.0, 0.6, 1.4, jointMat), 0, 0, 0); // hip block
     put(body, box(3.0, 1.6, 2.4, m.hull), 0, 1.05, 0.15); // main hull
@@ -234,22 +204,6 @@ const BULWARK = {
       put(body, cyl(0.12, 0.14, 0.7, m.barrels), side * 0.6, 1.9, 1.9); // exhaust stack
     }
   },
-  launcher(pod, m) {
-    // A short, fat mortar tube out of a housing like the cannon's, raised 0.3 rad to lob.
-    pod.position.set(1.15, 2.55, 0.2);
-    put(pod, box(0.5, 0.4, 0.6, jointMat), 0, -0.3, 0.1); // turret ring
-    put(pod, box(0.85, 0.7, 1.6, m.pods), 0, 0.05, -0.2); // breech housing
-    put(pod, cyl(0.3, 0.27, 1.1, m.barrels), 0, 0.15 + 0.55 * Math.sin(0.3), -0.9 - 0.55 * Math.cos(0.3), ALONG_Z + 0.3); // tube
-    return put(pod, new THREE.Object3D(), 0, 0.15 + 1.15 * Math.sin(0.3), -0.9 - 1.15 * Math.cos(0.3));
-  },
-  gun(pod, side, m) {
-    pod.position.set(side * 1.15, 2.55, 0.2);
-    put(pod, box(0.5, 0.4, 0.6, jointMat), 0, -0.3, 0.1); // turret ring
-    put(pod, box(0.85, 0.7, 1.9, m.pods), 0, 0.1, -0.1); // housing
-    put(pod, cyl(0.17, 0.21, 1.7, m.barrels), 0, 0.1, -1.85, ALONG_Z); // barrel
-    put(pod, box(0.5, 0.5, 0.4, m.trim), 0, 0.1, -2.75); // muzzle block
-    return put(pod, new THREE.Object3D(), 0, 0.1, -3.0);
-  },
   leg(m) {
     const foot = new THREE.Group();
     put(foot, box(1.2, 0.32, 1.6, m.trim), 0, 0.16, -0.15); // sole
@@ -260,6 +214,75 @@ const BULWARK = {
 };
 
 export const CLASSES = { A: WISP, B: LANCER, C: BULWARK };
+
+// Weapon models by weapons.json id, each built in a pod at its class's arm mount, facing -Z, and
+// returning its muzzle. Each is sized for a `home` class and scaled to fit any other.
+const KITS = {
+  // A long rifle on a slim forearm.
+  stitcher: { home: 'A', build(pod, m) {
+    pod.add(box(0.34, 0.34, 0.34, jointMat)); // shoulder
+    put(pod, box(0.28, 0.36, 1.1, m.pods), 0.04, -0.12, -0.45); // forearm
+    put(pod, box(0.08, 0.12, 0.55, m.trim), 0.04, 0.12, -0.7); // scope
+    put(pod, cyl(0.055, 0.075, 2.1, m.barrels), 0.04, -0.12, -1.95, ALONG_Z); // long barrel
+    put(pod, box(0.15, 0.15, 0.25, m.trim), 0.04, -0.12, -3.0); // muzzle brake
+    return put(pod, new THREE.Object3D(), 0.04, -0.12, -3.2);
+  } },
+  // A gun pod with one tapered barrel.
+  pike: { home: 'B', build(pod, m) {
+    pod.add(box(0.55, 0.6, 1.3, m.pods));
+    put(pod, cyl(0.1, 0.13, 1.4, m.barrels), 0, -0.05, -1.3, ALONG_Z);
+    return put(pod, new THREE.Object3D(), 0, -0.05, -2.0);
+  } },
+  // A cannon on a shoulder turret.
+  squall: { home: 'C', build(pod, m) {
+    put(pod, box(0.5, 0.4, 0.6, jointMat), 0, -0.3, 0.1); // turret ring
+    put(pod, box(0.85, 0.7, 1.9, m.pods), 0, 0.1, -0.1); // housing
+    put(pod, cyl(0.17, 0.21, 1.7, m.barrels), 0, 0.1, -1.85, ALONG_Z); // barrel
+    put(pod, box(0.5, 0.5, 0.4, m.trim), 0, 0.1, -2.75); // muzzle block
+    return put(pod, new THREE.Object3D(), 0, 0.1, -3.0);
+  } },
+  // A rack of three tubes on a slim forearm.
+  darts: { home: 'A', build(pod, m) {
+    pod.add(box(0.34, 0.34, 0.34, jointMat)); // shoulder
+    put(pod, box(0.28, 0.36, 0.9, m.pods), -0.04, -0.12, -0.4); // forearm
+    put(pod, box(0.34, 0.2, 0.55, m.trim), -0.04, 0.12, -0.6); // dart rack
+    for (const x of [-0.14, -0.04, 0.06]) put(pod, cyl(0.035, 0.035, 0.6, m.barrels), x, 0.12, -0.62, ALONG_Z); // dart tubes
+    return put(pod, new THREE.Object3D(), -0.04, 0.12, -0.95);
+  } },
+  // A pod with one wide launch tube.
+  rocket: { home: 'B', build(pod, m) {
+    pod.add(box(0.55, 0.6, 1.1, m.pods));
+    put(pod, cyl(0.17, 0.17, 1.2, m.barrels), 0, 0.05, -0.9, ALONG_Z); // rocket tube
+    put(pod, box(0.42, 0.42, 0.12, m.trim), 0, 0.05, -1.45); // muzzle collar
+    return put(pod, new THREE.Object3D(), 0, 0.05, -1.55);
+  } },
+  // A short, fat tube out of a turret housing, raised 0.3 rad to lob.
+  mortar: { home: 'C', build(pod, m) {
+    put(pod, box(0.5, 0.4, 0.6, jointMat), 0, -0.3, 0.1); // turret ring
+    put(pod, box(0.85, 0.7, 1.6, m.pods), 0, 0.05, -0.2); // breech housing
+    put(pod, cyl(0.3, 0.27, 1.1, m.barrels), 0, 0.15 + 0.55 * Math.sin(0.3), -0.9 - 0.55 * Math.cos(0.3), ALONG_Z + 0.3); // tube
+    return put(pod, new THREE.Object3D(), 0, 0.15 + 1.15 * Math.sin(0.3), -0.9 - 1.15 * Math.cos(0.3));
+  } },
+};
+
+/** Class `cls`'s own weapons as a loadout: indices into weapons.json's primaries and secondaries. */
+export function ownLoadout(cls) {
+  const own = (classes[cls] ?? classes.B).weapons;
+  return { primary: weapons.primaries.findIndex((w) => w.id === own.primary), secondary: weapons.secondaries.findIndex((w) => w.id === own.secondary) };
+}
+
+/** The weapons.json entries a loadout names (the first of a slot for an index out of range). */
+export function armament(loadout) {
+  return { primary: weapons.primaries[loadout.primary] ?? weapons.primaries[0], secondary: weapons.secondaries[loadout.secondary] ?? weapons.secondaries[0] };
+}
+
+/** Builds weapon `id` in `pod` at class `cls`'s left (`side` -1) or right (+1) arm; returns its muzzle. */
+export function mountWeapon(pod, cls, side, id, m) {
+  const spec = CLASSES[cls] ?? LANCER, kit = KITS[id] ?? KITS.pike;
+  pod.position.set(side * spec.arm[0], spec.arm[1], spec.arm[2]);
+  pod.scale.setScalar(spec.height / CLASSES[kit.home].height);
+  return kit.build(pod, m);
+}
 
 /** Stretch a segment mesh (built along Y) from a to b. */
 function place(mesh, a, b) {
@@ -279,10 +302,15 @@ function solveJoint(root, end, a, b, bendDir, out) {
 }
 
 export class Mech {
-  /** `cls` is 'A' (Wisp), 'B' (Lancer) or 'C' (Bulwark). Scale by tuning mech_height / `height`. */
-  constructor(scene, fx, cls = 'B') {
+  /**
+   * `cls` is 'A' (Wisp), 'B' (Lancer) or 'C' (Bulwark), carrying `loadout` (see `ownLoadout`).
+   * Scale by tuning mech_height / `height`.
+   */
+  constructor(scene, fx, cls = 'B', loadout = ownLoadout(cls)) {
     const spec = (this.spec = CLASSES[cls] ?? LANCER);
     this.cls = CLASSES[cls] ? cls : 'B';
+    this.loadout = loadout;
+    this.weapons = armament(loadout);
     this.height = spec.height;
     this.scene = scene;
     this.fx = fx;
@@ -332,19 +360,16 @@ export class Mech {
       return put(nozzle, new THREE.Object3D(), 0, -0.3, 0);
     });
 
-    // Weapon pods pitch with aim: the primary's (firing in turn) and the launcher's.
-    const pod = () => {
+    // Weapon pods pitch with aim: the primary on the left arm, the secondary's launcher on the right.
+    const pod = (side, weapon) => {
       const p = new THREE.Group();
       body.add(p);
-      return p;
+      return { pod: p, tip: mountWeapon(p, this.cls, side, weapon.id, this) };
     };
-    this.guns = spec.guns.map((side) => {
-      const p = pod();
-      return { pod: p, tip: spec.gun(p, side, this) };
-    });
-    const launcherPod = pod();
-    this.launcher = spec.launcher(launcherPod, this);
-    this.arms = [...this.guns.map((g) => g.pod), launcherPod];
+    this.guns = [pod(-1, this.weapons.primary)];
+    const launcher = pod(1, this.weapons.secondary);
+    this.launcher = launcher.tip;
+    this.arms = [this.guns[0].pod, launcher.pod];
 
     // Legs live in root space and are re-solved every frame.
     this.legs = [-1, 1].map((side, i) => {
@@ -612,7 +637,7 @@ export class Mech {
   fire(end, from = null) {
     const gun = this.guns[(this.nextGun = (this.nextGun + 1) % this.guns.length)];
     from ??= gun.tip.getWorldPosition(world);
-    Mech.audio?.shot(this.cls, this.own ? null : from);
+    Mech.audio?.shot(this.weapons.primary.sound, this.own ? null : from);
     this.fx.beam(from, end);
     this.fx.muzzleLight(from, this.own);
     this.fx.muzzle(from, flame.subVectors(end, from).normalize());
@@ -628,7 +653,7 @@ export class Mech {
     const tip = from ?? this.launcher.getWorldPosition(world);
     this.fx.burst(tip, flame.set(0, 0.3, -1).normalize().applyQuaternion(this.root.quaternion));
     this.fx.muzzleLight(tip, this.own);
-    Mech.audio?.launch(this.cls, this.own ? null : tip);
+    Mech.audio?.launch(this.weapons.secondary.sound, this.own ? null : tip);
   }
 
   /** A projectile primary leaving the next barrel along `dir`: flash and light. Returns the muzzle; `from` as in `fire`. */
@@ -637,7 +662,7 @@ export class Mech {
     from ??= gun.tip.getWorldPosition(new THREE.Vector3());
     this.fx.muzzleLight(from, this.own);
     this.fx.muzzle(from, dir);
-    Mech.audio?.shot(this.cls, this.own ? null : from);
+    Mech.audio?.shot(this.weapons.primary.sound, this.own ? null : from);
     return from;
   }
 

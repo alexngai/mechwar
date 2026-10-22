@@ -108,7 +108,7 @@ async fn game_loop(mut cmds: mpsc::UnboundedReceiver<Cmd>) {
                     let _ = reply.send(id);
                 }
                 Cmd::Msg(id, ClientMsg::Input(msg)) => game.push_input(id, msg),
-                Cmd::Msg(id, ClientMsg::Class(class)) => game.pick_class(id, class),
+                Cmd::Msg(id, ClientMsg::Pick(class, loadout)) => game.pick(id, class, loadout),
                 Cmd::Msg(id, ClientMsg::Name(name)) => game.set_name(id, &name),
                 Cmd::Leave(id) => {
                     println!("player {id} left");

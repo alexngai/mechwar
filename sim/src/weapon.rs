@@ -36,7 +36,7 @@ pub fn volley(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Vec<Projectile> {
     pellets(t, m, seq)
         .iter()
         .enumerate()
-        .map(|(n, ray)| Projectile { owner, seq, n: n as u8, primary: true, class: m.class, pos: ray.origin, vel: ray.dir * t.shot_speed, age: 0.0 })
+        .map(|(n, ray)| Projectile { owner, seq, n: n as u8, primary: true, class: m.class, loadout: m.loadout, pos: ray.origin, vel: ray.dir * t.shot_speed, age: 0.0 })
         .collect()
 }
 

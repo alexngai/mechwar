@@ -2,7 +2,8 @@
 
 use crate::client::{Drawn, NetClient};
 use crate::net::Event;
-use crate::{Arena, DT, Input, Mech, MechClass, Sim, Tuning, Vector, map};
+use crate::arsenal::{classes_json, weapons_json};
+use crate::{Arena, Arsenal, DT, Input, Loadout, Mech, MechClass, Sim, Tuning, Vector, map};
 use rapier3d::prelude::Ray;
 use wasm_bindgen::prelude::*;
 
@@ -23,8 +24,8 @@ fn mech_state(m: &Mech) -> Vec<f32> {
     ]
 }
 
-/// Thirteen floats per projectile: owner, seq, n, class, xyz, velocity xyz, age, predicted (0/1),
-/// primary fire (0/1).
+/// Fourteen floats per projectile: owner, seq, n, class, xyz, velocity xyz, age, predicted (0/1),
+/// primary fire (0/1), and the weapon (an index into weapons.json's primaries or secondaries).
 fn projectile_floats(drawn: impl IntoIterator<Item = Drawn>) -> Vec<f32> {
     drawn
         .into_iter()
@@ -33,6 +34,7 @@ fn projectile_floats(drawn: impl IntoIterator<Item = Drawn>) -> Vec<f32> {
                 f32::from(p.owner), p.seq as f32, f32::from(p.n), p.class.index() as f32,
                 p.pos.x, p.pos.y, p.pos.z, p.vel.x, p.vel.y, p.vel.z, p.age, if predicted { 1.0 } else { 0.0 },
                 if p.primary { 1.0 } else { 0.0 },
+                f32::from(if p.primary { p.loadout.primary } else { p.loadout.secondary }),
             ]
         })
         .collect()
@@ -54,14 +56,15 @@ fn ray_distance(arena: &Arena, origin: [f32; 3], dir: [f32; 3], max: f32) -> f32
     arena.cast_ray(&Ray::new(Vector::from_array(origin), dir), max).unwrap_or(max)
 }
 
-/// Offline sandbox. The sliders edit the base (B) tuning and the other classes' overrides.
+/// Offline sandbox. The sliders edit the base (B) tuning, the other classes' overrides and the
+/// weapons' values.
 #[wasm_bindgen]
 pub struct WasmSim {
     sim: Sim,
     base: Tuning,
-    class: MechClass,
-    /// classes.json as the sliders left it; None until they touch it.
+    /// classes.json and weapons.json as the sliders left them; None until they touch them.
     classes: Option<serde_json::Value>,
+    weapons: Option<serde_json::Value>,
 }
 
 #[wasm_bindgen]
@@ -71,27 +74,36 @@ impl WasmSim {
     pub fn new(tuning_json: &str, map: u8) -> Result<WasmSim, JsError> {
         let base = Tuning::from_json(tuning_json)?;
         let map = usize::from(map).min(map::MAPS.len() - 1);
-        Ok(WasmSim { sim: Sim::with_map(base.clone(), map), base, class: MechClass::B, classes: None })
+        Ok(WasmSim { sim: Sim::with_map(base.clone(), map), base, classes: None, weapons: None })
     }
 
     pub fn set_tuning(&mut self, tuning_json: &str) -> Result<(), JsError> {
         self.base = Tuning::from_json(tuning_json)?;
-        self.sim.tuning = self.class_tuning();
+        self.retune();
         Ok(())
     }
 
-    /// Replaces the compiled-in classes.json overrides.
+    /// Replaces the compiled-in classes.json.
     pub fn set_classes(&mut self, classes_json: &str) -> Result<(), JsError> {
         self.classes = Some(serde_json::from_str(classes_json)?);
-        self.sim.tuning = self.class_tuning();
+        self.retune();
         Ok(())
     }
 
-    /// 0 = A, 1 = B, 2 = C. Takes effect for movement at once; call `reset` to respawn in it.
-    pub fn set_class(&mut self, class: u8) {
-        self.class = MechClass::from_index(class).unwrap_or_default();
-        self.sim.class = self.class;
-        self.sim.tuning = self.class_tuning();
+    /// Replaces the compiled-in weapons.json.
+    pub fn set_weapons(&mut self, weapons_json: &str) -> Result<(), JsError> {
+        self.weapons = Some(serde_json::from_str(weapons_json)?);
+        self.retune();
+        Ok(())
+    }
+
+    /// Class 0 = A, 1 = B, 2 = C, carrying weapons.json's `primary` and `secondary`. Takes
+    /// effect at once; call `reset` to respawn in it.
+    pub fn set_class(&mut self, class: u8, primary: u8, secondary: u8) {
+        self.sim.class = MechClass::from_index(class).unwrap_or_default();
+        self.sim.loadout = Loadout { primary, secondary };
+        self.retune();
+        (self.sim.mech.class, self.sim.mech.loadout) = (self.sim.class, self.sim.loadout);
     }
 
     pub fn reset(&mut self) {
@@ -138,8 +150,11 @@ impl WasmSim {
 }
 
 impl WasmSim {
-    fn class_tuning(&self) -> Tuning {
-        self.classes.as_ref().map_or_else(|| self.base.for_class(self.class), |c| self.base.with_classes(c, self.class))
+    /// Rebuilds the sim's tuning for its class and loadout from the sliders' files.
+    fn retune(&mut self) {
+        let arsenal = Arsenal::with(&self.base, self.classes.as_ref().unwrap_or(classes_json()), self.weapons.as_ref().unwrap_or(weapons_json()));
+        self.sim.loadout = arsenal.clamp(self.sim.loadout);
+        self.sim.tuning = arsenal.get(self.sim.class, self.sim.loadout).clone();
     }
 }
 
@@ -207,9 +222,10 @@ impl WasmNetClient {
         self.0.map.map_or(-1, |m| m as i32)
     }
 
-    /// Bytes asking for class 0 = A, 1 = B, 2 = C at the next spawn.
-    pub fn pick_class(&self, class: u8) -> Vec<u8> {
-        self.0.pick_class(MechClass::from_index(class).unwrap_or_default())
+    /// Bytes asking for class 0 = A, 1 = B, 2 = C carrying weapons.json's `primary` and
+    /// `secondary` at the next spawn.
+    pub fn pick(&self, class: u8, primary: u8, secondary: u8) -> Vec<u8> {
+        self.0.pick(MechClass::from_index(class).unwrap_or_default(), Loadout { primary, secondary })
     }
 
     /// `mech_state` plus the render offset (3 floats) that smooths corrections.
@@ -224,8 +240,8 @@ impl WasmNetClient {
         ray_distance(self.0.arena(), [ox, oy, oz], [dx, dy, dz], max)
     }
 
-    /// Fourteen floats per remote mech: id, team, class, feet xyz, yaw, pitch, health, boosting, hovering, bot,
-    /// ability active, repairing.
+    /// Sixteen floats per remote mech: id, team, class, feet xyz, yaw, pitch, health, boosting, hovering, bot,
+    /// ability active, repairing, primary, secondary.
     pub fn remotes(&self, now: f64) -> Vec<f32> {
         let b = |v: bool| if v { 1.0 } else { 0.0 };
         self.0
@@ -233,7 +249,7 @@ impl WasmNetClient {
             .iter()
             .flat_map(|p| {
                 let v = &p.view;
-                [f32::from(p.id), f32::from(p.team), p.class.index() as f32, v.pos.x, v.pos.y, v.pos.z, v.yaw, v.pitch, v.health, b(v.boosting), b(v.hovering), b(p.bot), b(v.ability), b(v.repairing)]
+                [f32::from(p.id), f32::from(p.team), p.class.index() as f32, v.pos.x, v.pos.y, v.pos.z, v.yaw, v.pitch, v.health, b(v.boosting), b(v.hovering), b(p.bot), b(v.ability), b(v.repairing), f32::from(p.loadout.primary), f32::from(p.loadout.secondary)]
             })
             .collect()
     }
@@ -266,7 +282,7 @@ impl WasmNetClient {
 
     /// id (-1 until welcomed), kills, deaths, ping ms, last correction m, full (0/1), team,
     /// team 0 score, team 1 score, seconds left, ended (0/1), winner (-1 for none or a draw), class,
-    /// next match's map.
+    /// next match's map, primary, secondary.
     pub fn hud(&self) -> Vec<f32> {
         let (c, s) = (&self.0, &self.0.state);
         vec![
@@ -284,6 +300,8 @@ impl WasmNetClient {
             s.winner.map_or(-1.0, f32::from),
             c.class.index() as f32,
             f32::from(s.next_map),
+            f32::from(c.loadout.primary),
+            f32::from(c.loadout.secondary),
         ]
     }
 }

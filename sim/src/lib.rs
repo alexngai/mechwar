@@ -5,6 +5,7 @@ use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterCo
 use rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 
+pub mod arsenal;
 pub mod bot;
 pub mod client;
 pub mod collide;
@@ -17,6 +18,7 @@ pub mod weapon;
 #[cfg(feature = "wasm")]
 mod wasm;
 
+pub use arsenal::{Arsenal, Loadout};
 pub use map::Map;
 pub use rapier3d::prelude::Vector;
 
@@ -25,7 +27,8 @@ pub const DT: f32 = 1.0 / TICK_HZ;
 
 /// Every sim constant. Values live in `tuning.json` at the repo root, which also records
 /// each value's source and slider range. Client-only keys (camera) are ignored here.
-/// `tuning.json` is the B class; `classes.json` overrides values per class.
+/// `tuning.json` is the B class with its own weapons; `classes.json` overrides values per class
+/// and `weapons.json` per weapon (see `arsenal.rs`).
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Tuning {
     pub walk_speed: f32,
@@ -160,21 +163,10 @@ impl Tuning {
 }
 
 impl Tuning {
-    /// This tuning with a class's `classes.json` overrides applied.
+    /// This tuning for `class` carrying its own weapons. Builds every loadout: keep an `Arsenal`
+    /// where it's needed often.
     pub fn for_class(&self, class: MechClass) -> Tuning {
-        self.with_classes(&serde_json::from_str(include_str!("../../classes.json")).expect("classes.json is valid JSON"), class)
-    }
-
-    /// Like `for_class`, with the overrides from `classes` (classes.json's format) instead.
-    pub fn with_classes(&self, classes: &serde_json::Value, class: MechClass) -> Tuning {
-        let mut merged = serde_json::to_value(self).expect("tuning serializes");
-        if let Some(overrides) = classes[class.key()]["overrides"].as_object() {
-            for (name, value) in overrides {
-                assert!(merged.get(name).is_some(), "classes.json overrides unknown tuning field `{name}`");
-                merged[name] = value.clone();
-            }
-        }
-        serde_json::from_value(merged).expect("class overrides are numbers")
+        Arsenal::new(self).get(class, Loadout::of(class)).clone()
     }
 }
 
@@ -198,7 +190,7 @@ impl MechClass {
         Self::ALL.get(usize::from(i)).copied()
     }
 
-    fn key(self) -> &'static str {
+    pub(crate) fn key(self) -> &'static str {
         ["A", "B", "C"][self.index()]
     }
 }
@@ -250,6 +242,8 @@ impl Input {
 pub struct Mech {
     /// Picks the ability `step_mech` applies.
     pub class: MechClass,
+    /// The weapons carried; with `class`, picks this mech's tuning (`Arsenal::of`).
+    pub loadout: Loadout,
     /// Dead at 0 or below: `step_mech` leaves a dead mech alone.
     pub health: f32,
     /// Seconds the ability stays active, and until it can be used again.
@@ -379,8 +373,10 @@ pub fn aim_ray(t: &Tuning, m: &Mech) -> Ray {
 
 /// Single-player wrapper used by the offline sandbox.
 pub struct Sim {
+    /// For `class` carrying `loadout`.
     pub tuning: Tuning,
     pub class: MechClass,
+    pub loadout: Loadout,
     pub mech: Mech,
     /// Secondary fire and grenades in flight; offline they only meet the arena.
     pub projectiles: Vec<projectile::Projectile>,
@@ -404,13 +400,13 @@ impl Sim {
     pub fn with_map(tuning: Tuning, map: usize) -> Self {
         let map = Map::load(map);
         let spawn = Vector::from_array(map.spawns[0][0]);
-        let mut sim = Self { tuning, class: MechClass::B, mech: Mech::default(), projectiles: Vec::new(), blasts: Vec::new(), shots: Vec::new(), seq: 0, arena: Arena::new(&map), spawn };
+        let mut sim = Self { tuning, class: MechClass::B, loadout: Loadout::of(MechClass::B), mech: Mech::default(), projectiles: Vec::new(), blasts: Vec::new(), shots: Vec::new(), seq: 0, arena: Arena::new(&map), spawn };
         sim.reset();
         sim
     }
 
     pub fn reset(&mut self) {
-        self.mech = Mech { class: self.class, ..spawn_mech(&self.tuning, self.spawn) };
+        self.mech = Mech { class: self.class, loadout: self.loadout, ..spawn_mech(&self.tuning, self.spawn) };
     }
 
     pub fn step(&mut self, input: &Input) {

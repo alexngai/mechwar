@@ -214,22 +214,22 @@ export class Sound {
   // --- Cues -------------------------------------------------------------------------------------
 
   /**
-   * A primary shot by class `cls` at `pos` (null: ours, clear on the cockpit bus; others are
-   * heard through the hull). Each is a broadband report, a low punch, a body, and the weapon's
-   * mechanical action; no high ringing, which is what reads as a plink.
+   * A primary shot with weapons.json `sound` at `pos` (null: ours, clear on the cockpit bus;
+   * others are heard through the hull). Each is a broadband report, a low punch, a body, and the
+   * weapon's mechanical action; no high ringing, which is what reads as a plink.
    */
-  shot(cls, pos) {
+  shot(sound, pos) {
     const out = this.voice(pos, 0.6); // no reverb: at fire rate it smears into a wash
     if (!out) return;
     out.gain.value = pos ? 1.2 : 0.9;
-    if (cls === 'A') {
+    if (sound === 'vulcan') {
       // Submachine cannon: a sharp report, a short thump, and the bolt cycling right after.
       this.noise(out, 'white', 'highpass', 1400, 900, 0.001, 0.045, 0.85);
       this.noise(out, 'white', 'lowpass', 3500, 900, 0.001, 0.03, 0.35);
       this.tone(out, 'sine', 150, 60, 0.002, 0.07, 0.6);
       this.noise(out, 'brown', 'lowpass', 900, 200, 0.002, 0.08, 0.35);
       this.noise(out, 'white', 'bandpass', 650, 550, 0.001, 0.03, 0.22, 2, 0.028);
-    } else if (cls === 'C') {
+    } else if (sound === 'flak') {
       // Flak shotgun: a loud, sharp report, a deep boom and rumble, then the pump racking.
       this.noise(out, 'white', 'highpass', 700, 400, 0.001, 0.1, 1.0);
       this.noise(out, 'white', 'lowpass', 3000, 700, 0.001, 0.06, 0.5);
@@ -247,14 +247,14 @@ export class Sound {
     }
   }
 
-  /** Secondary fire leaving its launcher; the mortar adds a hollow knock. */
-  launch(cls, pos) {
+  /** Secondary fire with weapons.json `sound` leaving its launcher; the mortar adds a hollow knock. */
+  launch(sound, pos) {
     const out = this.voice(pos, 0.5);
     if (!out) return;
     out.gain.value = pos ? 1 : 0.6;
     this.noise(out, 'white', 'bandpass', 400, 2600, 0.01, 0.36, 0.5, 1.5);
     this.tone(out, 'sine', 120, 55, 0.003, 0.16, 0.5);
-    if (cls === 'C') this.tone(out, 'triangle', 190, 120, 0.002, 0.12, 0.45);
+    if (sound === 'mortar') this.tone(out, 'triangle', 190, 120, 0.002, 0.12, 0.45);
   }
 
   /** A burst of radius `radius` m at `pos`: a deep boom and rumble (the hull filter softens it). */
