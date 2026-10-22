@@ -84,7 +84,7 @@ if (net) {
 }
 
 // Index layout of state(); keep in sync with mech_state in sim/src/wasm.rs.
-const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, SPIN: 31, CHARGE: 32, OFFSET: 33 };
+const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, SPIN: 31, CHARGE: 32, BLOOM: 33, FIRE_WAIT: 34, OFFSET: 35 };
 // Volley index of thrown grenades; matches projectile::GRENADE in sim/src/projectile.rs.
 const GRENADE_N = 255;
 // Seconds before a second RMB can burst an own shell; matches projectile::ARM.
@@ -886,6 +886,14 @@ function drawOrbs(now, dt, alive) {
   }
 }
 
+/** Guns that take at least this long (s) between shots, or bursts, show their refire on the glass. */
+const SLOW_REFIRE = 0.25;
+/** The wait after a shot, or after a burst's last shot (its gaps come out of the cycle). */
+const refireTime = () => {
+  const burst = Math.max(T('burst'), 1), gap = T('burst_gap');
+  return burst > 1 ? Math.max(gap, 1 / T('fire_rate') - gap * (burst - 1)) : 1 / T('fire_rate');
+};
+
 function drawGlass(now, myTeam) {
   const W = glass.canvas.width, H = glass.canvas.height;
   const toScreen = (p) => ({ x: ((p.x + 1) / 2) * W, y: ((1 - p.y) / 2) * H });
@@ -931,6 +939,10 @@ function drawGlass(now, myTeam) {
     alt: 1 - curr[S.ALT_WAIT] / Math.max(T('alt_cooldown'), 1e-6), altReady: curr[S.ALT_WAIT] <= 0,
     altBurst: burstable,
     windup: T('charge_time') > 0 ? curr[S.CHARGE] : T('spin_up') > 0 ? curr[S.SPIN] : 0,
+    // The cone the next shot lands in (base spread plus bloom) as a fraction of the half-height,
+    // and a slow primary's refire, 0 to 1 (null for fast guns and spinning ones).
+    spread: Math.tan(THREE.MathUtils.degToRad(T('spread_deg') + curr[S.BLOOM])) / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)),
+    cycle: T('spin_up') > 0 || refireTime() < SLOW_REFIRE ? null : 1 - Math.max(curr[S.FIRE_WAIT], 0) / refireTime(),
     ability: 1 - curr[S.ABILITY_CD] / Math.max(T('ability_cooldown'), 1e-6), abilityActive: curr[S.ABILITY_T] > 0, abilityName: c.ability.name,
     health: curr[S.HEALTH], healthMax: T('health_max'), fuel: curr[S.FUEL] / T('fuel_max'), className: c.name, hurt,
     boostMin: T('boost_min_fuel') / T('fuel_max'), boosting: !!curr[S.BOOSTING], hovering: !!curr[S.HOVERING],

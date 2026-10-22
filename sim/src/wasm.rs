@@ -22,6 +22,7 @@ fn mech_state(m: &Mech) -> Vec<f32> {
         m.repair_time, m.stand_up,
         f32::from(m.grenades), m.grenade_wait, f32::from(m.emps), m.emp_wait, m.jammed, b(m.threw), b(m.pulsed),
         m.spin, m.charge,
+        m.bloom, m.fire_wait,
     ]
 }
 

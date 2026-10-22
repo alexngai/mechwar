@@ -1,7 +1,7 @@
 // Glass HUD: one canvas over the game, redrawn each frame from the `frame` object main.js fills.
 // Our own layout: compass tape up top, altitude and speed ladders framing the glass, an aim frame
-// (heat on its left arc, the secondary's recharge on its right) around a small reticle at the aim
-// point, target tags and damage arcs. The mech's state (hull, fuel, systems) and the radar are on
+// (heat on both arcs, the secondary's recharge and a slow gun's refire inside them) around
+// spread ticks at the aim point, target tags and damage arcs. The mech's state (hull, fuel, systems) and the radar are on
 // the cockpit's dash (cockpit.js, which draws the radar with `radar` below); only in the chase view,
 // where the dash isn't seen, does the glass show the radar and hull. Everything is drawn in device pixels scaled by `u` (1/1000 of the height).
 
@@ -177,18 +177,23 @@ export class Hud {
     });
     g.globalAlpha = 1;
 
-    // --- Aim frame: mirrored arcs filling from the bottom, heat (red) on the left and the
-    // secondary's recharge on the right (lit when ready, or while a burst is armed) ----------
+    // --- Aim frame: heat (red) fills both big arcs from the bottom, blinking when overheated.
+    // Inside them, short arcs: the secondary's recharge on the right (lit when ready, or while a
+    // burst is armed), and a slow primary's refire on the left (lit when it can fire) ---------
     const R = 210 * u, span = 0.55, bottom = cy + R * Math.sin(span);
     const blink = f.overheated && Math.floor(f.now / 150) % 2 === 0;
-    const gauge = (from, dir, fill, color) => {
-      // `from` is the arc's bottom end; `dir` +1 sweeps up the left side, -1 up the right.
-      g.lineWidth = 7 * u;
+    // An arc from `from` (its bottom end) sweeping `sweep` radians up the side (negative: the
+    // right side): a faint track, then `fill` of it in `color`.
+    const gauge = (r, from, sweep, fill, color, width) => {
+      g.lineWidth = width;
       g.strokeStyle = FAINT;
-      arc(g, cx, cy, R, Math.min(from, from + dir * 2 * span), Math.max(from, from + dir * 2 * span));
+      arc(g, cx, cy, r, Math.min(from, from + sweep), Math.max(from, from + sweep));
       g.strokeStyle = color;
-      const to = from + dir * Math.min(Math.max(fill, 0), 1) * 2 * span;
-      if (fill > 0.01) arc(g, cx, cy, R, Math.min(from, to), Math.max(from, to));
+      const to = from + sweep * Math.min(Math.max(fill, 0), 1);
+      if (fill > 0.01) arc(g, cx, cy, r, Math.min(from, to), Math.max(from, to));
+    };
+    for (const [from, dir] of [[Math.PI - span, 1], [span, -1]]) {
+      gauge(R, from, dir * 2 * span, f.heat, f.overheated && !blink ? FAINT : WARN, 7 * u);
       g.strokeStyle = DIM;
       g.lineWidth = 1.5 * u;
       for (let k = 0; k <= 10; k++) {
@@ -198,9 +203,10 @@ export class Hud {
         g.lineTo(cx + c * (R + 6 * u + out), cy + s * (R + 6 * u + out));
         g.stroke();
       }
-    };
-    gauge(Math.PI - span, 1, f.heat, f.overheated && !blink ? FAINT : WARN);
-    gauge(span, -1, f.alt, f.altReady || f.altBurst ? AMBER : DIM);
+    }
+    const inner = R - 20 * u, short = 0.6;
+    gauge(inner, span, -short, f.alt, f.altReady || f.altBurst ? AMBER : DIM, 4 * u);
+    if (f.cycle !== null) gauge(inner, Math.PI - span, short, f.cycle, f.cycle >= 1 ? AMBER : DIM, 4 * u);
     if (f.jammed && Math.floor(f.now / 200) % 2 === 0) {
       g.textAlign = 'center';
       g.fillStyle = WARN;
@@ -211,14 +217,22 @@ export class Hud {
     // --- Reticle at the aim point, with hit markers -----------------------------------------
     if (f.aim) {
       const { x, y } = f.aim;
-      g.lineWidth = 1.5 * u;
-      g.strokeStyle = DIM;
-      arc(g, x, y, 12 * u, 0, TAU);
-      // A charge, or a rotary's spin, fills a ring round it; white when full.
+      // Spread: four ticks at the edge of the cone the next shot lands in, opening as the gun
+      // blooms and closing as it settles.
+      const r = Math.max(7 * u, f.spread * cy);
+      g.lineWidth = 2 * u;
+      g.strokeStyle = AMBER;
+      g.beginPath();
+      for (const [sx, sy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        g.moveTo(x + sx * r, y + sy * r);
+        g.lineTo(x + sx * (r + 9 * u), y + sy * (r + 9 * u));
+      }
+      g.stroke();
+      // A charge, or a rotary's spin, fills a ring round it, outside the ticks; white when full.
       if (f.windup > 0) {
         g.lineWidth = 2.5 * u;
         g.strokeStyle = f.windup >= 1 ? '#ffffff' : AMBER;
-        arc(g, x, y, 19 * u, -Math.PI / 2, -Math.PI / 2 + TAU * f.windup);
+        arc(g, x, y, Math.max(19 * u, r + 14 * u), -Math.PI / 2, -Math.PI / 2 + TAU * f.windup);
       }
       g.fillStyle = AMBER;
       g.beginPath();
