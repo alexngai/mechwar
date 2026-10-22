@@ -1,17 +1,15 @@
 // Glass HUD: one canvas over the game, redrawn each frame from the `frame` object main.js fills.
-// Our own layout: compass tape up top, altitude and speed ladders framing the glass, an aim frame
-// (heat on both arcs, the secondary's recharge and a slow gun's refire inside them) around
-// spread ticks at the aim point, target tags and damage arcs. The mech's state (hull, fuel, systems) and the radar are on
-// the cockpit's dash (cockpit.js, which draws the radar with `radar` below); only in the chase view,
-// where the dash isn't seen, does the glass show the radar and hull. Everything is drawn in device pixels scaled by `u` (1/1000 of the height).
+// Our own layout: an aim frame (heat on both arcs, the secondary's recharge and a slow gun's
+// refire inside them) around spread ticks at the aim point, target tags and damage arcs. The
+// mech's state (hull, fuel, systems), radar, compass, speed and altitude are on the cockpit's dash
+// (cockpit.js, which draws the radar with `radar` below); only in the chase view, where the dash
+// isn't seen, does the glass show the radar and hull. Everything is drawn in device pixels scaled
+// by `u` (1/1000 of the height).
 
 const AMBER = '#ffc46a', DIM = 'rgba(255,196,106,0.35)', FAINT = 'rgba(255,196,106,0.14)', WARN = '#ff4a3a', FUEL = '#7fd8ff', REPAIR = '#6dff9a';
 const TAU = Math.PI * 2;
 const RADAR_RANGE = 90; // m
-const POINTS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 const hex = (c) => `#${c.toString(16).padStart(6, '0')}`;
-/** Angle wrapped to [-180, 180) degrees. */
-const wrapDeg = (d) => ((((d + 180) % 360) + 360) % 360) - 180;
 
 /**
  * Where world point (x, z) sits relative to a viewer at (mx, mz) facing `yaw`: `right` and
@@ -74,43 +72,6 @@ export class Hud {
     g.clearRect(0, 0, W, H);
     g.lineCap = 'round';
     const font = (px, weight = '') => `${weight} ${Math.round(px * u)}px ui-monospace, Menlo, monospace`;
-    const heading = headingDeg(f.yaw);
-
-    // --- Compass tape ---------------------------------------------------------------
-    const tapeY = 92 * u, tapeHalf = 260 * u, perDeg = tapeHalf / 60;
-    g.strokeStyle = AMBER;
-    g.fillStyle = AMBER;
-    g.lineWidth = 1.5 * u;
-    g.textAlign = 'center';
-    g.textBaseline = 'bottom';
-    g.font = font(15);
-    for (let d = Math.ceil((heading - 60) / 15) * 15; d <= heading + 60; d += 15) {
-      const x = cx + wrapDeg(d - heading) * perDeg;
-      const major = ((d % 360) + 360) % 360;
-      g.globalAlpha = 1 - Math.abs(x - cx) / (tapeHalf * 1.1);
-      g.beginPath();
-      g.moveTo(x, tapeY);
-      g.lineTo(x, tapeY - (major % 45 === 0 ? 12 : 6) * u);
-      g.stroke();
-      if (major % 45 === 0) g.fillText(POINTS[major / 45], x, tapeY - 14 * u);
-    }
-    g.globalAlpha = 1;
-    for (const c of f.contacts) {
-      if (!c.enemy) continue;
-      const rel = (relative(f.me.x, f.me.z, f.yaw, c.x, c.z).bearing * 180) / Math.PI;
-      if (Math.abs(rel) > 60) continue;
-      g.fillStyle = f.enemyColor;
-      tri(g, cx + rel * perDeg, tapeY + 4 * u, 5 * u, 1);
-    }
-    g.fillStyle = AMBER;
-    tri(g, cx, tapeY + 4 * u, 6 * u, -1);
-    g.textBaseline = 'top';
-    g.font = font(14);
-    g.fillText(String(Math.round(heading) % 360).padStart(3, '0'), cx, tapeY + 12 * u);
-
-    // --- Ladders ----------------------------------------------------------------------
-    ladder(g, u, cx - 340 * u, cy, f.altitude, 12 * u, 1, 5, -1); // altitude, m
-    ladder(g, u, cx + 340 * u, cy, f.speed * 3.6, 3 * u, 5, 10, 1); // speed, km/h
 
     // --- Target tags --------------------------------------------------------------------
     // Teammates: chevron, name, health. Enemies: brackets, health, name, distance and status; the
@@ -378,38 +339,6 @@ function bar(g, x, y, w, h, fill, color) {
   g.fillRect(x, y, w, h);
   g.fillStyle = color;
   g.fillRect(x, y, w * Math.min(Math.max(fill, 0), 1), h);
-}
-
-/**
- * A vertical tape centered on `value` at (x, cy): ticks every `step`, labels every `label`,
- * `per` px per unit, and a boxed readout on the side facing the center (`side` -1 left, 1 right).
- */
-function ladder(g, u, x, cy, value, per, step, label, side) {
-  const half = 150 * u, font = (px) => `${Math.round(px * u)}px ui-monospace, Menlo, monospace`;
-  g.strokeStyle = g.fillStyle = AMBER;
-  g.lineWidth = 1.5 * u;
-  g.font = font(12);
-  g.textBaseline = 'middle';
-  g.textAlign = side < 0 ? 'right' : 'left';
-  for (let v = Math.ceil((value - half / per) / step) * step; v <= value + half / per; v += step) {
-    const y = cy - (v - value) * per;
-    const major = Math.abs(v % label) < 1e-6;
-    g.globalAlpha = 1 - Math.abs(y - cy) / (half * 1.15);
-    g.beginPath();
-    g.moveTo(x, y);
-    g.lineTo(x - side * (major ? 14 : 7) * u, y);
-    g.stroke();
-    if (major) g.fillText(String(Math.round(v)), x + side * 6 * u, y);
-  }
-  g.globalAlpha = 1;
-  const bw = 58 * u, bh = 22 * u, bx = side < 0 ? x - 18 * u - bw : x + 18 * u;
-  g.fillStyle = 'rgba(8,12,10,0.6)';
-  g.fillRect(bx, cy - bh / 2, bw, bh);
-  g.strokeRect(bx, cy - bh / 2, bw, bh);
-  g.fillStyle = AMBER;
-  g.textAlign = 'center';
-  g.font = font(15);
-  g.fillText(value.toFixed(value < 100 ? 1 : 0), bx + bw / 2, cy);
 }
 
 export { hex };

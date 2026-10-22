@@ -7,7 +7,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CLASSES, TEAMS, mountWeapon, showRound, windUp } from './mech.js';
-import { radar } from './hud.js';
+import { headingDeg, radar, relative } from './hud.js';
 
 const frameMat = new THREE.MeshLambertMaterial({ color: 0x5a5f66, flatShading: true });
 const trimMat = new THREE.MeshLambertMaterial({ color: 0x1b1d20, flatShading: true });
@@ -26,9 +26,12 @@ const TAU = Math.PI * 2;
 const SPAN = 1.3, HUMP = 0.3, WING = 0.275, BEND = 2.5, TILT = 0.55;
 const DASH = 0.93; // the dash's back edge sits this fraction of the view's half-height below center
 // Instruments, w x h in meters, centered at SCREEN_AT on the console: vitals (hull and fuel) in the
-// middle, the round radar scope lower left, systems right.
-const SCREENS = { vitals: [0.48, 0.2], radar: [0.2, 0.2], systems: [0.3, 0.17] };
-const SCREEN_AT = { vitals: [0, 0.15], radar: [-0.45, 0.13], systems: [0.49, 0.13] };
+// middle, the round radar scope lower left, systems right, and out on the wings two round gauges:
+// the compass left, speed (with the altitude in digits) right.
+const SCREENS = { vitals: [0.48, 0.2], radar: [0.2, 0.2], systems: [0.3, 0.17], compass: [0.14, 0.14], speed: [0.14, 0.14] };
+const SCREEN_AT = { vitals: [0, 0.15], radar: [-0.45, 0.13], systems: [0.49, 0.13], compass: [-0.79, 0.125], speed: [0.79, 0.125] };
+const ROUND = new Set(['radar', 'compass', 'speed']); // set in a scope's round housing
+const SPEED_MAX = 120; // km/h at the speed gauge's full sweep
 const SEAM = 0.295; // panel seams between the middle and the sides
 const RIM = 0.035, RIM_DEPTH = 0.07; // bezel around each screen: bar width, how far it stands out
 const LOCAL = 3; // world lights (lamps, flashes) the cockpit takes at once
@@ -40,7 +43,7 @@ const CANOPY = {
   B: { paint: 0x5a5f66, bar: 0.12, rib: 0.042, brow: 0.026, dip: 0.09, rams: true, glazing: 1, armor: false },
   C: { paint: 0x55534b, bar: 0.16, rib: 0.056, brow: 0.034, dip: 0.05, rams: true, glazing: 1, armor: true },
 };
-const GLOW = { vitals: 0xffc46a, radar: 0xffc46a, systems: 0xffc46a }; // light each screen throws on its housing
+const GLOW = { vitals: 0xffc46a, radar: 0xffc46a, systems: 0xffc46a, compass: 0xffc46a, speed: 0xffc46a }; // light each screen throws on its housing
 const FLASH = 1.2, FLASH_LIFE = 0.06; // a shot's light on the cockpit: intensity, seconds
 const INSTRUMENT_HZ = 20; // redraws per second
 const AMBER = '#ffc46a', DIM = 'rgba(255,196,106,0.4)', FAINT = 'rgba(255,196,106,0.14)', WARN = '#ff4a3a', FUEL = '#7fd8ff', REPAIR = '#6dff9a';
@@ -230,7 +233,7 @@ export class Cockpit {
     panel.updateMatrix();
     const onPanel = (x, y, dz) => bendPoint(new THREE.Vector3(x, y, dz)).applyMatrix4(panel.matrix);
     const S = THREE.MathUtils.smoothstep;
-    const edge = (x) => WING + (HUMP - WING) * (1 - S(Math.abs(x), SEAM - 0.03, SEAM + 0.03)) - (WING - 0.08) * S(Math.abs(x), 0.7, 1.0);
+    const edge = (x) => WING + (HUMP - WING) * (1 - S(Math.abs(x), SEAM - 0.03, SEAM + 0.03)) - (WING - 0.08) * S(Math.abs(x), 0.95, 1.2);
     const face = new THREE.PlaneGeometry(2 * SPAN, 1, 156, 4), p = face.attributes.position;
     for (let i = 0; i < p.count; i++) p.setY(i, (p.getY(i) + 0.5) * edge(p.getX(i)));
     flat.add(new THREE.Mesh(face, frameMat));
@@ -245,7 +248,7 @@ export class Cockpit {
     for (let x = -1.2; x <= 1.2 + 1e-6; x += 0.15) flat.add(bolt(x, 0.015, 0.004));
     for (const [name, s] of Object.entries(this.screens)) {
       const [x, y] = SCREEN_AT[name];
-      flat.add((name === 'radar' ? scope(s) : bezel(s)).translateX(x).translateY(y));
+      flat.add((ROUND.has(name) ? scope(s) : bezel(s)).translateX(x).translateY(y));
       this.glows[name].position.copy(onPanel(x, y, 0.14));
     }
     const [vw, vh] = SCREENS.vitals, vy = SCREEN_AT.vitals[1] + vh / 2 + RIM;
@@ -309,6 +312,8 @@ export class Cockpit {
     vitalsScreen(this.screens.vitals, f);
     radarScreen(this.screens.radar, f);
     systemsScreen(this.screens.systems, f);
+    compassScreen(this.screens.compass, f);
+    speedScreen(this.screens.speed, f);
     for (const s of Object.values(this.screens)) {
       if (f.jammed) jamStatic(s);
       s.map.needsUpdate = true;
@@ -529,6 +534,91 @@ function radarScreen(s, f) {
   g.fillStyle = '#090d0b';
   g.fillRect(0, 0, W, W);
   radar(g, W / 2, W / 2, W * 0.42, W / 210, f, f.radarMap);
+}
+
+/** Compass: a card that turns with the mech under a fixed mark, with enemies' bearings round its rim. */
+function compassScreen(s, f) {
+  const { g, canvas } = s, W = canvas.width, c = W / 2, r = W * 0.44;
+  g.fillStyle = '#090d0b';
+  g.fillRect(0, 0, W, W);
+  g.save();
+  g.translate(c, c);
+  g.rotate((-headingDeg(f.yaw) * Math.PI) / 180);
+  g.strokeStyle = g.fillStyle = AMBER;
+  g.lineWidth = 6;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.font = font(64, 'bold');
+  for (let d = 0; d < 360; d += 15) {
+    const a = (d * Math.PI) / 180, inner = r - (d % 90 === 0 ? 44 : d % 45 === 0 ? 30 : 18);
+    g.globalAlpha = d % 45 === 0 ? 1 : 0.55;
+    g.beginPath();
+    g.moveTo(Math.sin(a) * inner, -Math.cos(a) * inner);
+    g.lineTo(Math.sin(a) * r, -Math.cos(a) * r);
+    g.stroke();
+    if (d % 90 === 0) {
+      g.save();
+      g.rotate(a);
+      g.fillText('NESW'[d / 90], 0, -r + 86);
+      g.restore();
+    }
+  }
+  g.restore();
+  g.globalAlpha = 1;
+  g.fillStyle = WARN;
+  for (const e of f.contacts) {
+    if (!e.enemy) continue;
+    const b = relative(f.me.x, f.me.z, f.yaw, e.x, e.z).bearing;
+    g.beginPath();
+    g.arc(c + Math.sin(b) * (r - 12), c - Math.cos(b) * (r - 12), 11, 0, TAU);
+    g.fill();
+  }
+  // The fixed mark: what's straight ahead.
+  g.fillStyle = AMBER;
+  g.beginPath();
+  g.moveTo(c, c - r + 54);
+  g.lineTo(c - 22, c - r + 14);
+  g.lineTo(c + 22, c - r + 14);
+  g.fill();
+}
+
+/** Speed: a needle sweeping 0 to SPEED_MAX km/h, with the altitude in digits under the hub. */
+function speedScreen(s, f) {
+  const { g, canvas } = s, W = canvas.width, c = W / 2, r = W * 0.42;
+  g.fillStyle = '#090d0b';
+  g.fillRect(0, 0, W, W);
+  // From lower left, clockwise round the top to lower right.
+  const angle = (kmh) => Math.PI * 0.75 + (Math.min(Math.max(kmh, 0), SPEED_MAX) / SPEED_MAX) * Math.PI * 1.5;
+  g.strokeStyle = g.fillStyle = AMBER;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.font = font(40);
+  for (let v = 0; v <= SPEED_MAX; v += 10) {
+    const a = angle(v), major = v % 20 === 0, inner = r - (major ? 34 : 18);
+    g.lineWidth = major ? 6 : 4;
+    g.globalAlpha = major ? 1 : 0.55;
+    g.beginPath();
+    g.moveTo(c + Math.cos(a) * inner, c + Math.sin(a) * inner);
+    g.lineTo(c + Math.cos(a) * r, c + Math.sin(a) * r);
+    g.stroke();
+    if (major) g.fillText(String(v), c + Math.cos(a) * (r - 66), c + Math.sin(a) * (r - 66));
+  }
+  g.globalAlpha = 1;
+  const a = angle(f.speed * 3.6);
+  g.lineWidth = 9;
+  g.beginPath();
+  g.moveTo(c - Math.cos(a) * 28, c - Math.sin(a) * 28);
+  g.lineTo(c + Math.cos(a) * (r - 22), c + Math.sin(a) * (r - 22));
+  g.stroke();
+  g.beginPath();
+  g.arc(c, c, 18, 0, TAU);
+  g.fill();
+  g.fillStyle = DIM;
+  g.font = font(30);
+  g.fillText('KM/H', c, c + 68);
+  g.fillStyle = AMBER;
+  g.font = font(46, 'bold');
+  g.fillText(`${Math.round(f.altitude)} M`, c, c + 150);
 }
 
 /** Systems: the ability's charge, each item's charges and recharge, and repair. */
