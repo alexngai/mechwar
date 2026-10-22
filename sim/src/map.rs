@@ -11,6 +11,8 @@ pub const MAPS: [(&str, &str); 3] = [
 ];
 /// Foundry.
 pub const DEFAULT: usize = 2;
+/// Maps the server rotates through between matches (blockout is a test map).
+pub const ROTATION: [&str; 2] = ["foundry", "saltworks"];
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct Solid {

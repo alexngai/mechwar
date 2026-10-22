@@ -137,12 +137,19 @@ me.own = true;
 const cockpit = new Cockpit();
 cockpit.setWeapons('B', me, T('eye_height'), T('mech_height') / me.height);
 
-// The arena is built once its map is known: right away offline, after the Welcome online.
-let arenaMap = -1, arena = { vents: [], furnaces: [] };
+// The arena is built once its map is known: right away offline, after the Welcome online, and
+// again whenever a new match is on another map.
+let arenaMap = -1, arena = Object.assign([], { vents: [], furnaces: [] });
 const ensureArena = (index) => {
   if (index < 0 || index === arenaMap) return;
   arenaMap = index;
   const map = MAPS[map_name(index)], light = map.night ? LIGHTS.night : LIGHTS.day;
+  for (const m of arena) {
+    scene.remove(m);
+    m.geometry?.dispose();
+    m.material?.dispose();
+  }
+  fx.clear();
   arena = buildArena(scene, map);
   sky.fit(map);
   glass.setMap(map);
@@ -679,12 +686,13 @@ function frame(now) {
     renderBoard(myId, hudState);
   }
   if (net) {
-    const [, kills, deaths, ping, correction, full, team, blue, red, secondsLeft, ended, winner] = hudState;
+    const [, kills, deaths, ping, correction, full, team, blue, red, secondsLeft, ended, winner, , nextMap] = hudState;
     const state = full ? 'server full' : connection || (curr[S.HEALTH] <= 0 ? 'DESTROYED, respawning' : '');
     hud.net.textContent = `K ${kills}  D ${deaths}  ping ${Math.round(ping)} ms  corr ${correction.toFixed(3)} m  ${now < messageUntil ? message : state}`;
     const clock = `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')}`;
     hud.score.textContent = `${team === 0 ? '▸ ' : ''}BLUE ${blue} – ${red} RED${team === 1 ? ' ◂' : ''}   ${ended ? '' : clock}`;
-    hud.banner.textContent = ended ? `${winner < 0 ? 'DRAW' : winner === team ? 'VICTORY' : 'DEFEAT'} · next match in ${secondsLeft}s` : '';
+    const next = MAPS[map_name(nextMap)]?.name ?? '';
+    hud.banner.textContent = ended ? `${winner < 0 ? 'DRAW' : winner === team ? 'VICTORY' : 'DEFEAT'} · next match on ${next} in ${secondsLeft}s` : '';
   }
 
   if (!firstPerson && alive) debug.hitbox(pos, T('mech_radius'), T('mech_height') * (curr[S.REPAIR_T] > 0 || curr[S.STAND] > 0 ? CROUCH : 1));

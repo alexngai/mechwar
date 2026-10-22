@@ -204,11 +204,7 @@ impl NetClient {
     pub fn receive(&mut self, bytes: &[u8], now_ms: f64) {
         match net::decode::<ServerMsg>(bytes) {
             Some(ServerMsg::Welcome { id, map }) => {
-                let map = usize::from(map).min(map::MAPS.len() - 1);
-                if map != map::DEFAULT {
-                    self.arena = Arena::new(&Map::load(map));
-                }
-                self.map = Some(map);
+                self.load_map(map);
                 self.id = Some(id);
             }
             Some(ServerMsg::Full) => self.full = true,
@@ -218,7 +214,19 @@ impl NetClient {
         }
     }
 
+    /// The server's map `index`, if it isn't the one loaded already.
+    fn load_map(&mut self, index: u8) {
+        let map = usize::from(index).min(map::MAPS.len() - 1);
+        if self.map != Some(map) && (self.map.is_some() || map != map::DEFAULT) {
+            self.arena = Arena::new(&Map::load(map));
+            self.projectiles.clear();
+        }
+        self.map = Some(map);
+    }
+
     fn apply(&mut self, s: Snapshot, now_ms: f64) {
+        // A new match may be on a new map.
+        self.load_map(s.state.map);
         // Smooth arrival jitter; snap when far off (first snapshot, or after a stalled tab).
         let sample = f64::from(s.tick) * f64::from(DT) * 1000.0 - now_ms;
         self.clock_offset = Some(match self.clock_offset {

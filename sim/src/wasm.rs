@@ -265,7 +265,8 @@ impl WasmNetClient {
     }
 
     /// id (-1 until welcomed), kills, deaths, ping ms, last correction m, full (0/1), team,
-    /// team 0 score, team 1 score, seconds left, ended (0/1), winner (-1 for none or a draw), class.
+    /// team 0 score, team 1 score, seconds left, ended (0/1), winner (-1 for none or a draw), class,
+    /// next match's map.
     pub fn hud(&self) -> Vec<f32> {
         let (c, s) = (&self.0, &self.0.state);
         vec![
@@ -282,6 +283,7 @@ impl WasmNetClient {
             if s.ended { 1.0 } else { 0.0 },
             s.winner.map_or(-1.0, f32::from),
             c.class.index() as f32,
+            f32::from(s.next_map),
         ]
     }
 }

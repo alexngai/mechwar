@@ -3,7 +3,8 @@
 //! (`dist`), `MAP` (`saltworks`), `LAG_MS` (one-way delay for testing), `SCORE_LIMIT`, `MATCH_SECONDS`.
 
 use std::future::IntoFuture;
-use std::{env, time::Duration};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{env, thread};
 
 use axum::Router;
 use axum::extract::State;
@@ -11,6 +12,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 use axum::routing::get;
 use futures_util::{SinkExt, StreamExt};
+use sim::bot::Nav;
 use sim::game::Game;
 use sim::net::{self, ClientMsg, ServerMsg};
 use sim::{DT, Map, Tuning};
@@ -66,8 +68,21 @@ async fn upgrade(ws: WebSocketUpgrade, State(app): State<App>) -> Response {
 }
 
 async fn game_loop(mut cmds: mpsc::UnboundedReceiver<Cmd>) {
-    let map = env::var("MAP").map_or(sim::map::DEFAULT, |name| Map::index(&name).expect("MAP must name a map in maps/"));
+    // MAP pins one map; otherwise a random one from the rotation each match.
+    let seed = SystemTime::now().duration_since(UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64);
+    let (map, rotation) = match env::var("MAP") {
+        Ok(name) => (Map::index(&name).expect("MAP must name a map in maps/"), Vec::new()),
+        Err(_) => {
+            let rotation: Vec<usize> = sim::map::ROTATION.iter().map(|name| Map::index(name).expect("rotation names a map")).collect();
+            (rotation[(seed % rotation.len() as u64) as usize], rotation)
+        }
+    };
+    // Bot nav takes a moment per map: build the others' now, not when a match switches to them.
+    let warm = rotation.clone();
+    thread::spawn(move || warm.into_iter().for_each(|m| _ = Nav::for_map(m)));
     let mut game = Game::new(Tuning::default(), map);
+    game.rotate(rotation, seed);
+    println!("map: {}", sim::map::MAPS[map].0);
     // Shorter matches for playtesting.
     if let Ok(v) = env::var("SCORE_LIMIT") {
         game.score_limit = v.parse().expect("SCORE_LIMIT must be a kill count");

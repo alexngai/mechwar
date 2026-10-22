@@ -99,6 +99,9 @@ impl From<&Mech> for MechView {
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct MatchState {
+    /// The map being played, and the one the next match will be on (indices into `map::MAPS`).
+    pub map: u8,
+    pub next_map: u8,
     pub scores: [u16; 2],
     /// Until the match ends, or after it ends, until the next one starts.
     pub seconds_left: u16,

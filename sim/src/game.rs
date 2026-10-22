@@ -100,8 +100,14 @@ pub struct Game {
     /// Team kills that win the match.
     pub score_limit: u16,
     pub match_seconds: f32,
-    /// Index into `map::MAPS`; clients load the same map from their Welcome.
+    /// Index into `map::MAPS`; clients load the same map from their Welcome, and switch with
+    /// the match state's.
     pub map: usize,
+    /// Maps to rotate through, a random other one each match; empty to stay on `map`.
+    pub rotation: Vec<usize>,
+    next_map: usize,
+    /// xorshift64 state for picking the next map.
+    rng: u64,
     arena: Arena,
     nav: &'static Nav,
     /// Feet positions per team and slot, from the map.
@@ -123,6 +129,9 @@ impl Game {
         assert!(data.spawns.iter().all(|s| s.len() >= TEAM_SIZE), "map needs {TEAM_SIZE} spawns per team");
         Self {
             map,
+            rotation: Vec::new(),
+            next_map: map,
+            rng: 0x9E37_79B9_7F4A_7C15,
             arena: Arena::new(&data),
             nav: Nav::for_map(map),
             spawns: data.spawns.map(|team| team.iter().map(|p| Vector::from_array(*p)).collect()),
@@ -260,7 +269,10 @@ impl Game {
 
         match self.phase {
             Phase::Playing { started_at } if self.tick >= started_at + secs(self.match_seconds) => self.end_match(),
-            Phase::Ended { restart_at, .. } if self.tick >= restart_at => self.start_match(),
+            Phase::Ended { restart_at, .. } if self.tick >= restart_at => {
+                self.load_map(self.next_map);
+                self.start_match();
+            }
             _ => {}
         }
 
@@ -431,6 +443,35 @@ impl Game {
             std::cmp::Ordering::Equal => None,
         };
         self.phase = Phase::Ended { winner, restart_at: self.tick + secs(POST_MATCH_SECONDS) };
+        // The next map is a random other one from the rotation, if there is one.
+        let others: Vec<usize> = self.rotation.iter().copied().filter(|&m| m != self.map).collect();
+        if !others.is_empty() {
+            self.rng ^= self.rng << 13;
+            self.rng ^= self.rng >> 7;
+            self.rng ^= self.rng << 17;
+            self.next_map = others[(self.rng % others.len() as u64) as usize];
+        }
+    }
+
+    /// Rotates through `maps` from here on, picking with `seed`.
+    pub fn rotate(&mut self, maps: Vec<usize>, seed: u64) {
+        self.rotation = maps;
+        self.rng = seed | 1;
+    }
+
+    /// Swaps in map `index`: its arena, nav and spawns. Matches start on it from their spawns.
+    fn load_map(&mut self, index: usize) {
+        if index == self.map {
+            return;
+        }
+        let data = Map::load(index);
+        self.map = index;
+        self.arena = Arena::new(&data);
+        self.nav = Nav::for_map(index);
+        self.spawns = data.spawns.map(|team| team.iter().map(|p| Vector::from_array(*p)).collect());
+        for p in &mut self.players {
+            p.history.clear();
+        }
     }
 
     /// The team spawn farthest from the nearest living enemy.
@@ -592,6 +633,8 @@ impl Game {
             events: self.events.clone(),
             orbs: self.orbs.clone(),
             state: MatchState {
+                map: self.map as u8,
+                next_map: self.next_map as u8,
                 scores: self.scores,
                 seconds_left: (until.saturating_sub(self.tick) as f32 / TICK_HZ).ceil() as u16,
                 ended,
@@ -637,6 +680,28 @@ mod tests {
 
     fn mech(game: &Game, id: u8) -> Mech {
         game.players.iter().find(|p| p.id == id).unwrap().mech
+    }
+
+    #[test]
+    fn matches_rotate_to_another_map() {
+        let (foundry, saltworks) = (Map::index("foundry").unwrap(), Map::index("saltworks").unwrap());
+        let mut game = Game::new(Tuning::default(), foundry);
+        game.bots = false;
+        let id = game.join().unwrap();
+        // Without a rotation it stays put.
+        game.end_match();
+        (0..=secs(POST_MATCH_SECONDS)).for_each(|_| game.step());
+        assert_eq!(game.map, foundry);
+
+        game.rotate(vec![foundry, saltworks], 42);
+        game.end_match();
+        let s = game.snapshot(id).state;
+        assert_eq!((s.map, s.next_map), (foundry as u8, saltworks as u8), "the next map isn't announced");
+        (0..=secs(POST_MATCH_SECONDS)).for_each(|_| game.step());
+        assert_eq!((game.map, game.snapshot(id).state.map), (saltworks, saltworks as u8));
+        let pos = mech(&game, id).pos;
+        let spawns = Map::load(saltworks).spawns;
+        assert!(spawns.iter().flatten().any(|p| Vector::from_array(*p).distance(pos) < 1.0), "not on a Saltworks spawn: {pos}");
     }
 
     #[test]

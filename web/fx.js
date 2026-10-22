@@ -96,6 +96,10 @@ class Pool {
     }
   }
 
+  clear() {
+    this.life.fill(0);
+  }
+
   update(dt, scale) {
     this.uniforms.scale.value = scale;
     for (let i = 0; i < this.max; i++) {
@@ -264,6 +268,11 @@ export class Effects {
 
   setQuality(high) {
     for (const l of this.lights) l.light.visible = high;
+  }
+
+  /** Drops every particle in flight (a map change: last map's smoke shouldn't hang in the new sky). */
+  clear() {
+    for (const pool of [this.glow, this.soft, this.embers]) pool.clear();
   }
 
   /** Smoke and dust are lit by the scene, so they darken at night; fire and sparks glow regardless. */
