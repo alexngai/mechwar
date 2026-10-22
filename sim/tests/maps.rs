@@ -161,6 +161,25 @@ fn bot_climbs_out_of_the_sump() {
 }
 
 #[test]
+fn sinkhole_has_six_levels() {
+    has_levels("sinkhole", &[-28.0, -21.0, -14.0, -7.0, 0.0, 8.0]);
+}
+
+#[test]
+fn bot_crosses_sinkhole() {
+    let map = Map::load(Map::index("sinkhole").unwrap());
+    let ended = bot_reaches("sinkhole", Vector::from_array(map.spawns[0][0]), Vector::new(15.0, 0.1, -78.0), 45.0);
+    assert!(ended.is_ok(), "bot never got across the pit; ended at {}", ended.unwrap_err());
+}
+
+#[test]
+fn bot_climbs_out_of_the_sinkhole() {
+    // From the pit floor up the spiral to the north rim.
+    let ended = bot_reaches("sinkhole", Vector::new(8.5, -27.9, 8.5), Vector::new(-60.0, 0.1, 60.0), 50.0);
+    assert!(ended.is_ok(), "bot never climbed out of the pit; ended at {}", ended.unwrap_err());
+}
+
+#[test]
 fn bot_climbs_to_the_viaduct_on_verdigris() {
     let index = Map::index("verdigris").unwrap();
     let map = Map::load(index);
