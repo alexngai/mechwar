@@ -143,6 +143,9 @@ impl NetClient {
         if let (true, Some(id)) = (self.mech.threw, self.id) {
             self.projectiles.push(projectile::grenade(&self.classes[self.class.index()], &self.mech, id, self.seq));
         }
+        if let (true, Some(id)) = (self.mech.alt_pressed, self.id) {
+            projectile::detonate(id, &mut self.projectiles);
+        }
         self.fly_own();
         self.render_offset *= 0.7;
         self.pending.push_back((self.seq, input, now_ms));

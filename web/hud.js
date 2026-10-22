@@ -187,12 +187,12 @@ export class Hud {
       if (f.heat > 0.01) arc(g, x, y, r, (2 * Math.PI) / 3, (2 * Math.PI) / 3 + f.heat * ((2 * Math.PI) / 3));
       g.strokeStyle = f.altReady ? AMBER : DIM;
       if (f.alt > 0.01) arc(g, x, y, r, Math.PI / 3 - f.alt * ((2 * Math.PI) / 3), Math.PI / 3);
-      if (f.altReady) {
+      if (f.altReady || f.altBurst) {
         g.fillStyle = AMBER;
         g.font = font(10);
         g.textAlign = 'left';
         g.textBaseline = 'middle';
-        g.fillText('RMB', x + r + 6 * u, y);
+        g.fillText(f.altBurst ? 'RMB BURST' : 'RMB', x + r + 6 * u, y);
       }
       g.fillStyle = AMBER;
       g.beginPath();
@@ -294,14 +294,15 @@ export class Hud {
     g.fill();
     const repairKey = f.repair.phase >= 1 ? 'ON' : f.repair.phase > 0 ? '…' : f.repair.ready >= 1 ? 'R' : '';
     const rows = [
-      [`${f.altName}`, f.alt, f.altReady ? 'RMB' : ''],
+      // While an own shell is armed in flight, RMB bursts it.
+      [`${f.altName}`, f.alt, f.altBurst ? 'RMB BURST' : f.altReady ? 'RMB' : '', f.altBurst],
       [`${f.abilityName}`, f.ability, f.abilityActive ? 'ON' : f.ability >= 1 ? 'F' : ''],
       ['Repair', f.repair.phase > 0 ? f.repair.phase : f.repair.ready, repairKey],
     ];
     g.textAlign = 'left';
-    rows.forEach(([name, fill, key], i) => {
+    rows.forEach(([name, fill, key, lit], i) => {
       const y = dy - 34 * u + i * 24 * u, x = cx + 150 * u;
-      g.fillStyle = fill >= 1 ? AMBER : DIM;
+      g.fillStyle = fill >= 1 || lit ? AMBER : DIM;
       g.font = font(12);
       g.fillText(`${name.toUpperCase()} ${key}`, x, y);
       bar(g, x, y + 5 * u, 120 * u, 4 * u, fill, fill >= 1 ? AMBER : DIM);

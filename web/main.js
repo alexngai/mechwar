@@ -53,6 +53,8 @@ if (net) {
 const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, REPAIR_CD: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, OFFSET: 31 };
 // Volley index of thrown grenades; matches projectile::GRENADE in sim/src/projectile.rs.
 const GRENADE_N = 255;
+// Seconds before a second RMB can burst an own shell; matches projectile::ARM.
+const ARM = 0.2;
 
 // --- Scene ---------------------------------------------------------------
 // ?quality=low|high (default high). High drops to Low once if it can't hold 45 fps.
@@ -151,6 +153,7 @@ const shots = []; // own predicted shots, drawn once this frame's pose is set
 const launches = new Map(), blastAt = new THREE.Vector3();
 const LAUNCH_BLEND = 0.15; // s
 let hurt = 0, shake = 0, boostKick = 0, message = '', messageUntil = 0;
+let burstable = false; // an own shell is armed in flight
 const BOOST_FOV = 6; // degrees
 // HUD feedback: own hits and kills, where hits on us came from, and when each player last fired.
 const hits = [], damageFrom = [], lastFired = new Map();
@@ -479,6 +482,7 @@ function frame(now) {
   // the eye). A primary shot's pellets all leave the barrel its first pellet picked.
   const pr = game.projectiles(now), drawn = [], live = new Set();
   let gunAt = null;
+  burstable = false;
   for (let i = 0; i < pr.length; i += 13) {
     const [owner, seq, n, cls, x, y, z, vx, vy, vz, age, predicted, primary] = pr.subarray(i, i + 13);
     const key = `${owner}:${seq}:${n}:${primary}`, ahead = predicted ? a * DT : 0;
@@ -498,6 +502,7 @@ function frame(now) {
       if (!predicted) lastFired.set(owner, now);
     }
     live.add(key);
+    if (predicted && !primary && n !== GRENADE_N && age >= ARM - DT / 2) burstable = true;
     const p = new THREE.Vector3(x + vx * ahead, y + vy * ahead, z + vz * ahead);
     const blend = Math.min((age + ahead) / LAUNCH_BLEND, 1);
     if (blend < 1) p.lerp(shot.from, 1 - blend);
@@ -689,6 +694,7 @@ function drawGlass(now, myTeam) {
     aim: aim.z < 1 ? toScreen(aim) : null,
     heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     alt: 1 - curr[S.ALT_WAIT] / Math.max(T('alt_cooldown'), 1e-6), altReady: curr[S.ALT_WAIT] <= 0, altName: c.secondary.name,
+    altBurst: burstable,
     ability: 1 - curr[S.ABILITY_CD] / Math.max(T('ability_cooldown'), 1e-6), abilityActive: curr[S.ABILITY_T] > 0, abilityName: c.ability.name,
     dodge: 1 - curr[S.DODGE_CD] / Math.max(T('dodge_cooldown'), 1e-6),
     health: curr[S.HEALTH], healthMax: T('health_max'), fuel: curr[S.FUEL] / T('fuel_max'), className: c.name,

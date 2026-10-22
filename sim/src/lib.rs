@@ -277,6 +277,10 @@ pub struct Mech {
     pub shot: bool,
     /// Set on ticks the secondary launched a volley.
     pub launched: bool,
+    /// The secondary trigger as of the last tick, and set on ticks it went down: a press bursts
+    /// the mech's armed shells in flight (`projectile::detonate`).
+    pub alt_held: bool,
+    pub alt_pressed: bool,
     /// Seconds into the current repair; 0 when not repairing.
     pub repair_time: f32,
     /// Seconds until a repair can start again.
@@ -395,6 +399,9 @@ impl Sim {
         self.seq += 1;
         let t = &self.tuning;
         step_mech(&self.arena, t, &mut self.mech, input);
+        if self.mech.alt_pressed {
+            projectile::detonate(0, &mut self.projectiles);
+        }
         if self.mech.launched {
             self.projectiles.extend(projectile::volley(t, &self.mech, 0, self.seq));
         }
@@ -434,6 +441,7 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     }
     m.shot = false;
     m.launched = false;
+    m.alt_pressed = false;
     m.threw = false;
     m.pulsed = false;
     if m.health <= 0.0 {
@@ -617,6 +625,8 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     m.bloom = (m.bloom - t.bloom_recovery * DT).max(0.0);
     m.shot = input.fire && !m.overheated && m.fire_wait <= 0.0;
     m.launched = input.alt_fire && !m.overheated && m.alt_wait <= 0.0;
+    m.alt_pressed = input.alt_fire && !m.alt_held;
+    m.alt_held = input.alt_fire;
     if m.shot {
         m.fire_wait += 1.0 / t.fire_rate;
         m.heat += t.heat_per_shot;
@@ -751,6 +761,50 @@ mod tests {
         assert!(sim.mech.overheated && sim.mech.alt_wait <= 0.0, "test needs a ready secondary while overheated");
         sim.step(&Input { fire: true, alt_fire: true, ..Input::default() });
         assert!(!sim.mech.launched && !sim.mech.shot, "fired while overheated");
+    }
+
+    #[test]
+    fn no_burst_before_arming() {
+        let (mut sim, _) = class_sim(MechClass::B);
+        let alt = Input { alt_fire: true, ..Input::default() };
+        // Fire, let go, and press again two ticks in: too early, so the rocket flies on.
+        sim.step(&alt);
+        sim.step(&Input::default());
+        sim.step(&alt);
+        assert!(sim.mech.alt_pressed);
+        assert_eq!((sim.projectiles.len(), sim.blasts.len()), (1, 0), "burst before arming");
+        // Pressed again once armed, it bursts.
+        sim.step(&Input::default());
+        run(&mut sim, Input::default(), (projectile::ARM * TICK_HZ) as usize);
+        sim.step(&alt);
+        assert_eq!((sim.projectiles.len(), sim.blasts.len()), (0, 1));
+    }
+
+    #[test]
+    fn held_secondary_doesnt_burst() {
+        let (mut sim, _) = class_sim(MechClass::B);
+        let alt = Input { alt_fire: true, ..Input::default() };
+        // Held from the launch on, well past arming.
+        run(&mut sim, alt, 30);
+        assert_eq!((sim.projectiles.len(), sim.blasts.len()), (1, 0), "a held trigger burst the rocket");
+        sim.step(&Input::default());
+        sim.step(&alt);
+        assert_eq!((sim.projectiles.len(), sim.blasts.len()), (0, 1));
+    }
+
+    #[test]
+    fn mortar_bursts_mid_air() {
+        let (mut sim, t) = class_sim(MechClass::C);
+        let aim = Input { pitch: 0.2, ..Input::default() };
+        sim.step(&Input { alt_fire: true, ..aim });
+        run(&mut sim, aim, 10);
+        // Where this tick's flight takes it.
+        let mut next = sim.projectiles[0];
+        assert!(projectile::fly(sim.arena(), &t, &mut next, |_, _| None).is_none());
+        sim.step(&Input { alt_fire: true, ..aim });
+        assert!(sim.projectiles.is_empty());
+        assert_eq!(sim.blasts, [(t.alt_radius, next.pos)]);
+        assert!(next.pos.y > 3.0, "burst at {} isn't mid-air", next.pos);
     }
 
     #[test]

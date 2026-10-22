@@ -735,6 +735,35 @@ fn predicted_blast_matches_server() {
 }
 
 #[test]
+fn predicted_airburst_matches_server() {
+    let t = Tuning::default();
+    let mut h = Harness::new();
+    let (id, watcher) = (h.clients[0].0, 1);
+    let (mut server, mut local, mut seen) = (Vec::new(), Vec::new(), Vec::new());
+    let mut max_correction = 0f32;
+    // A level rocket at the far enemy, burst by a second press 12 ticks later, well short of it.
+    for tick in 0..(2.0 * TICK_HZ) as u32 {
+        h.step([Input { alt_fire: tick == 5 || tick == 17, ..Input::default() }, Input::default()]);
+        server.extend(h.game.snapshot(id).events.iter().filter_map(|e| match *e {
+            Event::Blast { pos, .. } => Some(pos),
+            _ => None,
+        }));
+        local.extend(h.clients[0].1.blasts.drain(..).map(|b| b.2));
+        let now = h.now();
+        h.clients[watcher].1.projectiles(now);
+        seen.extend(h.clients[watcher].1.blasts.drain(..).map(|b| b.2));
+        max_correction = max_correction.max(h.clients[0].1.correction);
+    }
+    assert_eq!(server.len(), 1, "server blasts: {server:?}");
+    assert_eq!(local, server, "the predicted burst should land exactly where the server's did");
+    assert_eq!(seen, server, "the other client's replay should burst there too");
+    let eye = h.clients[0].1.mech.pos + Vector::Y * t.eye_height;
+    let flown = server[0].distance(eye);
+    assert!((flown - 13.0 * t.alt_speed * DT).abs() < 0.5, "burst {flown} m out, not 13 ticks of flight");
+    assert!(max_correction < 1e-5, "the burst threw prediction off by {max_correction} m");
+}
+
+#[test]
 fn bots_use_secondaries() {
     let mut game = Game::new(Tuning::default(), blockout());
     let human = game.join().unwrap();
