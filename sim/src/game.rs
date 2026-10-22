@@ -872,8 +872,8 @@ mod tests {
 
     #[test]
     fn a_picked_loadout_fires_its_weapons() {
-        // A Light carrying the Heavy's weapons fires flak pellets and a grenade, not the SMG's
-        // hitscan or the scatter darts.
+        // A Light carrying the Heavy's weapons fires the flak's hitscan pellets and a grenade, not
+        // the SMG's single round or the scatter's flak volley.
         let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
         game.bots = false;
         let id = game.join().unwrap();
@@ -887,10 +887,11 @@ mod tests {
         assert_eq!((m.class, m.loadout), (MechClass::A, heavy));
         let t = game.arsenal.get(MechClass::C, heavy);
         let launched: Vec<Projectile> = game.events.iter().filter_map(|e| if let Event::Launch(p) = e { Some(*p) } else { None }).collect();
-        assert_eq!(launched.iter().filter(|p| p.primary).count(), t.pellets as usize, "flak pellets");
-        assert_eq!(launched.iter().filter(|p| !p.primary).count(), t.alt_count.max(1.0) as usize, "mortar shells");
+        let pellets = game.events.iter().filter(|e| matches!(e, Event::Shot { .. })).count();
+        assert!(t.pellets > 1.0 && pellets == t.pellets as usize, "{pellets} flak pellets");
+        assert!(!launched.iter().any(|p| p.primary), "the flak launched projectiles");
+        assert_eq!(launched.len(), t.alt_count.max(1.0) as usize, "mortar shells");
         assert!(launched.iter().all(|p| (p.class, p.loadout) == (MechClass::A, heavy)));
-        assert!(!game.events.iter().any(|e| matches!(e, Event::Shot { .. })), "hitscan fired");
     }
 
     #[test]

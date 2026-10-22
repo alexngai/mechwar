@@ -29,11 +29,11 @@
       }
     },
     {
-      "id": "squall", "name": "Flak", "desc": "Five slow pellets in a cone, bursting at 60 m", "sound": "flak",
+      "id": "squall", "name": "Flak", "desc": "A shotgun: eight pellets in a wide cone, brutal up close and fading past 15 m", "sound": "shotgun",
       "stats": {
-        "fire_rate": 1.6, "shot_damage": 7, "heat_per_shot": 16, "weapon_range": 60,
-        "pellets": 5, "spread_deg": 2.5, "bloom_per_shot": 0, "bloom_max": 0,
-        "shot_speed": 110, "shot_gravity": 4, "shot_radius": 1
+        "fire_rate": 1.5, "shot_damage": 4.5, "heat_per_shot": 15, "weapon_range": 80,
+        "pellets": 8, "spread_deg": 3.5, "bloom_per_shot": 0, "bloom_max": 0,
+        "falloff_start": 15, "falloff_end": 45, "falloff_floor": 0.2
       }
     },
     {
@@ -47,10 +47,10 @@
   ],
   "secondaries": [
     {
-      "id": "darts", "name": "Scatter", "desc": "Three fast darts in a tight fan", "sound": "darts", "projectile": "dart",
+      "id": "darts", "name": "Scatter", "desc": "Nine slow flak pellets in a cone, each bursting on contact or at 60 m", "sound": "flak", "projectile": "flak",
       "stats": {
-        "alt_cooldown": 3, "alt_heat": 12, "alt_count": 3, "alt_spread_deg": 4, "alt_speed": 80,
-        "alt_fuse": 1.5, "alt_damage": 7, "alt_radius": 2
+        "alt_cooldown": 3.5, "alt_heat": 16, "alt_count": 9, "alt_cone": 1, "alt_spread_deg": 3, "alt_speed": 110,
+        "alt_loft_deg": 0, "alt_gravity": 4, "alt_bounce": 0, "alt_fuse": 0.55, "alt_damage": 6, "alt_radius": 1.5
       }
     },
     {

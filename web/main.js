@@ -578,9 +578,9 @@ function frame(now) {
     ability = grenade = emp = false;
     aux = auxHeld;
     acc -= DT;
-    // Hitscan pellets, where each stopped against the arena.
+    // Hitscan pellets, where each stopped against the arena; a tick's are one shot, from one barrel.
     const ends = game.take_shots();
-    for (let k = 0; k < ends.length; k += 3) shots.push(new THREE.Vector3(ends[k], ends[k + 1], ends[k + 2]));
+    for (let k = 0; k < ends.length; k += 3) shots.push(Object.assign(new THREE.Vector3(ends[k], ends[k + 1], ends[k + 2]), { first: k === 0 }));
     // Own EMPs show as predicted; the server's Pulse for them only marks hits.
     if (curr[S.PULSED]) sound.emp(null);
     if (curr[S.PULSED]) fx.pulse(toChest(new THREE.Vector3(curr[S.POS], curr[S.POS + 1], curr[S.POS + 2]), classIdx), T('emp_radius'));
@@ -825,7 +825,7 @@ function frame(now) {
         if (ray.intersectSphere(sphere, crossing)) reach = Math.min(reach, crossing.distanceTo(ray.origin));
       }
     }
-    me.fire(ray.at(reach, end), firstPerson ? cockpit.fire(camera, muzzle) : null);
+    me.fire(ray.at(reach, end), firstPerson ? (end.first ? cockpit.fire(camera, muzzle) : muzzle) : null);
   }
   shots.length = 0;
 

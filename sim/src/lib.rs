@@ -128,6 +128,7 @@ pub struct Tuning {
     pub alt_heat: f32,
     pub alt_count: f32,
     pub alt_spread_deg: f32,
+    pub alt_cone: f32,
     pub alt_speed: f32,
     pub alt_loft_deg: f32,
     pub alt_gravity: f32,

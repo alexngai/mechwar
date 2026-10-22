@@ -7,7 +7,7 @@ use std::ops::Range;
 use sim::client::NetClient;
 use sim::game::Game;
 use sim::net::{self, ClientMsg, Event, InputMsg, PlayerNet, ServerMsg};
-use sim::{DT, Input, Map, MechClass, TICK_HZ, Tuning, Vector};
+use sim::{DT, Input, Loadout, Map, MechClass, TICK_HZ, Tuning, Vector};
 
 /// The original blockout arena: the duels below rely on its open line between the slot-0 spawns.
 fn blockout() -> usize {
@@ -799,29 +799,38 @@ fn bots_use_secondaries() {
     assert!(present.iter().any(|c| *c != present[0]), "all bots were {:?}, so the test proved little", present[0]);
 }
 
+/// Primary `id`'s index in weapons.json.
+fn primary(id: &str) -> u8 {
+    let weapons: serde_json::Value = serde_json::from_str(include_str!("../../weapons.json")).unwrap();
+    weapons["primaries"].as_array().unwrap().iter().position(|w| w["id"] == id).unwrap() as u8
+}
+
 #[test]
 fn spread_matches_server() {
-    // A sprays and C fires flak at the floor ahead; the enemy is far beyond either.
+    // A sprays, and C taps its HEAT gun (the projectile primary) at the floor ahead; the enemy is
+    // far beyond either.
     let mut h = Harness::with_classes([MechClass::A, MechClass::C]);
     let (wisp, bulwark) = (h.clients[0].0, h.clients[1].0);
+    h.game.pick(bulwark, MechClass::C, Loadout { primary: primary("kiln"), ..Loadout::of(MechClass::C) });
     let aim = Input { pitch: -0.35, ..Input::default() };
-    let (mut server_shots, mut local_shots, mut server_flak, mut local_flak, mut seen_flak) = (vec![], vec![], vec![], vec![], vec![]);
+    let (mut server_shots, mut local_shots, mut server_slugs, mut local_slugs, mut seen_slugs) = (vec![], vec![], vec![], vec![], vec![]);
     let (mut max_bloom, mut max_correction) = (0f32, 0f32);
     for tick in 0..(3.0 * TICK_HZ) as u32 {
         let fire = (5..65).contains(&tick);
-        h.step([Input { fire, ..aim }, Input { fire, ..aim }]);
+        let tap = (5..75).contains(&tick) && tick % 16 < 2;
+        h.step([Input { fire, ..aim }, Input { fire: tap, ..aim }]);
         for e in h.game.snapshot(wisp).events {
             match e {
                 Event::Shot { shooter, end, .. } if shooter == wisp => server_shots.push(end),
-                Event::Blast { owner, primary: true, pos, .. } if owner == bulwark => server_flak.push(pos),
+                Event::Blast { owner, primary: true, pos, .. } if owner == bulwark => server_slugs.push(pos),
                 _ => {}
             }
         }
         local_shots.append(&mut h.clients[0].1.shots);
-        local_flak.extend(h.clients[1].1.blasts.drain(..).map(|b| b.2));
+        local_slugs.extend(h.clients[1].1.blasts.drain(..).map(|b| b.2));
         let now = h.now();
         h.clients[0].1.projectiles(now);
-        seen_flak.extend(h.clients[0].1.blasts.drain(..).filter(|b| b.0 == bulwark).map(|b| b.2));
+        seen_slugs.extend(h.clients[0].1.blasts.drain(..).filter(|b| b.0 == bulwark).map(|b| b.2));
         max_bloom = max_bloom.max(h.clients[0].1.mech.bloom);
         max_correction = h.clients.iter().map(|c| c.1.correction).fold(max_correction, f32::max);
     }
@@ -829,10 +838,9 @@ fn spread_matches_server() {
     assert!(max_bloom > 2.0, "bloom only reached {max_bloom} deg");
     let spread = server_shots.iter().map(|p| p.distance(server_shots[0])).fold(0.0, f32::max);
     assert!(spread > 0.3, "shots all landed within {spread} m, so the spread did nothing");
-    let pellets = unshielded().for_class(MechClass::C).pellets as usize;
-    assert!(server_flak.len() >= 3 * pellets, "only {} flak bursts", server_flak.len());
-    assert_eq!(local_flak, server_flak, "predicted flak burst somewhere else");
-    assert_eq!(seen_flak, server_flak, "the other client's flak replay burst somewhere else");
+    assert!(server_slugs.len() >= 3, "only {} slugs burst", server_slugs.len());
+    assert_eq!(local_slugs, server_slugs, "predicted slugs burst somewhere else");
+    assert_eq!(seen_slugs, server_slugs, "the other client's slug replay burst somewhere else");
     assert!(max_correction < 1e-5, "prediction drifted by {max_correction} m");
 }
 
@@ -862,15 +870,15 @@ fn falloff_scales_hit_damage() {
 }
 
 #[test]
-fn flak_hits() {
+fn shotgun_hits() {
     let classes = class_tunings();
     let flak = &classes[MechClass::C.index()];
     let (mut game, shooter, victim) = duel_game_with(unshielded());
     game.pick_class(shooter, MechClass::C);
     game.step();
-    // The victim walks up to about 25 m and stops.
+    // The victim walks up to about 12 m, inside the falloff, and stops.
     let (mut shooter_seq, mut victim_seq) = (0, 0);
-    while player(&game, victim).view.pos.distance(player(&game, shooter).view.pos) > 25.0 {
+    while player(&game, victim).view.pos.distance(player(&game, shooter).view.pos) > 12.0 {
         send(&mut game, victim, &mut victim_seq, 1, Input { move_z: 1.0, yaw: std::f32::consts::PI, ..Input::default() });
         game.step();
     }
@@ -879,25 +887,26 @@ fn flak_hits() {
         game.step();
     }
     let before = game.snapshot(victim).me.health;
-    let (mut launched, mut hit) = (0, 0);
+    let (mut pellets, mut hit) = (0, 0);
     for tick in 0..TICK_HZ as u32 {
         let aim = aim_at(&game, shooter, victim, tick == 0);
         send(&mut game, shooter, &mut shooter_seq, 1, aim);
         send(&mut game, victim, &mut victim_seq, 1, Input { yaw: std::f32::consts::PI, ..Input::default() });
         game.step();
         for e in game.snapshot(shooter).events {
-            match e {
-                Event::Launch(p) if p.primary && p.owner == shooter => launched += 1,
-                Event::Blast { owner, primary: true, hits, .. } if owner == shooter && hits & 1 << victim != 0 => hit += 1,
-                _ => {}
+            if let Event::Shot { shooter: from, hit: to, .. } = e
+                && from == shooter
+            {
+                pellets += 1;
+                hit += u32::from(to == Some(victim));
             }
         }
     }
     let dealt = before - game.snapshot(victim).me.health;
-    assert_eq!(launched, flak.pellets as u32);
-    assert!(hit >= launched - 1, "{hit} of {launched} pellets hit at 25 m");
+    assert!(flak.pellets > 1.0 && pellets == flak.pellets as u32, "{pellets} pellets");
+    assert!(hit >= pellets - 1, "{hit} of {pellets} pellets hit at 12 m");
     let full = flak.pellets * flak.shot_damage;
-    assert!(dealt > 0.7 * full && dealt <= full, "a flak shot did {dealt} of {full}");
+    assert!(dealt > 0.85 * full && dealt <= full + 1e-3, "a flak shot did {dealt} of {full}");
 }
 
 #[test]

@@ -76,15 +76,20 @@ fn ballistics(t: &Tuning, primary: bool) -> Ballistics {
 }
 
 /// The volley `m` launched this tick: from its eye along its aim, pitched up by `alt_loft_deg`,
-/// as a level fan of `alt_count` spaced `alt_spread_deg` apart.
+/// as a level fan of `alt_count` spaced `alt_spread_deg` apart, or with `alt_cone` 1 a cone
+/// `alt_spread_deg` wide that each shell lands in at random (seeded, like a primary's pellets).
 pub fn volley(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Vec<Projectile> {
     let eye = aim_ray(t, m).origin;
     let count = t.alt_count.max(1.0) as u8;
     let pitch = m.pitch + t.alt_loft_deg.to_radians();
     (0..count)
         .map(|n| {
-            let fan = (f32::from(n) - f32::from(count - 1) * 0.5) * t.alt_spread_deg.to_radians();
-            let dir = Rotation::from_rotation_y(m.yaw + fan) * Rotation::from_rotation_x(pitch) * Vector::NEG_Z;
+            let dir = if t.alt_cone > 0.0 {
+                weapon::in_cone(m.yaw, pitch, t.alt_spread_deg.to_radians(), seq, u32::from(n))
+            } else {
+                let fan = (f32::from(n) - f32::from(count - 1) * 0.5) * t.alt_spread_deg.to_radians();
+                Rotation::from_rotation_y(m.yaw + fan) * Rotation::from_rotation_x(pitch) * Vector::NEG_Z
+            };
             let target = if t.alt_lock_time > 0.0 && m.lock_time >= t.alt_lock_time { m.lock } else { 0 };
             Projectile { owner, seq, n, primary: false, class: m.class, loadout: m.loadout, charge: m.alt_charge, target, pos: eye, vel: dir * t.alt_speed, age: 0.0 }
         })
@@ -355,8 +360,9 @@ mod tests {
     }
 
     #[test]
-    fn darts_fan_symmetrically() {
+    fn fans_spread_symmetrically() {
         let (t, m) = mech(MechClass::A, [0.0, 0.0, 0.0], 0.3, 0.1);
+        let t = Tuning { alt_count: 3.0, alt_spread_deg: 4.0, alt_cone: 0.0, alt_loft_deg: 0.0, ..t };
         let v = volley(&t, &m, 0, 1);
         assert_eq!(v.len(), 3);
         let aim = aim_ray(&t, &m).dir;
@@ -364,6 +370,21 @@ mod tests {
         assert!(angle(&v[1]) < 1e-3, "middle dart off the aim");
         assert!((angle(&v[0]) - angle(&v[2])).abs() < 1e-3);
         assert!((angle(&v[0]) - t.alt_spread_deg.to_radians()).abs() < 0.01);
+    }
+
+    #[test]
+    fn scatter_fills_a_cone() {
+        let (t, m) = mech(MechClass::A, [0.0, 0.0, 0.0], 0.3, 0.1);
+        assert!(t.alt_cone > 0.0 && t.alt_count > 3.0, "the Light's own secondary isn't the flak volley");
+        let v = volley(&t, &m, 0, 7);
+        assert_eq!(v.len(), t.alt_count as usize);
+        let aim = aim_ray(&t, &m).dir;
+        let angles: Vec<f32> = v.iter().map(|p| p.vel.normalize().angle_between(aim)).collect();
+        assert!(angles.iter().all(|a| *a <= t.alt_spread_deg.to_radians() * 1.01), "a pellet left the cone: {angles:?}");
+        assert!(v.windows(2).all(|w| w[0].vel != w[1].vel), "pellets overlap");
+        // Not a level fan: some climb and some dip.
+        assert!(v.iter().any(|p| p.vel.y > aim.y * t.alt_speed + 0.1) && v.iter().any(|p| p.vel.y < aim.y * t.alt_speed - 0.1));
+        assert_ne!(v[0].vel, volley(&t, &m, 0, 8)[0].vel, "seq doesn't reseed");
     }
 
     #[test]

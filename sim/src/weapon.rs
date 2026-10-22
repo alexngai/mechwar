@@ -22,28 +22,28 @@ pub fn beam<'a>(arena: &Arena, t: &Tuning, m: &Mech, mechs: impl IntoIterator<It
     (ray.point_at(best), hit)
 }
 
-/// The rays this tick's shot fires from the eye: `pellets` of them, each the aim offset by a
-/// seeded point in a cone of `spread_deg + m.bloom`. Uses only + * sqrt and glam's (libm)
-/// rotations, so WASM and native agree to the bit.
+/// The rays this tick's shot fires from the eye: `pellets` of them, each the aim offset in a cone
+/// of `spread_deg + m.bloom` (`in_cone`).
 /// ponytail: the client knows the seed, so a cheat could counter-aim the spread; seed from a
 /// server secret if that matters.
 pub fn pellets(t: &Tuning, m: &Mech, seq: u32) -> Vec<Ray> {
     let eye = aim_ray(t, m).origin;
-    let rot = Rotation::from_rotation_y(m.yaw) * Rotation::from_rotation_x(m.pitch);
-    // Tangent-plane offset: within 1% of the cone angle up to 10 degrees.
     let cone = (t.spread_deg + m.bloom).to_radians();
-    (0..t.pellets.max(1.0) as u32)
-        .map(|n| {
-            let mut rng = u64::from(seq) << 32 | u64::from(n);
-            let (x, y) = loop {
-                let (x, y) = (unit(&mut rng) * 2.0 - 1.0, unit(&mut rng) * 2.0 - 1.0);
-                if x * x + y * y <= 1.0 {
-                    break (x, y);
-                }
-            };
-            Ray::new(eye, (rot * Vector::new(x * cone, y * cone, -1.0)).normalize())
-        })
-        .collect()
+    (0..t.pellets.max(1.0) as u32).map(|n| Ray::new(eye, in_cone(m.yaw, m.pitch, cone, seq, n))).collect()
+}
+
+/// Pellet `n` of shot `seq`: the aim (`yaw`, `pitch`) offset by a seeded point in a cone `cone`
+/// radians wide. Uses only + * sqrt and glam's (libm) rotations, so WASM and native agree to the bit.
+pub fn in_cone(yaw: f32, pitch: f32, cone: f32, seq: u32, n: u32) -> Vector {
+    let mut rng = u64::from(seq) << 32 | u64::from(n);
+    let (x, y) = loop {
+        let (x, y) = (unit(&mut rng) * 2.0 - 1.0, unit(&mut rng) * 2.0 - 1.0);
+        if x * x + y * y <= 1.0 {
+            break (x, y);
+        }
+    };
+    // Tangent-plane offset: within 1% of the cone angle up to 10 degrees.
+    (Rotation::from_rotation_y(yaw) * Rotation::from_rotation_x(pitch) * Vector::new(x * cone, y * cone, -1.0)).normalize()
 }
 
 /// Primary projectiles for this tick's shot, one per pellet ray, flying faster the more it was

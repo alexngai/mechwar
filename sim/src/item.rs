@@ -13,6 +13,7 @@ impl Tuning {
         Tuning {
             alt_count: 1.0,
             alt_spread_deg: 0.0,
+            alt_cone: 0.0,
             alt_speed: self.grenade_speed,
             alt_loft_deg: self.grenade_loft_deg,
             alt_gravity: self.grenade_gravity,

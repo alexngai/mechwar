@@ -23,7 +23,7 @@ const SCHEMES = [
 ];
 const PATTERNS = { plain: 0, camo: 1, splinter: 2, stripes: 3, hazard: 4 };
 const jointMat = new THREE.MeshPhongMaterial({ color: 0x1b1d20, specular: 0x5a5a5a, shininess: 50, flatShading: true });
-// Live rounds showing in a secondary's mouth: warheads and shells, and the darts' brass tips.
+// Live rounds showing in a secondary's mouth: warheads and shells, and the flak rounds' brass tips.
 const warheadMat = new THREE.MeshLambertMaterial({ color: 0xb8442c, flatShading: true });
 const dartMat = new THREE.MeshLambertMaterial({ color: 0xd8a640, flatShading: true });
 const mineLampMat = hot(new THREE.MeshBasicMaterial({ color: 0xff3020 }));
@@ -336,7 +336,7 @@ const KITS = {
     pod.userData.charge = glow;
     return put(pod, new THREE.Object3D(), 0, 0.1, -2.95);
   } },
-  // Three tubes splayed in a fan on a slim forearm, as the darts fly, each with a dart's tip in
+  // Three tubes splayed on a slim forearm, the Scatter's flak barrels, each with a round's tip in
   // its mouth while the rack's loaded (`userData.loaded`).
   darts: { home: 'A', build(pod, m) {
     pod.add(box(0.34, 0.34, 0.34, jointMat)); // shoulder
@@ -865,16 +865,20 @@ export class Mech {
   }
 
   /**
-   * Muzzle flash, light and a glowing beam from the next barrel to `end`, with sparks there.
+   * A glowing beam from the barrel to `end`, with sparks there. A shot's pellets arrive together:
+   * the first picks the next barrel, flashes and sounds, and the rest trace from the same barrel.
    * `from` overrides the muzzle (the cockpit's own guns in first person).
    */
   fire(end, from = null) {
-    const gun = this.guns[(this.nextGun = (this.nextGun + 1) % this.guns.length)];
-    from ??= gun.tip.getWorldPosition(world);
-    Mech.audio?.shot(this.weapons.primary.sound, this.own ? null : from);
+    const first = (this.pellet = ((this.pellet ?? -1) + 1) % (this.weapons.primary.stats.pellets ?? 1)) === 0;
+    if (first) this.gun = this.guns[(this.nextGun = (this.nextGun + 1) % this.guns.length)];
+    from ??= this.gun.tip.getWorldPosition(world);
+    if (first) {
+      Mech.audio?.shot(this.weapons.primary.sound, this.own ? null : from);
+      this.fx.muzzleLight(from, this.own);
+      this.fx.muzzle(from, flame.subVectors(end, from).normalize());
+    }
     this.fx.beam(from, end);
-    this.fx.muzzleLight(from, this.own);
-    this.fx.muzzle(from, flame.subVectors(end, from).normalize());
     this.fx.impact(end);
   }
 

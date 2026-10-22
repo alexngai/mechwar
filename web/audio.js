@@ -231,8 +231,17 @@ export class Sound {
       this.tone(out, 'sine', 150, 60, 0.002, 0.07, 0.6);
       this.noise(out, 'brown', 'lowpass', 900, 200, 0.002, 0.08, 0.35);
       this.noise(out, 'white', 'bandpass', 650, 550, 0.001, 0.03, 0.22, 2, 0.028);
+    } else if (sound === 'shotgun') {
+      // Shotgun: a hard, bright crack with little boom under it, then the pump racking quick.
+      this.noise(out, 'white', 'highpass', 3200, 1800, 0.0005, 0.025, 1.0);
+      this.noise(out, 'white', 'highpass', 1300, 700, 0.001, 0.06, 0.85);
+      this.noise(out, 'white', 'lowpass', 4200, 1200, 0.001, 0.035, 0.45);
+      this.tone(out, 'sine', 140, 52, 0.002, 0.12, 0.8);
+      this.noise(out, 'brown', 'lowpass', 1300, 220, 0.002, 0.1, 0.4);
+      this.noise(out, 'white', 'bandpass', 900, 700, 0.001, 0.03, 0.3, 2.5, 0.16);
+      this.noise(out, 'white', 'bandpass', 620, 520, 0.001, 0.04, 0.32, 2.5, 0.24);
     } else if (sound === 'flak') {
-      // Flak shotgun: a loud, sharp report, a deep boom and rumble, then the pump racking.
+      // Flak cannon: a loud, sharp report, a deep boom and rumble, then the breech racking.
       this.noise(out, 'white', 'highpass', 700, 400, 0.001, 0.1, 1.0);
       this.noise(out, 'white', 'lowpass', 3000, 700, 0.001, 0.06, 0.5);
       this.tone(out, 'sine', 95, 34, 0.002, 0.3, 1.0);
@@ -267,8 +276,12 @@ export class Sound {
     }
   }
 
-  /** Secondary fire with weapons.json `sound` leaving its launcher; the mortar adds a hollow knock. */
+  /**
+   * Secondary fire with weapons.json `sound` leaving its launcher; the mortar adds a hollow knock.
+   * A flak volley booms like a gun instead.
+   */
   launch(sound, pos) {
+    if (sound === 'flak') return this.shot(sound, pos);
     const out = this.voice(pos, 0.5);
     if (!out) return;
     out.gain.value = pos ? 1 : 0.6;
