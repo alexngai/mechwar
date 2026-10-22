@@ -159,6 +159,49 @@ const VANTAGE_RANGE: f32 = 75.0;
 /// Flankers and sneaks take the long way only to a target farther off than this.
 const DETOUR_MIN: f32 = 60.0;
 
+// Perception: bots know only what they see, hear or feel.
+/// Farthest a bot spots a mech in clear view.
+const VISION: f32 = 200.0;
+/// Its field of view, either side of where it looks.
+const HALF_FOV: f32 = 60.0 * PI / 180.0;
+/// Close enough to notice anywhere around it, and how long a target stays tracked once out of
+/// the field of view (it was just there).
+const CLOSE: f32 = 12.0;
+const TRACK: f32 = 1.0;
+/// How far off a mech is heard: gunfire, launches and beams; thrusters (boost, hover, dash);
+/// footsteps.
+const HEAR_GUNFIRE: f32 = 150.0;
+const HEAR_THRUSTERS: f32 = 70.0;
+const HEAR_STEPS: f32 = 25.0;
+/// A contact not seen, heard or felt for this long is forgotten.
+const MEMORY: f32 = 12.0;
+/// A last known position this close, with nobody there, is forgotten.
+const SEARCHED: f32 = 6.0;
+/// Target scoring, in metres of distance: an enemy that hit us lately (within `GRUDGE` s), and a
+/// wounded one (per missing fraction of hull), count as this much closer; so does the current
+/// target, so it isn't dropped for one a step nearer.
+const GRUDGE: f32 = 3.0;
+const THREAT_M: f32 = 25.0;
+const WOUNDED_M: f32 = 30.0;
+const STICKY_M: f32 = 5.0;
+/// Patrol: a fresh random waypoint after this long without reaching the last.
+const PATROL_FOR: f32 = 40.0;
+/// A last known position this close is watched while walking to it, not the way ahead.
+const WATCH: f32 = 50.0;
+
+/// What a bot knows of one enemy: where it was last perceived and when, whether it's in view
+/// now, its hull fraction then, and when it last hit us.
+#[derive(Clone, Copy, Debug)]
+struct Contact {
+    id: u8,
+    pos: Vector,
+    at: u32,
+    seen: bool,
+    seen_at: Option<u32>,
+    hull: f32,
+    hit_at: Option<u32>,
+}
+
 /// How a bot works its secondary, read off the weapon's stats so it follows any retuning.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum AltUse {
@@ -250,6 +293,12 @@ pub struct Bot {
     grenade_at: u32,
     /// Holding fire to cool: set near the overheat lockout, cleared once heat is well down.
     cooling: bool,
+    /// Enemies it knows of (see `perceive`), the one it's fighting, and the waypoint it's
+    /// patrolling to (and until when) with none known.
+    contacts: Vec<Contact>,
+    focus: Option<u8>,
+    patrol: Option<usize>,
+    patrol_until: u32,
 }
 
 impl Bot {
@@ -271,6 +320,10 @@ impl Bot {
             last_health: 0.0,
             grenade_at: 0,
             cooling: false,
+            contacts: Vec::new(),
+            focus: None,
+            patrol: None,
+            patrol_until: 0,
         };
         bot.respawned();
         bot
@@ -291,6 +344,70 @@ impl Bot {
         };
         (self.path_goal, self.vantage) = (None, None);
         self.cooling = false;
+        (self.focus, self.patrol) = (None, None);
+        self.contacts.clear();
+    }
+
+    /// Updates what this bot knows of `enemies` (id, mech, hull fraction) as of `tick`, and picks
+    /// the one to fight: in view now, scored by distance, less for one that hit us lately or is
+    /// wounded (and a little less for the current target). None when no enemy is in view.
+    pub fn perceive(&mut self, arena: &Arena, t: &Tuning, me: &Mech, enemies: &[(u8, Mech, f32)], tick: u32) -> Option<u8> {
+        self.contacts.retain(|c| enemies.iter().any(|e| e.0 == c.id) && tick - c.at < secs(MEMORY));
+        for &(id, ref m, hull) in enemies {
+            let known = self.contacts.iter().position(|c| c.id == id);
+            let recently = known.and_then(|k| self.contacts[k].seen_at).is_some_and(|at| tick - at < secs(TRACK));
+            let seen = in_view(arena, t, me, m, recently);
+            let heard = m.pos.distance(me.pos) < noise(m);
+            if let Some(k) = known {
+                self.contacts[k].seen = seen;
+            }
+            if !(seen || heard) {
+                continue;
+            }
+            let c = match known {
+                Some(k) => &mut self.contacts[k],
+                None => {
+                    self.contacts.push(Contact { id, pos: m.pos, at: tick, seen, seen_at: None, hull, hit_at: None });
+                    self.contacts.last_mut().expect("just pushed")
+                }
+            };
+            (c.pos, c.at, c.hull) = (m.pos, tick, hull);
+            if seen {
+                c.seen_at = Some(tick);
+            }
+        }
+        let score = |c: &Contact| {
+            let grudge = c.hit_at.is_some_and(|at| tick - at < secs(GRUDGE));
+            c.pos.distance(me.pos) - if grudge { THREAT_M } else { 0.0 } - WOUNDED_M * (1.0 - c.hull) - if self.focus == Some(c.id) { STICKY_M } else { 0.0 }
+        };
+        self.focus = self.contacts.iter().filter(|c| c.seen).min_by(|a, b| score(a).total_cmp(&score(b))).map(|c| c.id);
+        self.focus
+    }
+
+    /// Hit by enemy `id` standing at `pos`: the bot knows where it is, and holds a grudge.
+    pub fn hurt_by(&mut self, id: u8, pos: Vector, tick: u32) {
+        match self.contacts.iter_mut().find(|c| c.id == id) {
+            Some(c) => (c.pos, c.at, c.hit_at) = (pos, tick, Some(tick)),
+            None => self.contacts.push(Contact { id, pos, at: tick, seen: false, seen_at: None, hull: 1.0, hit_at: Some(tick) }),
+        }
+    }
+
+    /// Where to go with no enemy in view: the freshest contact's last known position (one
+    /// reached with nobody there is forgotten), else a random waypoint it can reach, patrolled to.
+    fn goal(&mut self, arena: &Arena, nav: &Nav, me: &Mech, tick: u32) -> Vector {
+        self.contacts.retain(|c| c.seen || flat(c.pos - me.pos).length() > SEARCHED);
+        if let Some(c) = self.contacts.iter().max_by_key(|c| c.at) {
+            return c.pos;
+        }
+        let here = nav.nearest(arena, me.pos);
+        let arrived = self.patrol.is_some_and(|i| flat(nav.node(i) - me.pos).length() < 2.0 * ARRIVE);
+        if self.patrol.is_none() || arrived || tick >= self.patrol_until {
+            let reach: Vec<usize> = nav.reachable(here).iter().enumerate().filter(|&(i, &r)| r && i != here).map(|(i, _)| i).collect();
+            let pick = (self.rand() * reach.len() as f32) as usize;
+            self.patrol = reach.get(pick.min(reach.len().saturating_sub(1))).copied();
+            self.patrol_until = tick + secs(PATROL_FOR);
+        }
+        self.patrol.map_or(me.pos, |i| nav.node(i))
     }
 
     /// xorshift64, uniform in [0, 1).
@@ -334,8 +451,12 @@ impl Bot {
             return mend(t, me, mate, max_turn);
         }
         let Some(target) = target.filter(|m| m.health > 0.0) else {
+            // Nothing to fight in view: go where an enemy was last known to be, watching that spot
+            // when it's near, or patrol.
             self.seen.clear();
-            return idle;
+            let spot = Mech { pos: self.goal(arena, nav, me, tick), ..Mech::default() };
+            let watch = !self.contacts.is_empty() && spot.pos.distance(me.pos) < WATCH;
+            return self.walk(arena, nav, t, me, &spot, watch, tick);
         };
 
         self.seen.push_back(target.pos + Vector::Y * (t.mech_height * 0.5));
@@ -447,9 +568,19 @@ impl Bot {
         }
 
         // No line of sight: walk the waypoint graph toward the target.
+        self.walk(arena, nav, t, me, target, false, tick)
+    }
+
+    /// Walking the waypoint graph toward `target` (a mech, or just a spot), out of the fight:
+    /// facing the way ahead, or with `watch`, facing the target itself.
+    #[allow(clippy::too_many_arguments)]
+    fn walk(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: &Mech, watch: bool, tick: u32) -> Input {
+        let max_turn = t.bot_turn_rate_deg.to_radians() * DT;
+        let (range, far) = (flat(target.pos - me.pos).length(), band(t).1);
         let toward = self.route(arena, nav, t, me, target, tick);
         let dir = toward.normalize_or_zero();
-        let want_yaw = atan2f(-dir.x, -dir.z);
+        let face = if watch { flat(target.pos - me.pos) } else { dir };
+        let want_yaw = atan2f(-face.x, -face.z);
         let new_yaw = me.yaw + wrap(want_yaw - me.yaw).clamp(-max_turn, max_turn);
         let rot = Rotation::from_rotation_y(new_yaw);
         Input {
@@ -553,6 +684,31 @@ pub fn sees(arena: &Arena, t: &Tuning, me: &Mech, target: &Mech) -> bool {
     len <= t.weapon_range && arena.cast_ray(&Ray::new(eye, d / len), len).is_none()
 }
 
+/// `target` is in `me`'s view: in clear sight within VISION, and in its field of view, or close,
+/// or `recently` in view (so one strafing past the edge isn't lost).
+fn in_view(arena: &Arena, t: &Tuning, me: &Mech, target: &Mech, recently: bool) -> bool {
+    let eye = me.pos + Vector::Y * t.eye_height;
+    let d = target.pos + Vector::Y * (t.mech_height * 0.5) - eye;
+    let len = d.length();
+    let facing = Rotation::from_rotation_y(me.yaw) * Vector::NEG_Z;
+    let ahead = flat(d).normalize_or_zero().dot(facing) >= HALF_FOV.cos();
+    len <= VISION && (ahead || len < CLOSE || recently) && arena.cast_ray(&Ray::new(eye, d / len), len).is_none()
+}
+
+/// How far off `m` can be heard this tick: gunfire and launches carry farthest, then thrusters,
+/// then footsteps; a mech standing still is silent.
+fn noise(m: &Mech) -> f32 {
+    if m.shot || m.launched || m.beaming || m.threw || m.pulsed {
+        HEAR_GUNFIRE
+    } else if m.boosting || m.hovering || m.dodge_time > 0.0 {
+        HEAR_THRUSTERS
+    } else if flat(m.vel).length() > 3.0 {
+        HEAR_STEPS
+    } else {
+        0.0
+    }
+}
+
 /// A repair torch's input for mending `mate`: square on, closing to half the beam's reach, the
 /// beam held while it's on them and the heat allows.
 fn mend(t: &Tuning, me: &Mech, mate: &Mech, max_turn: f32) -> Input {
@@ -648,6 +804,78 @@ mod tests {
 
         let (_, pulsed, _) = engage(9.0);
         assert!(pulsed, "never pulsed a target 9 m away");
+    }
+
+    fn blockout() -> (Arena, &'static Nav, Tuning) {
+        let index = Map::index("blockout").unwrap();
+        (Arena::new(&Map::load(index)), Nav::for_map(index), Tuning::default())
+    }
+
+    #[test]
+    fn bots_know_only_what_they_see_hear_or_feel() {
+        let (arena, nav, t) = blockout();
+        // Facing north (-z) from the north spawn.
+        let mut me = spawn_mech(&t, Vector::new(0.0, 0.1, 40.0));
+        let mut bot = Bot::new(1);
+        // Behind the tall cover at (-5, -30), standing still: nothing to go on.
+        let mut hidden = spawn_mech(&t, Vector::new(-5.0, 0.1, -36.0));
+        assert_eq!(bot.perceive(&arena, &t, &me, &[(1, hidden, 1.0)], 0), None);
+        assert!(bot.contacts.is_empty(), "knew of a hidden, silent enemy");
+        // It fires: heard, 76 m off, so the bot goes there, still without a target in view.
+        hidden.shot = true;
+        assert_eq!(bot.perceive(&arena, &t, &me, &[(1, hidden, 1.0)], 1), None);
+        assert_eq!(bot.goal(&arena, nav, &me, 1), hidden.pos);
+
+        // Standing silent 20 m behind it, in the open: unseen, until it hits the bot.
+        let mut bot = Bot::new(1);
+        me.pos = Vector::new(0.0, 0.1, 20.0);
+        let behind = spawn_mech(&t, Vector::new(0.0, 0.1, 40.0));
+        assert_eq!(bot.perceive(&arena, &t, &me, &[(2, behind, 1.0)], 0), None, "saw behind itself");
+        bot.hurt_by(2, behind.pos, 0);
+        let turned = (1..secs(3.0)).any(|tick| {
+            let focus = bot.perceive(&arena, &t, &me, &[(2, behind, 1.0)], tick);
+            let input = bot.think(&arena, nav, &t, &me, None, tick);
+            step_mech(&arena, &t, &mut me, &input);
+            focus == Some(2)
+        });
+        assert!(turned, "never turned on its attacker");
+    }
+
+    #[test]
+    fn bots_pick_targets_by_threat_and_wounds() {
+        let (arena, _, t) = blockout();
+        let me = spawn_mech(&t, Vector::new(0.0, 0.1, 40.0));
+        // Both in view ahead: `far` 20 m off, `near` 16 m.
+        let (far, near) = (spawn_mech(&t, Vector::new(-3.0, 0.1, 20.2)), spawn_mech(&t, Vector::new(3.0, 0.1, 24.3)));
+        let pick = |hull_far: f32, grudge: bool| {
+            let mut bot = Bot::new(1);
+            if grudge {
+                bot.hurt_by(1, far.pos, 0);
+            }
+            bot.perceive(&arena, &t, &me, &[(1, far, hull_far), (2, near, 1.0)], 1)
+        };
+        assert_eq!(pick(1.0, false), Some(2), "not the nearest");
+        assert_eq!(pick(0.4, false), Some(1), "not the badly wounded one");
+        assert_eq!(pick(1.0, true), Some(1), "not the one that just hit it");
+    }
+
+    #[test]
+    fn bots_search_the_last_known_spot_then_patrol() {
+        let (arena, nav, t) = blockout();
+        let mut me = spawn_mech(&t, Vector::new(0.0, 0.1, 40.0));
+        let mut bot = Bot::new(1);
+        // Hit from 15 m ahead by an enemy that has since gone (far off, out of sight and silent).
+        let gone = spawn_mech(&t, Vector::new(-5.0, 0.1, -36.0));
+        bot.hurt_by(1, Vector::new(0.0, 0.1, 25.0), 0);
+        let searched = (1..secs(8.0)).any(|tick| {
+            bot.perceive(&arena, &t, &me, &[(1, gone, 1.0)], tick);
+            let input = bot.think(&arena, nav, &t, &me, None, tick);
+            step_mech(&arena, &t, &mut me, &input);
+            bot.contacts.is_empty()
+        });
+        assert!(searched, "never gave up on the empty spot; at {}", me.pos);
+        bot.goal(&arena, nav, &me, secs(8.0));
+        assert!(bot.patrol.is_some(), "didn't go on patrol");
     }
 
     fn build(arsenal: &Arsenal, primary: u8, secondary: u8) -> &Tuning {

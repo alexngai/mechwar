@@ -321,23 +321,23 @@ impl Game {
             }
         }
 
-        // Bots queue one input per tick, aiming at the nearest visible enemy as of now (else the
-        // nearest enemy, to go find), skipping fresh launches they can't hurt yet. A bot with a
-        // repair torch also gets the most hurt teammate it can see within twice its beam's reach.
+        // Bots queue one input per tick. Each knows only the enemies it has seen, heard or felt
+        // (`Bot::perceive`), skipping fresh launches it can't hurt yet, and fights the one it
+        // picks from those in view. A bot with a repair torch also gets the most hurt teammate it
+        // can see within twice its beam's reach.
         for i in 0..self.players.len() {
             let me = &self.players[i];
             if me.bot.is_none() {
                 continue;
             }
             let t = self.arsenal.of(&me.mech);
-            let enemies = || self.players.iter().filter(|p| p.team != me.team && p.mech.health > 0.0 && p.mech.shield <= 0.0);
-            let dist = |p: &&Player| p.mech.pos.distance(me.mech.pos);
-            let target = enemies()
-                .filter(|p| bot::sees(&self.arena, t, &me.mech, &p.mech))
-                .min_by(|a, b| dist(a).total_cmp(&dist(b)))
-                .or_else(|| enemies().min_by(|a, b| dist(a).total_cmp(&dist(b))))
-                .map(|p| p.mech);
             let hurt = |q: &&Player| q.mech.health / self.arsenal.of(&q.mech).health_max;
+            let enemies: Vec<(u8, Mech, f32)> = self
+                .players
+                .iter()
+                .filter(|q| q.team != me.team && q.mech.health > 0.0 && q.mech.shield <= 0.0)
+                .map(|q| (q.id, q.mech, hurt(&q)))
+                .collect();
             let heal = (t.alt_beam > 0.0)
                 .then(|| {
                     self.players
@@ -350,6 +350,8 @@ impl Game {
                 .flatten();
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
+            let focus = bot.perceive(&self.arena, t, &p.mech, &enemies, self.tick);
+            let target = focus.and_then(|id| enemies.iter().find(|e| e.0 == id)).map(|e| e.1);
             let mut input = bot.think_with(&self.arena, self.nav, t, &p.mech, target.as_ref(), heal.as_ref(), self.tick);
             // Burst a shell that has flown past the target with the target inside its blast.
             if let Some(tm) = &target {
@@ -689,7 +691,12 @@ impl Game {
         let braced = target.mech.class == MechClass::C && target.mech.ability_time > 0.0;
         let damage = amount * if braced { tt.brace_damage_mult } else { 1.0 };
         let respawn_at = self.tick + secs(tt.respawn_delay);
+        let (tick, from) = (self.tick, attacker.map(|a| (self.players[a].id, self.players[a].mech.pos)));
         let target = &mut self.players[j];
+        // A bot feels where the hit came from.
+        if let (Some((id, pos)), Some(bot)) = (from, &mut target.bot) {
+            bot.hurt_by(id, pos, tick);
+        }
         target.mech.end_repair(tt);
         target.mech.health -= damage;
         if target.mech.health > 0.0 {
@@ -1128,6 +1135,7 @@ mod tests {
             m.pos = pos;
             m.alt_wait = 10.0; // so the bot doesn't press to fire
             m.loadout = Loadout::of(MechClass::B); // the rocket, whatever build the bot rolled
+            m.yaw = std::f32::consts::PI; // the bot faces south, at the human
         }
         unshield(&mut game);
         // The bot's rocket, 2 m past the human's chest and flying on.
