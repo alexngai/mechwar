@@ -14,6 +14,7 @@ import { Effects, HOT, halo, hot } from './fx.js';
 import saltworks from '../maps/saltworks.json';
 import foundry from '../maps/foundry.json';
 import verdigris from '../maps/verdigris.json';
+import riftline from '../maps/riftline.json';
 import blockout from '../maps/blockout.json';
 import { CROUCH, Mech, TEAMS } from './mech.js';
 import { Debug } from './debug.js';
@@ -37,7 +38,7 @@ const sameOrigin = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${locatio
 const server = params.get('server') ?? (import.meta.env.PROD && !params.has('offline') ? sameOrigin : null);
 const net = server ? new WasmNetClient() : null;
 // Maps by name; the sim's compiled-in list gives the index. Offline, ?map=<name> picks one.
-const MAPS = { saltworks, blockout, foundry, verdigris };
+const MAPS = { saltworks, blockout, foundry, verdigris, riftline };
 const mapIndex = (name) => {
   for (let i = 0; map_name(i); i++) if (map_name(i) === name) return i;
   return 0;

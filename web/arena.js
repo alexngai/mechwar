@@ -11,7 +11,7 @@ export const LOW_ONLY = 1, HIGH_ONLY = 2;
 const COLORS = {
   ground: 0x9a9384, concrete: 0xa8a08e, metal: 0x6f7880, panel: 0x8f969a, salt: 0xe8e4d8, tank: 0xb9ac8e,
   trim: 0x55585b, rail: 0xd3a23a, pipe: 0x7d7262, pole: 0x3a3c3f, rust: 0x8a5634, soot: 0x4f4c49, stack: 0x6e5a4c,
-  tower: 0x6c7470,
+  tower: 0x6c7470, rock: 0x7f7c8c,
 };
 // Lit windows on `tower` solids, unless the palette names its own; and how many slots are lit.
 const WINDOWS = ['#ffd890', '#9dffc0', '#7fe8ff'];
@@ -61,7 +61,7 @@ function kitbash(s, parts) {
     g.translate(x, y, z);
     parts.push(paint(g, hex));
   };
-  const tall = hy > 1.2 && s.mat !== 'salt' && s.mat !== 'ground';
+  const tall = hy > 1.2 && s.mat !== 'salt' && s.mat !== 'ground' && s.mat !== 'rock';
   if (tall) {
     // Cap trim along the top edges.
     add(2 * hx + 0.2, 0.25, 0.2, 0, hy - 0.12, hz);

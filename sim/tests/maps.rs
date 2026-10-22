@@ -85,11 +85,11 @@ fn bot_reaches_the_far_catwalk_on_saltworks() {
 }
 
 /// At least four connected waypoints at each of `levels` (m).
-fn has_levels(name: &str, levels: [f32; 4]) {
+fn has_levels(name: &str, levels: &[f32]) {
     let index = Map::index(name).unwrap();
     let map = Map::load(index);
     let reachable = Nav::for_map(index).reachable(0);
-    for level in levels {
+    for &level in levels {
         let count = map.nav.iter().zip(&reachable).filter(|(p, r)| **r && (p[1] - level).abs() < 0.5).count();
         assert!(count >= 4, "{name}: only {count} connected waypoints at {level} m");
     }
@@ -97,12 +97,48 @@ fn has_levels(name: &str, levels: [f32; 4]) {
 
 #[test]
 fn foundry_has_four_levels() {
-    has_levels("foundry", [-5.0, 0.0, 7.0, 14.0]);
+    has_levels("foundry", &[-5.0, 0.0, 7.0, 14.0]);
 }
 
 #[test]
 fn verdigris_has_four_levels() {
-    has_levels("verdigris", [-7.0, 0.0, 7.0, 14.0]);
+    has_levels("verdigris", &[-7.0, 0.0, 7.0, 14.0]);
+}
+
+#[test]
+fn riftline_has_five_levels() {
+    has_levels("riftline", &[-24.0, -16.0, -8.0, 0.0, 10.0]);
+}
+
+/// A short-sighted bot (so it must get close to see) starting at `from` gets line of sight to a
+/// target standing at `at` within `seconds`; returns where it ended up.
+fn bot_reaches(map: &str, from: Vector, at: Vector, seconds: f32) -> Result<(), Vector> {
+    let index = Map::index(map).unwrap();
+    let t = Tuning { weapon_range: 12.0, ..Tuning::default() };
+    let (arena, nav) = (Arena::new(&Map::load(index)), Nav::for_map(index));
+    let (mut me, target) = (spawn_mech(&t, from), spawn_mech(&t, at));
+    let mut bot = Bot::new(7);
+    for tick in 0..(seconds * TICK_HZ) as u32 {
+        if sees(&arena, &t, &me, &target) {
+            return Ok(());
+        }
+        let input = bot.think(&arena, nav, &t, &me, Some(&target), tick);
+        step_mech(&arena, &t, &mut me, &input);
+    }
+    Err(me.pos)
+}
+
+#[test]
+fn bot_crosses_the_rift() {
+    let map = Map::load(Map::index("riftline").unwrap());
+    let ended = bot_reaches("riftline", Vector::from_array(map.spawns[0][0]), Vector::new(-15.0, 0.1, -50.0), 45.0);
+    assert!(ended.is_ok(), "bot never got across the chasm; ended at {}", ended.unwrap_err());
+}
+
+#[test]
+fn bot_climbs_out_of_the_rift() {
+    let ended = bot_reaches("riftline", Vector::new(80.0, -23.9, 0.0), Vector::new(60.0, 0.1, 60.0), 40.0);
+    assert!(ended.is_ok(), "bot never climbed out of the chasm; ended at {}", ended.unwrap_err());
 }
 
 #[test]

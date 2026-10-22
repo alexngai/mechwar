@@ -114,14 +114,14 @@ function skyMaterial(sunDir) {
 /**
  * All skyline triangles, written straight into one non-indexed geometry, `push` meters farther out:
  * the desert, or for `kind` 'city' tower blocks, whose lit windows come back as `windows` (unlit
- * specks in `windowColors`, so they read through fog at night).
+ * specks in `windowColors`, so they read through fog at night). Every surface is tinted `tint`.
  */
-function skylineGeometry(push, kind = 'desert', windowColors = WINDOWS) {
+function skylineGeometry(push, kind = 'desert', windowColors = WINDOWS, tint = 0xffffff) {
   const rand = mulberry32(0x5a175a17);
-  const positions = [], colors = [], color = new THREE.Color();
+  const positions = [], colors = [], color = new THREE.Color(), tinted = new THREE.Color(tint);
   const tri = (a, b, c, hex) => {
     positions.push(...a, ...b, ...c);
-    color.setHex(hex).multiplyScalar(0.93 + rand() * 0.14); // per-facet shade for the faceted look
+    color.setHex(hex).multiply(tinted).multiplyScalar(0.93 + rand() * 0.14); // per-facet shade for the faceted look
     for (let i = 0; i < 3; i++) colors.push(color.r, color.g, color.b);
   };
 
@@ -299,11 +299,11 @@ export function createSky(scene, sunDir) {
     HAZE.set([hazy ? density : 0, falloff, floor, 0.85]);
     color.set(haze).convertLinearToSRGB().toArray(HAZE_COLOR);
     const value = Math.max(0, (Math.hypot(w, d) - LAID_OUT_FOR) / 2), kind = palette.skyline ?? 'desert';
-    const key = `${value} ${kind} ${palette.windows}`;
+    const key = `${value} ${kind} ${palette.windows} ${palette.tint}`;
     if (key === built) return;
     built = key;
     push.value = value;
-    const next = skylineGeometry(value, kind, palette.windows);
+    const next = skylineGeometry(value, kind, palette.windows, palette.tint);
     skyline.geometry.dispose();
     skyline.geometry = next.geometry;
     windows.geometry.dispose();

@@ -4,16 +4,17 @@
 use serde::Deserialize;
 
 /// Compiled-in maps. The index is what goes over the wire.
-pub const MAPS: [(&str, &str); 4] = [
+pub const MAPS: [(&str, &str); 5] = [
     ("saltworks", include_str!("../../maps/saltworks.json")),
     ("blockout", include_str!("../../maps/blockout.json")),
     ("foundry", include_str!("../../maps/foundry.json")),
     ("verdigris", include_str!("../../maps/verdigris.json")),
+    ("riftline", include_str!("../../maps/riftline.json")),
 ];
 /// Foundry.
 pub const DEFAULT: usize = 2;
 /// Maps the server rotates through between matches (blockout is a test map).
-pub const ROTATION: [&str; 3] = ["foundry", "saltworks", "verdigris"];
+pub const ROTATION: [&str; 4] = ["foundry", "saltworks", "verdigris", "riftline"];
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct Solid {
