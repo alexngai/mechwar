@@ -182,6 +182,13 @@ export class Hud {
       g.font = font(16, 'bold');
       g.fillText('BOOST JAMMED', cx, bottom + 34 * u);
     }
+    // A fresh launch is shielded until we act: say so under the frame.
+    if (f.shielded) {
+      g.textAlign = 'center';
+      g.fillStyle = '#7fe0ff';
+      g.font = font(13, 'bold');
+      g.fillText('SPAWN SHIELD · ENDS WHEN YOU MOVE OR FIRE', cx, bottom + 78 * u);
+    }
     // A made lock holds a while wherever we look: say so, and for how long, under the frame.
     if (f.lock?.progress >= 1) {
       g.textAlign = 'center';

@@ -10,31 +10,38 @@
     #hud { position: fixed; left: 16px; top: 16px; pointer-events: none; }
     #glass { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
     #glass.glow { filter: drop-shadow(0 0 2px rgba(255, 170, 80, 0.7)); }
-    .card p { margin: 10px 0 0; opacity: 0.85; }
-    .card p b { font-size: 12px; margin-bottom: 2px; }
     #score { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); padding: 4px 12px; background: #0009; font-size: 14px; white-space: pre; pointer-events: none; }
     #banner { position: fixed; top: 30%; left: 0; right: 0; text-align: center; font-size: 28px; letter-spacing: 2px; text-shadow: 0 2px 6px #000; pointer-events: none; }
     #score:empty, #banner:empty { display: none; }
-    #picker { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 16px; background: #0a0d10d0; }
+    #picker { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: safe center; gap: 12px; padding: 16px; overflow-y: auto; background: #0a0d10d0; }
     #picker[hidden] { display: none; }
     #picker h2 { margin: 0; font-size: 18px; letter-spacing: 2px; }
-    #cards { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
-    .card { width: 210px; padding: 14px; border: 1px solid #fff3; background: #1c2026; color: inherit; font: inherit; text-align: left; cursor: pointer; }
-    .card:hover, .card:focus-within { border-color: #7fe0ff; outline: none; }
-    .card .slot > b { margin: 10px 0 4px; font-size: 12px; }
-    .card .slot p { margin: 4px 0 0; opacity: 0.85; }
+    #bays { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+    .bay { min-width: 150px; padding: 6px 12px; border: 1px solid #fff3; background: #1c2026; color: inherit; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+    .bay small { display: block; font-size: 11px; opacity: 0.7; }
+    .bay:hover { border-color: #fff8; }
+    .bay.on { border-color: #7fe0ff; color: #7fe0ff; }
+    #bay { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+    #preview { width: 340px; height: 380px; border: 1px solid #fff2; background: #12161b; cursor: grab; touch-action: none; }
+    #slots { width: 360px; height: 380px; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
+    .slot { padding: 7px 10px; border: 1px solid #fff2; background: #1c2026; }
+    .slot > b { display: flex; justify-content: space-between; margin-bottom: 5px; letter-spacing: 1px; }
+    .slot > b span { opacity: 0.6; font-weight: normal; letter-spacing: 0; }
+    .slot p { margin: 5px 0 0; opacity: 0.85; }
+    .bars { display: grid; grid-template-columns: 64px 1fr 44px; gap: 2px 8px; align-items: center; margin-top: 6px; font-size: 11px; }
+    .bars span:nth-child(3n) { text-align: right; }
+    .bar { height: 5px; background: #fff2; }
+    .bar i { display: block; height: 100%; background: #7fe0ff; }
+    #launch-row { display: flex; gap: 16px; align-items: center; }
+    #launch { padding: 8px 28px; border: 1px solid #7fe0ff; background: none; color: #7fe0ff; font: inherit; font-size: 14px; letter-spacing: 2px; cursor: pointer; }
+    #launch:hover, #launch:focus-visible { background: #7fe0ff22; outline: none; }
+    #launch[hidden] { display: none; }
     .chips { display: flex; flex-wrap: wrap; gap: 4px; }
     .chip { position: relative; padding: 2px 6px; border: 1px solid #fff3; font-size: 11px; cursor: pointer; }
     .chip:hover { border-color: #fff8; }
     .chip:has(:checked) { border-color: #7fe0ff; color: #7fe0ff; }
     .chip:has(:focus-visible) { outline: 1px solid #7fe0ff; }
     .chip input { position: absolute; opacity: 0; pointer-events: none; }
-    .card .deploy { display: block; width: 100%; margin-top: 12px; padding: 6px; border: 1px solid #7fe0ff; background: none; color: #7fe0ff; font: inherit; cursor: pointer; }
-    .card .deploy:hover, .card .deploy:focus-visible { background: #7fe0ff22; outline: none; }
-    .card b { display: block; margin-bottom: 4px; font-size: 16px; }
-    .card .key { float: right; opacity: 0.6; }
-    .card dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 10px 0 0; }
-    .card dd { margin: 0; text-align: right; }
     #stats { position: fixed; right: 16px; bottom: 16px; padding: 4px 8px; background: #0009; pointer-events: none; }
     #debug-log { position: fixed; left: 16px; top: 40%; margin: 0; padding: 4px 8px; background: #0009; color: #ffe070; font: 12px/1.4 monospace; pointer-events: none; }
     #debug-log[hidden] { display: none; }
@@ -85,11 +92,12 @@
       </fieldset>
       <label><input type="checkbox" id="haze">HAZE</label>
     </div>
-    <h2>CHOOSE YOUR MECH</h2>
-    <div id="cards"></div>
-    <div id="picker-note"></div>
+    <h2>HANGAR</h2>
+    <div id="bays"></div>
+    <div id="bay"><canvas id="preview"></canvas><div id="slots"></div></div>
+    <div id="launch-row"><span id="picker-note"></span><button id="launch">LAUNCH</button></div>
   </div>
-  <div id="help">Click to play · WASD move · Shift+W boost · Shift+A/D dash · Shift+S turn about · Space hover · F ability · G grenade · T EMP · LMB fire · RMB secondary (again to burst) · MMB lock / scope · C change mech · I stats · M mute · Tab scores · R hold to repair · K respawn · Esc release mouse</div>
+  <div id="help">Click to play · WASD move · Shift+W boost · Shift+A/D dash · Shift+S turn about · Space hover · F ability · G grenade · T EMP · LMB fire · RMB secondary (again to burst) · MMB lock / scope · C hangar · I stats · M mute · Tab scores · R hold to repair · K respawn · Esc release mouse</div>
   <script type="module" src="/web/main.js"></script>
 </body>
 </html>

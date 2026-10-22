@@ -517,6 +517,7 @@ export class Mech {
     this.flash = 0;
     this.nextGun = 0;
     this.brace = 0;
+    this.guard = 0; // a fresh launch's shield, 0-1
     this.glide = 0;
     this.boosting = false;
     this.dashTrail = 0; // seconds of dash smoke left to lay
@@ -776,8 +777,10 @@ export class Mech {
       this.fx.dashTrail(body.getWorldPosition(world), this.dashDir, dt, this.dashTrail > DASH_TRAIL - 0.15);
       this.dashTrail -= dt;
     }
-    this.shell.visible = this.brace > 0.05;
-    this.shellMat.opacity = this.brace * (0.12 + 0.05 * Math.sin(this.t * 8));
+    // The shell shows a Brace, or a fresh launch's shield (brighter, pulsing slower).
+    this.guard = damp(this.guard, alive && s.shielded ? 1 : 0, 6, dt);
+    this.shell.visible = this.brace > 0.05 || this.guard > 0.05;
+    this.shellMat.opacity = Math.max(this.brace * (0.12 + 0.05 * Math.sin(this.t * 8)), this.guard * (0.2 + 0.08 * Math.sin(this.t * 4)));
     this.updateDrone(dt, repair);
     if (!alive) this.fx.smoke(world.copy(s.pos).addScaledVector(UP, 0.44 * spec.height * s.scale), dt, 0.18);
     if (alive && s.overheated) for (const gun of this.guns) this.fx.smoke(gun.tip.getWorldPosition(world), dt, 0.75);

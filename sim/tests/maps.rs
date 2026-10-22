@@ -5,7 +5,7 @@
 use sim::bot::{Bot, Nav, sees};
 use sim::game::{Game, TEAM_SIZE};
 use sim::map::MAPS;
-use sim::{Arena, Input, Map, MechClass, TICK_HZ, Tuning, Vector, spawn_mech, step_mech};
+use sim::{Arena, Input, Loadout, Map, MechClass, TICK_HZ, Tuning, Vector, spawn_mech, step_mech};
 
 #[test]
 fn spawns_are_standable_for_every_class() {
@@ -345,6 +345,8 @@ fn bots_spread_over_foundry() {
     // Six minutes: shorter runs swing too much as bots group up early on.
     for _ in 0..(360.0 * TICK_HZ) as u32 {
         game.step();
+        // Relaunch from the hangar once destroyed, as a pilot would.
+        game.pick(me, MechClass::B, Loadout::of(MechClass::B));
         for p in game.snapshot(me).players.iter().filter(|p| p.bot && p.view.health > 0.0) {
             let pos = p.view.pos;
             if let Some(level) = [-5.0, 0.0, 7.0, 14.0].iter().position(|y| (pos.y - y).abs() < 1.0) {

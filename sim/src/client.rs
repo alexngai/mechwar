@@ -51,6 +51,8 @@ pub struct NetClient {
     pub deaths: u16,
     pub team: u8,
     pub state: MatchState,
+    /// Seconds until we can launch while in the hangar; None while out in the arena.
+    pub hangar: Option<f32>,
     /// Last reconciliation's change to the predicted position. Zero when prediction is exact.
     pub correction: f32,
     /// Drawn on top of the predicted position so a correction slides in instead of snapping;
@@ -102,6 +104,7 @@ impl Default for NetClient {
             deaths: 0,
             team: 0,
             state: MatchState::default(),
+            hangar: None,
             correction: 0.0,
             render_offset: Vector::ZERO,
             obstacles: Vec::new(),
@@ -288,6 +291,7 @@ impl NetClient {
             self.team = me.team;
         }
         self.state = s.state;
+        self.hangar = s.hangar;
 
         for e in &s.events {
             match *e {

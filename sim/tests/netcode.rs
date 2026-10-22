@@ -6,7 +6,7 @@ use std::ops::Range;
 
 use sim::client::NetClient;
 use sim::game::Game;
-use sim::net::{self, ClientMsg, Event, InputMsg, ServerMsg};
+use sim::net::{self, ClientMsg, Event, InputMsg, PlayerNet, ServerMsg};
 use sim::{DT, Input, Map, MechClass, TICK_HZ, Tuning, Vector};
 
 /// The original blockout arena: the duels below rely on its open line between the slot-0 spawns.
@@ -28,10 +28,15 @@ struct Harness {
     no_rewind: bool,
 }
 
+/// The base tuning with no spawn shield, so a fresh mech can be hit straight away.
+fn unshielded() -> Tuning {
+    Tuning { spawn_shield: 0.0, ..Tuning::default() }
+}
+
 /// Base tuning with the primary narrowed to one exact ray at full damage, for tests that count
 /// hits. Server side only: the clients still predict with the compiled-in tuning.
 fn laser() -> Tuning {
-    Tuning { spread_deg: 0.0, bloom_per_shot: 0.0, falloff_start: 1000.0, falloff_end: 1000.0, ..Tuning::default() }
+    Tuning { spread_deg: 0.0, bloom_per_shot: 0.0, falloff_start: 1000.0, falloff_end: 1000.0, ..unshielded() }
 }
 
 impl Harness {
@@ -40,7 +45,7 @@ impl Harness {
     }
 
     fn with_classes(classes: [MechClass; 2]) -> Self {
-        Self::tuned(Tuning::default(), classes)
+        Self::tuned(unshielded(), classes)
     }
 
     /// Classes are picked before any input, so both spawn in them.
@@ -132,7 +137,7 @@ fn prediction_matches_server() {
 
 #[test]
 fn prediction_matches_server_through_repair() {
-    let t = Tuning::default();
+    let t = unshielded();
     let mut h = Harness::new();
     let a_id = h.clients[0].0;
     let (mut max_correction, mut a_shots, mut repaired_for) = (0f32, 0, 0f32);
@@ -182,7 +187,7 @@ fn prediction_matches_server_through_repair() {
 fn duel(no_rewind: bool, ticks: u32, fire: Range<u32>, strafe: impl Fn(u32) -> f32) -> (u32, u32, bool, Harness) {
     let mut h = Harness::new();
     h.no_rewind = no_rewind;
-    let t = Tuning::default();
+    let t = unshielded();
     let (mut hits, mut shots, mut killed) = (0, 0, false);
     for tick in 0..ticks {
         let now = h.now();
@@ -214,7 +219,7 @@ fn duel(no_rewind: bool, ticks: u32, fire: Range<u32>, strafe: impl Fn(u32) -> f
 
 #[test]
 fn lag_compensated_hits_kill_and_respawn() {
-    let t = Tuning::default();
+    let t = unshielded();
     let zigzag = |tick: u32| if (tick / 20) % 2 == 0 { 1.0 } else { -1.0 };
     let (hits, shots, killed, h) = duel(false, 300, 0..300, zigzag);
     assert!(killed, "B never died: {hits}/{shots} hits");
@@ -222,8 +227,17 @@ fn lag_compensated_hits_kill_and_respawn() {
     assert_eq!(hits, (t.health_max / t.shot_damage).ceil() as u32);
     assert_eq!(h.clients[0].1.kills, 1);
     assert_eq!(h.clients[1].1.deaths, 1);
-    // Killed around tick 70; respawn_delay (3 s) later B is back at full health.
-    assert_eq!(h.clients[1].1.mech.health, t.health_max, "B didn't respawn");
+    // Killed around tick 70, B waits in the hangar (ready once respawn_delay is up) until it
+    // launches, then it's back at full health.
+    let mut h = h;
+    assert!(h.clients[1].1.mech.health <= 0.0, "B respawned without launching");
+    assert_eq!(h.clients[1].1.hangar, Some(0.0));
+    let b = h.clients[1].0;
+    h.game.pick_class(b, MechClass::B);
+    for _ in 0..LATENCY_TICKS * 2 + 2 {
+        h.step([Input::default(); 2]);
+    }
+    assert_eq!(h.clients[1].1.mech.health, t.health_max, "B didn't launch");
 }
 
 #[test]
@@ -246,7 +260,7 @@ fn send(game: &mut Game, id: u8, seq: &mut u32, n: u32, input: Input) {
 
 #[test]
 fn input_backlog_drains_and_rate_is_capped() {
-    let t = Tuning::default();
+    let t = unshielded();
     let mut game = Game::new(t.clone(), blockout());
     game.bots = false;
     let id = game.join().unwrap();
@@ -285,7 +299,7 @@ fn team_of(game: &Game, id: u8) -> u8 {
 
 #[test]
 fn teams_fill_and_balance() {
-    let mut game = Game::new(Tuning::default(), blockout());
+    let mut game = Game::new(unshielded(), blockout());
     let a = game.join().unwrap();
     game.step();
     let s = game.snapshot(a);
@@ -310,7 +324,7 @@ fn teams_fill_and_balance() {
 
 #[test]
 fn no_friendly_fire() {
-    let t = Tuning::default();
+    let t = unshielded();
     let mut game = Game::new(t.clone(), blockout());
     game.bots = false;
     let shooter = game.join().unwrap();
@@ -342,7 +356,7 @@ fn no_friendly_fire() {
 
 #[test]
 fn match_ends_and_restarts() {
-    let t = Tuning::default();
+    let t = unshielded();
     let mut game = Game::new(t.clone(), blockout());
     game.score_limit = 2;
     let human = game.join().unwrap();
@@ -365,7 +379,8 @@ fn match_ends_and_restarts() {
     let winner = ended.winner.expect("a score-limit win isn't a draw");
     assert_eq!(ended.scores[usize::from(winner)], 2);
 
-    // Post-match: shots fly but nobody dies, then a fresh match starts with everyone healthy.
+    // Post-match: shots fly but nobody dies, then a fresh match starts with every bot healthy and
+    // every human back in the hangar.
     let restarted = loop {
         let s = step(&mut game);
         assert!(!s.events.iter().any(|e| matches!(e, Event::Kill { .. })), "kill after the match ended");
@@ -375,7 +390,8 @@ fn match_ends_and_restarts() {
     };
     assert_eq!(restarted.state.scores, [0, 0]);
     let classes = class_tunings();
-    assert!(restarted.players.iter().all(|p| p.view.health == classes[p.class.index()].health_max && p.kills == 0 && p.deaths == 0));
+    let fresh = |p: &PlayerNet| if p.bot { p.view.health == classes[p.class.index()].health_max } else { p.docked };
+    assert!(restarted.players.iter().all(|p| fresh(p) && p.kills == 0 && p.deaths == 0));
 
     // Time limit with no kills is a draw.
     let mut game = Game::new(t, blockout());
@@ -391,7 +407,7 @@ fn match_ends_and_restarts() {
 
 #[test]
 fn second_human_replaces_a_bot() {
-    let mut game = Game::new(Tuning::default(), blockout());
+    let mut game = Game::new(unshielded(), blockout());
     let human = game.join().unwrap();
     game.step();
     assert!(game.join().is_some(), "a bot should give up its slot");
@@ -401,7 +417,7 @@ fn second_human_replaces_a_bot() {
 }
 
 fn class_tunings() -> [Tuning; 3] {
-    MechClass::ALL.map(|c| Tuning::default().for_class(c))
+    MechClass::ALL.map(|c| unshielded().for_class(c))
 }
 
 fn player(game: &Game, id: u8) -> sim::net::PlayerNet {
@@ -461,7 +477,7 @@ fn heavier_class_takes_more_hits() {
 }
 
 #[test]
-fn class_applies_now_then_on_respawn() {
+fn class_applies_now_then_at_the_next_launch() {
     let classes = class_tunings();
     let (mut game, shooter, victim) = duel_game();
 
@@ -471,7 +487,7 @@ fn class_applies_now_then_on_respawn() {
     assert_eq!(player(&game, victim).class, MechClass::C);
     assert_eq!(game.snapshot(victim).me.health, classes[MechClass::C.index()].health_max);
 
-    // Once moving, a new pick waits for the next spawn.
+    // Once moving, a new pick does nothing; the next launch, from the hangar, takes its own.
     let mut seq = 0;
     send(&mut game, victim, &mut seq, 1, Input::default());
     game.step();
@@ -480,6 +496,7 @@ fn class_applies_now_then_on_respawn() {
     assert_eq!(player(&game, victim).class, MechClass::C);
 
     shoot_until_kill(&mut game, shooter, victim);
+    game.pick_class(victim, MechClass::A);
     for _ in 0..(classes[MechClass::C.index()].respawn_delay * TICK_HZ) as u32 + 2 {
         game.step();
     }
@@ -521,7 +538,7 @@ fn brace_cuts_damage() {
 
 #[test]
 fn damage_cancels_repair() {
-    let t = Tuning::default();
+    let t = unshielded();
     let (mut game, shooter, victim) = duel_game();
     let (mut shooter_seq, mut victim_seq) = (0, 0);
     let repair = Input { repair: true, ..Input::default() };
@@ -558,7 +575,7 @@ fn damage_cancels_repair() {
 
 #[test]
 fn hostile_inputs_are_sanitized() {
-    let t = Tuning::default();
+    let t = unshielded();
     let mut game = Game::new(t.clone(), blockout());
     game.bots = false;
     let id = game.join().unwrap();
@@ -586,7 +603,7 @@ fn xz_gap(a: Vector, b: Vector) -> f32 {
 #[test]
 fn head_on_mechs_block() {
     let (mut game, north, south) = duel_game();
-    let touching = 2.0 * Tuning::default().mech_radius;
+    let touching = 2.0 * unshielded().mech_radius;
     // Round capsules pushing head-on eventually slip past each other on any tiny offset; they
     // must never overlap, and must hold each other up for at least half a second first.
     let (mut north_seq, mut south_seq, mut met) = (0, 0, None);
@@ -609,7 +626,7 @@ fn head_on_mechs_block() {
 #[test]
 fn prediction_through_contact() {
     let mut h = Harness::new();
-    let touching = 2.0 * Tuning::default().mech_radius;
+    let touching = 2.0 * unshielded().mech_radius;
     let toward = |yaw| Input { move_z: 1.0, yaw, ..Input::default() };
     let away = |yaw| Input { move_z: -1.0, yaw, ..Input::default() };
     let pi = std::f32::consts::PI;
@@ -672,7 +689,7 @@ fn launch(game: &mut Game, shooter: u8, seq: &mut u32, aim: Input) -> (Vector, u
 
 #[test]
 fn rockets_splash_enemies_only() {
-    let t = Tuning::default();
+    let t = unshielded();
     let mut game = Game::new(t.clone(), blockout());
     game.bots = false;
     let shooter = game.join().unwrap();
@@ -735,7 +752,7 @@ fn predicted_blast_matches_server() {
 
 #[test]
 fn predicted_airburst_matches_server() {
-    let t = Tuning::default();
+    let t = unshielded();
     let mut h = Harness::new();
     let (id, watcher) = (h.clients[0].0, 1);
     let (mut server, mut local, mut seen) = (Vec::new(), Vec::new(), Vec::new());
@@ -764,7 +781,7 @@ fn predicted_airburst_matches_server() {
 
 #[test]
 fn bots_use_secondaries() {
-    let mut game = Game::new(Tuning::default(), blockout());
+    let mut game = Game::new(unshielded(), blockout());
     let human = game.join().unwrap();
     let mut launched = [false; 3];
     for _ in 0..(30.0 * TICK_HZ) as u32 {
@@ -812,7 +829,7 @@ fn spread_matches_server() {
     assert!(max_bloom > 2.0, "bloom only reached {max_bloom} deg");
     let spread = server_shots.iter().map(|p| p.distance(server_shots[0])).fold(0.0, f32::max);
     assert!(spread > 0.3, "shots all landed within {spread} m, so the spread did nothing");
-    let pellets = Tuning::default().for_class(MechClass::C).pellets as usize;
+    let pellets = unshielded().for_class(MechClass::C).pellets as usize;
     assert!(server_flak.len() >= 3 * pellets, "only {} flak bursts", server_flak.len());
     assert_eq!(local_flak, server_flak, "predicted flak burst somewhere else");
     assert_eq!(seen_flak, server_flak, "the other client's flak replay burst somewhere else");
@@ -823,7 +840,7 @@ fn spread_matches_server() {
 fn falloff_scales_hit_damage() {
     // One exact shot across the 80 m between the slot-0 spawns, with falloff ranges that make
     // that distance near, mid and far.
-    let t = Tuning::default();
+    let t = unshielded();
     let mut dealt = vec![];
     for (start, end) in [(200.0, 300.0), (40.0, 120.0), (10.0, 20.0)] {
         let (mut game, shooter, victim) = duel_game_with(Tuning { falloff_start: start, falloff_end: end, ..laser() });
@@ -848,7 +865,7 @@ fn falloff_scales_hit_damage() {
 fn flak_hits() {
     let classes = class_tunings();
     let flak = &classes[MechClass::C.index()];
-    let (mut game, shooter, victim) = duel_game_with(Tuning::default());
+    let (mut game, shooter, victim) = duel_game_with(unshielded());
     game.pick_class(shooter, MechClass::C);
     game.step();
     // The victim walks up to about 25 m and stops.
@@ -886,7 +903,7 @@ fn flak_hits() {
 #[test]
 fn predicted_grenade_matches_server() {
     use sim::projectile::GRENADE;
-    let t = Tuning::default();
+    let t = unshielded();
     let mut h = Harness::new();
     let (id, watcher) = (h.clients[0].0, 1);
     // A grenade, a rocket and an EMP on one input, aimed at the floor ahead; the enemy is far beyond.
@@ -922,7 +939,7 @@ fn predicted_grenade_matches_server() {
 
 #[test]
 fn emp_jams_the_other_client() {
-    let t = Tuning::default();
+    let t = unshielded();
     let mut h = Harness::new();
     let (a, b) = (h.clients[0].0, h.clients[1].0);
     let pi = std::f32::consts::PI;
@@ -987,7 +1004,7 @@ fn names_are_sanitized() {
 
 #[test]
 fn roster_reaches_clients() {
-    let mut game = Game::new(Tuning::default(), blockout());
+    let mut game = Game::new(unshielded(), blockout());
     let a = game.join().unwrap();
     let b = game.join().unwrap();
     game.step(); // bots fill the rest

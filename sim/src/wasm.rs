@@ -25,6 +25,7 @@ fn mech_state(m: &Mech) -> Vec<f32> {
         m.bloom, m.fire_wait,
         f32::from(m.lock), m.lock_time,
         b(m.beaming), m.beam_end.x, m.beam_end.y, m.beam_end.z,
+        b(m.shield > 0.0),
     ]
 }
 
@@ -246,8 +247,8 @@ impl WasmNetClient {
         ray_distance(self.0.arena(), [ox, oy, oz], [dx, dy, dz], max)
     }
 
-    /// Sixteen floats per remote mech: id, team, class, feet xyz, yaw, pitch, health, boosting, hovering, bot,
-    /// ability active, repairing, primary, secondary.
+    /// Eighteen floats per remote mech: id, team, class, feet xyz, yaw, pitch, health, boosting, hovering, bot,
+    /// ability active, repairing, primary, secondary, docked (in the hangar: not drawn), shielded.
     pub fn remotes(&self, now: f64) -> Vec<f32> {
         let b = |v: bool| if v { 1.0 } else { 0.0 };
         self.0
@@ -255,7 +256,7 @@ impl WasmNetClient {
             .iter()
             .flat_map(|p| {
                 let v = &p.view;
-                [f32::from(p.id), f32::from(p.team), p.class.index() as f32, v.pos.x, v.pos.y, v.pos.z, v.yaw, v.pitch, v.health, b(v.boosting), b(v.hovering), b(p.bot), b(v.ability), b(v.repairing), f32::from(p.loadout.primary), f32::from(p.loadout.secondary)]
+                [f32::from(p.id), f32::from(p.team), p.class.index() as f32, v.pos.x, v.pos.y, v.pos.z, v.yaw, v.pitch, v.health, b(v.boosting), b(v.hovering), b(p.bot), b(v.ability), b(v.repairing), f32::from(p.loadout.primary), f32::from(p.loadout.secondary), b(p.docked), b(v.shielded)]
             })
             .collect()
     }
@@ -290,7 +291,8 @@ impl WasmNetClient {
 
     /// id (-1 until welcomed), kills, deaths, ping ms, last correction m, full (0/1), team,
     /// team 0 score, team 1 score, seconds left, ended (0/1), winner (-1 for none or a draw), class,
-    /// next match's map, primary, secondary.
+    /// next match's map, primary, secondary, seconds until we can launch from the hangar (-1 when
+    /// out in the arena).
     pub fn hud(&self) -> Vec<f32> {
         let (c, s) = (&self.0, &self.0.state);
         vec![
@@ -310,6 +312,7 @@ impl WasmNetClient {
             f32::from(s.next_map),
             f32::from(c.loadout.primary),
             f32::from(c.loadout.secondary),
+            c.hangar.unwrap_or(-1.0),
         ]
     }
 }

@@ -114,6 +114,8 @@ pub struct Tuning {
     pub health_max: f32,
     pub shot_damage: f32,
     pub respawn_delay: f32,
+    /// Seconds a launch is shielded at most (`Mech::shield`).
+    pub spawn_shield: f32,
 
     pub ability_cooldown: f32,
     pub ability_duration: f32,
@@ -365,6 +367,9 @@ pub struct Mech {
     /// `weapon::beam`).
     pub beaming: bool,
     pub beam_end: Vector,
+    /// Seconds of shield left, fresh from launching (`spawn_shield`): no damage or jam until it
+    /// runs out or the pilot does anything but look around, so a mech can't be spawn camped.
+    pub shield: f32,
     /// Riding a jump pad's arc: no steering or boost until it lands, or hovers or dodges out.
     pub pad_arc: bool,
 }
@@ -577,6 +582,9 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     // Half a tick of slack so the stand-up ends on a whole tick despite float sums.
     m.stand_up = if m.stand_up > DT * 1.5 { m.stand_up - DT } else { 0.0 };
     let input = &if shutdown { Input { yaw: input.yaw, pitch: input.pitch, ..Input::default() } } else { *input };
+    let acted = input.move_x != 0.0 || input.move_z != 0.0 || input.dodge != 0;
+    let acted = acted || input.boost || input.hover || input.fire || input.alt_fire || input.ability || input.repair || input.grenade || input.emp;
+    m.shield = if acted { 0.0 } else { (m.shield - DT).max(0.0) };
 
     m.yaw = input.yaw;
     let pitch_limit = t.pitch_limit_deg.to_radians();

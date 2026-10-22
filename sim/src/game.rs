@@ -73,7 +73,10 @@ struct Player {
     history: VecDeque<(u32, Vector, bool)>,
     kills: u16,
     deaths: u16,
+    /// Tick the player can launch from the hangar at, while destroyed or not launched yet.
     respawn_at: Option<u32>,
+    /// Asked to launch: a human stays in the hangar until they do (bots launch on their own).
+    launch: bool,
     /// Server-driven player; None for a human.
     bot: Option<Bot>,
     name: String,
@@ -169,15 +172,25 @@ impl Game {
         self.add_player(team, None, MechClass::B)
     }
 
-    /// Class and weapons for this player's next spawn; immediate if they haven't moved yet.
+    /// Player `id` launching as `class` carrying `loadout`: from the hangar, as soon as their
+    /// respawn delay is up. Out in the arena it only takes before their first input (respawning
+    /// them in place); otherwise changes wait for the next launch.
     pub fn pick(&mut self, id: u8, class: MechClass, loadout: Loadout) {
         let loadout = self.arsenal.clamp(loadout);
         let Some(p) = self.players.iter_mut().find(|p| p.id == id) else { return };
-        (p.next_class, p.next_loadout) = (class, loadout);
-        if p.ack_seq == 0 && p.mech.health > 0.0 {
-            (p.class, p.loadout) = (class, loadout);
+        if p.respawn_at.is_some() {
+            (p.next_class, p.next_loadout, p.launch) = (class, loadout, true);
+        } else if p.ack_seq == 0 && p.mech.health > 0.0 {
+            (p.class, p.loadout, p.next_class, p.next_loadout) = (class, loadout, class, loadout);
             p.mech = spawn(&self.arsenal, class, loadout, p.mech.pos);
         }
+    }
+
+    /// Sends player `id` to the hangar, ready to launch: a human joining, or a new match.
+    pub fn dock(&mut self, id: u8) {
+        let tick = self.tick;
+        let Some(p) = self.players.iter_mut().find(|p| p.id == id) else { return };
+        (p.mech.health, p.respawn_at, p.launch) = (0.0, Some(tick), false);
     }
 
     /// `pick` with the class's own weapons.
@@ -208,6 +221,7 @@ impl Game {
             kills: 0,
             deaths: 0,
             respawn_at: None,
+            launch: false,
             name: if bot.is_some() { BOT_NAMES[usize::from(id) % BOT_NAMES.len()].into() } else { format!("Pilot-{id:02}") },
             renamed_at: None,
             bot,
@@ -291,12 +305,13 @@ impl Game {
         }
 
         for i in 0..self.players.len() {
-            if self.players[i].respawn_at.is_some_and(|at| self.tick >= at) {
-                let pos = self.respawn_point(self.players[i].team);
+            let p = &self.players[i];
+            if p.respawn_at.is_some_and(|at| self.tick >= at) && (p.launch || p.bot.is_some()) {
+                let pos = self.respawn_point(p.team);
                 let p = &mut self.players[i];
                 (p.class, p.loadout) = (p.next_class, p.next_loadout);
                 p.mech = spawn(&self.arsenal, p.class, p.loadout, pos);
-                p.respawn_at = None;
+                (p.respawn_at, p.launch) = (None, false);
             }
         }
 
@@ -462,6 +477,11 @@ impl Game {
             p.kills = 0;
             p.deaths = 0;
         }
+        // Humans start each match in the hangar.
+        let humans: Vec<u8> = self.players.iter().filter(|p| p.bot.is_none()).map(|p| p.id).collect();
+        for id in humans {
+            self.dock(id);
+        }
     }
 
     fn end_match(&mut self) {
@@ -608,7 +628,7 @@ impl Game {
         let reached: Vec<usize> = (0..self.players.len())
             .filter(|&j| {
                 let q = &self.players[j];
-                q.team != u.team && q.mech.health > 0.0 && item::emp_reaches(&self.arena, t, &u.mech, self.arsenal.of(&q.mech), &q.mech)
+                q.team != u.team && q.mech.health > 0.0 && q.mech.shield <= 0.0 && item::emp_reaches(&self.arena, t, &u.mech, self.arsenal.of(&q.mech), &q.mech)
             })
             .collect();
         let (owner, pos) = (u.id, item::emp_center(t, &u.mech));
@@ -644,7 +664,7 @@ impl Game {
     /// drops a health orb, and scores for `attacker`, if they're still here.
     fn apply_damage(&mut self, attacker: Option<usize>, j: usize, amount: f32) {
         let target = &self.players[j];
-        if !matches!(self.phase, Phase::Playing { .. }) || target.mech.health <= 0.0 {
+        if !matches!(self.phase, Phase::Playing { .. }) || target.mech.health <= 0.0 || target.mech.shield > 0.0 {
             return;
         }
         let tt = self.arsenal.of(&target.mech);
@@ -696,11 +716,13 @@ impl Game {
                     bot: p.bot.is_some(),
                     kills: p.kills,
                     deaths: p.deaths,
+                    docked: p.respawn_at.is_some_and(|at| self.tick >= at),
                     view: MechView::from(&p.mech),
                 })
                 .collect(),
             events: self.events.clone(),
             orbs: self.orbs.clone(),
+            hangar: me.and_then(|p| p.respawn_at).map(|at| at.saturating_sub(self.tick) as f32 * DT),
             state: MatchState {
                 map: self.map as u8,
                 next_map: self.next_map as u8,
@@ -726,7 +748,8 @@ impl Game {
 
 /// A fresh mech of `class` carrying `loadout` at `pos`.
 fn spawn(arsenal: &Arsenal, class: MechClass, loadout: Loadout, pos: Vector) -> Mech {
-    Mech { class, loadout, ..spawn_mech(arsenal.get(class, loadout), pos) }
+    let t = arsenal.get(class, loadout);
+    Mech { class, loadout, shield: t.spawn_shield, ..spawn_mech(t, pos) }
 }
 
 fn secs(s: f32) -> u32 {
@@ -756,6 +779,13 @@ mod tests {
 
     fn send(game: &mut Game, id: u8, input: Input) {
         game.push_input(id, InputMsg { seq: game.tick + 1, input, view_tick: game.tick as f32 });
+    }
+
+    /// Drops every fresh spawn's shield, so tests can hurt and jam mechs straight away.
+    fn unshield(game: &mut Game) {
+        for p in &mut game.players {
+            p.mech.shield = 0.0;
+        }
     }
 
     fn mech(game: &Game, id: u8) -> Mech {
@@ -818,6 +848,7 @@ mod tests {
             let i = at(&game, id);
             game.players[i].mech.pos = Vector::new(x, 0.05, 0.0);
         }
+        unshield(&mut game);
         // Killed in mid-air, it drops its orb over the floor below.
         let v = at(&game, victim);
         game.players[v].mech.pos.y = 10.0;
@@ -847,7 +878,9 @@ mod tests {
         game.bots = false;
         let id = game.join().unwrap();
         let heavy = Loadout::of(MechClass::C);
+        game.dock(id);
         game.pick(id, MechClass::A, heavy);
+        game.step();
         send(&mut game, id, Input { fire: true, alt_fire: true, ..Input::default() });
         game.step();
         let m = mech(&game, id);
@@ -871,6 +904,7 @@ mod tests {
             let id = game.join().unwrap();
             game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = Vector::new(x, 0.1, z);
         }
+        unshield(&mut game);
         let mender = (0u8..).map(|s| Loadout { primary: 0, secondary: s }).find(|&l| game.arsenal.get(MechClass::B, l).alt_beam > 0.0).unwrap();
         game.pick(user, MechClass::B, mender);
         game.players.iter_mut().find(|p| p.id == user).unwrap().mech.loadout = mender;
@@ -892,6 +926,58 @@ mod tests {
         }
         assert_eq!(mech(&game, mate).health, t.health_max);
         assert!(!game.events.iter().any(|e| matches!(e, Event::Launch(_))), "a beam launched a shell");
+    }
+
+    #[test]
+    fn humans_launch_from_the_hangar_when_they_choose_and_spawn_shielded() {
+        let t = Tuning::default();
+        let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+        game.bots = false;
+        let (pilot, enemy) = (game.join().unwrap(), game.join().unwrap());
+        game.dock(pilot);
+        for _ in 0..secs(t.respawn_delay) + 5 {
+            game.step();
+        }
+        assert!(mech(&game, pilot).health <= 0.0, "spawned without launching");
+        assert_eq!(game.snapshot(pilot).hangar, Some(0.0));
+        assert!(game.snapshot(enemy).players.iter().any(|p| p.id == pilot && p.docked), "a docked pilot is drawn");
+
+        // Launching spawns them next tick, shielded: hits do nothing until they act.
+        game.pick(pilot, MechClass::A, Loadout::of(MechClass::A));
+        game.step();
+        let m = mech(&game, pilot);
+        assert!(m.health > 0.0 && m.shield > 0.0 && m.class == MechClass::A, "didn't launch shielded: {m:?}");
+        assert_eq!(game.snapshot(pilot).hangar, None);
+        let j = game.players.iter().position(|p| p.id == pilot).unwrap();
+        game.apply_damage(None, j, 10.0);
+        assert_eq!(mech(&game, pilot).health, m.health, "hurt through the shield");
+        send(&mut game, pilot, Input { yaw: 1.0, pitch: 0.2, ..Input::default() });
+        game.step();
+        assert!(mech(&game, pilot).shield > 0.0, "looking around dropped the shield");
+        send(&mut game, pilot, Input { move_z: 1.0, ..Input::default() });
+        game.step();
+        assert_eq!(mech(&game, pilot).shield, 0.0, "moving kept the shield");
+        game.apply_damage(None, j, 10.0);
+        assert!(mech(&game, pilot).health < m.health, "the shield never dropped");
+        // Standing still, it lasts `spawn_shield` at most.
+        let p = &mut game.players[j].mech;
+        (p.shield, p.health) = (t.spawn_shield, t.health_max);
+        for _ in 0..secs(t.spawn_shield) + 1 {
+            send(&mut game, pilot, Input::default());
+            game.step();
+        }
+        assert_eq!(mech(&game, pilot).shield, 0.0, "an idle pilot stayed shielded");
+
+        // Out in the arena a pick waits for the next launch; destroyed, they wait in the hangar.
+        game.pick(pilot, MechClass::C, Loadout::of(MechClass::C));
+        game.apply_damage(None, j, 1000.0);
+        for _ in 0..secs(t.respawn_delay) + 5 {
+            game.step();
+        }
+        assert!(mech(&game, pilot).health <= 0.0, "respawned on its own");
+        game.pick(pilot, MechClass::C, Loadout::of(MechClass::C));
+        game.step();
+        assert_eq!(mech(&game, pilot).class, MechClass::C);
     }
 
     #[test]
@@ -920,6 +1006,7 @@ mod tests {
             let id = game.join().unwrap();
             game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = Vector::new(x, 0.1, z);
         }
+        unshield(&mut game);
         assert!(game.players.iter().all(|p| p.team == p.id % 2), "teams aren't as the test assumes");
 
         send(&mut game, user, Input { emp: true, ..Input::default() });
@@ -977,6 +1064,7 @@ mod tests {
             for (id, pos) in [(shooter, Vector::new(0.0, 4.1, 16.0)), (hider, Vector::new(0.0, 0.1, -1.85))] {
                 game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = pos;
             }
+            unshield(&mut game);
             for _ in 0..10 {
                 send(&mut game, shooter, Input::default());
                 send(&mut game, hider, Input::default());

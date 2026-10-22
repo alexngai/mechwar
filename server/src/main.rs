@@ -98,7 +98,7 @@ async fn game_loop(mut cmds: mpsc::UnboundedReceiver<Cmd>) {
         while let Ok(cmd) = cmds.try_recv() {
             match cmd {
                 Cmd::Join(out, reply) => {
-                    let id = game.join();
+                    let id = game.join().inspect(|&id| game.dock(id));
                     let msg = id.map_or(ServerMsg::Full, |id| ServerMsg::Welcome { id, map: game.map as u8 });
                     let _ = out.send((Instant::now(), net::encode(&msg)));
                     if let Some(id) = id {

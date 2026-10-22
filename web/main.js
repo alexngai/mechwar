@@ -13,6 +13,7 @@ import classesText from '../classes.json?raw';
 import weaponsText from '../weapons.json?raw';
 import { buildArena, HIGH_ONLY, LOW_ONLY } from './arena.js';
 import { Effects, HOT, halo, hot } from './fx.js';
+import { Preview } from './hangar.js';
 import saltworks from '../maps/saltworks.json';
 import foundry from '../maps/foundry.json';
 import verdigris from '../maps/verdigris.json';
@@ -86,7 +87,7 @@ if (net) {
 }
 
 // Index layout of state(); keep in sync with mech_state in sim/src/wasm.rs.
-const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, SPIN: 31, CHARGE: 32, BLOOM: 33, FIRE_WAIT: 34, LOCK: 35, LOCK_T: 36, BEAM: 37, BEAM_END: 38, OFFSET: 41 };
+const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, SPIN: 31, CHARGE: 32, BLOOM: 33, FIRE_WAIT: 34, LOCK: 35, LOCK_T: 36, BEAM: 37, BEAM_END: 38, SHIELD: 41, OFFSET: 42 };
 // Volley index of thrown grenades; matches projectile::GRENADE in sim/src/projectile.rs.
 const GRENADE_N = 255;
 const BOMBLET_N = 100; // a splitting shell's bomblets carry volley indices from here up (projectile::BOMBLET)
@@ -290,7 +291,8 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Tab') { e.preventDefault(); boardOpen = true; }
   if (e.code === 'KeyC' && picked !== null) pickerOpen = !pickerOpen;
   const digit = ['Digit1', 'Digit2', 'Digit3'].indexOf(e.code);
-  if (digit >= 0 && !$('picker').hidden) pick(digit);
+  if (digit >= 0 && !$('picker').hidden) showBay(digit);
+  if (e.code === 'Enter' && !$('picker').hidden) launch(bay);
 });
 addEventListener('keyup', (e) => {
   keys.delete(e.code);
@@ -439,46 +441,80 @@ const dps = (v) => {
   const hit = v('shot_damage') * v('pellets') * (v('charge_time') > 0 ? v('charge_damage') : 1);
   return Math.round((hit * v('burst')) / (1 / v('fire_rate') + v('charge_time')));
 };
-// Class cards: chips pick each slot's weapon (any weapon fits any class), and a click anywhere
-// else on the card, its Deploy button or its number key deploys in it.
-CLASS_KEYS.forEach((key, i) => {
-  const c = classes[key], card = document.createElement('div');
-  card.className = 'card';
-  const chips = (slot, list) => weapons[list].map((w, k) => `<label class="chip"><input type="radio" name="${key}-${slot}" value="${k}">${w.name}</label>`).join('');
-  card.innerHTML = `<span class="key">${i + 1}</span><b>${c.name}</b>${c.role}<dl>
-    <dt>HP</dt><dd>${classValue(i, 'health_max')}</dd><dt>Speed</dt><dd>${classValue(i, 'walk_speed')} m/s</dd>
-    <dt>DPS</dt><dd class="dps"></dd></dl>
-    <div class="slot"><b>LMB</b><div class="chips">${chips('primary', 'primaries')}</div><p class="primary"></p></div>
-    <div class="slot"><b>RMB</b><div class="chips">${chips('secondary', 'secondaries')}</div><p class="secondary"></p></div>
-    <p><b>F · ${c.ability.name}</b>${c.ability.desc}</p>
-    <button class="deploy">Deploy</button>`;
-  const show = () => {
-    const l = picks[i], { primary, secondary } = armament(l), v = (name) => valueOf(i, l, name);
-    card.querySelector(`[name="${key}-primary"][value="${l.primary}"]`).checked = true;
-    card.querySelector(`[name="${key}-secondary"][value="${l.secondary}"]`).checked = true;
-    card.querySelector('.dps').textContent = dps(v);
-    card.querySelector('p.primary').textContent = primary.desc;
-    card.querySelector('p.secondary').textContent = secondary.desc;
-  };
-  card.addEventListener('change', () => {
-    const at = (slot) => +card.querySelector(`[name="${key}-${slot}"]:checked`).value;
-    picks[i] = { primary: at('primary'), secondary: at('secondary') };
-    const { primary, secondary } = armament(picks[i]);
-    try { localStorage.setItem(`webhawk.loadout.${key}`, JSON.stringify({ primary: primary.id, secondary: secondary.id })); } catch { /* private mode */ }
-    show();
-  });
-  card.addEventListener('click', (e) => { if (!e.target.closest('.chips')) pick(i); });
-  show();
-  $('cards').append(card);
+// --- Hangar ----------------------------------------------------------------
+// One bay per class, each holding the loadout last picked in it (saved locally by weapon id). The
+// hangar shows before the first launch, on death and with C; Launch (or Enter) sends the shown
+// bay's build. Online the mech waits in the hangar until launched, and changes made out in the
+// arena apply at the next launch.
+let bay = 1, launching = false;
+const preview = new Preview($('preview'));
+/** Stat bars per slot: label, value from a lookup like `valueOf`'s, unit. */
+const STATS = {
+  primaries: [
+    ['Damage/s', (v) => dps(v), ''],
+    ['Range', (v) => Math.min(v('weapon_range'), v('falloff_end')), ' m'],
+    ['Heat/s', (v) => (v('heat_per_shot') * v('burst')) / (1 / v('fire_rate') + v('charge_time')), ''],
+  ],
+  secondaries: [
+    ['Damage', (v) => (v('alt_beam') > 0 ? v('alt_damage') : v('alt_damage') * Math.max(v('alt_count'), 1) + v('alt_split') * v('alt_split_damage')), ''],
+    ['Blast', (v) => (v('alt_beam') > 0 ? 0 : v('alt_radius')), ' m'],
+    ['Cooldown', (v) => v('alt_cooldown'), ' s'],
+  ],
+};
+const shown = (x) => (x < 10 ? x.toFixed(1).replace(/\.0$/, '') : Math.round(x));
+/** Bars for class `cls` carrying `l`, its `slot` weapon against the rest of `list`. */
+const statBars = (cls, l, slot, list) => STATS[list].map(([label, f, unit]) => {
+  const at = (k) => f((name) => valueOf(cls, { ...l, [slot]: k }, name));
+  const x = at(l[slot]), max = Math.max(...weapons[list].map((_, k) => at(k)), 1e-6);
+  return `<span>${label}</span><span class="bar"><i style="width: ${Math.round((100 * x) / max)}%"></i></span><span>${shown(x)}${unit}</span>`;
+}).join('');
+const bays = CLASS_KEYS.map((key, i) => {
+  const b = document.createElement('button');
+  b.className = 'bay';
+  b.addEventListener('click', () => showBay(i));
+  $('bays').append(b);
+  return b;
 });
-function pick(i) {
-  pickerOpen = false;
+function showBay(i) {
+  bay = i;
+  const key = CLASS_KEYS[i], c = classes[key], l = picks[i], { primary, secondary } = armament(l);
+  bays.forEach((b, k) => {
+    const w = armament(picks[k]);
+    b.classList.toggle('on', k === i);
+    b.innerHTML = `${k + 1} · ${classes[CLASS_KEYS[k]].name}<small>${w.primary.name} · ${w.secondary.name}</small>`;
+  });
+  const chips = (slot, list) => weapons[list].map((w, k) => `<label class="chip"><input type="radio" name="${slot}" value="${k}"${k === l[slot] ? ' checked' : ''}>${w.name}</label>`).join('');
+  $('slots').innerHTML = `
+    <div class="slot"><b>${c.name.toUpperCase()}<span>${c.role}</span></b>HP ${classValue(i, 'health_max')} · ${classValue(i, 'walk_speed')} m/s</div>
+    <div class="slot"><b>PRIMARY<span>LMB</span></b><div class="chips">${chips('primary', 'primaries')}</div><div class="bars">${statBars(i, l, 'primary', 'primaries')}</div><p>${primary.desc}</p></div>
+    <div class="slot"><b>SECONDARY<span>RMB · MMB</span></b><div class="chips">${chips('secondary', 'secondaries')}</div><div class="bars">${statBars(i, l, 'secondary', 'secondaries')}</div><p>${secondary.desc}</p></div>
+    <div class="slot"><b>ITEMS<span>G · T</span></b>Tumbler grenade · Brownout EMP</div>
+    <div class="slot"><b>ABILITY<span>F</span></b>${c.ability.name}: ${c.ability.desc}</div>`;
+  preview.show(key, l, classValue(i, 'mech_height'));
+}
+$('slots').addEventListener('change', () => {
+  const at = (slot) => +$('slots').querySelector(`[name="${slot}"]:checked`).value;
+  picks[bay] = { primary: at('primary'), secondary: at('secondary') };
+  const { primary, secondary } = armament(picks[bay]);
+  try { localStorage.setItem(`webhawk.loadout.${CLASS_KEYS[bay]}`, JSON.stringify({ primary: primary.id, secondary: secondary.id })); } catch { /* private mode */ }
+  showBay(bay);
+});
+$('launch').addEventListener('click', () => {
+  launch(bay);
+  renderer.domElement.requestPointerLock()?.catch?.(() => {});
+});
+showBay(bay);
+/** Launches bay `i`'s build: online from the hangar once the respawn delay is up (out in the arena it waits), offline at once. */
+function launch(i) {
+  if (net && picked !== null && curr[S.HEALTH] > 0) return;
   scoped = false;
   picked = i;
   const l = loadoutFor(i);
   if (net) {
+    launching = true;
     if (ws.readyState === WebSocket.OPEN) ws.send(net.pick(i, l.primary, l.secondary));
   } else {
+    pickerOpen = false;
     classIdx = i;
     loadout = l;
     sim.set_class(i, l.primary, l.secondary);
@@ -534,6 +570,8 @@ function frame(now) {
     }
     prev = curr;
     curr = game.state();
+    // Dying online opens the hangar (checked every tick: a slow frame can run several).
+    if (net && picked !== null && curr[S.HEALTH] <= 0 && prev[S.HEALTH] > 0) pickerOpen = true;
     if (dodge && curr[S.DODGE_CD] > prev[S.DODGE_CD]) me.dodge(dodge);
     if (ability && curr[S.ABILITY_CD] > prev[S.ABILITY_CD]) me.ability();
     dodge = 0;
@@ -561,9 +599,9 @@ function frame(now) {
     cockpit.setWeapons(CLASS_KEYS[classIdx], me, T('eye_height'), T('mech_height') / me.height);
     retune();
   }
-  // Dying online opens the picker once; the pick applies on respawn.
+  // Launching closes the hangar once the mech is out.
   const alive = curr[S.HEALTH] > 0;
-  if (net && picked !== null && !alive && prev[S.HEALTH] > 0) pickerOpen = true;
+  if (launching && alive) launching = pickerOpen = false;
 
   // The render offset slides server corrections (bumps) in instead of snapping.
   pos.set(lerp(S.POS) + lerp(S.OFFSET), lerp(S.POS + 1) + lerp(S.OFFSET + 1), lerp(S.POS + 2) + lerp(S.OFFSET + 2));
@@ -577,15 +615,16 @@ function frame(now) {
     vel: vel.set(lerp(S.VEL), lerp(S.VEL + 1), lerp(S.VEL + 2)),
     grounded: !!curr[S.GROUNDED], boosting: !!curr[S.BOOSTING], hovering: !!curr[S.HOVERING],
     health: curr[S.HEALTH], heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
-    ability: curr[S.ABILITY_T] > 0, damage: 1 - curr[S.HEALTH] / T('health_max'),
+    ability: curr[S.ABILITY_T] > 0, damage: 1 - curr[S.HEALTH] / T('health_max'), shielded: !!curr[S.SHIELD],
     repair: repairPhase(curr[S.REPAIR_T]),
   });
   if (curr[S.JAMMED] > 0) fx.jam(toChest(spark.copy(pos), classIdx), dt);
 
   if (net) {
     const r = net.remotes(now), live = new Set();
-    for (let i = 0; i < r.length; i += 16) {
-      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering, bot, abilityOn, repairing, primary, secondary] = r.subarray(i, i + 16);
+    for (let i = 0; i < r.length; i += 18) {
+      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering, bot, abilityOn, repairing, primary, secondary, docked, shielded] = r.subarray(i, i + 18);
+      if (docked) continue; // in the hangar: nothing to draw
       let e = remotes.get(id);
       if (e && (e.cls !== cls || e.mech.loadout.primary !== primary || e.mech.loadout.secondary !== secondary)) {
         e.mech.dispose();
@@ -608,7 +647,7 @@ function frame(now) {
       e.mech.update(dt, {
         pos: e.pos, yaw: ryaw, pitch: rpitch, scale: classValue(cls, 'mech_height') / e.mech.height, vel: e.vel,
         grounded: !hovering && Math.abs(e.vel.y) < 1.5, boosting: !!boosting, hovering: !!hovering, health,
-        ability: !!abilityOn, damage: 1 - health / classValue(cls, 'health_max'),
+        ability: !!abilityOn, damage: 1 - health / classValue(cls, 'health_max'), shielded: !!shielded,
         repair: repairPhase(e.repairAt === null ? 0 : (now - e.repairAt) / 1000 + 1e-3, cls),
       });
       if (now - (e.beamAt ?? -Infinity) < BEAM_HOLD) fx.mend(id + 1, e.mech.launcher.getWorldPosition(beamFrom), e.beamTo, dt);
@@ -824,7 +863,14 @@ function frame(now) {
   hud.damage.style.opacity = hurt;
 
   $('picker').hidden = !pickerOpen;
-  $('picker-note').textContent = picked === null ? '' : alive ? 'Applies on your next respawn · C to close' : 'Applies on respawn';
+  if (pickerOpen) {
+    // Out in the arena, the hangar only edits the next launch.
+    const out = net && picked !== null && alive, wait = net ? Math.max(hudState[16], 0) : 0;
+    $('launch').hidden = out;
+    $('launch').textContent = launching ? (wait > 0 ? `LAUNCHING IN ${wait.toFixed(1)} S` : 'LAUNCHING…') : wait > 0 ? `LAUNCH · READY IN ${wait.toFixed(1)} S` : 'LAUNCH';
+    $('picker-note').textContent = out ? 'Changes apply at your next launch · C to close' : 'Enter or Launch when ready';
+    preview.render(dt, myTeam);
+  }
   drawGlass(now, myTeam);
   $('board').hidden = !boardOpen;
   if (boardOpen && now - boardAt > 250) {
@@ -833,7 +879,7 @@ function frame(now) {
   }
   if (net) {
     const [, kills, deaths, ping, correction, full, team, blue, red, secondsLeft, ended, winner, , nextMap] = hudState;
-    const state = full ? 'server full' : connection || (curr[S.HEALTH] <= 0 ? 'DESTROYED, respawning' : '');
+    const state = full ? 'server full' : connection || (curr[S.HEALTH] <= 0 ? (picked === null ? 'in the hangar' : 'DESTROYED · launch when ready') : '');
     hud.net.textContent = `K ${kills}  D ${deaths}  ping ${Math.round(ping)} ms  corr ${correction.toFixed(3)} m  ${now < messageUntil ? message : state}`;
     const clock = `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')}`;
     hud.score.textContent = `${team === 0 ? '▸ ' : ''}BLUE ${blue} – ${red} RED${team === 1 ? ' ◂' : ''}   ${ended ? '' : clock}`;
@@ -984,6 +1030,7 @@ function drawGlass(now, myTeam) {
     heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     alt: 1 - curr[S.ALT_WAIT] / Math.max(T('alt_cooldown'), 1e-6), altReady: curr[S.ALT_WAIT] <= 0,
     altBurst: burstable,
+    shielded: !!curr[S.SHIELD],
     lock: curr[S.LOCK] > 0 ? {
       unit: curr[S.LOCK] - 1, progress: Math.min(curr[S.LOCK_T] / Math.max(T('alt_lock_time'), 1e-6), 1),
       left: T('alt_lock_time') + T('alt_lock_hold') - curr[S.LOCK_T], // s the lock holds once made

@@ -44,6 +44,9 @@ pub struct Snapshot {
     pub events: Vec<Event>,
     pub state: MatchState,
     pub orbs: Vec<Orb>,
+    /// In the hangar (destroyed, or not launched yet): seconds until it can launch (0: now).
+    /// None while out in the arena.
+    pub hangar: Option<f32>,
 }
 
 /// A health orb, dropped where a mech was destroyed: it heals every mech near it until it runs
@@ -66,6 +69,8 @@ pub struct PlayerNet {
     pub bot: bool,
     pub kills: u16,
     pub deaths: u16,
+    /// In the hangar with its wreck cleared: not drawn.
+    pub docked: bool,
     pub view: MechView,
 }
 
@@ -81,6 +86,7 @@ pub struct MechView {
     /// Class ability active (Slipstream or Brace; Vent is instant).
     pub ability: bool,
     pub repairing: bool,
+    pub shielded: bool,
 }
 
 impl From<&Mech> for MechView {
@@ -94,6 +100,7 @@ impl From<&Mech> for MechView {
             hovering: m.hovering,
             ability: m.ability_time > 0.0,
             repairing: m.repair_time > 0.0,
+            shielded: m.shield > 0.0,
         }
     }
 }
