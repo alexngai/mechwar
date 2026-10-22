@@ -192,18 +192,9 @@ export class Hud {
       const to = from + sweep * Math.min(Math.max(fill, 0), 1);
       if (fill > 0.01) arc(g, cx, cy, r, Math.min(from, to), Math.max(from, to));
     };
-    for (const [from, dir] of [[Math.PI - span, 1], [span, -1]]) {
-      gauge(R, from, dir * 2 * span, f.heat, f.overheated && !blink ? FAINT : WARN, 7 * u);
-      g.strokeStyle = DIM;
-      g.lineWidth = 1.5 * u;
-      for (let k = 0; k <= 10; k++) {
-        const a = from + (dir * k * 2 * span) / 10, c = Math.cos(a), s = Math.sin(a), out = (k % 5 ? 8 : 14) * u;
-        g.beginPath();
-        g.moveTo(cx + c * (R + 6 * u), cy + s * (R + 6 * u));
-        g.lineTo(cx + c * (R + 6 * u + out), cy + s * (R + 6 * u + out));
-        g.stroke();
-      }
-    }
+    const heat = f.overheated && !blink ? FAINT : WARN;
+    gauge(R, Math.PI - span, 2 * span, f.heat, heat, 7 * u);
+    gauge(R, span, -2 * span, f.heat, heat, 7 * u);
     const inner = R - 20 * u, short = 0.6;
     gauge(inner, span, -short, f.alt, f.altReady || f.altBurst ? AMBER : DIM, 4 * u);
     if (f.cycle !== null) gauge(inner, Math.PI - span, short, f.cycle, f.cycle >= 1 ? AMBER : DIM, 4 * u);
