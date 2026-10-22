@@ -6,7 +6,7 @@
 // tall and 3.6 m wide, so lanes and doors are 9+ m wide and clearances 6+ m; ramps stay near 23
 // degrees (walkable is 40); hover tops out at 3.5 m, so 3 m ledges are hover shortcuts and the 7 m
 // and 14 m tiers need ramps.
-import { box, coral, furnace, lamp, once, pad, pipe, point, railing, ramp, stack, turned, write } from './kit.mjs';
+import { box, furnace, growth, lamp, once, pad, pipe, point, railing, ramp, stack, turned, write } from './kit.mjs';
 
 // --- Floor and edges -------------------------------------------------------------------------
 box([-120, -1, 7], [120, 0, 120], 'ground'); // north floor
@@ -96,12 +96,12 @@ point([9.5, 7, 110], [22, 7, 112], [9.5, 14, 84], [-5, 14, 84]); // hangar roof 
 // --- Courtyard (north half) ------------------------------------------------------------------
 stack(45, 40);
 stack(-45, 40);
-// Coral grown on the stacks, high over the courtyard, and a table-coral perch off the east one at
+// Blocks built out from the stacks, high over the courtyard, and a perch off the east one at
 // gantry height, reached by a jump pad from the courtyard floor.
-coral([48, 22, 40], [1, 0], 8);
-coral([-48, 22, 40], [-1, 0], 8);
-coral([-45, 18, 37], [0, -1], 7);
-coral([45, 14, 37], [0, -1], 6, { shelf: 4.5, lit: true });
+growth([48, 22, 40], [1, 0], 8);
+growth([-48, 22, 40], [-1, 0], 8);
+growth([-45, 18, 37], [0, -1], 7);
+growth([45, 14, 37], [0, -1], 6, { shelf: 4.5, lit: true });
 pad([52, 0, 25], [45, 14, 31], 17);
 box([18, 0, 24], [22, 3, 28], 'panel');
 box([22, 0, 27], [25, 2, 30], 'panel');

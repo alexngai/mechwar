@@ -47,36 +47,48 @@ export function beam(a, b, w, t, mat = 'metal') {
 }
 
 /**
- * Coral grown onto a structure: cubes of varying sizes, turned only about the vertical, stepping
- * out from `root` (a point on its face) `reach` m along `dir` ([dx, dz], unit), biggest at the face
- * and shrinking and climbing toward the tip, each with a smaller one on its flank; `size` scales
- * them. None hangs below `root`, but clearance under it is the caller's: keep it 6.5 m+ over
- * anywhere mechs walk. With `shelf`, a walkway level with `root` instead, slabs turned under it
- * and one `shelf` m across at the tip, so mechs can walk out on it; with `lit`, a lamp there. The
- * shape is random but seeded by `root`, so a rerun writes the same map.
+ * A growth on a structure, the way a city builds outward as it climbs: two or three blocks stacked
+ * up its face from `root` (a point on the face, their underside), each reaching further out along
+ * `dir` ([dx, dz], unit) than the one below, the top one about `reach` m, with a tank on its roof.
+ * They turn only about the vertical, a little off the face's own line; `size` scales them. None
+ * hangs below `root`, but clearance under it is the caller's: keep it 6.5 m+ over anywhere mechs
+ * walk. With `shelf`, a slab walkway level with `root` instead, `shelf` m across at the tip, so
+ * mechs can walk out on it; with `lit`, a lamp there. The shape is random but seeded by `root`, so
+ * a rerun writes the same map.
  */
-export function coral(root, dir, reach, { size = 1, shelf = 0, lit = false, mat = 'rock' } = {}) {
-  const [x, y, z] = root, [dx, dz] = dir, k = size;
+export function growth(root, dir, reach, { size = 1, shelf = 0, lit = false, mat = 'concrete' } = {}) {
+  const [x, y, z] = root, [dx, dz] = dir, k = size, face = (Math.atan2(-dx, -dz) * 180) / Math.PI;
   let seed = (Math.abs(Math.round(x * 73 + y * 151 + z * 283)) % 2147483646) + 1;
   const rand = (lo, hi) => lo + (hi - lo) * (((seed = (seed * 16807) % 2147483647) - 1) / 2147483646);
-  // A box `r` m in half size across, `t` tall, centered `d` m along dir, `l` to its left, `h` high.
-  const cube = (d, l, h, r, t = r) => turned([r3(x + dx * d - dz * l), r3(h), r3(z + dz * d + dx * l)], [r, t, r].map(r3), r3(rand(0, 90)), mat);
+  // A block from `d0` to `d1` m out from the face, `l` to its left, `w` across and `t` tall, its
+  // underside at `h`, turned `turn` degrees off square.
+  const block = (d0, d1, l, h, w, t, turn = 0, m = mat) => {
+    const d = (d0 + d1) / 2;
+    turned([r3(x + dx * d - dz * l), r3(h + t / 2), r3(z + dz * d + dx * l)], [w / 2, t / 2, (d1 - d0) / 2].map(r3), r3(face + turn), m);
+  };
   if (shelf) {
-    // Slabs 1 m thick, so the underside stays near 7 m over a terrace 8 m down; the extra slabs'
-    // tops sit a hair under the walkway's, so the two don't flicker.
-    beam([x - dx * 0.8, y - 0.5, z - dz * 0.8], [r3(x + dx * reach), y - 0.5, r3(z + dz * reach)], Math.max(5, shelf), 1, mat);
-    for (const f of [0.2, 0.55]) cube(f * reach, rand(-1.5, 1.5), y - 0.55, rand(1.6, 2.4), 0.5);
-    cube(reach, 0, y - 0.55, shelf / 2, 0.5);
+    // Square slabs 1 m thick, so the underside stays near 7 m over a terrace 8 m down; the extra
+    // slabs' tops sit a hair under the walkway's, so the two don't flicker.
+    block(-0.8, reach, 0, y - 1, Math.max(5, shelf), 1);
+    for (const f of [0.2, 0.55]) {
+      const r = rand(1.6, 2.4);
+      block(f * reach - r, f * reach + r, rand(-1.5, 1.5), y - 1.05, 2 * r, 1);
+    }
+    block(reach - shelf / 2, reach + shelf / 2, 0, y - 1.05, shelf, 1);
     if (lit) lamp([r3(x + dx * (reach + 1.2)), y, r3(z + dz * (reach + 1.2))]);
     return;
   }
-  for (let d = 0; d < reach; ) {
-    const f = d / reach, r = k * (2.6 - 1.4 * f) * rand(0.85, 1.15), l = rand(-1, 1) * k, h = y + r + f * f * 0.4 * reach;
-    cube(d + 0.5 * r, l, h, r);
-    const s = r * rand(0.4, 0.6);
-    cube(d + rand(0, 1) * r, l + (r + 0.3 * s) * (rand(0, 1) < 0.5 ? -1 : 1), h + rand(0, 0.8) * r, s);
-    d += 1.3 * r;
+  const n = rand(0, 1) < 0.5 ? 2 : 3;
+  let h = y, out = 0, l = 0;
+  for (let i = 1; i <= n; i++) {
+    const t = k * rand(2, 3.5);
+    out = reach * (0.45 + (0.55 * i) / n) * rand(0.9, 1.05);
+    l = rand(-1.5, 1.5) * k;
+    block(-0.5, out, l, h, k * rand(3, 6), t, rand(-6, 6));
+    h += t;
   }
+  const r = k * rand(0.9, 1.3);
+  block(out / 2 - r, out / 2 + r, l, h, 2 * r, 2.4 * r, rand(0, 45), 'tank');
 }
 
 /** A smokestack: two boxes, square and diamond, whose union is a fluted, eight-pointed shaft. */

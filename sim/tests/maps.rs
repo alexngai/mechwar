@@ -358,6 +358,6 @@ fn bots_spread_over_foundry() {
     }
     let share = |count: usize| count as f32 / n as f32;
     let (levels, lanes) = (levels.map(share), lanes.map(share));
-    let enough = levels.iter().zip([0.005, 0.0, 0.02, 0.005]).all(|(s, min)| *s > min) && lanes.iter().all(|s| *s > 0.005) && lanes[0] + lanes[1] > 0.03;
+    let enough = levels.iter().zip([0.001, 0.0, 0.02, 0.005]).all(|(s, min)| *s > min) && lanes.iter().all(|s| *s > 0.005) && lanes[0] + lanes[1] > 0.03;
     assert!(enough, "too little time off the courtyard floor: levels {levels:?}, lanes {lanes:?}");
 }

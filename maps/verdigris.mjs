@@ -4,7 +4,7 @@
 // The north half (z > 0), the east district (straddling z = 0) and the center are authored here;
 // `write` (maps/kit.mjs) adds the 180-degree twin. Metrics as Foundry's: alleys and gates 9-10 m,
 // 6.5 m under every deck and street bridge, ramps near 23 degrees, 3 m hover ledges.
-import { box, coral, lamp, once, pad, point, railing, ramp, sign, write } from './kit.mjs';
+import { box, growth, lamp, once, pad, point, railing, ramp, sign, write } from './kit.mjs';
 
 const GREEN = '#3dff8a', TEAL = '#3de0ff', MAGENTA = '#ff4fd8';
 
@@ -109,16 +109,16 @@ lamp([66, 0, -20]);
 box([78, 0, -6], [84, 3, 0], 'rust'); // crates in the pocket
 point([44, 0, 14], [44, 0, -14], [68, 0, 0], [82, 0, 4], [68, 0, 30], [68, 0, -30], [60, 0, 30], [58, 7, 0], [62, 0, -16]);
 
-// --- Coral: growths on the towers ------------------------------------------------------------------
-// Overhangs (high over every street, deck and the viaduct), and one table-coral perch on the east
-// district's tower, 14 m up over its street, reached by a jump pad (its twin is on the west).
+// --- Growths: blocks built out from the towers -----------------------------------------------------
+// Overhangs (high over every street, deck and the viaduct), and one perch on the east district's
+// tower, 14 m up over its street, reached by a jump pad (its twin is on the west).
 const D = Math.SQRT1_2;
-coral([3, 21, 3], [D, D], 8); // the clock tower's crown, four ways with the twin
-coral([-3, 21, 3], [-D, D], 8);
-coral([32, 16, 84], [-1, 0], 7); // over the plaza, off both its towers
-coral([-32, 16, 84], [1, 0], 7);
-coral([75, 12, 72], [0, -1], 7); // over the north-east yard
-coral([74, 14, 25], [-1, 0], 9, { shelf: 5, lit: true }); // the east perch
+growth([3, 21, 3], [D, D], 8); // the clock tower's crown, four ways with the twin
+growth([-3, 21, 3], [-D, D], 8);
+growth([32, 16, 84], [-1, 0], 7); // over the plaza, off both its towers
+growth([-32, 16, 84], [1, 0], 7);
+growth([75, 12, 72], [0, -1], 7); // over the north-east yard
+growth([74, 14, 25], [-1, 0], 9, { shelf: 5, lit: true }); // the east perch
 pad([69, 0, 7], [65, 14, 25], 17);
 
 // --- Spawns, twin, write ---------------------------------------------------------------------------
