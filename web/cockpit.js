@@ -1,6 +1,6 @@
 // First-person cockpit: an original curved canopy frame, the dash's instruments and the class's own
 // weapons, kept in camera space and drawn in a second pass after the world with depth cleared, so
-// none of it clips into walls. One console wraps around the pilot and carries the mech's state:
+// none of it clips into walls; the weapons go first, under the cockpit (see `render`). One console wraps around the pilot and carries the mech's state:
 // hull and fuel in the middle, the radar scope lower left, systems right; the glass HUD (hud.js)
 // keeps what's aimed and reacted with. The pass is lit like the world (sun direction, the map's
 // palette, nearby lamps and flashes), shades under cover, and flashes with the guns.
@@ -343,6 +343,22 @@ export class Cockpit {
     this.scene.add(group);
     this.weapons = { group, guns, launcher, arms: [...guns, launcher] };
     this.next = 0;
+  }
+
+  /**
+   * Draws the pass over whatever `renderer` holds (it must not auto-clear): the guns first, then
+   * the canopy and console over them, depth cleared between, so the frame always covers the guns
+   * and they only show through the glass, outside the cockpit.
+   */
+  render(renderer) {
+    const guns = this.weapons?.group;
+    this.frame.visible = false;
+    renderer.render(this.scene, this.camera);
+    renderer.clearDepth();
+    this.frame.visible = true;
+    if (guns) guns.visible = false;
+    renderer.render(this.scene, this.camera);
+    if (guns) guns.visible = true;
   }
 
   /** Spins the primary's barrels by `spin` and lights its coils by `charge` (see mech.js `windUp`). */

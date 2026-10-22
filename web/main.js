@@ -802,7 +802,7 @@ function frame(now) {
   if (firstPerson) {
     renderer.autoClear = false;
     renderer.clearDepth();
-    renderer.render(cockpit.scene, cockpit.camera);
+    cockpit.render(renderer);
     renderer.autoClear = true;
   }
   watchPerformance(now, dt);
