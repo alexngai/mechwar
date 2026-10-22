@@ -141,7 +141,7 @@ cockpit.setWeapons('B', me, T('eye_height'), T('mech_height') / me.height);
 
 // The arena is built once its map is known: right away offline, after the Welcome online, and
 // again whenever a new match is on another map.
-let arenaMap = -1, arena = Object.assign([], { vents: [], furnaces: [] });
+let arenaMap = -1, arena = Object.assign([], { vents: [], furnaces: [], lights: [] });
 const ensureArena = (index) => {
   if (index < 0 || index === arenaMap) return;
   arenaMap = index;
@@ -638,6 +638,17 @@ function frame(now) {
   // Shade the cockpit when anything stands between the eye and the sun.
   const shaded = firstPerson && game.cast_ray(eye.x, eye.y, eye.z, SUN_DIR.x, SUN_DIR.y, SUN_DIR.z, 150) < 150;
   cockpit.update(dt, camera, SUN_DIR, T('fov'), shaded);
+  // ...and light it from the night lamps and flashes nearby (not our own guns': the cockpit flashes those).
+  if (firstPerson) {
+    const flashes = fx.lights
+      .filter(({ light, life }) => light.visible && life > 0 && light.position.distanceTo(eye) > 2)
+      .map(({ light }) => ({ at: light.position, rgb: light.color, radius: light.distance, power: light.intensity / 20 }));
+    cockpit.local(camera, [...arena.lights, ...flashes], (at) => {
+      const d = to.subVectors(at, eye).length();
+      to.divideScalar(d);
+      return game.cast_ray(eye.x, eye.y, eye.z, to.x, to.y, to.z, d) >= d - 0.5;
+    });
+  }
 
   // The predicted aim point only knows the arena, so stop own tracers at the first enemy mech
   // they cross (visual only; the server decides hits).

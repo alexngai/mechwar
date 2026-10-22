@@ -178,9 +178,9 @@ export class Hud {
     g.globalAlpha = 1;
 
     // --- Aim frame: mirrored arcs filling from the bottom, heat (red) on the left and the
-    // secondary's recharge on the right (lit when ready, flashing while a burst is armed) ----------
+    // secondary's recharge on the right (lit when ready, or while a burst is armed) ----------
     const R = 210 * u, span = 0.55, bottom = cy + R * Math.sin(span);
-    const blink = f.overheated && Math.floor(f.now / 150) % 2 === 0, burst = f.altBurst && Math.floor(f.now / 120) % 2 === 0;
+    const blink = f.overheated && Math.floor(f.now / 150) % 2 === 0;
     const gauge = (from, dir, fill, color) => {
       // `from` is the arc's bottom end; `dir` +1 sweeps up the left side, -1 up the right.
       g.lineWidth = 7 * u;
@@ -200,7 +200,7 @@ export class Hud {
       }
     };
     gauge(Math.PI - span, 1, f.heat, f.overheated && !blink ? FAINT : WARN);
-    gauge(span, -1, f.alt, burst ? '#ffffff' : f.altReady || f.altBurst ? AMBER : DIM);
+    gauge(span, -1, f.alt, f.altReady || f.altBurst ? AMBER : DIM);
     if (f.jammed && Math.floor(f.now / 200) % 2 === 0) {
       g.textAlign = 'center';
       g.fillStyle = WARN;

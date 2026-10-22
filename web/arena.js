@@ -406,15 +406,15 @@ export function buildArena(scene, map) {
   });
   for (const d of map.decor ?? []) decorParts(d, solid, glow, lamp);
   const lit = (m) => (map.night ? glowing(m) : m);
-  if (map.night) {
-    const light = (at, l) => ({ at, ...l, rgb: new THREE.Color(l.color) });
-    const lights = [
-      ...glow.lamps.map((p) => light(p, { ...LAMP, color: lamp.light })),
-      ...glow.furnaces.map((p) => light(p, FURNACE)),
-      ...glow.signs.map(({ at, color }) => light(at, { ...SIGN, color })),
-    ];
-    for (const g of [...ground, ...solid]) bakeLights(g, lights, boxes);
-  }
+  const light = (at, l) => ({ at, ...l, rgb: new THREE.Color(l.color) });
+  const lights = map.night
+    ? [
+        ...glow.lamps.map((p) => light(p, { ...LAMP, color: lamp.light })),
+        ...glow.furnaces.map((p) => light(p, FURNACE)),
+        ...glow.signs.map(({ at, color }) => light(at, { ...SIGN, color })),
+      ]
+    : [];
+  if (map.night) for (const g of [...ground, ...solid]) bakeLights(g, lights, boxes);
 
   const meshes = [
     ground.length && new THREE.Mesh(mergeGeometries(ground), lit(new THREE.MeshLambertMaterial({ map: groundTexture(), vertexColors: true }))),
@@ -452,5 +452,6 @@ export function buildArena(scene, map) {
   // Smoke rises from the top of each stack (its square half; the diamond is the same stack).
   meshes.vents = map.solids.filter((s) => s.mat === 'stack' && !s.yaw).map((s) => new THREE.Vector3(s.box[0], s.box[1] + s.half[1] + 0.5, s.box[2]));
   meshes.furnaces = glow.furnaces;
+  meshes.lights = lights; // night lights, for the cockpit
   return meshes;
 }

@@ -1,8 +1,9 @@
 // First-person cockpit: an original curved canopy frame, the dash's instruments and the class's own
 // weapons, kept in camera space and drawn in a second pass after the world with depth cleared, so
-// none of it clips into walls. The dash carries the mech's state (hull and fuel, the radar scope,
-// systems); the glass HUD (hud.js) keeps what's aimed and reacted with. The pass is lit like the
-// world (sun direction, the map's palette), shades under cover, and flashes with the guns.
+// none of it clips into walls. One console wraps around the pilot and carries the mech's state:
+// hull and fuel in the middle, the radar scope lower left, systems right; the glass HUD (hud.js)
+// keeps what's aimed and reacted with. The pass is lit like the world (sun direction, the map's
+// palette, nearby lamps and flashes), shades under cover, and flashes with the guns.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CLASSES, TEAMS } from './mech.js';
@@ -19,20 +20,25 @@ const DEPTH = 1; // canopy pillars sit this far ahead of the eye
 const RECOIL = 0.12; // m
 const RECOIL_RECOVER = 10; // 1/s
 const TAU = Math.PI * 2;
-// Instruments, w x h in meters at the canopy's depth: vitals (hull and fuel) left, the round radar
-// scope in the middle, systems right.
-const SCREENS = { vitals: [0.44, 0.24], radar: [0.34, 0.34], systems: [0.44, 0.24] };
-const SCREEN_X = { vitals: -0.6, radar: 0, systems: 0.6 };
-const RIM = 0.035, RIM_DEPTH = 0.07; // housing frame around each screen: bar width, how far it stands out
-const POD_YAW = 0.3; // side pods turn this far toward the pilot
-const SCOPE_TILT = 0.5; // the scope lies back further than the pods, to stay under the aim frame
+// The console, in its own flat space (x along its face, y up it from its foot, z toward the pilot):
+// it reaches SPAN either side, stands HUMP tall over the middle screen and WING over the sides, and
+// is then bent around an upright axis BEND ahead of its face and leaned back by TILT.
+const SPAN = 1.3, HUMP = 0.355, WING = 0.325, BEND = 2.5, TILT = 0.3;
+// Instruments, w x h in meters, centered at SCREEN_AT on the console: vitals (hull and fuel) in the
+// middle, the round radar scope lower left, systems right.
+const SCREENS = { vitals: [0.54, 0.24], radar: [0.24, 0.24], systems: [0.36, 0.2] };
+const SCREEN_AT = { vitals: [0, 0.185], radar: [-0.53, 0.16], systems: [0.58, 0.16] };
+const SEAM = 0.34; // panel seams between the middle and the sides
+const RIM = 0.035, RIM_DEPTH = 0.07; // bezel around each screen: bar width, how far it stands out
+const LOCAL = 3; // world lights (lamps, flashes) the cockpit takes at once
 const GLOW = { vitals: 0xffc46a, radar: 0xffc46a, systems: 0xffc46a }; // light each screen throws on its housing
 const FLASH = 1.2, FLASH_LIFE = 0.06; // a shot's light on the cockpit: intensity, seconds
 const INSTRUMENT_HZ = 20; // redraws per second
 const AMBER = '#ffc46a', DIM = 'rgba(255,196,106,0.4)', FAINT = 'rgba(255,196,106,0.14)', WARN = '#ff4a3a', FUEL = '#7fd8ff', REPAIR = '#6dff9a';
 const LAMP_OFF = 0x3a0b08;
 
-const box = (w, h, d, mat) => new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+// Split along x, so the console's boxes bend with it.
+const box = (w, h, d, mat) => new THREE.Mesh(new THREE.BoxGeometry(w, h, d, Math.ceil(w / 0.05)), mat);
 
 /** A box stretched from a to b (built along Y), `t` thick. */
 function strut(a, b, t, mat) {
@@ -66,8 +72,8 @@ function bolt(x, y, z, r = 0.007) {
  */
 function clearDash(group, pod, fov) {
   const halfH = Math.tan(THREE.MathUtils.degToRad(fov / 2)) * DEPTH;
-  const tallest = SCREENS.vitals[1]; // the side pods: the scope sits between the guns
-  const line = (-halfH * 0.75 + tallest + 2 * RIM + 0.03) / DEPTH, span = 0.95; // slopes per meter ahead
+  // Slopes per meter ahead: over the console's hump, and out past the side screens.
+  const line = (-halfH * 0.75 + HUMP * Math.cos(TILT)) / (DEPTH + HUMP * Math.sin(TILT)), span = 0.95;
   const out = Math.sign(pod.position.x) || 1, scale = group.scale.x;
   let slide = 0, lift = 0;
   group.updateMatrixWorld(true);
@@ -85,41 +91,44 @@ function clearDash(group, pod, fov) {
   else pod.position.y += lift / scale;
 }
 
-/**
- * Screen `s` set in its housing: recessed behind a frame that stands out RIM_DEPTH, on a back plate,
- * under a hood, with bolted corners and posts down to the dash. `lamp`, if given, is a warning
- * strip along the frame's top bar.
- */
-function housing(s, lamp) {
-  const g = new THREE.Group(), { w, h } = s, front = RIM_DEPTH - 0.01;
-  g.add(new THREE.Mesh(new THREE.PlaneGeometry(w, h), s.mat));
-  g.add(box(w + 2 * RIM, h + 2 * RIM, 0.03, trimMat).translateZ(-0.025));
-  for (const y of [-1, 1]) g.add(box(w + 2 * RIM, RIM, RIM_DEPTH, frameMat).translateY((y * (h + RIM)) / 2).translateZ(front / 2));
-  for (const x of [-1, 1]) g.add(box(RIM, h, RIM_DEPTH, frameMat).translateX((x * (w + RIM)) / 2).translateZ(front / 2));
-  const hood = box(w + 2 * RIM + 0.02, 0.012, 0.08, frameMat);
-  hood.position.set(0, h / 2 + RIM, front + 0.02);
-  hood.rotation.x = 0.3;
-  g.add(hood);
-  if (lamp) g.add(box(w * 0.9, 0.012, 0.01, lamp).translateY((h + RIM) / 2).translateZ(front + 0.005));
-  for (const x of [-1, 1]) {
-    for (const y of [-1, 1]) g.add(bolt((x * (w + RIM)) / 2, (y * (h + RIM)) / 2, front + 0.004));
-    g.add(rod(new THREE.Vector3((x * w) / 3, -h / 2 - RIM, 0), new THREE.Vector3((x * w) / 3, -h / 2 - RIM - 0.05, -0.01), 0.011, boltMat));
+/** Bends console point `p` around the pilot (see BEND), in place. */
+function bendPoint(p) {
+  const a = p.x / BEND, r = BEND - p.z;
+  return p.set(r * Math.sin(a), p.y, BEND - r * Math.cos(a));
+}
+
+function bend(geometry) {
+  const p = geometry.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    bendPoint(v.fromBufferAttribute(p, i));
+    p.setXYZ(i, v.x, v.y, v.z);
   }
+  return geometry;
+}
+
+/** Screen `s` set into the console's face: on a dark backing, inside a bolted frame standing out RIM_DEPTH. */
+function bezel(s) {
+  const g = new THREE.Group(), { w, h } = s;
+  g.add(new THREE.Mesh(new THREE.PlaneGeometry(w, h, 16, 1), s.mat).translateZ(0.006));
+  g.add(box(w + 2 * RIM, h + 2 * RIM, 0.004, trimMat));
+  for (const y of [-1, 1]) g.add(box(w + 2 * RIM, RIM, RIM_DEPTH, frameMat).translateY((y * (h + RIM)) / 2).translateZ(RIM_DEPTH / 2));
+  for (const x of [-1, 1]) g.add(box(RIM, h, RIM_DEPTH, frameMat).translateX((x * (w + RIM)) / 2).translateZ(RIM_DEPTH / 2));
+  for (const x of [-1, 1]) for (const y of [-1, 1]) g.add(bolt((x * (w + RIM)) / 2, (y * (h + RIM)) / 2, RIM_DEPTH + 0.004));
   return g;
 }
 
-/** The radar scope: a round screen in a deep, bolted bezel on a back plate, on posts to the dash. */
+/** The radar scope: a round screen set into the console's face, in a deep, bolted bezel. */
 function scope(s) {
-  const g = new THREE.Group(), r = s.w / 2, front = RIM_DEPTH - 0.01, facing = (mesh) => ((mesh.rotation.x = Math.PI / 2), mesh);
-  g.add(new THREE.Mesh(new THREE.CircleGeometry(r, 48), s.mat));
-  g.add(facing(new THREE.Mesh(new THREE.CylinderGeometry(r + RIM, r + RIM, 0.03, 40), trimMat)).translateY(-0.025));
-  g.add(facing(new THREE.Mesh(new THREE.CylinderGeometry(r + RIM, r + RIM, front, 40, 1, true), frameMat)).translateY(front / 2));
+  const g = new THREE.Group(), r = s.w / 2, front = RIM_DEPTH - 0.01;
+  g.add(new THREE.Mesh(new THREE.CircleGeometry(r, 48), s.mat).translateZ(0.006));
+  const wall = new THREE.Mesh(new THREE.CylinderGeometry(r + RIM, r + RIM, front, 40, 1, true), frameMat);
+  wall.rotation.x = Math.PI / 2;
+  g.add(wall.translateY(front / 2));
   g.add(new THREE.Mesh(new THREE.RingGeometry(r, r + RIM, 40), frameMat).translateZ(front));
   for (let k = 0; k < 8; k++) {
     const a = ((k + 0.5) / 8) * TAU;
     g.add(bolt(Math.cos(a) * (r + RIM / 2), Math.sin(a) * (r + RIM / 2), front + 0.004));
   }
-  for (const x of [-1, 1]) g.add(rod(new THREE.Vector3((x * r) / 2, -r * 0.8, -0.02), new THREE.Vector3((x * r) / 2, -r - RIM - 0.06, -0.03), 0.011, boltMat));
   return g;
 }
 
@@ -147,6 +156,10 @@ export class Cockpit {
     this.flash = new THREE.PointLight(0xffc27a, 0, 1.6, 2);
     this.flashLife = 0;
     this.scene.add(this.flash);
+    // The strongest lamps and flashes nearby, placed where they are relative to the eye. All stay in
+    // the scene (dark when unused): changing the light count would recompile the materials.
+    this.locals = Array.from({ length: LOCAL }, () => new THREE.PointLight(0xffffff, 0, 0, 2));
+    this.scene.add(...this.locals);
     this.sunBase = this.sun.intensity;
     this.shade = 0; // 0 in the open, 1 under cover from the sun
   }
@@ -181,38 +194,78 @@ export class Cockpit {
       this.frame.add(rod(at(0.15), at(0.45), 0.024, cableMat), rod(at(0.4), at(0.72), 0.011, boltMat));
       for (const t of [0.15, 0.72]) this.frame.add(strut(at(t).add(new THREE.Vector3(side * 0.05, 0, -0.03)), at(t), 0.03, trimMat));
     }
-    // The dash: a sloped console with a bolted rubber edge along the front, conduits clamped along
-    // it, toggle banks between the screens, and the three screens in their housings, the side pods
-    // turned toward the pilot.
+    // The dash: a sloped shelf with a bolted rubber front edge, and on it one console that wraps
+    // around the pilot: hull and fuel in the middle under a hood, the radar scope lower left,
+    // systems right, the heat lamp along its rolled rim, seams between, toggle banks at the seams'
+    // feet and conduits clamped along its foot.
     const dash = box(width, 0.5, 0.7, frameMat);
     dash.position.set(0, top - 0.25, z - 0.1);
     dash.rotation.x = 0.25;
     this.frame.add(dash);
-    // The dash's top falls from top + 0.08 at its back to top - 0.09 at its front edge (z + 0.3).
+    // The shelf's top falls from top + 0.08 at its back to top - 0.09 at its front edge (z + 0.3).
     const surface = (zz) => top + 0.079 - (0.173 * (zz - (z - 0.377))) / 0.677;
     this.frame.add(box(width, 0.04, 0.06, trimMat).translateY(top).translateZ(z + 0.24));
     for (let x = -halfW; x <= halfW; x += 0.2) this.frame.add(bolt(x, top, z + 0.272));
-    for (const [zz, r] of [[z + 0.07, 0.013], [z + 0.11, 0.009]]) {
-      const y = surface(zz) + r;
-      this.frame.add(rod(new THREE.Vector3(-width / 2, y, zz), new THREE.Vector3(width / 2, y, zz), r, cableMat));
-      for (let x = -halfW + 0.1; x <= halfW; x += 0.35) this.frame.add(box(0.025, 2.6 * r, 0.03, boltMat).translateX(x).translateY(y).translateZ(zz));
+    const panel = new THREE.Group(), flat = new THREE.Group(), foot = z - 0.02;
+    panel.position.set(0, surface(foot) - 0.01, foot);
+    panel.rotation.x = -TILT;
+    panel.updateMatrix();
+    const onPanel = (x, y, dz) => bendPoint(new THREE.Vector3(x, y, dz)).applyMatrix4(panel.matrix);
+    const S = THREE.MathUtils.smoothstep;
+    const edge = (x) => WING + (HUMP - WING) * (1 - S(Math.abs(x), SEAM - 0.03, SEAM + 0.03)) - (WING - 0.08) * S(Math.abs(x), 0.85, 1.15);
+    const face = new THREE.PlaneGeometry(2 * SPAN, 1, 156, 4), p = face.attributes.position;
+    for (let i = 0; i < p.count; i++) p.setY(i, (p.getY(i) + 0.5) * edge(p.getX(i)));
+    flat.add(new THREE.Mesh(face, frameMat));
+    const rim = (from, to, dy, dz) => {
+      const points = [];
+      for (let x = from; x <= to + 1e-6; x += 0.02) points.push(new THREE.Vector3(x, edge(x) + dy, dz));
+      return new THREE.CatmullRomCurve3(points);
+    };
+    flat.add(new THREE.Mesh(new THREE.TubeGeometry(rim(-SPAN, SPAN, 0, 0), 260, 0.02, 6), frameMat));
+    flat.add(new THREE.Mesh(new THREE.TubeGeometry(rim(-0.9, 0.9, 0.012, 0.014), 180, 0.006, 5), this.lampMat));
+    for (const side of [-1, 1]) flat.add(rod(new THREE.Vector3(side * SEAM, 0.01, 0.002), new THREE.Vector3(side * SEAM, edge(side * SEAM) - 0.02, 0.002), 0.005, trimMat));
+    for (let x = -1.2; x <= 1.2 + 1e-6; x += 0.15) flat.add(bolt(x, 0.015, 0.004));
+    for (const [name, s] of Object.entries(this.screens)) {
+      const [x, y] = SCREEN_AT[name];
+      flat.add((name === 'radar' ? scope(s) : bezel(s)).translateX(x).translateY(y));
+      this.glows[name].position.copy(onPanel(x, y, 0.14));
     }
-    for (const side of [-1, 1]) {
-      const x = side * 0.32, y = surface(z - 0.02);
-      this.frame.add(box(0.055, 0.012, 0.06, trimMat).translateX(x).translateY(y + 0.006).translateZ(z - 0.02));
-      for (const dx of [-0.017, 0, 0.017]) {
-        const lever = rod(new THREE.Vector3(x + dx, y + 0.012, z - 0.03), new THREE.Vector3(x + dx, y + 0.04, z - 0.015), 0.004, boltMat);
-        this.frame.add(lever, box(0.008, 0.006, 0.008, pipMat).translateX(x + dx).translateY(y + 0.014).translateZ(z + 0.003));
+    const [vw, vh] = SCREENS.vitals, vy = SCREEN_AT.vitals[1] + vh / 2 + RIM;
+    const hood = box(vw + 2 * RIM + 0.05, 0.012, 0.09, frameMat);
+    hood.position.set(0, vy + 0.008, 0.045);
+    hood.rotation.x = 0.25;
+    flat.add(hood);
+    for (const side of [-1, 1]) flat.add(box(0.012, 0.05, 0.09, frameMat).translateX(side * (vw / 2 + RIM + 0.02)).translateY(vy - 0.02).translateZ(0.045));
+    flat.updateMatrixWorld(true);
+    flat.traverse((o) => o.isMesh && panel.add(new THREE.Mesh(bend(o.geometry.applyMatrix4(o.matrixWorld)), o.material)));
+    this.frame.add(panel);
+    for (const [dz, r] of [[0.08, 0.013], [0.12, 0.009]]) {
+      const at = (x) => {
+        const pt = onPanel(x, 0, dz);
+        pt.y = surface(pt.z) + r;
+        return pt;
+      };
+      const points = [];
+      for (let x = -SPAN; x <= SPAN + 1e-6; x += 0.1) points.push(at(x));
+      this.frame.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points), 60, r, 8), cableMat));
+      for (let x = -1.05; x <= 1.05 + 1e-6; x += 0.35) {
+        const clamp = box(0.025, 2.6 * r, 0.03, boltMat);
+        clamp.position.copy(at(x));
+        clamp.rotation.y = -x / BEND;
+        this.frame.add(clamp);
       }
     }
-    for (const [name, s] of Object.entries(this.screens)) {
-      const x = SCREEN_X[name], round = name === 'radar';
-      const pod = round ? scope(s) : housing(s, name === 'vitals' ? this.lampMat : null);
-      pod.rotation.set(round ? -SCOPE_TILT : -0.2, -Math.sign(x) * POD_YAW, 0, 'YXZ'); // leaning back
-      pod.position.set(x, top + (round ? (s.h / 2 + RIM) * Math.cos(SCOPE_TILT) : s.h / 2 + RIM) + 0.01, z - 0.04);
-      this.frame.add(pod);
-      pod.updateMatrixWorld();
-      this.glows[name].position.set(0, 0, 0.14).applyMatrix4(pod.matrixWorld);
+    for (const side of [-1, 1]) {
+      const at = onPanel(side * SEAM, 0, 0.035), y = surface(at.z);
+      const bank = new THREE.Group();
+      bank.position.set(at.x, y, at.z);
+      bank.rotation.y = (-side * SEAM) / BEND;
+      bank.add(box(0.055, 0.012, 0.06, trimMat).translateY(0.006));
+      for (const dx of [-0.017, 0, 0.017]) {
+        bank.add(rod(new THREE.Vector3(dx, 0.012, -0.01), new THREE.Vector3(dx, 0.04, 0.005), 0.004, boltMat));
+        bank.add(box(0.008, 0.006, 0.008, pipMat).translateX(dx).translateY(0.014).translateZ(0.023));
+      }
+      this.frame.add(bank);
     }
     // One mesh per material: the cockpit draws every frame, so keep its draw calls few.
     this.frame.updateMatrixWorld(true);
@@ -300,6 +353,31 @@ export class Cockpit {
   }
 
   /**
+   * Lights the cockpit with the strongest of `lights` at the eye of `worldCamera`: each { at, rgb,
+   * radius, power } in world space, falling off as arena.js bakes them, unless `clear(at)` says a
+   * wall stands between.
+   */
+  local(worldCamera, lights, clear) {
+    const eye = worldCamera.position;
+    const near = lights
+      .map((l) => ({ l, d: l.at.distanceTo(eye) }))
+      .map((c) => ({ ...c, k: c.d < c.l.radius ? Math.min(c.l.power * (1 - c.d / c.l.radius) ** 2, 2.5) : 0 }))
+      .filter((c) => c.k > 0.02)
+      .sort((a, b) => b.k - a.k);
+    let n = 0;
+    for (const { l, d, k } of near) {
+      if (n === LOCAL) break;
+      if (!clear(l.at)) continue;
+      // Irradiance pi * k here makes Lambert metal glow k times its color, as the arena's baked light does.
+      const light = this.locals[n++];
+      worldCamera.worldToLocal(light.position.copy(l.at));
+      light.color.copy(l.rgb);
+      light.intensity = Math.PI * k * d * d;
+    }
+    for (; n < LOCAL; n++) this.locals[n].intensity = 0;
+  }
+
+  /**
    * Follows the world camera's aspect and the sun, eases into shade when `shaded` (the sun blocked),
    * and eases recoil and the last shot's flash back. `fov` is the base field of view: the canopy
    * ignores the boost kick so it doesn't rebuild while it eases.
@@ -364,7 +442,8 @@ function bar(g, x, y, w, h, fill, color) {
 
 /**
  * Vitals: the fuel tube on the left (it drains with boost, hover and dodges; the tick is what a boost
- * needs), the hull number and bar, a red wash when hit, and lamps, or the repair cycle's state.
+ * needs), the hull number and bar in the middle, a red wash when hit, and lamps down the right, or
+ * the repair cycle's state under the hull.
  */
 function vitalsScreen(s, f) {
   const [g, W, H] = blank(s);
@@ -372,7 +451,7 @@ function vitalsScreen(s, f) {
     g.fillStyle = `rgba(255,60,40,${0.3 * f.hurt})`;
     g.fillRect(0, 0, W, H);
   }
-  const tx = 24, ty = 24, tw = 46, th = H - 48, fill = clamp01(f.fuel), short = f.fuel < f.boostMin;
+  const tx = 22, ty = 20, tw = 44, th = H - 40, fill = clamp01(f.fuel), short = f.fuel < f.boostMin;
   g.fillStyle = 'rgba(127,216,255,0.08)';
   g.fillRect(tx, ty, tw, th);
   g.fillStyle = short ? WARN : FUEL;
@@ -386,32 +465,31 @@ function vitalsScreen(s, f) {
   g.moveTo(tx - 8, tick);
   g.lineTo(tx + tw + 8, tick);
   g.stroke();
-  const low = f.health / f.healthMax < 0.3, color = low ? WARN : AMBER, mid = (96 + W) / 2;
+  const low = f.health / f.healthMax < 0.3, color = low ? WARN : AMBER, left = 88, right = 372, mid = (left + right) / 2;
   g.textAlign = 'center';
   g.fillStyle = DIM;
-  g.font = font(28);
-  g.fillText(`HULL · ${f.className.toUpperCase()}`, mid, 18);
+  g.font = font(24);
+  g.fillText(`HULL · ${f.className.toUpperCase()}`, mid, 16);
   g.fillStyle = color;
-  g.font = font(104, 'bold');
-  g.fillText(String(Math.ceil(f.health)), mid, 48);
-  bar(g, 96, 158, W - 120, 18, f.health / f.healthMax, color);
+  g.font = font(112, 'bold');
+  g.fillText(String(Math.ceil(f.health)), mid, 40);
+  bar(g, left, 150, right - left, 16, f.health / f.healthMax, color);
   const status = f.standing ? 'RESTARTING' : f.repair >= 1 ? 'REPAIRING' : f.repair > 0 ? 'SHUTTING DOWN' : '';
   if (status) {
     g.fillStyle = REPAIR;
-    g.font = font(34, 'bold');
-    g.fillText(status, mid, H - 66);
-    return;
+    g.font = font(28, 'bold');
+    g.fillText(status, mid, 178);
   }
   g.textAlign = 'left';
   [['DODGE', f.dodge >= 1, AMBER], ['BOOST', f.boosting, FUEL], ['JAM', f.jammed, WARN]].forEach(([name, on, lit], i) => {
-    const x = 100 + i * 136, y = H - 66;
+    const x = 394, y = 30 + i * 62;
     g.fillStyle = on ? lit : FAINT;
     g.beginPath();
-    g.arc(x + 11, y + 15, 10, 0, TAU);
+    g.arc(x + 9, y + 12, 9, 0, TAU);
     g.fill();
     g.fillStyle = on ? lit : DIM;
-    g.font = font(28);
-    g.fillText(name, x + 28, y);
+    g.font = font(24);
+    g.fillText(name, x + 24, y);
   });
 }
 
