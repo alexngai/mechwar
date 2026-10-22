@@ -454,7 +454,7 @@ export function buildArena(scene, map) {
   if (padGlow.length) {
     // Jump pads breathe: their glow swells and fades on a sine, once every second and a half or so.
     const pads = new THREE.Mesh(mergeGeometries(padGlow), hot(new THREE.MeshBasicMaterial({ vertexColors: true })));
-    pads.onBeforeRender = () => pads.material.color.setScalar(0.72 + 0.28 * Math.sin(performance.now() / 250));
+    pads.onBeforeRender = () => pads.material.color.setScalar(0.86 + 0.12 * Math.sin(performance.now() / 250));
     meshes.push(pads);
   }
   for (const p of glow.lamps) {
