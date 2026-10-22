@@ -7,7 +7,7 @@
 // (maps/kit.mjs) adds the 180-degree twin. Metrics as Riftline's: 8 m terraces, 6.5 m+ under
 // every deck, ramps near 24 degrees. A side "facing" d degrees has its outward normal d degrees
 // clockwise from north; on it, p runs outward from the center and s runs clockwise along it.
-import { box, lamp, once, pad, point, r3, railing, ramp, sign, turned, write } from './kit.mjs';
+import { box, branch, lamp, once, pad, point, r3, railing, ramp, sign, turned, write } from './kit.mjs';
 
 const BASE = -29; // bottom of every rock mass
 const CYAN = '#3de0ff';
@@ -113,8 +113,14 @@ turned([-88, 4, 20], [5, 4, 4], 10, 'rock');
 box([58, 0, 56], [72, 7, 68], 'panel'); // pump house, roof by ramp
 ramp([65, 0, 84], [65, 7, 68], 7);
 railing([58, 7, 56], [72, 7, 56]);
-box([-80, 0, 70], [-78, 24, 72], 'metal'); // cable pylon
+box([-80, 0, 70], [-78, 24, 72], 'metal'); // cable pylon, its arms braced out both ways
 lamp([-79, 24, 71]);
+branch([-78, 18, 71], [1, 0], 5, { w: 1.2, t: 0.5, lit: true });
+branch([-80, 18, 71], [-1, 0], 5, { w: 1.2, t: 0.5, lit: true });
+// A platform cantilevered off the north rim over the pit, level with it: a lookout over the
+// bridges (7 m clear over the -7 terrace below). Its twin hangs off the south rim.
+branch([-18, 0, RIM], [0, -1], 8, { w: 4, deck: 5, lit: true });
+point([-18, 0, 43]);
 box([-30.5, 0, 72], [-20, 9, 73], 'concrete'); // base front wall, gates at x +-15
 box([-10, 0, 72], [10, 9, 73], 'concrete');
 box([20, 0, 72], [30.5, 9, 73], 'concrete');
