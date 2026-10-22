@@ -23,6 +23,8 @@ fn mech_state(m: &Mech) -> Vec<f32> {
         f32::from(m.grenades), m.grenade_wait, f32::from(m.emps), m.emp_wait, m.jammed, b(m.threw), b(m.pulsed),
         m.spin, m.charge,
         m.bloom, m.fire_wait,
+        f32::from(m.lock), m.lock_time,
+        b(m.beaming), m.beam_end.x, m.beam_end.y, m.beam_end.z,
     ]
 }
 
@@ -261,7 +263,8 @@ impl WasmNetClient {
     /// Six floats per event since the last call: kind, a, b, x, y, z.
     /// Shot (kind 0): a = shooter, b = hit id or -1, xyz = where it stopped. Kill (kind 1): a = killer,
     /// b = victim. Blast (kind 2): a = owner, b = blast radius, xyz = where. Splash hit (kind 3): a = attacker,
-    /// b = victim. EMP (kind 4): a = owner, b = bitmask of the ids it jammed, xyz = where.
+    /// b = victim. EMP (kind 4): a = owner, b = bitmask of the ids it jammed, xyz = where. Beam (kind 5):
+    /// a = owner, b = id it's on or -1, xyz = where it stops.
     pub fn take_events(&mut self) -> Vec<f32> {
         let mut out = Vec::new();
         for e in std::mem::take(&mut self.0.events) {
@@ -271,6 +274,7 @@ impl WasmNetClient {
                 }
                 Event::Kill { killer, victim } => out.extend([1.0, f32::from(killer), f32::from(victim), 0.0, 0.0, 0.0]),
                 Event::Pulse { owner, pos, hits } => out.extend([4.0, f32::from(owner), f32::from(hits), pos.x, pos.y, pos.z]),
+                Event::Beam { owner, end, hit } => out.extend([5.0, f32::from(owner), hit.map_or(-1.0, f32::from), end.x, end.y, end.z]),
                 // The client turns these into the blasts and hits below.
                 Event::Launch(_) | Event::Blast { .. } => {}
             }

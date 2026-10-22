@@ -105,6 +105,23 @@ export class Hud {
       g.fillText(name, t.x, t.y - s - 10 * u);
       g.textBaseline = 'top';
       g.fillText(`${Math.round(t.dist)} m${t.status ? ` · ${t.status}` : ''}`, t.x, t.y + s + 4 * u);
+      // Lock-on: a diamond closing in as the lock builds, white and labeled once it holds.
+      if (f.lock?.unit === t.unit) {
+        const locked = f.lock.progress >= 1, d = s * (1.3 + 1.6 * (1 - f.lock.progress));
+        g.strokeStyle = g.fillStyle = locked ? '#ffffff' : AMBER;
+        g.lineWidth = 2 * u;
+        g.beginPath();
+        g.moveTo(t.x, t.y - d);
+        g.lineTo(t.x + d, t.y);
+        g.lineTo(t.x, t.y + d);
+        g.lineTo(t.x - d, t.y);
+        g.closePath();
+        g.stroke();
+        if (locked) {
+          g.font = font(11, 'bold');
+          g.fillText('LOCKED', t.x, t.y + d + 4 * u);
+        }
+      }
       if (t.focus) {
         const x = t.x + s + 12 * u, y = t.y - s;
         const lines = [[name, 13, 'bold'], [t.label.toUpperCase(), 11, ''], [`HULL ${t.hp}/${t.hpMax}`, 11, ''], [`${Math.round(t.dist)} m`, 11, '']];

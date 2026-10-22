@@ -34,6 +34,8 @@ pub struct Projectile {
     pub loadout: Loadout,
     /// The shot's charge, 0-1 (see `tuning_for`).
     pub charge: f32,
+    /// The player a homing shell is locked on (their id + 1; 0 for none): see `home`.
+    pub target: u8,
     pub pos: Vector,
     pub vel: Vector,
     pub age: f32,
@@ -56,13 +58,20 @@ struct Ballistics {
     fuse: f32,
     damage: f32,
     radius: f32,
+    /// Mines stick where they land, and burst for an enemy within `trigger`.
+    stick: bool,
+    trigger: f32,
 }
 
 fn ballistics(t: &Tuning, primary: bool) -> Ballistics {
     if primary {
-        Ballistics { gravity: t.shot_gravity, bounce: 0.0, fuse: t.weapon_range / t.shot_speed.max(1.0), damage: t.shot_damage, radius: t.shot_radius }
+        let fuse = t.weapon_range / t.shot_speed.max(1.0);
+        Ballistics { gravity: t.shot_gravity, bounce: 0.0, fuse, damage: t.shot_damage, radius: t.shot_radius, stick: false, trigger: 0.0 }
     } else {
-        Ballistics { gravity: t.alt_gravity, bounce: t.alt_bounce, fuse: t.alt_fuse, damage: t.alt_damage, radius: t.alt_radius }
+        Ballistics {
+            gravity: t.alt_gravity, bounce: t.alt_bounce, fuse: t.alt_fuse, damage: t.alt_damage, radius: t.alt_radius,
+            stick: t.alt_stick > 0.5, trigger: t.alt_trigger,
+        }
     }
 }
 
@@ -76,7 +85,8 @@ pub fn volley(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Vec<Projectile> {
         .map(|n| {
             let fan = (f32::from(n) - f32::from(count - 1) * 0.5) * t.alt_spread_deg.to_radians();
             let dir = Rotation::from_rotation_y(m.yaw + fan) * Rotation::from_rotation_x(pitch) * Vector::NEG_Z;
-            Projectile { owner, seq, n, primary: false, class: m.class, loadout: m.loadout, charge: 0.0, pos: eye, vel: dir * t.alt_speed, age: 0.0 }
+            let target = if t.alt_lock_time > 0.0 && m.lock_time >= t.alt_lock_time { m.lock } else { 0 };
+            Projectile { owner, seq, n, primary: false, class: m.class, loadout: m.loadout, charge: m.alt_charge, target, pos: eye, vel: dir * t.alt_speed, age: 0.0 }
         })
         .collect()
 }
@@ -84,24 +94,40 @@ pub fn volley(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Vec<Projectile> {
 /// Grenades carry this volley index, clear of any secondary volley's, so a grenade and a volley
 /// launched on the same input keep distinct ids.
 pub const GRENADE: u8 = u8::MAX;
+/// A splitting shell's bomblets carry volley indices from here up (below GRENADE).
+pub const BOMBLET: u8 = 100;
+/// Seconds a bomblet falls before bursting, if it hasn't hit anything.
+const BOMBLET_FUSE: f32 = 2.0;
 
 /// The grenade `m` threw this tick: a one-shell volley on the grenade's ballistics.
 pub fn grenade(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Projectile {
-    Projectile { n: GRENADE, ..volley(&t.grenade(), m, owner, seq)[0] }
+    Projectile { n: GRENADE, charge: 0.0, target: 0, ..volley(&t.grenade(), m, owner, seq)[0] }
 }
 
 /// The tuning projectile `p` flies and bursts with, given its owner's tuning `t`: grenades swap
-/// their ballistics into the secondary's fields, and a charged shell hits harder and wider.
+/// their ballistics into the secondary's fields, and a charged shell (a primary's charge, or a
+/// heat-fed secondary's) hits harder and wider.
 pub fn tuning_for<'a>(t: &'a Tuning, p: &Projectile) -> Cow<'a, Tuning> {
     if p.n == GRENADE {
         return Cow::Owned(t.grenade());
+    }
+    if p.n >= BOMBLET && !p.primary {
+        let mut b = t.clone();
+        (b.alt_damage, b.alt_radius, b.alt_fuse) = (t.alt_split_damage, t.alt_split_radius, BOMBLET_FUSE);
+        (b.alt_bounce, b.alt_stick, b.alt_trigger, b.alt_split, b.alt_turn) = (0.0, 0.0, 0.0, 0.0, 0.0);
+        return Cow::Owned(b);
     }
     if p.charge <= 0.0 {
         return Cow::Borrowed(t);
     }
     let mut charged = t.clone();
-    charged.shot_damage *= weapon::power(t, p.charge);
-    charged.shot_radius *= 1.0 + (t.charge_radius - 1.0) * p.charge;
+    if p.primary {
+        charged.shot_damage *= weapon::power(t, p.charge);
+        charged.shot_radius *= 1.0 + (t.charge_radius - 1.0) * p.charge;
+    } else {
+        charged.alt_damage *= 1.0 + (t.alt_charge_damage - 1.0) * p.charge;
+        charged.alt_radius *= 1.0 + (t.alt_charge_radius - 1.0) * p.charge;
+    }
     Cow::Owned(charged)
 }
 
@@ -112,7 +138,88 @@ pub fn radius(t: &Tuning, p: &Projectile) -> f32 {
 
 /// Whether `p` is a secondary shell (not a grenade or primary fire) its owner can burst yet.
 pub fn armed(p: &Projectile) -> bool {
-    !p.primary && p.n != GRENADE && p.age >= ARM - DT * 0.5
+    !p.primary && p.n < BOMBLET && p.age >= ARM - DT * 0.5
+}
+
+/// The bomblets shell `p` (tuned by its owner's `t`) scatters bursting at `at`: none unless its
+/// weapon splits and it burst in the air, by its fuse or a press rather than on contact.
+pub fn split(t: &Tuning, p: &Projectile, at: Vector) -> Vec<Projectile> {
+    let fused = p.age >= ballistics(&tuning_for(t, p), p.primary).fuse - DT * 0.5;
+    if p.primary || p.n >= BOMBLET || t.alt_split < 1.0 || !fused {
+        return Vec::new();
+    }
+    let count = t.alt_split.min(20.0) as u8;
+    (0..count)
+        .map(|k| {
+            let out = Rotation::from_rotation_y(std::f32::consts::TAU * f32::from(k) / f32::from(count)) * Vector::X * t.alt_split_speed;
+            let vel = if p.vel.is_finite() { p.vel * 0.2 } else { Vector::ZERO } + out + Vector::NEG_Y * 2.0;
+            Projectile { n: BOMBLET + k, charge: 0.0, target: 0, pos: at, vel, age: 0.0, ..*p }
+        })
+        .collect()
+}
+
+/// Before `owner` launches a volley tuned by `t`, bursts its oldest live secondary shells beyond
+/// `alt_max` (as `detonate` does), so a mine layer keeps at most that many down.
+pub fn cap<'a>(t: &Tuning, owner: u8, shells: impl IntoIterator<Item = &'a mut Projectile>) {
+    let mut own: Vec<_> = shells.into_iter().filter(|p| p.owner == owner && !p.primary && p.n < BOMBLET && p.age.is_finite()).collect();
+    let excess = (own.len() + t.alt_count.max(1.0) as usize).saturating_sub(t.alt_max.max(1.0) as usize);
+    for p in own.iter_mut().take(excess) {
+        p.age = f32::INFINITY;
+    }
+}
+
+/// Lock-on, after `m`'s tick: while its lock-on launcher (`t.alt_lock_time` > 0) is `held`, the
+/// enemy nearest its aim within the cone, in sight and in reach (of `chests`, by player id), builds
+/// lock; anything else starts it over.
+pub fn track(arena: &Arena, t: &Tuning, m: &mut Mech, held: bool, chests: &[(u8, Vector)]) {
+    if t.alt_lock_time <= 0.0 || !held || m.health <= 0.0 {
+        (m.lock, m.lock_time) = (0, 0.0);
+        return;
+    }
+    let ray = aim_ray(t, m);
+    let (reach, cone) = (t.alt_speed * t.alt_fuse, t.alt_lock_cone.to_radians());
+    let nearest = chests
+        .iter()
+        .filter_map(|&(id, chest)| {
+            let to = chest - ray.origin;
+            let (dist, angle) = (to.length(), ray.dir.angle_between(to));
+            let clear = || arena.cast_ray(&Ray::new(ray.origin, to / dist), dist).is_none();
+            (dist <= reach && angle <= cone && clear()).then_some((id, angle))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map_or(0, |(id, _)| id + 1);
+    if nearest != 0 && nearest == m.lock {
+        m.lock_time += DT;
+    } else {
+        (m.lock, m.lock_time) = (nearest, 0.0);
+    }
+}
+
+/// Turns homing shell `p` (tuned by `t`) toward `goal`, by at most this tick's `alt_turn`.
+pub fn home(t: &Tuning, p: &mut Projectile, goal: Vector) {
+    let (speed, want) = (p.vel.length(), (goal - p.pos).normalize_or_zero());
+    if p.primary || t.alt_turn <= 0.0 || speed < 1e-3 || want == Vector::ZERO {
+        return;
+    }
+    let have = p.vel / speed;
+    let axis = have.cross(want).normalize_or_zero();
+    if axis != Vector::ZERO {
+        p.vel = Rotation::from_axis_angle(axis, have.angle_between(want).min(t.alt_turn.to_radians() * DT)) * have * speed;
+    }
+}
+
+/// Whether mine `p` (tuned by `t`), stuck and armed, has any of `mechs` within its trigger reach.
+pub fn triggered<'a>(t: &Tuning, p: &Projectile, mechs: impl IntoIterator<Item = (&'a Tuning, &'a Mech)>) -> bool {
+    let b = ballistics(t, p.primary);
+    if b.trigger <= 0.0 || p.vel != Vector::ZERO || p.age < ARM {
+        return false;
+    }
+    mechs.into_iter().any(|(tm, m)| {
+        let (c, center) = hit_shape(tm, m);
+        let h = c.half_height();
+        let axis = Vector::new(center.x, p.pos.y.clamp(center.y - h, center.y + h), center.z);
+        axis.distance(p.pos) - c.radius <= b.trigger
+    })
 }
 
 /// A fresh secondary press by `owner` (`Mech::alt_pressed`): each of its armed shells bursts at
@@ -124,12 +231,15 @@ pub fn detonate<'a>(owner: u8, shells: impl IntoIterator<Item = &'a mut Projecti
 }
 
 /// Advances `p` one tick: gravity, then this tick's path against the arena and `hit_mech`, which
-/// gives how far along a ray (up to a limit) the nearest mech stops it. Off the arena it bounces
-/// if its weapon bounces, else bursts; it always bursts on a mech or once its fuse runs out.
-/// Returns where it burst.
+/// gives how far along a ray (up to a limit) the nearest mech stops it. Off the arena it sticks if
+/// it's a mine (and stays put from then on), bounces if its weapon bounces, else bursts; it always
+/// bursts on a mech or once its fuse runs out. Returns where it burst.
 pub fn fly(arena: &Arena, t: &Tuning, p: &mut Projectile, mut hit_mech: impl FnMut(&Ray, f32) -> Option<f32>) -> Option<Vector> {
     let b = ballistics(t, p.primary);
     p.age += DT;
+    if b.stick && p.vel == Vector::ZERO {
+        return (p.age >= b.fuse - DT * 0.5).then_some(p.pos);
+    }
     p.vel.y -= b.gravity * DT;
     let step = p.vel * DT;
     let len = step.length();
@@ -140,6 +250,10 @@ pub fn fly(arena: &Arena, t: &Tuning, p: &mut Projectile, mut hit_mech: impl FnM
             return Some(ray.point_at((toi - STANDOFF).max(0.0)));
         }
         match wall {
+            Some((toi, normal)) if b.stick => {
+                p.pos = ray.point_at(toi) + normal * STANDOFF;
+                p.vel = Vector::ZERO;
+            }
             Some((toi, _)) if b.bounce <= 0.0 => return Some(ray.point_at((toi - STANDOFF).max(0.0))),
             Some((toi, normal)) => {
                 // The rest of this tick's travel is dropped; the shell leaves the surface next tick.

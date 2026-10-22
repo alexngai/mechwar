@@ -121,6 +121,8 @@ pub enum Event {
     Blast { owner: u8, seq: u32, n: u8, primary: bool, class: MechClass, loadout: Loadout, charge: f32, pos: Vector, hits: u16 },
     /// An EMP went off at `pos`. `hits` has bit `id` set for each player it jammed.
     Pulse { owner: u8, pos: Vector, hits: u16 },
+    /// A held beam this tick, from `owner`'s launcher to `end`, on mech `hit` if any.
+    Beam { owner: u8, end: Vector, hit: Option<u8> },
 }
 
 pub fn encode<T: Serialize>(msg: &T) -> Vec<u8> {

@@ -2,10 +2,25 @@
 //! with range, and projectile primaries (`shot_speed > 0`) flown by `projectile.rs`.
 //! Deterministic from (mech state, input seq), so the client predicts exactly what the server fires.
 
-use rapier3d::prelude::{Ray, Rotation};
+use rapier3d::parry::query::RayCast;
+use rapier3d::prelude::{Pose, Ray, Rotation};
 
 use crate::projectile::Projectile;
-use crate::{Mech, Tuning, Vector, aim_ray};
+use crate::{Arena, Mech, Tuning, Vector, aim_ray, hit_shape};
+
+/// Where a held beam (`alt_beam`) stops, from the eye along the aim: the first wall, or the
+/// first of `mechs` (id, tuning, mech) in its way, whose id comes back too.
+pub fn beam<'a>(arena: &Arena, t: &Tuning, m: &Mech, mechs: impl IntoIterator<Item = (u8, &'a Tuning, &'a Mech)>) -> (Vector, Option<u8>) {
+    let ray = aim_ray(t, m);
+    let (mut best, mut hit) = (arena.cast_ray(&ray, t.alt_beam).unwrap_or(t.alt_beam), None);
+    for (id, tq, q) in mechs {
+        let (shape, center) = hit_shape(tq, q);
+        if let Some(toi) = shape.cast_ray(&Pose::from_translation(center), &ray, best, true) {
+            (best, hit) = (toi, Some(id));
+        }
+    }
+    (ray.point_at(best), hit)
+}
 
 /// The rays this tick's shot fires from the eye: `pellets` of them, each the aim offset by a
 /// seeded point in a cone of `spread_deg + m.bloom`. Uses only + * sqrt and glam's (libm)
@@ -39,7 +54,7 @@ pub fn volley(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Vec<Projectile> {
         .iter()
         .enumerate()
         .map(|(n, ray)| Projectile {
-            owner, seq, n: n as u8, primary: true, class: m.class, loadout: m.loadout, charge: m.shot_charge,
+            owner, seq, n: n as u8, primary: true, class: m.class, loadout: m.loadout, charge: m.shot_charge, target: 0,
             pos: ray.origin, vel: ray.dir * speed, age: 0.0,
         })
         .collect()

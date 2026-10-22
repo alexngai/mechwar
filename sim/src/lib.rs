@@ -133,6 +133,37 @@ pub struct Tuning {
     pub alt_fuse: f32,
     pub alt_damage: f32,
     pub alt_radius: f32,
+    /// A heat-fed launcher spends this share of the mech's heat on each shell (and fires even
+    /// overheated); the heat spent, as a share of `heat_max`, is the shell's charge, which scales
+    /// its damage and radius up to `alt_charge_damage` and `alt_charge_radius` times.
+    pub alt_heat_fed: f32,
+    pub alt_charge_damage: f32,
+    pub alt_charge_radius: f32,
+    /// Mines: shells that stick where they land (`alt_stick` 1), burst when an enemy comes within
+    /// `alt_trigger`, and at most `alt_max` of a mech's live at once (the oldest burst first).
+    pub alt_stick: f32,
+    pub alt_trigger: f32,
+    pub alt_max: f32,
+    /// `alt_release` 1: the secondary fires when its trigger is let go, not pressed. Held, a
+    /// lock-on launcher (`alt_lock_time` > 0) locks the enemy nearest its aim within
+    /// `alt_lock_cone` degrees once it's held there that long, and its shells home on a locked
+    /// target, turning up to `alt_turn` degrees a second.
+    pub alt_release: f32,
+    pub alt_lock_time: f32,
+    pub alt_lock_cone: f32,
+    pub alt_turn: f32,
+    /// A splitting shell bursting in the air (its fuse, or a press) scatters `alt_split` bomblets
+    /// in a ring at `alt_split_speed`, each bursting on contact for `alt_split_damage` over
+    /// `alt_split_radius`.
+    pub alt_split: f32,
+    pub alt_split_damage: f32,
+    pub alt_split_radius: f32,
+    pub alt_split_speed: f32,
+    /// A beam secondary (`alt_beam` > 0, its reach in m) launches nothing: held, it runs from the
+    /// eye along the aim to the first mech or wall, mending a teammate `alt_beam_heal` hp/s or
+    /// burning an enemy `alt_damage` hp/s, for `alt_heat` heat/s.
+    pub alt_beam: f32,
+    pub alt_beam_heal: f32,
 
     /// Stop-to-repair: shut down for `repair_windup`, then heal at `repair_rate`; once it ends,
     /// still shut down for `repair_standup` while standing back up.
@@ -294,6 +325,11 @@ pub struct Mech {
     pub burst_left: u8,
     pub charge: f32,
     pub shot_charge: f32,
+    /// The charge the last secondary launched with (heat-fed launchers).
+    pub alt_charge: f32,
+    /// Lock-on: the enemy being locked (its id + 1; 0 for none), and for how long.
+    pub lock: u8,
+    pub lock_time: f32,
     /// Where the aim ray from the eye lands (for the crosshair).
     pub aim_point: Vector,
     /// Set on ticks a shot fired.
@@ -318,6 +354,10 @@ pub struct Mech {
     /// Set on ticks a grenade was thrown, and an EMP went off.
     pub threw: bool,
     pub pulsed: bool,
+    /// Holding a beam secondary on, and where the beam stopped (set by whoever knows the mechs:
+    /// `weapon::beam`).
+    pub beaming: bool,
+    pub beam_end: Vector,
     /// Riding a jump pad's arc: no steering or boost until it lands, or hovers or dodges out.
     pub pad_arc: bool,
 }
@@ -458,10 +498,14 @@ impl Sim {
             projectile::detonate(0, &mut self.projectiles);
         }
         if self.mech.launched {
+            projectile::cap(t, 0, &mut self.projectiles);
             self.projectiles.extend(projectile::volley(t, &self.mech, 0, self.seq));
         }
         if self.mech.threw {
             self.projectiles.push(projectile::grenade(t, &self.mech, 0, self.seq));
+        }
+        if self.mech.beaming {
+            self.mech.beam_end = weapon::beam(&self.arena, t, &self.mech, []).0;
         }
         if self.mech.shot && t.shot_speed > 0.0 {
             self.projectiles.extend(weapon::volley(t, &self.mech, 0, self.seq));
@@ -469,17 +513,19 @@ impl Sim {
             let arena = &self.arena;
             self.shots.extend(weapon::pellets(t, &self.mech, self.seq).iter().map(|r| r.point_at(arena.cast_ray(r, t.weapon_range).unwrap_or(t.weapon_range))));
         }
-        let (arena, blasts) = (&self.arena, &mut self.blasts);
+        let (arena, blasts, mut bomblets) = (&self.arena, &mut self.blasts, Vec::new());
         self.projectiles.retain_mut(|p| {
             let radius = projectile::radius(t, p);
             match projectile::fly(arena, &projectile::tuning_for(t, p), p, |_, _| None) {
                 Some(at) => {
                     blasts.push((radius, at));
+                    bomblets.extend(projectile::split(t, p, at));
                     false
                 }
                 None => true,
             }
         });
+        self.projectiles.extend(bomblets);
     }
 
     pub fn arena(&self) -> &Arena {
@@ -499,6 +545,7 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     m.alt_pressed = false;
     m.threw = false;
     m.pulsed = false;
+    m.beaming = false;
     if m.health <= 0.0 {
         return;
     }
@@ -728,8 +775,14 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
         // A burst, once started, fires out whether the trigger's held or not.
         m.shot = (input.fire || m.burst_left > 0) && ready;
     }
-    m.launched = input.alt_fire && !m.overheated && m.alt_wait <= 0.0;
-    m.alt_pressed = input.alt_fire && !m.alt_held;
+    // A heat-fed launcher fires even overheated: it spends heat rather than making it.
+    // Most secondaries fire on the press; a release-fired one (a lock-on launcher) when let go.
+    let pulled = if t.alt_release > 0.5 { !input.alt_fire && m.alt_held } else { input.alt_fire };
+    let beam = t.alt_beam > 0.0;
+    m.launched = !beam && pulled && (t.alt_heat_fed > 0.0 || !m.overheated) && m.alt_wait <= 0.0;
+    m.beaming = beam && input.alt_fire && !m.overheated;
+    // Mines go off by themselves: a press lays more rather than bursting those down.
+    m.alt_pressed = input.alt_fire && !m.alt_held && t.alt_stick < 0.5 && t.alt_release < 0.5 && !beam;
     m.alt_held = input.alt_fire;
     if m.shot {
         (m.shot_charge, m.charge) = (m.charge, 0.0);
@@ -750,15 +803,20 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     }
     if m.launched {
         m.alt_wait = t.alt_cooldown;
-        m.heat += t.alt_heat;
+        let spent = m.heat * t.alt_heat_fed;
+        m.alt_charge = spent / t.heat_max.max(1.0);
+        m.heat += t.alt_heat - spent;
     }
-    if (m.shot || m.launched) && m.heat >= t.heat_max {
+    if m.beaming {
+        m.heat += t.alt_heat * DT;
+    }
+    if (m.shot || m.launched || m.beaming) && m.heat >= t.heat_max {
         m.heat = t.heat_max;
         m.overheated = true;
     }
     // Heat sheds once the trigger's let go (holding it counts as firing, between shots too), and
     // faster the cooler it runs, so short bursts pay.
-    if m.shot || m.launched || (input.fire && !m.overheated) {
+    if m.shot || m.launched || m.beaming || (input.fire && !m.overheated) {
         m.heat_wait = t.heat_decay_delay;
     } else {
         m.heat_wait = (m.heat_wait - DT).max(0.0);
@@ -903,6 +961,94 @@ mod tests {
     /// The ticks, of the next `ticks`, that `input` fires the primary on.
     fn shots(sim: &mut Sim, input: Input, ticks: usize) -> Vec<usize> {
         (0..ticks).filter(|_| (sim.step(&input), sim.mech.shot).1).collect()
+    }
+
+    #[test]
+    fn heat_fed_shells_spend_heat_for_power_even_overheated() {
+        let mut sim = weapon_sim(|t| (t.alt_heat_fed, t.alt_heat, t.alt_charge_damage, t.alt_charge_radius) = (1.0, 0.0, 5.0, 3.0));
+        let t = sim.tuning.clone();
+        (sim.mech.heat, sim.mech.overheated) = (t.heat_max, true);
+        sim.step(&Input { alt_fire: true, ..Input::default() });
+        assert!(sim.mech.launched && sim.mech.heat == 0.0 && !sim.mech.overheated, "heat {}, overheated {}", sim.mech.heat, sim.mech.overheated);
+        let full = projectile::tuning_for(&t, sim.projectiles.last().expect("launched"));
+        assert!((full.alt_damage - 5.0 * t.alt_damage).abs() < 1e-3 && (full.alt_radius - 3.0 * t.alt_radius).abs() < 1e-3);
+    }
+
+    #[test]
+    fn mines_stick_go_off_near_enemies_and_cap() {
+        let mut sim = weapon_sim(|t| {
+            (t.alt_stick, t.alt_trigger, t.alt_max, t.alt_fuse, t.alt_count, t.alt_cooldown, t.alt_heat) = (1.0, 3.0, 2.0, 20.0, 1.0, 0.1, 0.0);
+            (t.alt_speed, t.alt_gravity, t.alt_loft_deg, t.alt_bounce) = (30.0, 18.0, 0.0, 0.0);
+        });
+        let down = Input { pitch: -0.8, ..Input::default() };
+        let lay = Input { alt_fire: true, ..down };
+        sim.step(&lay);
+        run(&mut sim, down, 30);
+        let mine = sim.projectiles[0];
+        assert_eq!(mine.vel, Vector::ZERO, "didn't stick");
+        run(&mut sim, down, 30);
+        assert_eq!(sim.projectiles[0].pos, mine.pos, "moved after sticking");
+        let t = sim.tuning.clone();
+        let near = Mech { pos: mine.pos + Vector::X * 2.0, ..spawn_mech(&t, Vector::ZERO) };
+        let far = Mech { pos: mine.pos + Vector::X * 20.0, ..near };
+        assert!(projectile::triggered(&t, &mine, [(&t, &near)]) && !projectile::triggered(&t, &mine, [(&t, &far)]));
+        // Laying more doesn't set off those down, but past the cap of two the oldest goes.
+        for _ in 0..2 {
+            sim.step(&lay);
+            run(&mut sim, down, 30);
+        }
+        assert_eq!(sim.projectiles.len(), 2);
+        assert!(sim.projectiles.iter().all(|p| p.seq != mine.seq), "the oldest mine is still down");
+    }
+
+    #[test]
+    fn release_fired_secondaries_fire_when_let_go() {
+        let mut sim = weapon_sim(|t| (t.alt_release, t.alt_heat) = (1.0, 0.0));
+        sim.step(&Input { alt_fire: true, ..Input::default() });
+        assert!(!sim.mech.launched, "fired on the press");
+        run(&mut sim, Input { alt_fire: true, ..Input::default() }, 10);
+        sim.step(&Input::default());
+        assert!(sim.mech.launched, "didn't fire when let go");
+    }
+
+    #[test]
+    fn lock_on_builds_on_an_enemy_in_the_cone_and_shells_home() {
+        let mut t = Tuning::default();
+        (t.alt_lock_time, t.alt_lock_cone, t.alt_turn, t.alt_speed, t.alt_fuse) = (0.5, 8.0, 180.0, 40.0, 3.0);
+        let arena = Arena::new(&map::Map::load(map::Map::index("blockout").unwrap()));
+        let mut m = spawn_mech(&t, Vector::new(0.0, 0.1, 45.0));
+        let eye = aim_ray(&t, &m).origin;
+        let (ahead, aside) = ((7, eye + Vector::NEG_Z * 20.0), (9, eye + Vector::X * 20.0));
+        for _ in 0..(0.5 * TICK_HZ) as usize + 1 {
+            projectile::track(&arena, &t, &mut m, true, &[ahead, aside]);
+        }
+        assert!(m.lock == 8 && m.lock_time >= t.alt_lock_time, "lock {} for {}", m.lock, m.lock_time);
+        let mut p = projectile::volley(&t, &m, 0, 1)[0];
+        assert_eq!(p.target, 8);
+        projectile::track(&arena, &t, &mut m, false, &[ahead]);
+        assert_eq!((m.lock, m.lock_time), (0, 0.0), "let go, the lock stays");
+        // Homing on a goal off to the side turns the shell toward it.
+        let goal = p.pos + Vector::new(15.0, 0.0, -15.0);
+        for _ in 0..10 {
+            projectile::home(&t, &mut p, goal);
+            p.pos += p.vel * DT;
+        }
+        assert!(p.vel.normalize().dot((goal - p.pos).normalize()) > 0.95, "didn't turn toward the goal");
+    }
+
+    #[test]
+    fn splitting_shells_scatter_bomblets_in_the_air_only() {
+        let t = Tuning { alt_split: 6.0, alt_split_damage: 10.0, alt_split_radius: 2.5, ..Tuning::default() };
+        let m = spawn_mech(&t, Vector::new(0.0, 0.1, 45.0));
+        let mut p = projectile::volley(&t, &m, 0, 1)[0];
+        p.age = 0.1;
+        assert!(projectile::split(&t, &p, p.pos).is_empty(), "split on contact");
+        p.age = f32::INFINITY; // pressed, or its fuse ran out
+        let bomblets = projectile::split(&t, &p, p.pos);
+        assert_eq!(bomblets.len(), 6);
+        let b = projectile::tuning_for(&t, &bomblets[0]);
+        assert_eq!((b.alt_damage, b.alt_radius, b.alt_split), (10.0, 2.5, 0.0));
+        assert!(bomblets.iter().all(|b| b.n >= projectile::BOMBLET && !projectile::armed(b)) && projectile::split(&t, &bomblets[0], p.pos).is_empty());
     }
 
     #[test]

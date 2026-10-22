@@ -54,14 +54,54 @@
       }
     },
     {
+      "id": "hornet", "name": "Hornet", "desc": "Lock-on volley: hold on an enemy to lock, let go to loose four missiles that home on it", "sound": "hornet", "projectile": "dart",
+      "stats": {
+        "alt_release": 1, "alt_lock_time": 0.8, "alt_lock_cone": 8, "alt_turn": 120, "alt_count": 4, "alt_spread_deg": 6,
+        "alt_speed": 45, "alt_gravity": 0, "alt_loft_deg": 6, "alt_bounce": 0, "alt_fuse": 3, "alt_damage": 9, "alt_radius": 2,
+        "alt_cooldown": 5, "alt_heat": 18
+      }
+    },
+    {
+      "id": "mender", "name": "Mender", "desc": "Repair beam: hold it on a teammate to mend 10 hp/s, or on an enemy to burn 6 hp/s, out to 28 m; runs warm while held", "sound": "mender",
+      "stats": { "alt_beam": 28, "alt_beam_heal": 10, "alt_damage": 6, "alt_heat": 16, "alt_cooldown": 0 }
+    },
+    {
       "id": "rocket", "name": "Rocket", "desc": "Straight-flying rocket with a 4 m blast", "sound": "rocket", "projectile": "rocket",
       "stats": {}
+    },
+    {
+      "id": "spindle", "name": "Spindle", "desc": "Rail rifle: hold to zoom, let go to fire one fast, flat, heavy slug", "sound": "spindle", "projectile": "rail", "zoom": 2.5,
+      "stats": {
+        "alt_release": 1, "alt_count": 1, "alt_speed": 320, "alt_gravity": 0, "alt_loft_deg": 0, "alt_bounce": 0,
+        "alt_fuse": 1.2, "alt_damage": 34, "alt_radius": 0.8, "alt_cooldown": 3.5, "alt_heat": 22
+      }
+    },
+    {
+      "id": "furnace", "name": "Furnace", "desc": "Heat-fed launcher: throws your heat as a fireball, bigger the hotter you run, and fires even overheated", "sound": "furnace", "projectile": "ember",
+      "stats": {
+        "alt_cooldown": 4, "alt_heat": 0, "alt_heat_fed": 1, "alt_count": 1, "alt_speed": 70, "alt_gravity": 6, "alt_loft_deg": 2,
+        "alt_bounce": 0, "alt_fuse": 3, "alt_damage": 10, "alt_radius": 2, "alt_charge_damage": 5, "alt_charge_radius": 3
+      }
     },
     {
       "id": "mortar", "name": "Mortar", "desc": "Lobbed shell that bounces once or twice, then bursts wide", "sound": "mortar", "projectile": "shell",
       "stats": {
         "alt_cooldown": 5, "alt_heat": 25, "alt_speed": 36, "alt_loft_deg": 10, "alt_gravity": 18,
         "alt_bounce": 0.45, "alt_fuse": 1.4, "alt_damage": 40, "alt_radius": 5.5
+      }
+    },
+    {
+      "id": "splitter", "name": "Splitter", "desc": "Cluster canister: bursts at its fuse or on a second press into six bomblets that rain down", "sound": "mortar", "projectile": "shell",
+      "stats": {
+        "alt_cooldown": 4, "alt_heat": 18, "alt_count": 1, "alt_speed": 50, "alt_gravity": 14, "alt_loft_deg": 10, "alt_bounce": 0,
+        "alt_fuse": 1.4, "alt_damage": 12, "alt_radius": 2.5, "alt_split": 6, "alt_split_damage": 11, "alt_split_radius": 2.5, "alt_split_speed": 7
+      }
+    },
+    {
+      "id": "warren", "name": "Warren", "desc": "Mine layer: three sticky mines that burst when an enemy comes within 3.5 m; six down at most", "sound": "mines", "projectile": "mine",
+      "stats": {
+        "alt_cooldown": 3, "alt_heat": 10, "alt_count": 3, "alt_spread_deg": 10, "alt_speed": 28, "alt_loft_deg": 10, "alt_gravity": 18,
+        "alt_bounce": 0, "alt_stick": 1, "alt_trigger": 3.5, "alt_max": 6, "alt_fuse": 20, "alt_damage": 22, "alt_radius": 3.5
       }
     }
   ]

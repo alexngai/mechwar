@@ -351,6 +351,7 @@ impl Game {
                 }
                 let mut shells = Vec::new();
                 if p.mech.launched {
+                    projectile::cap(t, p.id, self.projectiles.iter_mut().map(|f| &mut f.p));
                     shells = projectile::volley(t, &p.mech, p.id, msg.seq);
                 }
                 if p.mech.shot && t.shot_speed > 0.0 {
@@ -368,6 +369,15 @@ impl Game {
                 }
                 if self.players[i].mech.pulsed {
                     self.pulse(i);
+                }
+                if self.players[i].mech.beaming {
+                    self.beam(i);
+                }
+                if self.arsenal.of(&self.players[i].mech).alt_lock_time > 0.0 {
+                    let team = self.players[i].team;
+                    let chests = self.chests(|q| q.team != team);
+                    let t = self.arsenal.of(&self.players[i].mech).clone();
+                    projectile::track(&self.arena, &t, &mut self.players[i].mech, msg.input.alt_fire, &chests);
                 }
             }
         }
@@ -388,6 +398,7 @@ impl Game {
         // half the shooter's RTT if hits feel late.
         let mut flying = std::mem::take(&mut self.projectiles);
         let mut bursts = Vec::new();
+        let chests = self.chests(|_| true);
         flying.retain_mut(|f| {
             let enemies = || {
                 self.players
@@ -396,7 +407,11 @@ impl Game {
                     .map(|q| (self.arsenal.of(&q.mech), &q.mech))
             };
             let t = projectile::tuning_for(self.arsenal.get(f.p.class, f.p.loadout), &f.p);
-            match projectile::fly(&self.arena, &t, &mut f.p, |ray, max| projectile::first_mech(ray, max, enemies())) {
+            if let Some(&(_, goal)) = chests.iter().find(|(id, _)| f.p.target == id + 1) {
+                projectile::home(&t, &mut f.p, goal);
+            }
+            let burst = projectile::fly(&self.arena, &t, &mut f.p, |ray, max| projectile::first_mech(ray, max, enemies()));
+            match burst.or_else(|| projectile::triggered(&t, &f.p, enemies()).then_some(f.p.pos)) {
                 Some(at) => {
                     bursts.push((f.p, f.team, at));
                     false
@@ -578,6 +593,10 @@ impl Game {
             }
         }
         self.events.push(Event::Blast { owner: p.owner, seq: p.seq, n: p.n, primary: p.primary, class: p.class, loadout: p.loadout, charge: p.charge, pos: at, hits });
+        for bomblet in projectile::split(self.arsenal.get(p.class, p.loadout), &p, at) {
+            self.events.push(Event::Launch(bomblet));
+            self.projectiles.push(Flying { p: bomblet, team });
+        }
     }
 
     /// Player `user`'s EMP: jams every living enemy it reaches, and its Pulse event.
@@ -599,6 +618,26 @@ impl Game {
             hits |= 1 << self.players[j].id;
         }
         self.events.push(Event::Pulse { owner, pos, hits });
+    }
+
+    /// Player `user`'s held beam this tick: mends the teammate it touches, burns the enemy.
+    /// ponytail: targets aren't rewound like shots; rewind with `history` if beams slip at high ping.
+    fn beam(&mut self, user: usize) {
+        let u = &self.players[user];
+        let t = self.arsenal.of(&u.mech);
+        let others = self.players.iter().enumerate().filter(|&(j, q)| j != user && q.mech.health > 0.0).map(|(_, q)| (q.id, self.arsenal.of(&q.mech), &q.mech));
+        let (end, hit) = weapon::beam(&self.arena, t, &u.mech, others);
+        let (owner, team, heal, burn) = (u.id, u.team, t.alt_beam_heal * DT, t.alt_damage * DT);
+        self.players[user].mech.beam_end = end;
+        self.events.push(Event::Beam { owner, end, hit });
+        let Some(j) = hit.and_then(|id| self.players.iter().position(|q| q.id == id)) else { return };
+        if self.players[j].team == team {
+            let max = self.arsenal.of(&self.players[j].mech).health_max;
+            let q = &mut self.players[j].mech;
+            q.health = (q.health + heal).min(max);
+        } else {
+            self.apply_damage(Some(user), j, burn);
+        }
     }
 
     /// Damages player `j` (less while braced) while the match is on, ending any repair. A kill
@@ -671,6 +710,17 @@ impl Game {
                 winner,
             },
         }
+    }
+}
+
+impl Game {
+    /// Chest positions, by player id, of the living players `which` picks: what lock-on aims at.
+    fn chests(&self, which: impl Fn(&Player) -> bool) -> Vec<(u8, Vector)> {
+        self.players
+            .iter()
+            .filter(|q| q.mech.health > 0.0 && which(q))
+            .map(|q| (q.id, q.mech.pos + Vector::Y * (self.arsenal.of(&q.mech).mech_height * 0.5)))
+            .collect()
     }
 }
 
@@ -811,6 +861,40 @@ mod tests {
     }
 
     #[test]
+    fn beams_mend_teammates_and_burn_enemies() {
+        let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
+        game.bots = false;
+        // Joins alternate teams: the user, an enemy 8 m behind them (clear, as in the EMP test),
+        // and a teammate.
+        let [user, enemy, mate] = [0, 1, 2];
+        for (x, z) in [(-15.0, 18.0), (-15.0, 26.0), (30.0, 30.0)] {
+            let id = game.join().unwrap();
+            game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = Vector::new(x, 0.1, z);
+        }
+        let mender = (0u8..).map(|s| Loadout { primary: 0, secondary: s }).find(|&l| game.arsenal.get(MechClass::B, l).alt_beam > 0.0).unwrap();
+        game.pick(user, MechClass::B, mender);
+        game.players.iter_mut().find(|p| p.id == user).unwrap().mech.loadout = mender;
+        let t = game.arsenal.get(MechClass::B, mender).clone();
+        let beam = Input { yaw: std::f32::consts::PI, alt_fire: true, ..Input::default() };
+        send(&mut game, user, beam);
+        game.step();
+        let on = game.events.iter().find_map(|e| if let Event::Beam { owner, hit, .. } = *e { Some((owner, hit)) } else { None });
+        assert_eq!(on, Some((user, Some(enemy))));
+        assert!((mech(&game, enemy).health - (t.health_max - t.alt_damage * DT)).abs() < 1e-4, "enemy health {}", mech(&game, enemy).health);
+        assert!(mech(&game, user).heat > 0.0, "beaming ran cold");
+
+        // Put the teammate there, hurt: it mends, capped at full.
+        let p = game.players.iter_mut().find(|p| p.id == mate).unwrap();
+        (p.mech.pos, p.mech.health) = (Vector::new(-15.0, 0.1, 24.0), t.health_max - 1.0);
+        for _ in 0..secs(1.0) {
+            send(&mut game, user, beam);
+            game.step();
+        }
+        assert_eq!(mech(&game, mate).health, t.health_max);
+        assert!(!game.events.iter().any(|e| matches!(e, Event::Launch(_))), "a beam launched a shell");
+    }
+
+    #[test]
     fn untouched_orbs_fade() {
         let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
         game.bots = false;
@@ -939,7 +1023,7 @@ mod tests {
         }
         // The bot's rocket, 2 m past the human's chest and flying on.
         let chest = Vector::new(0.0, 0.1 + t.mech_height * 0.5, 0.0);
-        let p = Projectile { owner: bot, seq: 1, n: 0, primary: false, class: MechClass::B, loadout: Loadout::of(MechClass::B), charge: 0.0, pos: chest + Vector::Z * 2.0, vel: Vector::Z * t.alt_speed, age: 0.5 };
+        let p = Projectile { owner: bot, seq: 1, n: 0, primary: false, class: MechClass::B, loadout: Loadout::of(MechClass::B), charge: 0.0, target: 0, pos: chest + Vector::Z * 2.0, vel: Vector::Z * t.alt_speed, age: 0.5 };
         game.projectiles.push(Flying { p, team: 1 });
         game.step();
         let hits = game.events.iter().find_map(|e| if let Event::Blast { owner, hits, .. } = *e { Some((owner, hits)) } else { None });

@@ -277,6 +277,8 @@ export class Sound {
     if (sound === 'mortar') this.tone(out, 'triangle', 190, 120, 0.002, 0.12, 0.45);
     if (sound === 'furnace') this.noise(out, 'brown', 'lowpass', 600, 120, 0.01, 0.5, 0.7);
     if (sound === 'mines') this.tone(out, 'square', 900, 700, 0.001, 0.05, 0.12);
+    if (sound === 'hornet') this.noise(out, 'white', 'bandpass', 1800, 3000, 0.005, 0.25, 0.4, 2);
+    if (sound === 'spindle') this.tone(out, 'sawtooth', 1400, 260, 0.001, 0.14, 0.25);
   }
 
   /** A burst of radius `radius` m at `pos`: a deep boom and rumble (the hull filter softens it). */
@@ -573,14 +575,14 @@ export class Sound {
   }
 
   /**
-   * Each frame: { alive, heat (0-1), overheated, hull (0-1), repairing (0-1 phase), jammed }.
-   * Drives the repair whir and paces warning beeps.
+   * Each frame: { alive, heat (0-1), overheated, hull (0-1), repairing (0-1 phase), jammed, beaming }.
+   * Drives the repair whir (higher and softer for a held beam) and paces warning beeps.
    */
   cockpit(s, dt) {
     if (!this.running) return;
     const n = this.cockpitNodes, t = this.ctx.currentTime;
-    n.whir.frequency.setTargetAtTime(s.repairing >= 1 ? 420 : 300, t, 0.2);
-    n.whirGain.gain.setTargetAtTime(s.repairing > 0 ? 0.05 : 0, t, 0.1);
+    n.whir.frequency.setTargetAtTime(s.repairing >= 1 ? 420 : s.beaming ? 560 : 300, t, 0.2);
+    n.whirGain.gain.setTargetAtTime(s.repairing > 0 ? 0.05 : s.beaming ? 0.035 : 0, t, 0.1);
     if (!s.alive) return;
     // Warnings: a burst of fast alarm beeps as we overheat (then quiet through the cooldown),
     // soft beeps while running hot, a low-hull pulse, jam crackle.

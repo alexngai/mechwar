@@ -58,7 +58,7 @@ pub struct NetClient {
     pub render_offset: Vector,
     /// Other mechs and their teams at their latest server positions, treated as fixed when
     /// predicting contact.
-    obstacles: Vec<(u8, Mech)>,
+    obstacles: Vec<(u8, u8, Mech)>,
     /// Own projectiles (secondary and projectile primary fire), predicted from launch.
     pub projectiles: Vec<Projectile>,
     /// Where own hitscan pellets stopped against the arena, since the page last took them.
@@ -133,6 +133,7 @@ impl NetClient {
         // Only the first prediction of an input fires; reconciliation replays never do.
         let (t, m) = (self.arsenal.of(&self.mech), &self.mech);
         if let (true, Some(id)) = (m.launched, self.id) {
+            projectile::cap(t, id, &mut self.projectiles);
             self.projectiles.extend(projectile::volley(t, m, id, self.seq));
         }
         if let (true, Some(id)) = (m.shot, self.id) {
@@ -149,6 +150,17 @@ impl NetClient {
         if let (true, Some(id)) = (self.mech.alt_pressed, self.id) {
             projectile::detonate(id, &mut self.projectiles);
         }
+        // Lock-on, against enemies where they were last seen.
+        let t = self.arsenal.of(&self.mech);
+        if t.alt_lock_time > 0.0 {
+            let chests: Vec<_> = self.obstacles.iter().filter(|(_, team, m)| *team != self.team && m.health > 0.0).map(|(id, _, m)| (*id, m.pos + Vector::Y * (self.arsenal.of(m).mech_height * 0.5))).collect();
+            let t = t.clone();
+            projectile::track(&self.arena, &t, &mut self.mech, input.alt_fire, &chests);
+        }
+        if self.mech.beaming {
+            let others = self.obstacles.iter().filter(|(_, _, m)| m.health > 0.0).map(|(id, _, m)| (*id, self.arsenal.of(m), m));
+            self.mech.beam_end = weapon::beam(&self.arena, self.arsenal.of(&self.mech), &self.mech, others).0;
+        }
         self.fly_own();
         self.render_offset *= 0.7;
         self.pending.push_back((self.seq, input, now_ms));
@@ -159,7 +171,7 @@ impl NetClient {
     fn predict(&mut self, input: &Input) {
         let t = self.arsenal.of(&self.mech);
         step_mech(&self.arena, t, &mut self.mech, input);
-        for (_, other) in &self.obstacles {
+        for (_, _, other) in &self.obstacles {
             let mut other = *other;
             collide::separate(&self.arena, t, &mut self.mech, self.arsenal.of(&other), &mut other, 1.0);
         }
@@ -168,20 +180,26 @@ impl NetClient {
     /// Flies own projectiles one tick against the arena and enemies where they were last seen.
     fn fly_own(&mut self) {
         let (arsenal, arena, obstacles, team) = (&self.arsenal, &self.arena, &self.obstacles, self.team);
-        let (burst, blasts) = (&mut self.burst, &mut self.blasts);
+        let (burst, blasts, mut bomblets) = (&mut self.burst, &mut self.blasts, Vec::new());
         self.projectiles.retain_mut(|p| {
-            let enemies = || obstacles.iter().filter(|(t, m)| *t != team && m.health > 0.0).map(|(_, m)| (arsenal.of(m), m));
+            let enemies = || obstacles.iter().filter(|(_, t, m)| *t != team && m.health > 0.0).map(|(_, _, m)| (arsenal.of(m), m));
             let t = projectile::tuning_for(arsenal.get(p.class, p.loadout), p);
-            let Some(at) = projectile::fly(arena, &t, p, |ray, max| projectile::first_mech(ray, max, enemies())) else {
+            if let Some((_, _, m)) = obstacles.iter().find(|(id, _, _)| p.target == id + 1) {
+                projectile::home(&t, p, m.pos + Vector::Y * (arsenal.of(m).mech_height * 0.5));
+            }
+            let hit = projectile::fly(arena, &t, p, |ray, max| projectile::first_mech(ray, max, enemies()));
+            let Some(at) = hit.or_else(|| projectile::triggered(&t, p, enemies()).then_some(p.pos)) else {
                 return true;
             };
             blasts.push((p.owner, projectile::radius(arsenal.get(p.class, p.loadout), p), at));
+            bomblets.extend(projectile::split(arsenal.get(p.class, p.loadout), p, at));
             burst.push_back((p.id(), at));
             if burst.len() > BURSTS_KEPT {
                 burst.pop_front();
             }
             false
         });
+        self.projectiles.extend(bomblets);
     }
 
     /// Message setting our callsign to `raw`; the server sanitizes it.
@@ -251,7 +269,7 @@ impl NetClient {
                 .iter()
                 .filter(|p| p.id != own)
                 // Repairing ones crouch (`hit_shape`); any repair time will do.
-                .map(|p| (p.team, Mech { class: p.class, loadout: p.loadout, pos: p.view.pos, health: p.view.health, repair_time: if p.view.repairing { DT } else { 0.0 }, ..Mech::default() }))
+                .map(|p| (p.id, p.team, Mech { class: p.class, loadout: p.loadout, pos: p.view.pos, health: p.view.health, repair_time: if p.view.repairing { DT } else { 0.0 }, ..Mech::default() }))
                 .collect();
             // Reconcile: take the server's state at ack_seq and replay what it hasn't seen yet.
             let predicted = self.mech.pos;
@@ -277,7 +295,7 @@ impl NetClient {
                 Event::Launch(_) => {}
                 Event::Blast { owner, seq, n, primary, class, loadout, charge, pos, hits } => {
                     let id = (owner, seq, n, primary);
-                    let shape = Projectile { owner, seq, n, primary, class, loadout, charge, pos, vel: Vector::ZERO, age: 0.0 };
+                    let shape = Projectile { owner, seq, n, primary, class, loadout, charge, target: 0, pos, vel: Vector::ZERO, age: 0.0 };
                     let radius = projectile::radius(self.arsenal.get(class, loadout), &shape);
                     self.hits.extend((0..16).filter(|v| hits & 1 << v != 0).map(|v| (owner, v)));
                     if Some(owner) != self.id {
@@ -293,7 +311,7 @@ impl NetClient {
                         self.blasts.push((owner, radius, pos));
                     }
                 }
-                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } => self.events.push(*e),
+                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } => self.events.push(*e),
             }
         }
         self.snapshots.push_back(s);
@@ -327,9 +345,15 @@ impl NetClient {
         let mut drawn: Vec<Drawn> = self.projectiles.iter().map(|&p| Drawn { p, predicted: true }).collect();
         for r in &mut self.replays {
             let t = projectile::tuning_for(self.arsenal.get(r.p.class, r.p.loadout), &r.p);
+            // A homing shell turns toward its target as it last stood (or as we stand, if it's us).
+            let us = self.id.map(|id| (id, self.team, self.mech));
+            let goal = self.obstacles.iter().chain(us.iter()).find(|(id, _, _)| r.p.target == id + 1).map(|(_, _, m)| m.pos + Vector::Y * (self.arsenal.of(m).mech_height * 0.5));
             // State after `flown` ticks is as of tick `launched - 1 + flown`.
             let due = (at - r.launched as f32 + 1.0).floor().max(0.0) as u32;
             while r.flown < due && !r.done {
+                if let Some(goal) = goal {
+                    projectile::home(&t, &mut r.p, goal);
+                }
                 r.done = projectile::fly(&self.arena, &t, &mut r.p, |_, _| None).is_some();
                 r.flown += 1;
             }

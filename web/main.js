@@ -20,7 +20,7 @@ import riftline from '../maps/riftline.json';
 import sump from '../maps/sump.json';
 import sinkhole from '../maps/sinkhole.json';
 import blockout from '../maps/blockout.json';
-import { CROUCH, Mech, TEAMS, armament, ownLoadout, showRound, windUp } from './mech.js';
+import { CROUCH, Mech, TEAMS, armament, ownLoadout, showRound, stoke, windUp } from './mech.js';
 import { Debug } from './debug.js';
 import { Cockpit } from './cockpit.js';
 import { Sound } from './audio.js';
@@ -70,6 +70,8 @@ const picks = CLASS_KEYS.map((key) => {
 });
 /** The loadout picking class `i` spawns with. */
 const loadoutFor = (i) => picks[i];
+/** How far the carried secondary's scope zooms (1 for none). */
+const zoomOf = () => armament(loadout).secondary.zoom ?? 1;
 let ws = null, connection = server ? 'connecting' : '', picked = null;
 if (net) {
   ws = new WebSocket(server);
@@ -84,9 +86,10 @@ if (net) {
 }
 
 // Index layout of state(); keep in sync with mech_state in sim/src/wasm.rs.
-const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, SPIN: 31, CHARGE: 32, BLOOM: 33, FIRE_WAIT: 34, OFFSET: 35 };
+const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, SPIN: 31, CHARGE: 32, BLOOM: 33, FIRE_WAIT: 34, LOCK: 35, LOCK_T: 36, BEAM: 37, BEAM_END: 38, OFFSET: 41 };
 // Volley index of thrown grenades; matches projectile::GRENADE in sim/src/projectile.rs.
 const GRENADE_N = 255;
+const BOMBLET_N = 100; // a splitting shell's bomblets carry volley indices from here up (projectile::BOMBLET)
 // A shell whose velocity jumps more than this (m/s) between frames has bounced: gravity alone moves
 // it under 1 m/s a frame, and a bounce at least halves its speed, glancing off a floor or square off a wall.
 const BOUNCE_JUMP = 4;
@@ -222,7 +225,7 @@ const shots = []; // own predicted shots, drawn once this frame's pose is set
 // Projectiles seen so far by id, with the launcher position each is drawn leaving from.
 const launches = new Map(), blastAt = new THREE.Vector3();
 const LAUNCH_BLEND = 0.15; // s
-let hurt = 0, shake = 0, boostKick = 0, message = '', messageUntil = 0;
+let hurt = 0, shake = 0, boostKick = 0, zoomKick = 0, message = '', messageUntil = 0;
 let burstable = false; // an own shell is armed in flight
 const BOOST_FOV = 6; // degrees
 // HUD feedback: own hits and kills, where hits on us came from, and when each player last fired.
@@ -244,8 +247,10 @@ document.addEventListener('pointerlockchange', () => {
 addEventListener('mousemove', (e) => {
   if (!locked()) return;
   const limit = THREE.MathUtils.degToRad(T('pitch_limit_deg'));
-  yaw -= e.movementX * T('mouse_sensitivity');
-  pitch = THREE.MathUtils.clamp(pitch - e.movementY * T('mouse_sensitivity'), -limit, limit);
+  // Zoomed in, the view turns slower to match.
+  const sens = T('mouse_sensitivity') / (1 + (zoomOf() - 1) * zoomKick);
+  yaw -= e.movementX * sens;
+  pitch = THREE.MathUtils.clamp(pitch - e.movementY * sens, -limit, limit);
 });
 addEventListener('mousedown', (e) => {
   if (!locked()) return;
@@ -479,6 +484,8 @@ const repairPhase = (t, cls = classIdx) => (t > 0 ? Math.min(t / Math.max(classV
 let prev = game.state(), curr = prev, acc = 0, last = performance.now();
 const eye = new THREE.Vector3(), offset = new THREE.Vector3(), aim = new THREE.Vector3();
 const pos = new THREE.Vector3(), vel = new THREE.Vector3(), seen = new THREE.Vector3(), step = new THREE.Vector3();
+const beamFrom = new THREE.Vector3(), beamTo = new THREE.Vector3();
+const BEAM_HOLD = 120; // ms a remote's beam stays drawn after the server last said it was on
 const ray = new THREE.Ray(), sphere = new THREE.Sphere(), crossing = new THREE.Vector3();
 const heading = new THREE.Vector3(), chest = new THREE.Vector3(), to = new THREE.Vector3(), look = new THREE.Vector3(), ndc = new THREE.Vector3(), muzzle = new THREE.Vector3();
 const spark = new THREE.Vector3();
@@ -593,6 +600,7 @@ function frame(now) {
         ability: !!abilityOn, damage: 1 - health / classValue(cls, 'health_max'),
         repair: repairPhase(e.repairAt === null ? 0 : (now - e.repairAt) / 1000 + 1e-3, cls),
       });
+      if (now - (e.beamAt ?? -Infinity) < BEAM_HOLD) fx.mend(id + 1, e.mech.launcher.getWorldPosition(beamFrom), e.beamTo, dt);
       if (now < (e.jammedUntil ?? 0)) fx.jam(toChest(spark.copy(e.pos), cls), dt);
       if (health > 0) debug.hitbox(e.pos, classValue(cls, 'mech_radius'), classValue(cls, 'mech_height') * (repairing ? CROUCH : 1));
     }
@@ -647,6 +655,11 @@ function frame(now) {
       if (a === myId && b) hits.push({ at: now, kill: false });
       for (const [id, e] of remotes) if (b & (1 << id)) e.jammedUntil = now + 1000 * classValue(cls, 'emp_jam');
     }
+    if (kind === 5 && a !== myId) {
+      // A remote's held beam; our own is drawn from our prediction.
+      const e = remotes.get(a);
+      if (e) (e.beamTo ??= new THREE.Vector3()).set(x, y, z), (e.beamAt = now);
+    }
   }
 
   // Projectiles: own ones extrapolated like the own mech, others already at render time. Each is
@@ -660,13 +673,14 @@ function frame(now) {
     const secondary = primary ? null : weapons.secondaries[weapon];
     const key = `${owner}:${seq}:${n}:${primary}`, ahead = predicted ? a * DT : 0;
     const mech = predicted ? me : remotes.get(owner)?.mech;
+    const bomblet = !primary && n >= BOMBLET_N && n !== GRENADE_N; // born in the air, where its shell split
     let shot = launches.get(key);
     if (!shot) {
       let from = null;
       if (primary) {
         if (n === 0) gunAt = mech?.muzzle(heading.set(vx, vy, vz).normalize(), predicted && firstPerson ? cockpit.fire(camera, new THREE.Vector3()) : null) ?? null;
         from = gunAt;
-      } else {
+      } else if (!bomblet) {
         from = predicted && firstPerson && n === 0 ? cockpit.fire(camera, new THREE.Vector3(), true) : mech?.launcher.getWorldPosition(new THREE.Vector3());
         if (n === 0) mech?.launch(from);
         if (n === GRENADE_N) sound.grenade(predicted ? null : { x, y, z });
@@ -675,11 +689,11 @@ function frame(now) {
       if (!predicted) lastFired.set(owner, now);
     }
     live.add(key);
-    if (predicted && !primary && n !== GRENADE_N && age >= ARM - DT / 2) burstable = true;
+    if (predicted && !primary && n !== GRENADE_N && !bomblet && age >= ARM - DT / 2) burstable = true;
     const p = new THREE.Vector3(x + vx * ahead, y + vy * ahead, z + vz * ahead);
     const blend = Math.min((age + ahead) / LAUNCH_BLEND, 1);
     if (blend < 1) p.lerp(shot.from, 1 - blend);
-    const look = (primary ? weapons.primaries[weapon] : secondary)?.projectile, vel = new THREE.Vector3(vx, vy, vz);
+    const look = bomblet ? 'bomblet' : (primary ? weapons.primaries[weapon] : secondary)?.projectile, vel = new THREE.Vector3(vx, vy, vz);
     // A shell or grenade whose velocity jumps between frames has bounced: it clanks, as hard as the
     // jump (one that stops dead, a mine sticking, doesn't).
     if (!primary && shot.vel) {
@@ -716,7 +730,9 @@ function frame(now) {
   shake *= Math.exp(-6 * dt);
   // A small FOV kick while boosting sells the speed.
   boostKick += ((curr[S.BOOSTING] ? 1 : 0) - boostKick) * (1 - Math.exp(-6 * dt));
-  const fov = T('fov') + BOOST_FOV * boostKick;
+  // A scoped secondary (weapons.json `zoom`) narrows the view while its trigger's held.
+  zoomKick += ((firstPerson && altFiring && zoomOf() > 1 ? 1 : 0) - zoomKick) * (1 - Math.exp(-10 * dt));
+  const fov = (T('fov') + BOOST_FOV * boostKick) / (1 + (zoomOf() - 1) * zoomKick);
   if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }
   camera.updateMatrixWorld();
   cockpit.setTeam(myTeam);
@@ -726,6 +742,12 @@ function frame(now) {
   cockpit.windUp(curr[S.SPIN], curr[S.CHARGE], curr[S.ALT_WAIT] <= 0, dt);
   windUp(me.guns[0].pod, curr[S.SPIN], curr[S.CHARGE], dt);
   showRound(me.arms[1], curr[S.ALT_WAIT] <= 0);
+  for (const pod of [me.arms[1], cockpit.weapons?.launcher.pod]) if (pod) stoke(pod, curr[S.HEAT] / T('heat_max'));
+  // A held beam, from the launcher (the cockpit's, in first person) to where the sim says it stops.
+  if (curr[S.BEAM]) {
+    const from = firstPerson && cockpit.weapons ? cockpit.launcherTip(camera, beamFrom) : me.launcher.getWorldPosition(beamFrom);
+    fx.mend(0, from, beamTo.set(curr[S.BEAM_END], curr[S.BEAM_END + 1], curr[S.BEAM_END + 2]), dt);
+  }
   // ...and light it from the night lamps and flashes nearby (not our own guns': the cockpit flashes those).
   if (firstPerson) {
     const flashes = fx.lights
@@ -767,7 +789,7 @@ function frame(now) {
   sound.thrusters(alive ? (curr[S.BOOSTING] ? 2 : curr[S.HOVERING] ? 1 : 0) : 0, others);
   sound.cockpit({
     alive, heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
-    hull: curr[S.HEALTH] / T('health_max'), repairing: repairPhase(curr[S.REPAIR_T]), jammed: curr[S.JAMMED] > 0,
+    hull: curr[S.HEALTH] / T('health_max'), repairing: repairPhase(curr[S.REPAIR_T]), jammed: curr[S.JAMMED] > 0, beaming: !!curr[S.BEAM],
   }, dt);
   // A jump pad fires as a mech leaves it upward: a pulse on the pad and a thump.
   const onPad = (p) => arena.pads?.find((d) => Math.abs(p.y - d.at[1]) < 1 && Math.hypot(p.x - d.at[0], p.z - d.at[2]) < 2.5);
@@ -951,6 +973,7 @@ function drawGlass(now, myTeam) {
     heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     alt: 1 - curr[S.ALT_WAIT] / Math.max(T('alt_cooldown'), 1e-6), altReady: curr[S.ALT_WAIT] <= 0,
     altBurst: burstable,
+    lock: curr[S.LOCK] > 0 ? { unit: curr[S.LOCK] - 1, progress: Math.min(curr[S.LOCK_T] / Math.max(T('alt_lock_time'), 1e-6), 1) } : null,
     windup: T('charge_time') > 0 ? curr[S.CHARGE] : T('spin_up') > 0 ? curr[S.SPIN] : 0,
     // The cone the next shot lands in (base spread plus bloom) as a fraction of the half-height,
     // and a slow primary's refire, 0 to 1 (null for fast guns and spinning ones).

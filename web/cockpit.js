@@ -389,6 +389,12 @@ export class Cockpit {
     this.accent.color.setHex((TEAMS[team] ?? TEAMS[-1]).accent);
   }
 
+  /** Where the launcher's muzzle is in the world, without firing it (a held beam starts there). */
+  launcherTip(worldCamera, out) {
+    this.scene.updateMatrixWorld();
+    return worldCamera.localToWorld(this.weapons.launcher.tip.getWorldPosition(out));
+  }
+
   /**
    * Kicks the next primary gun back (in turn like the mech's own), or the launcher for `secondary`
    * fire, and returns its muzzle in world space, given the world camera this cockpit rides with.

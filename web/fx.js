@@ -170,7 +170,8 @@ export function halo(color, size) {
 
 /** Tracers: pooled camera-facing quads stretched muzzle to impact, soft across their width. */
 class Beams {
-  constructor(scene, count = 24) {
+  constructor(scene, count = 24, color = 0xffe2a0, width = BEAM_WIDTH) {
+    this.width = width;
     const texture = canvasTexture(1, 32, (g, w, h) => {
       const l = g.createLinearGradient(0, 0, 0, h);
       l.addColorStop(0, 'rgba(255,255,255,0)');
@@ -184,7 +185,7 @@ class Beams {
     this.items = Array.from({ length: count }, () => {
       const mesh = new THREE.Mesh(
         geometry,
-        hot(new THREE.MeshBasicMaterial({ map: texture, color: 0xffe2a0, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })),
+        hot(new THREE.MeshBasicMaterial({ map: texture, color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })),
       );
       mesh.matrixAutoUpdate = false;
       mesh.frustumCulled = false;
@@ -213,7 +214,7 @@ class Beams {
       // Turn the quad about the beam's axis to face the camera.
       side.crossVectors(dir, view.subVectors(camera.position, mid)).normalize();
       normal.crossVectors(side, dir);
-      b.mesh.matrix.makeBasis(dir.multiplyScalar(length), side.multiplyScalar(BEAM_WIDTH), normal).setPosition(mid);
+      b.mesh.matrix.makeBasis(dir.multiplyScalar(length), side.multiplyScalar(this.width), normal).setPosition(mid);
       b.mesh.material.opacity = b.life / BEAM_LIFE;
     }
   }
@@ -256,6 +257,8 @@ export class Effects {
     // Sparks and cinders: tiny, many, and never bigger than a few pixels however close.
     this.embers = new Pool(scene, 800, THREE.AdditiveBlending, 0.012);
     this.beams = new Beams(scene);
+    // Held beams: one slot per mech (0 for our own, id + 1 for others), refreshed while on.
+    this.mends = new Beams(scene, 17, 0x60ffb0, 0.5);
     this.shells = new Shells(scene);
     // Two short-lived lights at the latest muzzle flashes (High quality only).
     this.lights = [0, 1].map(() => {
@@ -287,6 +290,7 @@ export class Effects {
     this.soft.update(dt, scale);
     this.embers.update(dt, scale);
     this.beams.update(dt, camera);
+    this.mends.update(dt, camera);
     for (const l of this.lights) {
       l.life = Math.max(0, l.life - dt);
       l.light.intensity = (l.life / LIGHT_LIFE) * 60;
@@ -295,6 +299,15 @@ export class Effects {
 
   beam(from, to) {
     this.beams.spawn(from, to);
+  }
+
+  /** Holds `slot`'s beam on from `from` to `to` this frame (it fades once no longer held), glowing where it lands. */
+  mend(slot, from, to, dt) {
+    const b = this.mends.items[slot];
+    b.from.copy(from);
+    b.to.copy(to);
+    b.life = BEAM_LIFE;
+    for (let k = count(30, dt); k > 0; k--) this.glow.spawn(to, scatter(UP, 2, 1.5), { life: rand(0.15, 0.3), size: [0.5, 0.1], color: REPAIR, drag: 3 });
   }
 
   /** A flash's light at `p`; `own` marks the player's own guns (the cockpit lights those itself). */
@@ -391,7 +404,30 @@ export class Effects {
         item.core.material.color.setHex(0x70ffa0);
         return;
       }
-      const shell = p.look === 'shell', dart = p.look === 'dart', slug = p.look === 'slug';
+      if (p.look === 'rail') {
+        // A rail slug: a small, white-hot core trailing a long blue-white streak.
+        item.mesh.scale.setScalar(0.45);
+        item.core.visible = true;
+        item.core.material.color.setHex(0xd8f0ff);
+        dir.copy(p.vel).normalize();
+        for (let k = count(160, dt); k > 0; k--) this.glow.spawn(p.pos, scatter(dir, -4, 0.2), { life: 0.08, size: [0.35, 0.05], color: COOL_FLAME, drag: 2 });
+        return;
+      }
+      if (p.look === 'bomblet') {
+        item.mesh.scale.setScalar(0.4);
+        item.core.visible = (p.age * 10) % 1 < 0.5;
+        item.core.material.color.setHex(0xff7a30);
+        return;
+      }
+      if (p.look === 'mine') {
+        // A flat disc that lies where it stuck, its lamp blinking slow; quick while in flight.
+        if (p.vel.lengthSq() < 1e-6) item.mesh.rotation.set(-Math.PI / 2, 0, 0);
+        item.mesh.scale.set(1.6, 1.6, 0.25);
+        item.core.visible = (p.age * (p.vel.lengthSq() < 1e-6 ? 1.5 : 6)) % 1 < 0.3;
+        item.core.material.color.setHex(0xff3020);
+        return;
+      }
+      const shell = p.look === 'shell', dart = p.look === 'dart', slug = p.look === 'slug' || p.look === 'ember';
       item.mesh.scale.setScalar(slug ? 1.1 + 0.8 * p.charge : p.primary ? 0.6 : dart ? 0.6 : shell ? 1.6 : 1);
       item.core.visible = !shell || (p.age * 6) % 1 < 0.5;
       item.core.material.color.setHex(slug ? 0xff9a40 : p.primary ? 0xffe2a0 : shell ? 0xff4020 : 0xffb060);
