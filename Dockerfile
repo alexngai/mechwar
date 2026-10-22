@@ -8,7 +8,7 @@ RUN rustup target add wasm32-unknown-unknown \
  && curl -sSfL "https://github.com/rustwasm/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-${arch}-unknown-linux-musl.tar.gz" \
     | tar -xz --strip-components=1 -C /usr/local/bin "wasm-pack-v0.15.0-${arch}-unknown-linux-musl/wasm-pack"
 WORKDIR /src
-COPY Cargo.toml Cargo.lock tuning.json classes.json ./
+COPY Cargo.toml Cargo.lock tuning.json classes.json weapons.json ./
 COPY maps maps
 COPY sim sim
 COPY server server
@@ -19,7 +19,7 @@ FROM node:22-bookworm-slim AS web
 WORKDIR /src
 COPY package.json package-lock.json ./
 RUN npm ci
-COPY index.html tuning.json classes.json ./
+COPY index.html tuning.json classes.json weapons.json ./
 COPY maps maps
 COPY web web
 COPY --from=rust /src/sim/pkg sim/pkg
