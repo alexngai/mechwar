@@ -1,7 +1,9 @@
 // Glass HUD: one canvas over the game, redrawn each frame from the `frame` object main.js fills.
-// Our own layout: compass tape up top, altitude and speed ladders framing the glass, a two-arc
-// reticle at the aim point, target tags, damage arcs, radar bottom-left, hull and readiness
-// gauges bottom center. Everything is drawn in device pixels scaled by `u` (1/1000 of the height).
+// Our own layout: compass tape up top, altitude and speed ladders framing the glass, an aim frame
+// (heat on its left arc, the secondary's recharge on its right) around a small reticle at the aim
+// point, target tags and damage arcs. The mech's state (hull, fuel, systems) and the radar are on
+// the cockpit's dash (cockpit.js, which draws the radar with `radar` below); only in the chase view,
+// where the dash isn't seen, does the glass show the radar and hull. Everything is drawn in device pixels scaled by `u` (1/1000 of the height).
 
 const AMBER = '#ffc46a', DIM = 'rgba(255,196,106,0.35)', FAINT = 'rgba(255,196,106,0.14)', WARN = '#ff4a3a', FUEL = '#7fd8ff', REPAIR = '#6dff9a';
 const TAU = Math.PI * 2;
@@ -107,8 +109,8 @@ export class Hud {
     g.fillText(String(Math.round(heading) % 360).padStart(3, '0'), cx, tapeY + 12 * u);
 
     // --- Ladders ----------------------------------------------------------------------
-    ladder(g, u, cx - 340 * u, cy, f.altitude, 12 * u, 1, 5, 'ALT m', -1);
-    ladder(g, u, cx + 340 * u, cy, f.speed * 3.6, 3 * u, 5, 10, 'SPD km/h', 1);
+    ladder(g, u, cx - 340 * u, cy, f.altitude, 12 * u, 1, 5, -1); // altitude, m
+    ladder(g, u, cx + 340 * u, cy, f.speed * 3.6, 3 * u, 5, 10, 1); // speed, km/h
 
     // --- Target tags --------------------------------------------------------------------
     // Teammates: chevron, name, health. Enemies: brackets, health, name, distance and status; the
@@ -175,25 +177,43 @@ export class Hud {
     });
     g.globalAlpha = 1;
 
-    // --- Reticle ------------------------------------------------------------------------
-    if (f.aim) {
-      const { x, y } = f.aim, r = 26 * u;
-      const blink = f.overheated && Math.floor(f.now / 150) % 2 === 0;
-      g.lineWidth = 3 * u;
+    // --- Aim frame: mirrored arcs filling from the bottom, heat (red) on the left and the
+    // secondary's recharge on the right (lit when ready, flashing while a burst is armed) ----------
+    const R = 210 * u, span = 0.55, bottom = cy + R * Math.sin(span);
+    const blink = f.overheated && Math.floor(f.now / 150) % 2 === 0, burst = f.altBurst && Math.floor(f.now / 120) % 2 === 0;
+    const gauge = (from, dir, fill, color) => {
+      // `from` is the arc's bottom end; `dir` +1 sweeps up the left side, -1 up the right.
+      g.lineWidth = 7 * u;
       g.strokeStyle = FAINT;
-      arc(g, x, y, r, (2 * Math.PI) / 3, (4 * Math.PI) / 3);
-      arc(g, x, y, r, -Math.PI / 3, Math.PI / 3);
-      g.strokeStyle = f.overheated ? (blink ? WARN : FAINT) : f.heat > 0.8 ? WARN : AMBER;
-      if (f.heat > 0.01) arc(g, x, y, r, (2 * Math.PI) / 3, (2 * Math.PI) / 3 + f.heat * ((2 * Math.PI) / 3));
-      g.strokeStyle = f.altReady ? AMBER : DIM;
-      if (f.alt > 0.01) arc(g, x, y, r, Math.PI / 3 - f.alt * ((2 * Math.PI) / 3), Math.PI / 3);
-      if (f.altReady || f.altBurst) {
-        g.fillStyle = AMBER;
-        g.font = font(10);
-        g.textAlign = 'left';
-        g.textBaseline = 'middle';
-        g.fillText(f.altBurst ? 'RMB BURST' : 'RMB', x + r + 6 * u, y);
+      arc(g, cx, cy, R, Math.min(from, from + dir * 2 * span), Math.max(from, from + dir * 2 * span));
+      g.strokeStyle = color;
+      const to = from + dir * Math.min(Math.max(fill, 0), 1) * 2 * span;
+      if (fill > 0.01) arc(g, cx, cy, R, Math.min(from, to), Math.max(from, to));
+      g.strokeStyle = DIM;
+      g.lineWidth = 1.5 * u;
+      for (let k = 0; k <= 10; k++) {
+        const a = from + (dir * k * 2 * span) / 10, c = Math.cos(a), s = Math.sin(a), out = (k % 5 ? 8 : 14) * u;
+        g.beginPath();
+        g.moveTo(cx + c * (R + 6 * u), cy + s * (R + 6 * u));
+        g.lineTo(cx + c * (R + 6 * u + out), cy + s * (R + 6 * u + out));
+        g.stroke();
       }
+    };
+    gauge(Math.PI - span, 1, f.heat, f.overheated && !blink ? FAINT : WARN);
+    gauge(span, -1, f.alt, burst ? '#ffffff' : f.altReady || f.altBurst ? AMBER : DIM);
+    if (f.jammed && Math.floor(f.now / 200) % 2 === 0) {
+      g.textAlign = 'center';
+      g.fillStyle = WARN;
+      g.font = font(16, 'bold');
+      g.fillText('BOOST JAMMED', cx, bottom + 34 * u);
+    }
+
+    // --- Reticle at the aim point, with hit markers -----------------------------------------
+    if (f.aim) {
+      const { x, y } = f.aim;
+      g.lineWidth = 1.5 * u;
+      g.strokeStyle = DIM;
+      arc(g, x, y, 12 * u, 0, TAU);
       g.fillStyle = AMBER;
       g.beginPath();
       g.arc(x, y, 2.2 * u, 0, TAU);
@@ -228,56 +248,10 @@ export class Hud {
     }
     g.globalAlpha = 1;
 
-    // --- Radar --------------------------------------------------------------------------
-    const rr = 105 * u, rx = 40 * u + rr, ry = H - 40 * u - rr, k = rr / RADAR_RANGE;
-    g.save();
-    g.beginPath();
-    g.arc(rx, ry, rr, 0, TAU);
-    g.fillStyle = 'rgba(8,12,10,0.55)';
-    g.fill();
-    g.clip();
-    if (this.radarMap) {
-      // World (x, z) to radar: rotate by heading about the viewer, heading up.
-      const { canvas: m, minX, minZ, scale } = this.radarMap, c = Math.cos(f.yaw), s = Math.sin(f.yaw);
-      const ox = minX - f.me.x, oz = minZ - f.me.z;
-      g.setTransform((k * c) / scale, (k * s) / scale, (-k * s) / scale, (k * c) / scale, rx + k * (c * ox - s * oz), ry + k * (s * ox + c * oz));
-      g.drawImage(m, 0, 0);
-      g.setTransform(1, 0, 0, 1, 0, 0);
-    }
-    g.strokeStyle = FAINT;
-    g.lineWidth = 1 * u;
-    for (const ring of [30, 60]) arc(g, rx, ry, ring * k, 0, TAU);
-    const sweep = (f.now / 1000) * 2.5;
-    g.strokeStyle = DIM;
-    g.beginPath();
-    g.moveTo(rx, ry);
-    g.lineTo(rx + Math.cos(sweep) * rr, ry + Math.sin(sweep) * rr);
-    g.stroke();
-    for (const c of f.contacts) {
-      const p = relative(f.me.x, f.me.z, f.yaw, c.x, c.z);
-      const px = rx + p.right * k, py = ry - p.ahead * k;
-      g.fillStyle = c.orb ? REPAIR : c.enemy ? f.enemyColor : f.friendColor;
-      if (c.orb) g.fillRect(px - 2.5 * u, py - 2.5 * u, 5 * u, 5 * u); // health orb
-      else if (c.enemy) diamond(g, px, py, 5 * u);
-      else {
-        g.beginPath();
-        g.arc(px, py, 3.5 * u, 0, TAU);
-        g.fill();
-      }
-    }
-    g.restore();
-    g.strokeStyle = DIM;
-    g.lineWidth = 1.5 * u;
-    arc(g, rx, ry, rr, 0, TAU);
-    g.fillStyle = AMBER;
-    tri(g, rx, ry - 3 * u, 6 * u, -1);
-    const north = relative(0, 0, f.yaw, 0, -1).bearing - Math.PI / 2;
-    g.font = font(12);
-    g.textAlign = 'center';
-    g.textBaseline = 'middle';
-    g.fillText('N', rx + Math.cos(north) * (rr + 10 * u), ry + Math.sin(north) * (rr + 10 * u));
+    // --- Radar and hull, in the chase view only (the cockpit's dash carries them otherwise) ----
+    if (f.firstPerson) return;
+    radar(g, 145 * u, 145 * u, 105 * u, u, f, this.radarMap);
 
-    // --- Dashboard: hull, fuel, readiness -----------------------------------------------------
     const dy = H - 120 * u, low = f.health / f.healthMax < 0.3;
     g.textAlign = 'center';
     g.textBaseline = 'alphabetic';
@@ -288,50 +262,69 @@ export class Hud {
     g.fillStyle = DIM;
     g.fillText(`HULL · ${f.className.toUpperCase()}`, cx, dy + 16 * u);
     bar(g, cx - 120 * u, dy + 24 * u, 240 * u, 7 * u, f.health / f.healthMax, low ? WARN : AMBER);
-    bar(g, cx - 120 * u, dy + 37 * u, 240 * u, 5 * u, f.fuel, FUEL);
-    g.fillStyle = f.dodge >= 1 ? AMBER : FAINT;
-    g.beginPath();
-    g.arc(cx - 140 * u, dy + 30 * u, 5 * u, 0, TAU);
-    g.fill();
-    const repairKey = f.repair >= 1 ? 'ON' : f.repair > 0 ? '…' : 'R';
-    const rows = [
-      // While an own shell is armed in flight, RMB bursts it.
-      [`${f.altName}`, f.alt, f.altBurst ? 'RMB BURST' : f.altReady ? 'RMB' : '', f.altBurst],
-      [`${f.abilityName}`, f.ability, f.abilityActive ? 'ON' : f.ability >= 1 ? 'F' : ''],
-      ['Repair', f.repair > 0 ? f.repair : 1, repairKey],
-    ];
-    g.textAlign = 'left';
-    rows.forEach(([name, fill, key, lit], i) => {
-      const y = dy - 34 * u + i * 24 * u, x = cx + 150 * u;
-      g.fillStyle = fill >= 1 || lit ? AMBER : DIM;
-      g.font = font(12);
-      g.fillText(`${name.toUpperCase()} ${key}`, x, y);
-      bar(g, x, y + 5 * u, 120 * u, 4 * u, fill, fill >= 1 ? AMBER : DIM);
-    });
-    // Items, left of the hull: a pip per charge and the next charge's progress.
-    g.textAlign = 'right';
-    f.items.forEach((it, i) => {
-      const y = dy - 22 * u + i * 26 * u, x = cx - 165 * u;
-      g.fillStyle = it.charges > 0 ? AMBER : DIM;
-      g.font = font(12);
-      g.fillText(`${it.key} ${it.name.toUpperCase()}`, x, y);
-      for (let k = 0; k < it.max; k++) {
-        g.fillStyle = k < it.charges ? AMBER : FAINT;
-        g.fillRect(x - 120 * u + k * 12 * u, y + 5 * u, 9 * u, 5 * u);
-      }
-      if (it.charges < it.max) bar(g, x - 120 * u + it.max * 12 * u, y + 7 * u, 40 * u, 2 * u, it.recharge, DIM);
-    });
-    // Shutdown and jamming warnings over the hull numeral.
+    // The repair cycle over the hull numeral.
     g.textAlign = 'center';
     g.font = font(16, 'bold');
     if (f.repair > 0 || f.standing) {
       g.fillStyle = REPAIR;
       g.fillText(f.standing ? 'SYSTEMS RESTARTING' : f.repair >= 1 ? 'REPAIRING · SYSTEMS OFFLINE' : 'SHUTTING DOWN', cx, dy - 52 * u);
-    } else if (f.jammed && Math.floor(f.now / 200) % 2 === 0) {
-      g.fillStyle = WARN;
-      g.fillText('BOOST JAMMED', cx, dy - 52 * u);
     }
   }
+}
+
+/**
+ * The radar, centered at (rx, ry) with radius `rr`, drawn at scale `u`: the map's pre-drawn top-down
+ * plan (`map`, from Hud.setMap) turning about the viewer, heading up, with `f`'s contacts. Drawn on
+ * the glass in the chase view and on the cockpit's dash scope (cockpit.js) otherwise.
+ */
+export function radar(g, rx, ry, rr, u, f, map) {
+  const k = rr / RADAR_RANGE;
+  g.save();
+  g.beginPath();
+  g.arc(rx, ry, rr, 0, TAU);
+  g.fillStyle = 'rgba(8,12,10,0.55)';
+  g.fill();
+  g.clip();
+  if (map) {
+    // World (x, z) to radar: rotate by heading about the viewer, heading up.
+    const { canvas: m, minX, minZ, scale } = map, c = Math.cos(f.yaw), s = Math.sin(f.yaw);
+    const ox = minX - f.me.x, oz = minZ - f.me.z;
+    g.setTransform((k * c) / scale, (k * s) / scale, (-k * s) / scale, (k * c) / scale, rx + k * (c * ox - s * oz), ry + k * (s * ox + c * oz));
+    g.drawImage(m, 0, 0);
+    g.setTransform(1, 0, 0, 1, 0, 0);
+  }
+  g.strokeStyle = FAINT;
+  g.lineWidth = 1 * u;
+  for (const ring of [30, 60]) arc(g, rx, ry, ring * k, 0, TAU);
+  const sweep = (f.now / 1000) * 2.5;
+  g.strokeStyle = DIM;
+  g.beginPath();
+  g.moveTo(rx, ry);
+  g.lineTo(rx + Math.cos(sweep) * rr, ry + Math.sin(sweep) * rr);
+  g.stroke();
+  for (const c of f.contacts) {
+    const p = relative(f.me.x, f.me.z, f.yaw, c.x, c.z);
+    const px = rx + p.right * k, py = ry - p.ahead * k;
+    g.fillStyle = c.orb ? REPAIR : c.enemy ? f.enemyColor : f.friendColor;
+    if (c.orb) g.fillRect(px - 2.5 * u, py - 2.5 * u, 5 * u, 5 * u); // health orb
+    else if (c.enemy) diamond(g, px, py, 5 * u);
+    else {
+      g.beginPath();
+      g.arc(px, py, 3.5 * u, 0, TAU);
+      g.fill();
+    }
+  }
+  g.restore();
+  g.strokeStyle = DIM;
+  g.lineWidth = 1.5 * u;
+  arc(g, rx, ry, rr, 0, TAU);
+  g.fillStyle = AMBER;
+  tri(g, rx, ry - 3 * u, 6 * u, -1);
+  const north = relative(0, 0, f.yaw, 0, -1).bearing - Math.PI / 2;
+  g.font = `${Math.round(12 * u)}px ui-monospace, Menlo, monospace`;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText('N', rx + Math.cos(north) * (rr + 10 * u), ry + Math.sin(north) * (rr + 10 * u));
 }
 
 function arc(g, x, y, r, a, b) {
@@ -380,7 +373,7 @@ function bar(g, x, y, w, h, fill, color) {
  * A vertical tape centered on `value` at (x, cy): ticks every `step`, labels every `label`,
  * `per` px per unit, and a boxed readout on the side facing the center (`side` -1 left, 1 right).
  */
-function ladder(g, u, x, cy, value, per, step, label, title, side) {
+function ladder(g, u, x, cy, value, per, step, label, side) {
   const half = 150 * u, font = (px) => `${Math.round(px * u)}px ui-monospace, Menlo, monospace`;
   g.strokeStyle = g.fillStyle = AMBER;
   g.lineWidth = 1.5 * u;
@@ -406,9 +399,6 @@ function ladder(g, u, x, cy, value, per, step, label, title, side) {
   g.textAlign = 'center';
   g.font = font(15);
   g.fillText(value.toFixed(value < 100 ? 1 : 0), bx + bw / 2, cy);
-  g.font = font(11);
-  g.fillStyle = DIM;
-  g.fillText(title, x, cy - half - 12 * u);
 }
 
 export { hex };

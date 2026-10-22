@@ -635,7 +635,9 @@ function frame(now) {
   if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }
   camera.updateMatrixWorld();
   cockpit.setTeam(myTeam);
-  cockpit.update(dt, camera, SUN_DIR, T('fov'));
+  // Shade the cockpit when anything stands between the eye and the sun.
+  const shaded = firstPerson && game.cast_ray(eye.x, eye.y, eye.z, SUN_DIR.x, SUN_DIR.y, SUN_DIR.z, 150) < 150;
+  cockpit.update(dt, camera, SUN_DIR, T('fov'), shaded);
 
   // The predicted aim point only knows the arena, so stop own tracers at the first enemy mech
   // they cross (visual only; the server decides hits).
@@ -825,15 +827,17 @@ function drawGlass(now, myTeam) {
   aim.set(curr[S.AIM], curr[S.AIM + 1], curr[S.AIM + 2]).project(camera);
   const c = classes[CLASS_KEYS[classIdx]];
   glass.resize(renderer.getPixelRatio());
-  glass.draw({
-    now, yaw, me: { x: pos.x, z: pos.z }, altitude: pos.y, speed: Math.hypot(curr[S.VEL], curr[S.VEL + 2]),
+  // One frame for both the glass and the cockpit's dash screens.
+  const f = {
+    now, yaw, me: { x: pos.x, z: pos.z }, altitude: pos.y, speed: Math.hypot(curr[S.VEL], curr[S.VEL + 2]), firstPerson,
     aim: aim.z < 1 ? toScreen(aim) : null,
     heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
-    alt: 1 - curr[S.ALT_WAIT] / Math.max(T('alt_cooldown'), 1e-6), altReady: curr[S.ALT_WAIT] <= 0, altName: c.secondary.name,
+    alt: 1 - curr[S.ALT_WAIT] / Math.max(T('alt_cooldown'), 1e-6), altReady: curr[S.ALT_WAIT] <= 0,
     altBurst: burstable,
     ability: 1 - curr[S.ABILITY_CD] / Math.max(T('ability_cooldown'), 1e-6), abilityActive: curr[S.ABILITY_T] > 0, abilityName: c.ability.name,
     dodge: 1 - curr[S.DODGE_CD] / Math.max(T('dodge_cooldown'), 1e-6),
-    health: curr[S.HEALTH], healthMax: T('health_max'), fuel: curr[S.FUEL] / T('fuel_max'), className: c.name,
+    health: curr[S.HEALTH], healthMax: T('health_max'), fuel: curr[S.FUEL] / T('fuel_max'), className: c.name, hurt,
+    boostMin: T('boost_min_fuel') / T('fuel_max'), boosting: !!curr[S.BOOSTING], hovering: !!curr[S.HOVERING],
     friendColor: hex((TEAMS[myTeam] ?? TEAMS[-1]).accent), enemyColor: hex((TEAMS[1 - myTeam] ?? TEAMS[1]).accent),
     repair: repairPhase(curr[S.REPAIR_T]), standing: curr[S.STAND] > 0,
     items: [
@@ -842,8 +846,10 @@ function drawGlass(now, myTeam) {
     ],
     jammed: curr[S.JAMMED] > 0,
     feed: feed.filter((k) => now - k.at < 6000),
-    contacts, tags, hits, damage: damageFrom,
-  });
+    contacts, tags, hits, damage: damageFrom, radarMap: glass.radarMap,
+  };
+  glass.draw(f);
+  if (firstPerson) cockpit.instruments(f);
 }
 
 // Stats overlay (I) and the one-time fallback from High to Low.
