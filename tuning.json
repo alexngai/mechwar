@@ -58,6 +58,8 @@
   "burst_gap":         { "value": 0.07,   "min": 0.033, "max": 0.5,   "step": 0.001,  "unit": "s",        "group": "primary", "source": "own tuning" },
   "charge_time":       { "value": 0,      "min": 0,     "max": 5,     "step": 0.05,   "unit": "s (0 none)", "group": "primary", "source": "own tuning" },
   "charge_damage":     { "value": 1,      "min": 1,     "max": 10,    "step": 0.1,    "unit": "x at full", "group": "primary", "source": "own tuning" },
+  "charge_speed":      { "value": 1,      "min": 1,     "max": 5,     "step": 0.1,    "unit": "x at full", "group": "primary", "source": "own tuning" },
+  "charge_radius":     { "value": 1,      "min": 1,     "max": 10,    "step": 0.1,    "unit": "x at full", "group": "primary", "source": "own tuning" },
 
   "mech_radius":       { "value": 1.4,    "min": 0.3,   "max": 4,     "step": 0.05,   "unit": "m",       "group": "body",   "source": "own tuning" },
   "mech_height":       { "value": 5,      "min": 1,     "max": 12,    "step": 0.1,    "unit": "m",       "group": "body",   "source": "own tuning" },

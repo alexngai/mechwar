@@ -9,7 +9,7 @@ use rapier3d::parry::query::RayCast;
 use rapier3d::prelude::{Capsule, Pose, Ray, Rotation};
 use serde::{Deserialize, Serialize};
 
-use crate::{Arena, DT, Loadout, Mech, MechClass, Tuning, Vector, aim_ray, hit_shape};
+use crate::{Arena, DT, Loadout, Mech, MechClass, Tuning, Vector, aim_ray, hit_shape, weapon};
 
 /// Added to mech capsules for contact: projectiles aren't points.
 pub const PROJECTILE_RADIUS: f32 = 0.25;
@@ -32,6 +32,8 @@ pub struct Projectile {
     /// The owner's class and loadout at launch, which pick the tuning it flies with.
     pub class: MechClass,
     pub loadout: Loadout,
+    /// The shot's charge, 0-1 (see `tuning_for`).
+    pub charge: f32,
     pub pos: Vector,
     pub vel: Vector,
     pub age: f32,
@@ -74,7 +76,7 @@ pub fn volley(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Vec<Projectile> {
         .map(|n| {
             let fan = (f32::from(n) - f32::from(count - 1) * 0.5) * t.alt_spread_deg.to_radians();
             let dir = Rotation::from_rotation_y(m.yaw + fan) * Rotation::from_rotation_x(pitch) * Vector::NEG_Z;
-            Projectile { owner, seq, n, primary: false, class: m.class, loadout: m.loadout, pos: eye, vel: dir * t.alt_speed, age: 0.0 }
+            Projectile { owner, seq, n, primary: false, class: m.class, loadout: m.loadout, charge: 0.0, pos: eye, vel: dir * t.alt_speed, age: 0.0 }
         })
         .collect()
 }
@@ -88,15 +90,24 @@ pub fn grenade(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Projectile {
     Projectile { n: GRENADE, ..volley(&t.grenade(), m, owner, seq)[0] }
 }
 
-/// The tuning a projectile with volley index `n` flies with, given its class's tuning `t`:
-/// grenades swap their ballistics into the secondary's fields.
-pub fn tuning_for(t: &Tuning, n: u8) -> Cow<'_, Tuning> {
-    if n == GRENADE { Cow::Owned(t.grenade()) } else { Cow::Borrowed(t) }
+/// The tuning projectile `p` flies and bursts with, given its owner's tuning `t`: grenades swap
+/// their ballistics into the secondary's fields, and a charged shell hits harder and wider.
+pub fn tuning_for<'a>(t: &'a Tuning, p: &Projectile) -> Cow<'a, Tuning> {
+    if p.n == GRENADE {
+        return Cow::Owned(t.grenade());
+    }
+    if p.charge <= 0.0 {
+        return Cow::Borrowed(t);
+    }
+    let mut charged = t.clone();
+    charged.shot_damage *= weapon::power(t, p.charge);
+    charged.shot_radius *= 1.0 + (t.charge_radius - 1.0) * p.charge;
+    Cow::Owned(charged)
 }
 
-/// How wide a burst of projectile `p`'s kind spreads, given its class's tuning `t`.
+/// How wide projectile `p`'s burst spreads, given its owner's tuning `t`.
 pub fn radius(t: &Tuning, p: &Projectile) -> f32 {
-    ballistics(&tuning_for(t, p.n), p.primary).radius
+    ballistics(&tuning_for(t, p), p.primary).radius
 }
 
 /// Whether `p` is a secondary shell (not a grenade or primary fire) its owner can burst yet.

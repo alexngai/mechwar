@@ -371,8 +371,9 @@ export class Effects {
   }
 
   /**
-   * This frame's projectiles, each { pos, vel, look, age, primary, grenade }, `look` a secondary's
-   * weapons.json `projectile`: primary fire is a small hot slug with a short glow streak, rockets
+   * This frame's projectiles, each { pos, vel, look, charge, age, primary, grenade }, `look` the
+   * weapon's weapons.json `projectile`: primary fire is a small hot slug with a short glow streak
+   * unless it's a burning `slug` (bigger and fierier the more it was charged, 0-1), rockets
    * and darts burn with a smoke trail, shells tumble dark with a blinking light, and grenades
    * tumble small with a light that blinks faster as the fuse runs down.
    */
@@ -390,10 +391,17 @@ export class Effects {
         item.core.material.color.setHex(0x70ffa0);
         return;
       }
-      const shell = p.look === 'shell', dart = p.look === 'dart';
-      item.mesh.scale.setScalar(p.primary ? 0.6 : dart ? 0.6 : shell ? 1.6 : 1);
+      const shell = p.look === 'shell', dart = p.look === 'dart', slug = p.look === 'slug';
+      item.mesh.scale.setScalar(slug ? 1.1 + 0.8 * p.charge : p.primary ? 0.6 : dart ? 0.6 : shell ? 1.6 : 1);
       item.core.visible = !shell || (p.age * 6) % 1 < 0.5;
-      item.core.material.color.setHex(p.primary ? 0xffe2a0 : shell ? 0xff4020 : 0xffb060);
+      item.core.material.color.setHex(slug ? 0xff9a40 : p.primary ? 0xffe2a0 : shell ? 0xff4020 : 0xffb060);
+      if (slug) {
+        dir.copy(p.vel).normalize();
+        for (let k = count(70 + 60 * p.charge, dt); k > 0; k--) {
+          this.glow.spawn(p.pos, scatter(dir, -3, 0.6), { life: rand(0.06, 0.14), size: [0.7 + 0.6 * p.charge, 0.1], color: FIRE, drag: 4 });
+        }
+        return;
+      }
       if (p.primary) {
         dir.copy(p.vel).normalize();
         for (let k = count(60, dt); k > 0; k--) this.glow.spawn(p.pos, scatter(dir, -2, 0.3), { life: 0.05, size: [0.5, 0.1], color: SPARK, drag: 4 });

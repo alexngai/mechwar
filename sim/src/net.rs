@@ -118,7 +118,7 @@ pub enum Event {
     /// A projectile (secondary, or a projectile primary) leaving its owner, before its first tick of flight; clients replay it.
     Launch(Projectile),
     /// A projectile burst at `pos`. `hits` has bit `id` set for each player its splash hurt.
-    Blast { owner: u8, seq: u32, n: u8, primary: bool, class: MechClass, loadout: Loadout, pos: Vector, hits: u16 },
+    Blast { owner: u8, seq: u32, n: u8, primary: bool, class: MechClass, loadout: Loadout, charge: f32, pos: Vector, hits: u16 },
     /// An EMP went off at `pos`. `hits` has bit `id` set for each player it jammed.
     Pulse { owner: u8, pos: Vector, hits: u16 },
 }

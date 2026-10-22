@@ -652,8 +652,8 @@ function frame(now) {
   const pr = game.projectiles(now), drawn = [], live = new Set();
   let gunAt = null;
   burstable = false;
-  for (let i = 0; i < pr.length; i += 14) {
-    const [owner, seq, n, , x, y, z, vx, vy, vz, age, predicted, primary, weapon] = pr.subarray(i, i + 14);
+  for (let i = 0; i < pr.length; i += 15) {
+    const [owner, seq, n, , x, y, z, vx, vy, vz, age, predicted, primary, weapon, charge] = pr.subarray(i, i + 15);
     const secondary = primary ? null : weapons.secondaries[weapon];
     const key = `${owner}:${seq}:${n}:${primary}`, ahead = predicted ? a * DT : 0;
     const mech = predicted ? me : remotes.get(owner)?.mech;
@@ -676,7 +676,8 @@ function frame(now) {
     const p = new THREE.Vector3(x + vx * ahead, y + vy * ahead, z + vz * ahead);
     const blend = Math.min((age + ahead) / LAUNCH_BLEND, 1);
     if (blend < 1) p.lerp(shot.from, 1 - blend);
-    drawn.push({ pos: p, vel: new THREE.Vector3(vx, vy, vz), look: secondary?.projectile, age: age + ahead, primary: !!primary, grenade: n === GRENADE_N });
+    const look = (primary ? weapons.primaries[weapon] : secondary)?.projectile;
+    drawn.push({ pos: p, vel: new THREE.Vector3(vx, vy, vz), look, charge, age: age + ahead, primary: !!primary, grenade: n === GRENADE_N });
     if (!primary) debug.shell(key, n === GRENADE_N ? 'Tumbler' : secondary.name, p, age + ahead);
   }
   for (const key of launches.keys()) if (!live.has(key)) launches.delete(key);

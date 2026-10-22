@@ -94,9 +94,12 @@ pub struct Tuning {
     pub burst: f32,
     pub burst_gap: f32,
     /// Charge primaries build charge over `charge_time` s while held (0: none) and fire on
-    /// release, hitting (and heating) `charge_damage` times as hard at full charge.
+    /// release, hitting (and heating) `charge_damage` times as hard at full charge; a projectile
+    /// also flies `charge_speed` times as fast and bursts `charge_radius` times as wide.
     pub charge_time: f32,
     pub charge_damage: f32,
+    pub charge_speed: f32,
+    pub charge_radius: f32,
 
     pub mech_radius: f32,
     pub mech_height: f32,
@@ -283,11 +286,11 @@ pub struct Mech {
     /// Degrees the primary's cone has grown from firing, on top of `spread_deg`.
     pub bloom: f32,
     /// The primary's mechanics: spin 0-1 (spin-up weapons), shots left in a burst, charge 0-1
-    /// (charge weapons), and the last shot's damage and heat multiplier from its charge.
+    /// (charge weapons), and the charge the last shot fired with.
     pub spin: f32,
     pub burst_left: u8,
     pub charge: f32,
-    pub shot_power: f32,
+    pub shot_charge: f32,
     /// Where the aim ray from the eye lands (for the crosshair).
     pub aim_point: Vector,
     /// Set on ticks a shot fired.
@@ -464,7 +467,7 @@ impl Sim {
         let (arena, blasts) = (&self.arena, &mut self.blasts);
         self.projectiles.retain_mut(|p| {
             let radius = projectile::radius(t, p);
-            match projectile::fly(arena, &projectile::tuning_for(t, p.n), p, |_, _| None) {
+            match projectile::fly(arena, &projectile::tuning_for(t, p), p, |_, _| None) {
                 Some(at) => {
                     blasts.push((radius, at));
                     false
@@ -713,8 +716,7 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     m.alt_pressed = input.alt_fire && !m.alt_held;
     m.alt_held = input.alt_fire;
     if m.shot {
-        m.shot_power = 1.0 + (t.charge_damage - 1.0) * m.charge;
-        m.charge = 0.0;
+        (m.shot_charge, m.charge) = (m.charge, 0.0);
         let burst = t.burst.max(1.0);
         m.burst_left = if m.burst_left > 0 { m.burst_left - 1 } else { burst as u8 - 1 };
         let spun = if t.spin_up > 0.0 { t.spin_start + (1.0 - t.spin_start) * m.spin } else { 1.0 };
@@ -728,7 +730,7 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
         } else {
             cycle
         };
-        m.heat += t.heat_per_shot * m.shot_power;
+        m.heat += t.heat_per_shot * weapon::power(t, m.shot_charge);
     }
     if m.launched {
         m.alt_wait = t.alt_cooldown;
@@ -851,11 +853,25 @@ mod tests {
         let fire = Input { fire: true, ..Input::default() };
         assert!(shots(&mut sim, fire, 45).is_empty(), "fired while held");
         sim.step(&Input::default());
-        assert!(sim.mech.shot && (sim.mech.shot_power - 3.0).abs() < 1e-4, "full charge: {}", sim.mech.shot_power);
+        assert!(sim.mech.shot && sim.mech.shot_charge == 1.0, "full charge: {}", sim.mech.shot_charge);
         run(&mut sim, Input::default(), 30);
         sim.step(&fire);
         sim.step(&Input::default());
-        assert!(sim.mech.shot && sim.mech.shot_power < 1.1, "a tap: {}", sim.mech.shot_power);
+        assert!(sim.mech.shot && sim.mech.shot_charge < 0.05, "a tap: {}", sim.mech.shot_charge);
+    }
+
+    #[test]
+    fn charged_shells_fly_faster_and_hit_harder_and_wider() {
+        let mut sim = weapon_sim(|t| {
+            (t.charge_time, t.charge_damage, t.charge_speed, t.charge_radius, t.heat_per_shot) = (1.0, 1.5, 2.5, 3.5, 0.0);
+            (t.shot_speed, t.shot_gravity, t.shot_radius) = (60.0, 0.0, 1.0);
+        });
+        run(&mut sim, Input { fire: true, ..Input::default() }, 45);
+        sim.step(&Input::default());
+        let p = *sim.projectiles.iter().find(|p| p.primary).expect("fired a shell");
+        let charged = projectile::tuning_for(&sim.tuning, &p);
+        assert!((p.vel.length() - 150.0).abs() < 0.5, "{} m/s", p.vel.length());
+        assert!((charged.shot_damage - 1.5 * sim.tuning.shot_damage).abs() < 1e-3 && (projectile::radius(&sim.tuning, &p) - 3.5).abs() < 1e-4);
     }
 
     /// A Lancer sim with its tuning changed by `set`.

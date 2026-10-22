@@ -31,13 +31,23 @@ pub fn pellets(t: &Tuning, m: &Mech, seq: u32) -> Vec<Ray> {
         .collect()
 }
 
-/// Primary projectiles for this tick's shot, one per pellet ray.
+/// Primary projectiles for this tick's shot, one per pellet ray, flying faster the more it was
+/// charged (and bursting harder and wider: `projectile::tuning_for`).
 pub fn volley(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Vec<Projectile> {
+    let speed = t.shot_speed * (1.0 + (t.charge_speed - 1.0) * m.shot_charge);
     pellets(t, m, seq)
         .iter()
         .enumerate()
-        .map(|(n, ray)| Projectile { owner, seq, n: n as u8, primary: true, class: m.class, loadout: m.loadout, pos: ray.origin, vel: ray.dir * t.shot_speed, age: 0.0 })
+        .map(|(n, ray)| Projectile {
+            owner, seq, n: n as u8, primary: true, class: m.class, loadout: m.loadout, charge: m.shot_charge,
+            pos: ray.origin, vel: ray.dir * speed, age: 0.0,
+        })
         .collect()
+}
+
+/// Damage (and heat) multiplier of a shot fired with `charge` (0-1).
+pub fn power(t: &Tuning, charge: f32) -> f32 {
+    1.0 + (t.charge_damage - 1.0) * charge
 }
 
 /// Damage multiplier for a hitscan hit `dist` away: 1 up to `falloff_start`, then linear down to

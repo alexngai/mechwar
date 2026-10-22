@@ -37,11 +37,11 @@
       }
     },
     {
-      "id": "kiln", "name": "Kiln", "desc": "Charge cannon: hold to charge, release to fire; full charge hits three times as hard", "sound": "rail",
+      "id": "kiln", "name": "Kiln", "desc": "Heat cannon: hold to charge a burning slug that bursts on impact; charging widens the burst from 1 to 3.5 m and speeds the slug", "sound": "rail", "projectile": "slug",
       "stats": {
-        "fire_rate": 2, "charge_time": 0.9, "charge_damage": 3, "shot_damage": 18, "heat_per_shot": 8,
-        "spread_deg": 0.05, "bloom_per_shot": 0, "bloom_max": 0,
-        "falloff_start": 80, "falloff_end": 160, "falloff_floor": 0.7
+        "fire_rate": 2, "charge_time": 0.9, "charge_damage": 1.5, "charge_speed": 2.5, "charge_radius": 3.5,
+        "shot_damage": 16, "heat_per_shot": 8, "spread_deg": 0.1, "bloom_per_shot": 0, "bloom_max": 0,
+        "shot_speed": 90, "shot_gravity": 6, "shot_radius": 1, "weapon_range": 200
       }
     }
   ],

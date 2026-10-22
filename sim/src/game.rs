@@ -391,7 +391,7 @@ impl Game {
                     .filter(|q| q.team != f.team && q.mech.health > 0.0)
                     .map(|q| (self.arsenal.of(&q.mech), &q.mech))
             };
-            let t = projectile::tuning_for(self.arsenal.get(f.p.class, f.p.loadout), f.p.n);
+            let t = projectile::tuning_for(self.arsenal.get(f.p.class, f.p.loadout), &f.p);
             match projectile::fly(&self.arena, &t, &mut f.p, |ray, max| projectile::first_mech(ray, max, enemies())) {
                 Some(at) => {
                     bursts.push((f.p, f.team, at));
@@ -532,8 +532,7 @@ impl Game {
             // After the match ends shots still fly, but don't hit anyone.
             let hit = hit.filter(|_| matches!(self.phase, Phase::Playing { .. }));
             self.events.push(Event::Shot { shooter: shooter_id, end: ray.point_at(best), hit: hit.map(|j| self.players[j].id) });
-            // ponytail: charge scales hitscan damage only; projectile primaries fly at their base damage.
-            hits.extend(hit.map(|j| (j, t.shot_damage * m.shot_power * weapon::falloff(t, best))));
+            hits.extend(hit.map(|j| (j, t.shot_damage * weapon::power(t, m.shot_charge) * weapon::falloff(t, best))));
         }
         for (j, damage) in hits {
             self.apply_damage(Some(shooter), j, damage);
@@ -542,7 +541,7 @@ impl Game {
 
     /// Splash from projectile `p` (fired by `team`) bursting at `at`, and its Blast event.
     fn burst(&mut self, p: Projectile, team: u8, at: Vector) {
-        let t = projectile::tuning_for(self.arsenal.get(p.class, p.loadout), p.n);
+        let t = projectile::tuning_for(self.arsenal.get(p.class, p.loadout), &p);
         let hurt: Vec<(usize, f32)> = self
             .players
             .iter()
@@ -559,7 +558,7 @@ impl Game {
                 self.apply_damage(attacker, j, damage);
             }
         }
-        self.events.push(Event::Blast { owner: p.owner, seq: p.seq, n: p.n, primary: p.primary, class: p.class, loadout: p.loadout, pos: at, hits });
+        self.events.push(Event::Blast { owner: p.owner, seq: p.seq, n: p.n, primary: p.primary, class: p.class, loadout: p.loadout, charge: p.charge, pos: at, hits });
     }
 
     /// Player `user`'s EMP: jams every living enemy it reaches, and its Pulse event.
@@ -897,7 +896,7 @@ mod tests {
         }
         // The bot's rocket, 2 m past the human's chest and flying on.
         let chest = Vector::new(0.0, 0.1 + t.mech_height * 0.5, 0.0);
-        let p = Projectile { owner: bot, seq: 1, n: 0, primary: false, class: MechClass::B, loadout: Loadout::of(MechClass::B), pos: chest + Vector::Z * 2.0, vel: Vector::Z * t.alt_speed, age: 0.5 };
+        let p = Projectile { owner: bot, seq: 1, n: 0, primary: false, class: MechClass::B, loadout: Loadout::of(MechClass::B), charge: 0.0, pos: chest + Vector::Z * 2.0, vel: Vector::Z * t.alt_speed, age: 0.5 };
         game.projectiles.push(Flying { p, team: 1 });
         game.step();
         let hits = game.events.iter().find_map(|e| if let Event::Blast { owner, hits, .. } = *e { Some((owner, hits)) } else { None });

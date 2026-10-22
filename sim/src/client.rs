@@ -171,7 +171,7 @@ impl NetClient {
         let (burst, blasts) = (&mut self.burst, &mut self.blasts);
         self.projectiles.retain_mut(|p| {
             let enemies = || obstacles.iter().filter(|(t, m)| *t != team && m.health > 0.0).map(|(_, m)| (arsenal.of(m), m));
-            let t = projectile::tuning_for(arsenal.get(p.class, p.loadout), p.n);
+            let t = projectile::tuning_for(arsenal.get(p.class, p.loadout), p);
             let Some(at) = projectile::fly(arena, &t, p, |ray, max| projectile::first_mech(ray, max, enemies())) else {
                 return true;
             };
@@ -275,9 +275,9 @@ impl NetClient {
             match *e {
                 Event::Launch(p) if Some(p.owner) != self.id => self.replays.push(Replay { launched: s.tick, p, flown: 0, done: false }),
                 Event::Launch(_) => {}
-                Event::Blast { owner, seq, n, primary, class, loadout, pos, hits } => {
+                Event::Blast { owner, seq, n, primary, class, loadout, charge, pos, hits } => {
                     let id = (owner, seq, n, primary);
-                    let shape = Projectile { owner, seq, n, primary, class, loadout, pos, vel: Vector::ZERO, age: 0.0 };
+                    let shape = Projectile { owner, seq, n, primary, class, loadout, charge, pos, vel: Vector::ZERO, age: 0.0 };
                     let radius = projectile::radius(self.arsenal.get(class, loadout), &shape);
                     self.hits.extend((0..16).filter(|v| hits & 1 << v != 0).map(|v| (owner, v)));
                     if Some(owner) != self.id {
@@ -326,7 +326,7 @@ impl NetClient {
         });
         let mut drawn: Vec<Drawn> = self.projectiles.iter().map(|&p| Drawn { p, predicted: true }).collect();
         for r in &mut self.replays {
-            let t = projectile::tuning_for(self.arsenal.get(r.p.class, r.p.loadout), r.p.n);
+            let t = projectile::tuning_for(self.arsenal.get(r.p.class, r.p.loadout), &r.p);
             // State after `flown` ticks is as of tick `launched - 1 + flown`.
             let due = (at - r.launched as f32 + 1.0).floor().max(0.0) as u32;
             while r.flown < due && !r.done {
