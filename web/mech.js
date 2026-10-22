@@ -1,7 +1,7 @@
 // Original procedural mechs: three walker classes built from boxes and posed every frame from
 // sim state. They're rigid parts on joints, so there's no skinned mesh; legs use two-bone IK.
 import * as THREE from 'three';
-import { halo } from './fx.js';
+import { halo, hot } from './fx.js';
 
 // Team color lives in the accents (visor, light strip) and the weapon pods; the hull carries a
 // personal scheme picked from the player id. -1 is offline.
@@ -283,7 +283,7 @@ export class Mech {
     this.pods = paintMaterial(this.wear, TEAMS[-1].paint);
     this.trim = paintMaterial(this.wear, 0x2f3236);
     this.hazard = paintMaterial(this.wear, 0xc9a227, 0x1d1d1d, 'hazard');
-    this.accent = new THREE.MeshBasicMaterial({ color: TEAMS[-1].accent });
+    this.accent = hot(new THREE.MeshBasicMaterial({ color: TEAMS[-1].accent }));
     this.lit = 1;
     this.flicker = 0;
     this.barrels = new THREE.MeshLambertMaterial({ color: 0x2a2c30, flatShading: true });
@@ -343,19 +343,14 @@ export class Mech {
     this.shell.visible = false;
 
     // Big parts cast sun shadows; everything receives them. Tiny parts skip the shadow pass.
-    const glowing = [];
     root.traverse((o) => {
       if (!o.isMesh || o === this.shell) return;
       o.receiveShadow = true;
       o.geometry.computeBoundingSphere();
       o.castShadow = o.geometry.boundingSphere.radius > 0.35;
-      if (o.material === this.accent) glowing.push(o);
     });
-    // Glow halos stand in for bloom: visors and lenses always, nozzles while thrusting.
-    this.halos = glowing.map((o) => o.add(halo(TEAMS[-1].accent, 1.1)).children.at(-1));
-    this.nozzleHalos = this.nozzles.map((exit) => exit.add(halo(0xffa040, 1.8)).children.at(-1));
 
-    // Added after the shadow and halo pass: the strip needs no halo and the plate casts no shadow.
+    // Added after the shadow pass: the strip stays out of it and the plate casts no shadow.
     const [sw, sy, sz, sl] = spec.strip;
     put(body, box(sw, 0.1, sl, this.accent), 0, sy, sz);
     const [pw, ph, py, pz] = spec.plate;
@@ -388,7 +383,6 @@ export class Mech {
     this.team = team;
     const t = TEAMS[team] ?? TEAMS[-1];
     this.pods.color.setHex(t.paint);
-    for (const h of this.halos) h.material.color.setHex(t.accent);
     this.lit = -1; // repaint the accents on the next update
   }
 
@@ -543,11 +537,6 @@ export class Mech {
       this.lit = lit;
       this.accent.color.setHex((TEAMS[this.team] ?? TEAMS[-1]).accent).multiplyScalar(lit);
     }
-    for (const h of this.halos) h.visible = Mech.halos && lit === 1;
-    for (const h of this.nozzleHalos) {
-      h.visible = Mech.halos && thrusting;
-      h.material.color.setHex(slipstream ? 0x80c0ff : 0xffa040);
-    }
     if (this.dashTrail > 0) {
       this.fx.dashTrail(body.getWorldPosition(world), this.dashDir, dt, this.dashTrail > DASH_TRAIL - 0.15);
       this.dashTrail -= dt;
@@ -650,7 +639,5 @@ export class Mech {
   }
 }
 
-/** Halos on (High quality) or off (Low). */
-Mech.halos = true;
 /** Sound cues (`audio.js`), once the page sets them up. */
 Mech.audio = null;

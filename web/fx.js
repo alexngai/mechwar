@@ -3,16 +3,30 @@
 // pool overwrites its oldest particle; raise the sizes if effects visibly cut out in big fights.
 import * as THREE from 'three';
 
+// Tints are display colors. Drawn into High quality's HDR target they go in as the scene-linear
+// color that OutputPass's sRGB and ACES (three's ACESFilmicToneMapping, inverted) turn back into
+// that tint, so they look the same and their hottest parts cross the bloom threshold.
 const vertexShader = `
 attribute float size;
 attribute float alpha;
 attribute vec3 tint;
 uniform float scale;
 uniform float cap; // largest angular size (rad): keeps embers drifting past the eye from blooming
-varying vec3 vTint;
+uniform float toneMappingExposure;
+varying vec3 vTint, vLinear;
 varying float vAlpha;
+vec3 untonemap(vec3 c) {
+  c = min(c, 0.97); // display white would take infinite light
+  vec3 y = mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
+  y = clamp(inverse(mat3(1.60475, -0.10208, -0.00327, -0.53108, 1.10813, -0.07276, -0.07367, -0.00605, 1.07602)) * y, 0.0, 1.0);
+  vec3 a = 0.983729 * y - 1.0, b = 0.432951 * y - 0.0245786, k = 0.238081 * y + 0.000090537;
+  vec3 v = (-b - sqrt(b * b - 4.0 * a * k)) / (2.0 * a);
+  // Saturated tints fall outside what ACES can output; clamp, or additive sparks would subtract.
+  return max(inverse(mat3(0.59719, 0.07600, 0.02840, 0.35458, 0.90834, 0.13383, 0.04823, 0.01566, 0.83777)) * v * 0.6 / toneMappingExposure, 0.0);
+}
 void main() {
   vTint = tint;
+  vLinear = untonemap(tint);
   vAlpha = alpha;
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
   gl_PointSize = scale * min(size / -mv.z, cap);
@@ -20,13 +34,17 @@ void main() {
 }`;
 
 const fragmentShader = `
-varying vec3 vTint;
+varying vec3 vTint, vLinear;
 varying float vAlpha;
 void main() {
   vec2 c = gl_PointCoord - 0.5;
   float d = dot(c, c) * 4.0;
   if (d > 1.0) discard;
-  gl_FragColor = vec4(vTint, vAlpha * (1.0 - d));
+  #ifdef TONE_MAPPING
+    gl_FragColor = vec4(vTint, vAlpha * (1.0 - d)); // straight to the screen
+  #else
+    gl_FragColor = vec4(vLinear, vAlpha * (1.0 - d));
+  #endif
 }`;
 
 class Pool {
@@ -117,6 +135,17 @@ function canvasTexture(width, height, paint) {
   return new THREE.CanvasTexture(canvas);
 }
 
+/** Gain on `hot` materials: above 1 in High quality, so they cross the bloom threshold. */
+export const HOT = { value: 1 };
+/** Has a basic material's color scaled by HOT. */
+export function hot(material) {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.hot = HOT;
+    shader.fragmentShader = `uniform float hot;\n${shader.fragmentShader}`.replace('#include <opaque_fragment>', 'outgoingLight *= hot;\n#include <opaque_fragment>');
+  };
+  return material;
+}
+
 let glowTexture;
 /** An additive glow sprite: a cheap stand-in for bloom around bright things. */
 export function halo(color, size) {
@@ -151,7 +180,7 @@ class Beams {
     this.items = Array.from({ length: count }, () => {
       const mesh = new THREE.Mesh(
         geometry,
-        new THREE.MeshBasicMaterial({ map: texture, color: 0xffe2a0, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+        hot(new THREE.MeshBasicMaterial({ map: texture, color: 0xffe2a0, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })),
       );
       mesh.matrixAutoUpdate = false;
       mesh.frustumCulled = false;

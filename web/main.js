@@ -1,10 +1,14 @@
 import * as THREE from 'three';
 import GUI from 'lil-gui';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import init, { WasmNetClient, WasmSim, map_name, tick_dt } from '../sim/pkg/sim.js';
 import tuning from '../tuning.json';
 import classes from '../classes.json';
-import { buildArena } from './arena.js';
-import { Effects } from './fx.js';
+import { buildArena, HIGH_ONLY, LOW_ONLY } from './arena.js';
+import { Effects, HOT } from './fx.js';
 import saltworks from '../maps/saltworks.json';
 import foundry from '../maps/foundry.json';
 import blockout from '../maps/blockout.json';
@@ -100,6 +104,19 @@ function placeSun(p) {
 }
 const camera = new THREE.PerspectiveCamera(T('fov'), 1, 0.1, 500);
 camera.rotation.order = 'YXZ';
+// High quality draws the world into an HDR target for bloom, and OutputPass tone maps it to the
+// screen. Only hot emissives (HOT), particle cores and the sun are bright enough to bloom: lit
+// concrete stays under about 0.7 by day. The threshold is on the brightest channel, so red accents
+// bloom like blue ones, and the widest blurs stay faint so a furnace mouth doesn't wash the view.
+const composer = new EffectComposer(renderer);
+const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.7, 0, 1.1);
+bloom.materialHighPassFilter.fragmentShader = bloom.materialHighPassFilter.fragmentShader.replace('luminance( texel.xyz )', 'max( texel.r, max( texel.g, texel.b ) )');
+[1, 1, 0.6, 0.2, 0].forEach((k, i) => bloom.bloomTintColors[i].setScalar(k));
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(bloom);
+const output = new OutputPass();
+output.needsSwap = false; // so every frame renders into the same target
+composer.addPass(output);
 
 
 const fx = new Effects(scene);
@@ -137,7 +154,12 @@ function applyQuality() {
   renderer.setPixelRatio(Math.min(devicePixelRatio, high ? 2 : 1));
   renderer.shadowMap.enabled = sun.castShadow = high;
   fx.setQuality(high);
-  Mech.halos = high;
+  HOT.value = high ? 2 : 1;
+  // The target's MSAA is most of High's cost: 11-11-10 float (no alpha) halves it against 16-bit
+  // RGBA, and on a 2x screen two samples look as smooth as four.
+  composer.reset(new THREE.WebGLRenderTarget(1, 1, { type: THREE.UnsignedInt101111Type, format: THREE.RGBFormat, samples: renderer.getPixelRatio() > 1 ? 2 : 4 }));
+  camera.layers.set(0);
+  camera.layers.enable(high ? HIGH_ONLY : LOW_ONLY);
   document.getElementById('glass').classList.toggle('glow', high);
   // Shadow support is compiled into materials, so they need rebuilding.
   scene.traverse((o) => {
@@ -595,7 +617,8 @@ function frame(now) {
     hud.banner.textContent = ended ? `${winner < 0 ? 'DRAW' : winner === team ? 'VICTORY' : 'DEFEAT'} · next match in ${secondsLeft}s` : '';
   }
 
-  renderer.render(scene, camera);
+  if (quality === 'high') composer.render(dt);
+  else renderer.render(scene, camera);
   if (firstPerson) {
     renderer.autoClear = false;
     renderer.clearDepth();
@@ -732,6 +755,8 @@ function watchPerformance(now, dt) {
 
 function resize() {
   renderer.setSize(innerWidth, innerHeight);
+  composer.setPixelRatio(renderer.getPixelRatio());
+  composer.setSize(innerWidth, innerHeight);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
 }

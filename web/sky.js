@@ -3,10 +3,12 @@
 // purely visual: nothing here collides or casts shadows.
 import * as THREE from 'three';
 
+// `haze` is low-lying mist: color, density at the map's lowest floor (1/m) and the height (m) over
+// which it thins by e.
 const SKY = {
-  day: { horizon: 0xd9cdb4, zenith: 0x8fb0c8, sun: 0xfff1d6, stars: 0 },
+  day: { horizon: 0xd9cdb4, zenith: 0x8fb0c8, sun: 0xfff1d6, stars: 0, haze: [0xd9cdb4, 0.004, 3] },
   // Moonlit: a deep blue zenith over a horizon warmed by the works' own glow; the sun becomes the moon.
-  night: { horizon: 0x2e2520, zenith: 0x050912, sun: 0x8492b4, stars: 1 },
+  night: { horizon: 0x2e2520, zenith: 0x050912, sun: 0x8492b4, stars: 1, haze: [0x7a6656, 0.05, 3] },
 };
 const COLORS = {
   flat: 0xd3ccbb, talus: 0xb5a58e, scree: 0xab9882, cliff: 0x9f8774, cap: 0xbcae96,
@@ -17,6 +19,38 @@ const COLORS = {
 const SKYLINE_FOG = 0.85;
 // The skyline is laid out around a 120 m square arena; bigger maps push all of it outward.
 const LAID_OUT_FOR = Math.hypot(120, 120);
+
+// The haze rides three's fog chunks, so every fogged material gets it (the dome and particles don't
+// fog). Its density falls off exponentially with height; the fragment integrates it along the
+// view ray. Typed-array uniform values are shared, not copied, when materials clone their
+// uniforms, so `fit` reaches every material by writing these.
+const HAZE = new Float32Array([0, 1, 0, 0]); // density at `base`, falloff height, base height, most it hides
+const HAZE_COLOR = new Float32Array(3);
+for (const lib of Object.values(THREE.ShaderLib)) {
+  if (lib.uniforms.fogColor) Object.assign(lib.uniforms, { haze: { value: HAZE }, hazeColor: { value: HAZE_COLOR } });
+}
+THREE.ShaderChunk.fog_pars_vertex += '\n#ifdef USE_FOG\n  varying vec3 vFogView;\n#endif\n';
+THREE.ShaderChunk.fog_vertex += '\n#ifdef USE_FOG\n  vFogView = mvPosition.xyz;\n#endif\n';
+THREE.ShaderChunk.fog_pars_fragment += '\n#ifdef USE_FOG\n  uniform vec4 haze;\n  uniform vec3 hazeColor;\n  varying vec3 vFogView;\n#endif\n';
+THREE.ShaderChunk.fog_fragment = /* glsl */ `
+#ifdef USE_FOG
+  {
+    // Heights in falloffs: the eye's above the base, and the surface's above the eye (the view
+    // matrix's Y row turns view space back into world rise). Density is relative to the base.
+    float above = (cameraPosition.y - haze.z) / haze.y, rise = dot(viewMatrix[1].xyz, vFogView) / haze.y;
+    float atEye = exp(-max(above, -4.0)), atSurface = exp(-max(above + rise, -4.0));
+    float depth = haze.x * length(vFogView) * (abs(rise) > 1e-3 ? (atEye - atSurface) / rise : atEye);
+    // A display color, like the fog's: on screen fog mixes in after tone mapping, while into High's
+    // HDR target it goes in linear, before OutputPass tone maps it.
+    #ifdef TONE_MAPPING
+      vec3 hazeTint = hazeColor;
+    #else
+      vec3 hazeTint = sRGBTransferEOTF(vec4(hazeColor, 1.0)).rgb;
+    #endif
+    gl_FragColor.rgb = mix(gl_FragColor.rgb, hazeTint, min(1.0 - exp(-depth), haze.w));
+  }
+#endif
+${THREE.ShaderChunk.fog_fragment}`;
 
 /** Small seeded PRNG (mulberry32) so the skyline is the same on every load. */
 function mulberry32(seed) {
@@ -180,7 +214,7 @@ function skylineMaterial(push) {
     shader.uniforms.push = push;
     shader.vertexShader = `uniform float push;\n${shader.vertexShader}`.replace(
       '#include <fog_vertex>',
-      `#include <fog_vertex>\n#ifdef USE_FOG\n  vFogDepth = max(vFogDepth - push, 0.0) * ${SKYLINE_FOG.toFixed(2)};\n#endif`,
+      `#include <fog_vertex>\n#ifdef USE_FOG\n  vFogDepth = max(vFogDepth - push, 0.0) * ${SKYLINE_FOG.toFixed(2)};\n  vFogView *= vFogDepth / max(-mvPosition.z, 1e-3);\n#endif`,
     );
   };
   return material;
@@ -189,7 +223,8 @@ function skylineMaterial(push) {
 /**
  * Adds the sky dome and distant skyline to `scene`, and sets its fog and background to the horizon color.
  * `sunDir` points toward the sun (normalized), or the moon at night. Returns `{ fit(map) }`, which
- * moves the skyline clear of the map's `size` and sets the sky for its `night`.
+ * moves the skyline clear of the map's `size`, sets the sky for its `night` and lays the haze on
+ * its lowest floor.
  */
 export function createSky(scene, sunDir) {
   scene.background = new THREE.Color(SKY.day.horizon);
@@ -202,7 +237,9 @@ export function createSky(scene, sunDir) {
   const skyline = new THREE.Mesh(skylineGeometry(0), skylineMaterial(push));
   skyline.matrixAutoUpdate = false;
   scene.add(dome, skyline);
-  const fit = ({ size: [w, d], night }) => {
+  const color = new THREE.Color();
+  const fit = (map) => {
+    const { size: [w, d], night } = map;
     const look = night ? SKY.night : SKY.day, u = dome.material.uniforms;
     u.horizon.value.setHex(look.horizon);
     u.zenith.value.setHex(look.zenith);
@@ -210,6 +247,10 @@ export function createSky(scene, sunDir) {
     u.stars.value = look.stars;
     scene.fog.color.setHex(look.horizon);
     scene.background.setHex(look.horizon);
+    const [haze, density, falloff] = look.haze;
+    const floor = Math.min(...map.solids.filter((s) => s.mat === 'ground').map((s) => s.box[1] + s.half[1]));
+    HAZE.set([density, falloff, floor, 0.85]);
+    color.setHex(haze).convertLinearToSRGB().toArray(HAZE_COLOR);
     const value = Math.max(0, (Math.hypot(w, d) - LAID_OUT_FOR) / 2);
     if (value === push.value) return;
     push.value = value;

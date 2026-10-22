@@ -3,7 +3,10 @@
 // merged into three meshes. Only `solids` collide (the sim reads the same file); everything added
 // here is visual.
 import * as THREE from 'three';
-import { halo } from './fx.js';
+import { halo, hot } from './fx.js';
+
+// Camera layers for quality-specific extras: halos stand in for bloom in Low; High has light shafts.
+export const LOW_ONLY = 1, HIGH_ONLY = 2;
 
 const COLORS = {
   ground: 0x9a9384, concrete: 0xa8a08e, metal: 0x6f7880, panel: 0x8f969a, salt: 0xe8e4d8, tank: 0xb9ac8e,
@@ -14,6 +17,7 @@ const TILE = 8; // ground texture repeat, meters
 const LAMP = { color: 0xffc98a, radius: 16, power: 1.4 };
 const FURNACE = { color: 0xff8a3a, radius: 15, power: 4 };
 const AO_STEPS = [0.4, 0.9, 1.6, 2.5, 3.6]; // sample distances along the normal, meters
+const UP = new THREE.Vector3(0, 1, 0);
 const color = new THREE.Color(), v = new THREE.Vector3(), n = new THREE.Vector3(), local = new THREE.Vector3(), sample = new THREE.Vector3(), to = new THREE.Vector3();
 
 const solidMatrix = (s) =>
@@ -118,13 +122,24 @@ function decorParts(d, parts, glow) {
     head.translate(x, y + 3.25, z);
     glow.push(paint(head, 0xffd9a0));
     glow.lamps.push(new THREE.Vector3(x, y + 3.1, z));
+    // Its light shaft, down to the deck it stands on.
+    glow.shafts.push(paint(new THREE.CylinderGeometry(0.3, 2.6, 3.1, 16, 1, true).translate(x, y + 1.55, z), LAMP.color, 0.25));
   } else if (d.kind === 'furnace') {
     // A furnace mouth: a glowing slab set into a wall (`from`/`to` corners), lit from `at`.
-    const a = new THREE.Vector3(...d.from), b = new THREE.Vector3(...d.to);
-    const g = new THREE.BoxGeometry(...new THREE.Vector3().subVectors(b, a).toArray().map(Math.abs));
-    g.translate(...a.add(b).multiplyScalar(0.5).toArray());
+    const a = new THREE.Vector3(...d.from), b = new THREE.Vector3(...d.to), at = new THREE.Vector3(...d.at);
+    const size = new THREE.Vector3().subVectors(b, a).toArray().map(Math.abs);
+    const g = new THREE.BoxGeometry(...size);
+    const center = a.add(b).multiplyScalar(0.5);
+    g.translate(...center.toArray());
     glow.push(paint(g, 0xffa050));
-    glow.furnaces.push(new THREE.Vector3(...d.at));
+    glow.furnaces.push(at);
+    // Its glow: a square shaft flaring 5 m out of the mouth, off the wall toward `at`.
+    const thin = size[0] < size[2] ? 0 : 2;
+    const out = new THREE.Vector3().setComponent(thin, Math.sign(at.getComponent(thin) - center.getComponent(thin)));
+    const across = new THREE.Vector3().crossVectors(UP, out).multiplyScalar(size[2 - thin] / 2);
+    const shaft = new THREE.CylinderGeometry(Math.SQRT2, 1.6 * Math.SQRT2, 1, 4, 1, true, Math.PI / 4);
+    shaft.applyMatrix4(new THREE.Matrix4().makeBasis(across, out.clone().multiplyScalar(-5), UP.clone().multiplyScalar(size[1] / 2)).setPosition(center.addScaledVector(out, 2.5)));
+    glow.shafts.push(paint(shaft, FURNACE.color, 0.3));
   }
 }
 
@@ -243,6 +258,39 @@ function glowing(material) {
   return material;
 }
 
+/**
+ * Additive light shafts that read as lit air: bright at the source (`uv.y` 1), fading along the
+ * shaft and toward its edges, where the eye looks through the least of it, and into the fog.
+ */
+function shaftMaterial() {
+  return new THREE.ShaderMaterial({
+    uniforms: THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
+    vertexShader: /* glsl */ `
+      uniform float fogNear, fogFar;
+      varying vec3 vColor, vNormal, vView;
+      void main() {
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        vColor = color * uv.y * uv.y * (1.0 - smoothstep(fogNear, fogFar, -mv.z));
+        vNormal = normalMatrix * normal;
+        vView = mv.xyz;
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: /* glsl */ `
+      varying vec3 vColor, vNormal, vView;
+      void main() {
+        gl_FragColor = vec4(vColor * abs(dot(normalize(vNormal), normalize(vView))), 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+    vertexColors: true,
+    fog: true,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+}
+
 /** Concrete slabs with seams, grit and salt stains; drawn once, no file download. */
 function groundTexture() {
   const size = 256, canvas = document.createElement('canvas');
@@ -293,6 +341,7 @@ export function buildArena(scene, map) {
   const ground = [], solid = [], glow = [];
   glow.lamps = [];
   glow.furnaces = [];
+  glow.shafts = [];
   map.solids.forEach((s, i) => {
     const g = paint(boxGeometry(s.half), COLORS[s.mat] ?? COLORS.concrete, jitter(i));
     g.applyMatrix4(boxes[i].matrix);
@@ -320,7 +369,7 @@ export function buildArena(scene, map) {
   const meshes = [
     ground.length && new THREE.Mesh(mergeGeometries(ground), lit(new THREE.MeshLambertMaterial({ map: groundTexture(), vertexColors: true }))),
     new THREE.Mesh(mergeGeometries(solid), lit(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }))),
-    glow.length && new THREE.Mesh(mergeGeometries(glow), new THREE.MeshBasicMaterial({ vertexColors: true })),
+    glow.length && new THREE.Mesh(mergeGeometries(glow), hot(new THREE.MeshBasicMaterial({ vertexColors: true }))),
   ].filter(Boolean);
   // Sun shadows: the floor only receives; solids and their trim cast and receive.
   meshes[0].receiveShadow = true;
@@ -328,12 +377,19 @@ export function buildArena(scene, map) {
   for (const p of glow.lamps) {
     const h = halo(0xffd29a, map.night ? 4 : 2.6);
     h.position.copy(p);
+    h.layers.set(LOW_ONLY);
     meshes.push(h);
   }
   for (const p of glow.furnaces) {
     const h = halo(0xff8a3a, 7);
     h.position.copy(p);
+    h.layers.set(LOW_ONLY);
     meshes.push(h);
+  }
+  if (map.night && glow.shafts.length) {
+    const shafts = new THREE.Mesh(mergeGeometries(glow.shafts), shaftMaterial());
+    shafts.layers.set(HIGH_ONLY);
+    meshes.push(shafts);
   }
   scene.add(...meshes);
   console.info(`arena ${map.name}: ${meshes.length} meshes, built in ${Math.round(performance.now() - started)} ms`);
