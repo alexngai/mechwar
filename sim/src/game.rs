@@ -105,10 +105,13 @@ pub struct Game {
     /// Index into `map::MAPS`; clients load the same map from their Welcome, and switch with
     /// the match state's.
     pub map: usize,
-    /// Maps to rotate through, a random other one each match; empty to stay on `map`.
+    /// Maps to rotate through, dealt like a shuffled deck: each plays once before any repeats,
+    /// never twice in a row. Empty to stay on `map`.
     pub rotation: Vec<usize>,
+    /// The rest of the current deck; the next map comes off the end.
+    upcoming: Vec<usize>,
     next_map: usize,
-    /// xorshift64 state for picking the next map.
+    /// xorshift64 state for shuffling the rotation.
     rng: u64,
     arena: Arena,
     nav: &'static Nav,
@@ -132,6 +135,7 @@ impl Game {
         Self {
             map,
             rotation: Vec::new(),
+            upcoming: Vec::new(),
             next_map: map,
             rng: 0x9E37_79B9_7F4A_7C15,
             arena: Arena::new(&data),
@@ -453,20 +457,35 @@ impl Game {
             std::cmp::Ordering::Equal => None,
         };
         self.phase = Phase::Ended { winner, restart_at: self.tick + secs(POST_MATCH_SECONDS) };
-        // The next map is a random other one from the rotation, if there is one.
-        let others: Vec<usize> = self.rotation.iter().copied().filter(|&m| m != self.map).collect();
-        if !others.is_empty() {
-            self.rng ^= self.rng << 13;
-            self.rng ^= self.rng >> 7;
-            self.rng ^= self.rng << 17;
-            self.next_map = others[(self.rng % others.len() as u64) as usize];
+        // The next map comes off the deck; an empty deck is shuffled anew, not leading with this map.
+        if self.rotation.len() > 1 {
+            if self.upcoming.is_empty() {
+                self.upcoming = self.shuffled(self.rotation.clone());
+                if self.upcoming.last() == Some(&self.map) {
+                    self.upcoming.swap(0, self.rotation.len() - 1);
+                }
+            }
+            self.next_map = self.upcoming.pop().expect("a refilled deck has maps");
         }
     }
 
-    /// Rotates through `maps` from here on, picking with `seed`.
+    /// Rotates through `maps` from here on, shuffling with `seed`. The first deck leaves out the
+    /// current map, so every map has played before any comes round again.
     pub fn rotate(&mut self, maps: Vec<usize>, seed: u64) {
-        self.rotation = maps;
         self.rng = seed | 1;
+        self.upcoming = self.shuffled(maps.iter().copied().filter(|&m| m != self.map).collect());
+        self.rotation = maps;
+    }
+
+    /// `maps` in a random order (Fisher-Yates, on the xorshift64 state).
+    fn shuffled(&mut self, mut maps: Vec<usize>) -> Vec<usize> {
+        for i in (1..maps.len()).rev() {
+            self.rng ^= self.rng << 13;
+            self.rng ^= self.rng >> 7;
+            self.rng ^= self.rng << 17;
+            maps.swap(i, (self.rng % (i as u64 + 1)) as usize);
+        }
+        maps
     }
 
     /// Swaps in map `index`: its arena, nav and spawns. Matches start on it from their spawns.
@@ -691,6 +710,29 @@ mod tests {
 
     fn mech(game: &Game, id: u8) -> Mech {
         game.players.iter().find(|p| p.id == id).unwrap().mech
+    }
+
+    #[test]
+    fn rotation_plays_every_map_before_any_repeats() {
+        let maps: Vec<usize> = crate::map::ROTATION.iter().map(|name| Map::index(name).unwrap()).collect();
+        for seed in [1, 42, 0xdead_beef, 1_792_656_822_821_000_000] {
+            let mut game = Game::new(Tuning::default(), maps[0]);
+            game.rotate(maps.clone(), seed);
+            // Deal 4 decks' worth without loading each map: only the order matters here.
+            let mut played = vec![game.map];
+            for _ in 1..maps.len() * 4 {
+                game.end_match();
+                assert_ne!(game.next_map, game.map, "seed {seed}: the same map twice in a row: {played:?}");
+                game.map = game.next_map;
+                played.push(game.map);
+            }
+            for deck in played.chunks(maps.len()) {
+                let mut seen = deck.to_vec();
+                seen.sort();
+                seen.dedup();
+                assert_eq!(seen.len(), maps.len(), "seed {seed}: a deck missed a map: {played:?}");
+            }
+        }
     }
 
     #[test]

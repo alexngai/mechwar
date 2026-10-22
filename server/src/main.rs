@@ -117,7 +117,11 @@ async fn game_loop(mut cmds: mpsc::UnboundedReceiver<Cmd>) {
                 }
             }
         }
+        let map = game.map;
         game.step();
+        if game.map != map {
+            println!("map: {}", sim::map::MAPS[game.map].0);
+        }
         let now = Instant::now();
         if game.roster_version() != roster_sent {
             roster_sent = game.roster_version();
