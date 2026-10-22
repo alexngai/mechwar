@@ -10,7 +10,7 @@ use rapier3d::prelude::{Ray, Rotation};
 
 use crate::item;
 use crate::map::{MAPS, Map};
-use crate::{Arena, DT, Input, Mech, MechClass, TICK_HZ, Tuning, Vector, spawn_mech, step_mech};
+use crate::{Arena, Arsenal, DT, Input, Loadout, Mech, MechClass, TICK_HZ, Tuning, Vector, spawn_mech, step_mech};
 
 /// A waypoint links to another this close when a mech can walk there.
 const LINK_RANGE: f32 = 35.0;
@@ -148,9 +148,6 @@ fn walkable(arena: &Arena, t: &Tuning, from: Vector, to: Vector) -> bool {
 const ARRIVE: f32 = 2.5;
 /// Bots boost toward a waypoint at least this far away.
 const BOOST_LEG: f32 = 15.0;
-/// Engagement range band: close in beyond FAR, back off inside NEAR.
-const FAR: f32 = 45.0;
-const NEAR: f32 = 20.0;
 /// Fire only when aim is this close to where the bot wants it.
 const AIM_TOLERANCE: f32 = 2.0 * PI / 180.0;
 /// Farthest a Heavy lobs its grenade launcher's shells.
@@ -161,6 +158,61 @@ const GRENADE_RANGE: f32 = 28.0;
 const VANTAGE_RANGE: f32 = 75.0;
 /// Flankers and sneaks take the long way only to a target farther off than this.
 const DETOUR_MIN: f32 = 60.0;
+
+/// How a bot works its secondary, read off the weapon's stats so it follows any retuning.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum AltUse {
+    /// Shells at the target, led by their flight and lobbed when they drop (mines too).
+    Shell,
+    /// A beam held on the target (`alt_beam`).
+    Beam,
+    /// Lock with `aux`, then fire once it holds (`alt_lock_time`).
+    Lock,
+    /// Pressed, then let go to fire (`alt_release`).
+    Release,
+    /// Fed by heat: fired once the mech runs hot (`alt_heat_fed`).
+    HeatFed,
+}
+
+fn alt_use(t: &Tuning) -> AltUse {
+    if t.alt_beam > 0.0 {
+        AltUse::Beam
+    } else if t.alt_lock_time > 0.0 {
+        AltUse::Lock
+    } else if t.alt_heat_fed > 0.0 {
+        AltUse::HeatFed
+    } else if t.alt_release > 0.0 {
+        AltUse::Release
+    } else {
+        AltUse::Shell
+    }
+}
+
+/// The distance a bot carrying `t` likes to fight at: where its primary still hits hard (a
+/// projectile's, where its flight is still short enough to lead).
+fn preferred_range(t: &Tuning) -> f32 {
+    let reach = if t.shot_speed > 0.0 { t.weapon_range.min(0.6 * t.shot_speed) } else { t.falloff_start.min(t.weapon_range) };
+    reach.clamp(10.0, 60.0)
+}
+
+/// Engagement band around the preferred range: close in beyond `.1`, back off inside `.0`.
+fn band(t: &Tuning) -> (f32, f32) {
+    let r = preferred_range(t);
+    (0.6 * r, 1.4 * r)
+}
+
+/// Guardrails on a random build: a repair torch wants a gun that reaches well past its beam (it
+/// heals from behind the fight), a heat-fed launcher a gun that runs hot enough to feed it, and a
+/// rail gun more than a shotgun's reach to share its fight with.
+fn sensible(t: &Tuning) -> bool {
+    let heat_per_s = t.heat_per_shot * t.burst.max(1.0) * t.fire_rate;
+    match alt_use(t) {
+        AltUse::Beam => preferred_range(t) >= 30.0,
+        AltUse::HeatFed => heat_per_s >= 20.0,
+        AltUse::Release => preferred_range(t) >= 25.0,
+        _ => true,
+    }
+}
 
 /// How a bot goes after its target this life.
 #[derive(Clone, Copy, PartialEq)]
@@ -249,14 +301,37 @@ impl Bot {
         (self.rng >> 40) as f32 / (1u64 << 24) as f32
     }
 
+    /// A build for this life, as a player would pick in the hangar: any primary and secondary,
+    /// rolled again until the guardrails (`sensible`) pass.
+    pub fn pick_loadout(&mut self, arsenal: &Arsenal, class: MechClass) -> Loadout {
+        let (primaries, secondaries) = arsenal.counts();
+        loop {
+            let roll = |n: usize, r: f32| ((r * n as f32) as usize).min(n - 1) as u8;
+            let loadout = Loadout { primary: roll(primaries, self.rand()), secondary: roll(secondaries, self.rand()) };
+            if sensible(arsenal.get(class, loadout)) {
+                return loadout;
+            }
+        }
+    }
+
     /// This tick's input for a bot driving `me` against `target`.
     pub fn think(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: Option<&Mech>, tick: u32) -> Input {
+        self.think_with(arena, nav, t, me, target, None, tick)
+    }
+
+    /// `think`, with a hurt teammate a repair torch could mend: it does when no enemy is in sight.
+    #[allow(clippy::too_many_arguments)]
+    pub fn think_with(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: Option<&Mech>, heal: Option<&Mech>, tick: u32) -> Input {
         let idle = Input { yaw: me.yaw, pitch: me.pitch, ..Input::default() };
         let took_damage = me.health < self.last_health;
         self.last_health = me.health;
         if me.health <= 0.0 {
             self.respawned();
             return idle;
+        }
+        let max_turn = t.bot_turn_rate_deg.to_radians() * DT;
+        if let Some(mate) = heal.filter(|_| alt_use(t) == AltUse::Beam && !target.is_some_and(|m| m.health > 0.0 && sees(arena, t, me, m))) {
+            return mend(t, me, mate, max_turn);
         }
         let Some(target) = target.filter(|m| m.health > 0.0) else {
             self.seen.clear();
@@ -268,8 +343,8 @@ impl Bot {
         while self.seen.len() > reaction_ticks + 1 {
             self.seen.pop_front();
         }
-        let max_turn = t.bot_turn_rate_deg.to_radians() * DT;
         let range = flat(target.pos - me.pos).length();
+        let (near, far) = band(t);
 
         if sees(arena, t, me, target) {
             let err = t.bot_aim_error_deg.to_radians();
@@ -277,16 +352,22 @@ impl Bot {
             self.wobble.1 = (self.wobble.1 + (self.rand() - 0.5) * err * 0.3).clamp(-err, err);
             // The secondary, when ready and in its useful range, takes over the aim until it fires:
             // led by the flight time, and lobbed along the flat-ground arc for the mortar. The gun
-            // holds meanwhile, so heat drops enough for the launch not to overheat.
+            // holds meanwhile, so heat drops enough for the launch not to overheat. A beam aims
+            // where the gun does and runs alongside it; a heat-fed launcher waits to run hot.
             let (eye, chest) = (me.pos + Vector::Y * t.eye_height, self.seen[0]);
             let dist = chest.distance(eye);
-            let alt_range = if t.alt_gravity > 0.0 { MORTAR_RANGE } else { 0.8 * t.alt_speed * t.alt_fuse };
-            let alt = me.alt_wait <= 0.0 && dist < alt_range && dist > t.alt_radius + 2.0;
-            let alt_cool = !me.overheated && me.heat + t.alt_heat < t.heat_max;
+            let use_ = alt_use(t);
+            let alt = me.alt_wait <= 0.0
+                && match use_ {
+                    AltUse::Beam => dist < t.alt_beam,
+                    AltUse::HeatFed => me.heat >= 0.6 * t.heat_max && dist < 0.8 * t.alt_speed * t.alt_fuse,
+                    _ => dist < if t.alt_gravity > 0.0 { MORTAR_RANGE } else { 0.8 * t.alt_speed * t.alt_fuse } && dist > t.alt_radius + 2.0,
+                };
+            let alt_cool = use_ == AltUse::HeatFed || (!me.overheated && me.heat + t.alt_heat < t.heat_max);
             // Otherwise a grenade takes the aim the same way, every few seconds while charges last.
             let grenade = t.grenade();
             let throw = !alt && me.grenades > 0 && tick >= self.grenade_at && dist < GRENADE_RANGE && dist > t.grenade_radius + 2.0;
-            let shell = if alt { Some(t) } else if throw { Some(&grenade) } else { None };
+            let shell = if alt && use_ != AltUse::Beam { Some(t) } else if throw { Some(&grenade) } else { None };
             // Shells are led by their flight time, and so are projectile primaries.
             let primary_lead = if t.shot_speed > 0.0 { dist / t.shot_speed } else { 0.0 };
             let lead = shell.map_or(primary_lead, |s| dist / s.alt_speed);
@@ -324,21 +405,33 @@ impl Bot {
             // Perches keep climbing to their vantage too, then hold it, and a bot cooling off
             // repositions along its route. In range, hold the band and strafe.
             let perch = self.role == Role::Perch && self.vantage.is_some();
-            let (move_x, move_z) = if range > FAR || perch || self.cooling {
+            let (move_x, move_z) = if range > far || perch || self.cooling {
                 let dir = self.route(arena, nav, t, me, target, tick).normalize_or_zero();
                 let rot = Rotation::from_rotation_y(new_yaw);
                 (dir.dot(rot * Vector::X), dir.dot(rot * Vector::NEG_Z))
             } else {
-                (self.strafe, if range < NEAR { -1.0 } else { 0.0 })
+                (self.strafe, if range < near { -1.0 } else { 0.0 })
             };
+            // A charged gun charges while it holds (on target or not) and lets go once full and
+            // on target; a rail gun is pressed one tick and let go the next; a lock-on launcher
+            // locks first, then fires once the lock holds.
+            let fire = shell.is_none() && !self.cooling && if t.charge_time > 0.0 { !(on_target && me.charge >= 0.85) } else { on_target };
+            let alt_fire = alt
+                && alt_cool
+                && match use_ {
+                    AltUse::Lock => me.lock != 0 && me.lock_time >= t.alt_lock_time,
+                    AltUse::Release => on_target && !me.alt_held,
+                    _ => on_target,
+                };
             return Input {
                 move_x,
                 move_z,
                 yaw: new_yaw,
                 pitch: new_pitch,
                 dodge: if dodge && !self.perched(nav, me) { self.strafe as i8 } else { 0 },
-                fire: shell.is_none() && on_target && !self.cooling,
-                alt_fire: alt && alt_cool && on_target,
+                fire,
+                alt_fire,
+                aux: use_ == AltUse::Lock && alt && me.lock == 0 && !me.aux_held,
                 grenade: throw,
                 hover: tick < self.hover_until,
                 // When it would land (taking the target for our size), and they aren't jammed already.
@@ -365,9 +458,9 @@ impl Bot {
             yaw: new_yaw,
             pitch: me.pitch * 0.9,
             // Boost on long legs only: at boost speed a bot overshoots turns onto ramps.
-            boost: range > FAR && me.fuel > 0.5 * t.fuel_max && toward.length() > BOOST_LEG,
+            boost: range > far && me.fuel > 0.5 * t.fuel_max && toward.length() > BOOST_LEG,
             // Lights speed boost on long runs.
-            ability: me.class == MechClass::A && range > FAR,
+            ability: me.class == MechClass::A && range > far,
             hover: tick < self.hover_until,
             // Hurt and out of sight: stop and repair until full or seen again.
             repair: me.repair_time > 0.0 || me.health < 0.3 * t.health_max,
@@ -460,6 +553,26 @@ pub fn sees(arena: &Arena, t: &Tuning, me: &Mech, target: &Mech) -> bool {
     len <= t.weapon_range && arena.cast_ray(&Ray::new(eye, d / len), len).is_none()
 }
 
+/// A repair torch's input for mending `mate`: square on, closing to half the beam's reach, the
+/// beam held while it's on them and the heat allows.
+fn mend(t: &Tuning, me: &Mech, mate: &Mech, max_turn: f32) -> Input {
+    let (yaw, pitch) = look_at(me.pos + Vector::Y * t.eye_height, mate.pos + Vector::Y * (t.mech_height * 0.5));
+    let new_yaw = me.yaw + wrap(yaw - me.yaw).clamp(-max_turn, max_turn);
+    let new_pitch = me.pitch + (pitch - me.pitch).clamp(-max_turn, max_turn);
+    let on = wrap(yaw - new_yaw).abs() < AIM_TOLERANCE && (pitch - new_pitch).abs() < AIM_TOLERANCE;
+    let to = flat(mate.pos - me.pos);
+    let dir = if to.length() > 0.5 * t.alt_beam { to.normalize_or_zero() } else { Vector::ZERO };
+    let rot = Rotation::from_rotation_y(new_yaw);
+    Input {
+        move_x: dir.dot(rot * Vector::X),
+        move_z: dir.dot(rot * Vector::NEG_Z),
+        yaw: new_yaw,
+        pitch: new_pitch,
+        alt_fire: on && to.length() < t.alt_beam && !me.overheated && me.heat < 0.85 * t.heat_max,
+        ..Input::default()
+    }
+}
+
 fn flat(v: Vector) -> Vector {
     Vector::new(v.x, 0.0, v.z)
 }
@@ -535,5 +648,108 @@ mod tests {
 
         let (_, pulsed, _) = engage(9.0);
         assert!(pulsed, "never pulsed a target 9 m away");
+    }
+
+    fn build(arsenal: &Arsenal, primary: u8, secondary: u8) -> &Tuning {
+        arsenal.get(MechClass::B, Loadout { primary, secondary })
+    }
+
+    #[test]
+    fn profiles_follow_weapon_stats() {
+        let arsenal = Arsenal::new(&Tuning::default());
+        let (primaries, secondaries) = arsenal.counts();
+        // Every way of working a secondary is in play, each read off a weapon's stats.
+        let uses: Vec<AltUse> = (0..secondaries as u8).map(|s| alt_use(build(&arsenal, 0, s))).collect();
+        for want in [AltUse::Shell, AltUse::Beam, AltUse::Lock, AltUse::Release, AltUse::HeatFed] {
+            assert!(uses.contains(&want), "no secondary works as {want:?}");
+        }
+        // Shotguns like it close; something likes it far off.
+        let ranges: Vec<(f32, f32)> = (0..primaries as u8).map(|p| build(&arsenal, p, 0)).map(|t| (t.pellets, preferred_range(t))).collect();
+        assert!(ranges.iter().filter(|(pellets, _)| *pellets > 2.0).all(|&(_, r)| r < 25.0), "{ranges:?}");
+        assert!(ranges.iter().any(|&(_, r)| r >= 50.0), "{ranges:?}");
+    }
+
+    #[test]
+    fn bots_pick_varied_sensible_builds() {
+        let arsenal = Arsenal::new(&Tuning::default());
+        let (primaries, secondaries) = arsenal.counts();
+        let mut bot = Bot::new(7);
+        for class in MechClass::ALL {
+            let builds: Vec<Loadout> = (0..300).map(|_| bot.pick_loadout(&arsenal, class)).collect();
+            assert!(builds.iter().all(|&l| sensible(arsenal.get(class, l))), "a build past the guardrails");
+            let distinct = |f: fn(&Loadout) -> u8| builds.iter().map(f).collect::<std::collections::HashSet<u8>>().len();
+            assert_eq!((distinct(|l| l.primary), distinct(|l| l.secondary)), (primaries, secondaries), "{class:?} never rolled some weapon");
+        }
+        let all = (0..primaries as u8).flat_map(|p| (0..secondaries as u8).map(move |s| (p, s)));
+        assert!(all.into_iter().any(|(p, s)| !sensible(build(&arsenal, p, s))), "the guardrails turn nothing away");
+    }
+
+    /// The first build with `secondary` the guardrails allow.
+    fn with_secondary(arsenal: &Arsenal, secondary: u8) -> Loadout {
+        let primaries = arsenal.counts().0 as u8;
+        (0..primaries).map(|primary| Loadout { primary, secondary }).find(|&l| sensible(arsenal.get(MechClass::B, l))).expect("some primary fits")
+    }
+
+    #[test]
+    fn bots_work_every_secondary() {
+        let blockout = Map::index("blockout").unwrap();
+        let (arena, nav, arsenal) = (Arena::new(&Map::load(blockout)), Nav::for_map(blockout), Arsenal::new(&Tuning::default()));
+        for s in 0..arsenal.counts().1 as u8 {
+            let loadout = with_secondary(&arsenal, s);
+            let t = arsenal.get(MechClass::B, loadout);
+            // A target standing in the open 25 m north; running warm, so a heat-fed launcher has fuel.
+            let mut me = Mech { loadout, heat: 0.7 * t.heat_max, ..spawn_mech(t, Vector::new(0.0, 0.1, 40.0)) };
+            let target = spawn_mech(t, Vector::new(0.0, 0.1, 15.0));
+            let chest = target.pos + Vector::Y * (t.mech_height * 0.5);
+            let mut bot = Bot::new(1);
+            let used = (0..secs(6.0)).any(|tick| {
+                let input = bot.think(&arena, nav, t, &me, Some(&target), tick);
+                step_mech(&arena, t, &mut me, &input);
+                projectile::track(&arena, t, &mut me, &[(1, chest)]);
+                me.launched || me.beaming
+            });
+            assert!(used, "a bot never used secondary {s} ({:?})", alt_use(t));
+        }
+    }
+
+    #[test]
+    fn repair_torches_mend_hurt_teammates() {
+        let blockout = Map::index("blockout").unwrap();
+        let (arena, nav, arsenal) = (Arena::new(&Map::load(blockout)), Nav::for_map(blockout), Arsenal::new(&Tuning::default()));
+        let torch = (0..arsenal.counts().1 as u8).find(|&s| alt_use(build(&arsenal, 0, s)) == AltUse::Beam).expect("a beam secondary");
+        let loadout = with_secondary(&arsenal, torch);
+        let t = arsenal.get(MechClass::B, loadout);
+        let mut me = Mech { loadout, ..spawn_mech(t, Vector::new(0.0, 0.1, 40.0)) };
+        let mate = Mech { health: 0.4 * t.health_max, ..spawn_mech(t, Vector::new(8.0, 0.1, 20.0)) };
+        let mut bot = Bot::new(1);
+        let mended = (0..secs(3.0)).any(|tick| {
+            let input = bot.think_with(&arena, nav, t, &me, None, Some(&mate), tick);
+            step_mech(&arena, t, &mut me, &input);
+            me.beaming
+        });
+        assert!(mended, "never turned the torch on a hurt teammate");
+    }
+
+    #[test]
+    fn bots_fight_at_their_weapons_range() {
+        let blockout = Map::index("blockout").unwrap();
+        let (arena, nav, arsenal) = (Arena::new(&Map::load(blockout)), Nav::for_map(blockout), Arsenal::new(&Tuning::default()));
+        let primaries = arsenal.counts().0 as u8;
+        let reach = |p: u8| preferred_range(build(&arsenal, p, 0));
+        let (close, far) = ((0..primaries).min_by(|&a, &b| reach(a).total_cmp(&reach(b))).unwrap(), (0..primaries).max_by(|&a, &b| reach(a).total_cmp(&reach(b))).unwrap());
+        // Each faces a target 45 m off for 8 s; where it ends up.
+        let settle = |primary: u8| {
+            let t = build(&arsenal, primary, 0);
+            let mut me = Mech { loadout: Loadout { primary, secondary: 0 }, ..spawn_mech(t, Vector::new(0.0, 0.1, 40.0)) };
+            let target = spawn_mech(t, Vector::new(0.0, 0.1, -5.0));
+            let mut bot = Bot::new(3);
+            for tick in 0..secs(8.0) {
+                let input = bot.think(&arena, nav, t, &me, Some(&target), tick);
+                step_mech(&arena, t, &mut me, &Input { fire: false, alt_fire: false, grenade: false, emp: false, ..input });
+            }
+            flat(target.pos - me.pos).length()
+        };
+        let (near, held) = (settle(close), settle(far));
+        assert!(near < 25.0 && held > 35.0, "short-range gun ended {near} m off, long-range {held} m");
     }
 }

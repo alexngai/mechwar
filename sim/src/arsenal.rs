@@ -102,6 +102,11 @@ impl Arsenal {
         self.get(m.class, m.loadout)
     }
 
+    /// How many primaries and secondaries there are to pick from.
+    pub fn counts(&self) -> (usize, usize) {
+        (self.primaries, self.secondaries)
+    }
+
     /// `loadout` with each index in range: clients may send anything.
     pub fn clamp(&self, loadout: Loadout) -> Loadout {
         let last = |n: usize| u8::try_from(n - 1).unwrap_or(u8::MAX);

@@ -202,18 +202,20 @@ impl Game {
         self.players.iter().filter(|p| p.team == team).count()
     }
 
-    fn add_player(&mut self, team: u8, bot: Option<Bot>, class: MechClass) -> Option<u8> {
+    fn add_player(&mut self, team: u8, mut bot: Option<Bot>, class: MechClass) -> Option<u8> {
         let id = (0..MAX_PLAYERS as u8).find(|id| !self.players.iter().any(|p| p.id == *id))?;
         let slot = (0..TEAM_SIZE).find(|s| !self.players.iter().any(|p| p.team == team && p.slot == *s))?;
+        // Humans start with the class's own weapons until they launch; bots pick a build.
+        let loadout = bot.as_mut().map_or(Loadout::of(class), |b| b.pick_loadout(&self.arsenal, class));
         self.players.push(Player {
             id,
             team,
             slot,
             class,
-            loadout: Loadout::of(class),
+            loadout,
             next_class: class,
-            next_loadout: Loadout::of(class),
-            mech: spawn(&self.arsenal, class, Loadout::of(class), self.spawns[usize::from(team)][slot]),
+            next_loadout: loadout,
+            mech: spawn(&self.arsenal, class, loadout, self.spawns[usize::from(team)][slot]),
             inputs: VecDeque::new(),
             credit: 0.0,
             ack_seq: 0,
@@ -309,6 +311,10 @@ impl Game {
             if p.respawn_at.is_some_and(|at| self.tick >= at) && (p.launch || p.bot.is_some()) {
                 let pos = self.respawn_point(p.team);
                 let p = &mut self.players[i];
+                // A bot picks a new build each life, as a player might in the hangar.
+                if let Some(bot) = &mut p.bot {
+                    p.next_loadout = bot.pick_loadout(&self.arsenal, p.next_class);
+                }
                 (p.class, p.loadout) = (p.next_class, p.next_loadout);
                 p.mech = spawn(&self.arsenal, p.class, p.loadout, pos);
                 (p.respawn_at, p.launch) = (None, false);
@@ -316,23 +322,35 @@ impl Game {
         }
 
         // Bots queue one input per tick, aiming at the nearest visible enemy as of now (else the
-        // nearest enemy, to go find).
+        // nearest enemy, to go find), skipping fresh launches they can't hurt yet. A bot with a
+        // repair torch also gets the most hurt teammate it can see within twice its beam's reach.
         for i in 0..self.players.len() {
             let me = &self.players[i];
             if me.bot.is_none() {
                 continue;
             }
             let t = self.arsenal.of(&me.mech);
-            let enemies = || self.players.iter().filter(|p| p.team != me.team && p.mech.health > 0.0);
+            let enemies = || self.players.iter().filter(|p| p.team != me.team && p.mech.health > 0.0 && p.mech.shield <= 0.0);
             let dist = |p: &&Player| p.mech.pos.distance(me.mech.pos);
             let target = enemies()
                 .filter(|p| bot::sees(&self.arena, t, &me.mech, &p.mech))
                 .min_by(|a, b| dist(a).total_cmp(&dist(b)))
                 .or_else(|| enemies().min_by(|a, b| dist(a).total_cmp(&dist(b))))
                 .map(|p| p.mech);
+            let hurt = |q: &&Player| q.mech.health / self.arsenal.of(&q.mech).health_max;
+            let heal = (t.alt_beam > 0.0)
+                .then(|| {
+                    self.players
+                        .iter()
+                        .filter(|q| q.team == me.team && q.id != me.id && q.mech.health > 0.0 && hurt(q) < 0.8)
+                        .filter(|q| q.mech.pos.distance(me.mech.pos) < 2.0 * t.alt_beam && bot::sees(&self.arena, t, &me.mech, &q.mech))
+                        .min_by(|a, b| hurt(a).total_cmp(&hurt(b)))
+                        .map(|q| q.mech)
+                })
+                .flatten();
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
-            let mut input = bot.think(&self.arena, self.nav, t, &p.mech, target.as_ref(), self.tick);
+            let mut input = bot.think_with(&self.arena, self.nav, t, &p.mech, target.as_ref(), heal.as_ref(), self.tick);
             // Burst a shell that has flown past the target with the target inside its blast.
             if let Some(tm) = &target {
                 let tt = self.arsenal.of(tm);
@@ -1109,7 +1127,9 @@ mod tests {
             let m = &mut game.players.iter_mut().find(|p| p.id == id).unwrap().mech;
             m.pos = pos;
             m.alt_wait = 10.0; // so the bot doesn't press to fire
+            m.loadout = Loadout::of(MechClass::B); // the rocket, whatever build the bot rolled
         }
+        unshield(&mut game);
         // The bot's rocket, 2 m past the human's chest and flying on.
         let chest = Vector::new(0.0, 0.1 + t.mech_height * 0.5, 0.0);
         let p = Projectile { owner: bot, seq: 1, n: 0, primary: false, class: MechClass::B, loadout: Loadout::of(MechClass::B), charge: 0.0, target: 0, pos: chest + Vector::Z * 2.0, vel: Vector::Z * t.alt_speed, age: 0.5 };
