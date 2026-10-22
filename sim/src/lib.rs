@@ -162,7 +162,11 @@ impl Tuning {
 impl Tuning {
     /// This tuning with a class's `classes.json` overrides applied.
     pub fn for_class(&self, class: MechClass) -> Tuning {
-        let classes: serde_json::Value = serde_json::from_str(include_str!("../../classes.json")).expect("classes.json is valid JSON");
+        self.with_classes(&serde_json::from_str(include_str!("../../classes.json")).expect("classes.json is valid JSON"), class)
+    }
+
+    /// Like `for_class`, with the overrides from `classes` (classes.json's format) instead.
+    pub fn with_classes(&self, classes: &serde_json::Value, class: MechClass) -> Tuning {
         let mut merged = serde_json::to_value(self).expect("tuning serializes");
         if let Some(overrides) = classes[class.key()]["overrides"].as_object() {
             for (name, value) in overrides {

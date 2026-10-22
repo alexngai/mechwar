@@ -98,7 +98,7 @@ function stencil(canvas, id) {
 }
 
 const UP = new THREE.Vector3(0, 1, 0);
-const CROUCH = 0.8; // repairing mechs crouch to this much of their height; matches sim/src/lib.rs
+export const CROUCH = 0.8; // repairing mechs crouch to this much of their height; matches sim/src/lib.rs
 const ALONG_Z = Math.PI / 2; // pitch that lays a cylinder along Z
 const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), local = new THREE.Vector3(), moveDir = new THREE.Vector3();
 const pole = new THREE.Vector3(), world = new THREE.Vector3(), flame = new THREE.Vector3(), stretch = new THREE.Vector3();

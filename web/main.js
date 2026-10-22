@@ -7,12 +7,15 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import init, { WasmNetClient, WasmSim, map_name, tick_dt } from '../sim/pkg/sim.js';
 import tuning from '../tuning.json';
 import classes from '../classes.json';
+import tuningText from '../tuning.json?raw';
+import classesText from '../classes.json?raw';
 import { buildArena, HIGH_ONLY, LOW_ONLY } from './arena.js';
 import { Effects, HOT, halo, hot } from './fx.js';
 import saltworks from '../maps/saltworks.json';
 import foundry from '../maps/foundry.json';
 import blockout from '../maps/blockout.json';
-import { Mech, TEAMS } from './mech.js';
+import { CROUCH, Mech, TEAMS } from './mech.js';
+import { Debug } from './debug.js';
 import { Cockpit } from './cockpit.js';
 import { Sound } from './audio.js';
 import { Hud, hex } from './hud.js';
@@ -252,22 +255,68 @@ const turnAbout = () => { if (turnT < 0) turnT = 0; };
 const ease = (x) => x * x * (3 - 2 * x);
 
 // --- Tuning panel ----------------------------------------------------------
-const gui = new GUI({ title: 'Tuning (tuning.json)' });
-const folders = {};
-const push = () => sim?.set_tuning(JSON.stringify(tuning));
+// The sliders show and edit the class being played: the Lancer's values are tuning.json itself,
+// the others' are their classes.json overrides (• marks one; moving any slider adds one).
+const gui = new GUI({ title: 'Tuning' });
+const folders = {}, sliders = [], values = {};
+const push = () => {
+  sim?.set_tuning(JSON.stringify(tuning));
+  sim?.set_classes(JSON.stringify(classes));
+};
 for (const [name, p] of Object.entries(tuning)) {
   // Online the sim runs on compiled-in tuning.json on both ends, so only camera values are live.
   // Bot values only matter to the server.
   if ((net && p.group !== 'camera') || p.group === 'bot') continue;
+  Object.defineProperty(values, name, {
+    get: () => T(name),
+    set: (v) => {
+      v = +v.toFixed(6); // no float dust from step snapping
+      if (classIdx === 1) p.value = v;
+      else classes[CLASS_KEYS[classIdx]].overrides[name] = v;
+    },
+  });
   folders[p.group] ??= gui.addFolder(p.group).close();
-  folders[p.group].add(p, 'value', p.min, p.max, p.step).name(`${name} (${p.unit})`).onChange(push);
+  sliders.push([name, p, folders[p.group].add(values, name, p.min, p.max, p.step).onChange(() => (push(), retune()))]);
 }
 (folders.move ?? folders.camera).open();
 if (net) gui.close(); // online only camera values are live; keep the corner for the kill feed
-gui.add({ copy: () => navigator.clipboard.writeText(JSON.stringify(tuning, null, 2) + '\n') }, 'copy').name('Copy tuning.json');
+/** Points the panel at the class being played: its values, its override marks, its name. */
+function retune() {
+  const c = classes[CLASS_KEYS[classIdx]];
+  gui.title(`Tuning · ${c.name} (${classIdx === 1 ? 'tuning.json' : 'classes.json'})`);
+  for (const [name, p, slider] of sliders) slider.name(`${name} (${p.unit})${classIdx !== 1 && name in c.overrides ? ' •' : ''}`).updateDisplay();
+}
+// The copies are the repo's files with the panel's numbers swapped in, so a paste diffs only
+// what changed. A value that's still equal keeps its original spelling (3.0 stays 3.0).
+const swap = (old, now) => (Number(old) === now ? old : String(now));
+const tuningFile = () =>
+  tuningText.replace(/^( {2}"(\w+)":\s*\{ "value": )([^,]+),( *)/gm, (_, head, name, old, gap) => {
+    const now = swap(old, tuning[name].value);
+    return `${head}${now},${' '.repeat(Math.max(1, old.length + gap.length - now.length))}`;
+  });
+const classesFile = () =>
+  classesText.replace(/("(\w)": \{[^]*?"overrides": \{)([^}]*)\}/g, (_, head, key, list) => {
+    const overrides = classes[key].overrides;
+    let body = list.replace(/"(\w+)": ([-\d.e]+)/g, (_, name, old) => `"${name}": ${swap(old, overrides[name])}`);
+    const added = Object.keys(overrides).filter((name) => !list.includes(`"${name}":`)).map((name) => `"${name}": ${overrides[name]}`);
+    if (added.length) body = list.trim() ? body.replace(/\s*$/, (end) => `,\n      ${added.join(', ')}${end}`) : ` ${added.join(', ')} `;
+    return `${head}${body}}`;
+  });
+gui.add({ copy: () => navigator.clipboard.writeText(tuningFile()) }, 'copy').name('Copy tuning.json');
+gui.add({ copy: () => navigator.clipboard.writeText(classesFile()) }, 'copy').name('Copy classes.json');
 
 // --- HUD -------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
+// Debug overlay: blast reach, shell paths with flight time and range, hit capsules (?debug, or
+// the checkbox; remembered).
+const debug = new Debug(scene, $('debug-log'));
+const debugOn = { on: params.has('debug') || stored('webhawk.debug') === '1' };
+debug.setOn(debugOn.on);
+gui.add(debugOn, 'on').name('Debug overlay').onChange((on) => {
+  debug.setOn(on);
+  try { localStorage.setItem('webhawk.debug', on ? '1' : ''); } catch { /* private mode */ }
+});
+retune();
 const hud = { net: $('net'), score: $('score'), banner: $('banner'), damage: $('damage') };
 
 // --- Class picker ----------------------------------------------------------
@@ -409,6 +458,7 @@ function frame(now) {
     me.own = true;
     meClass = classIdx;
     cockpit.setWeapons(CLASS_KEYS[classIdx], me, T('eye_height'), T('mech_height') / me.height);
+    retune();
   }
   // Dying online opens the picker once; the pick applies on respawn.
   const alive = curr[S.HEALTH] > 0;
@@ -461,6 +511,7 @@ function frame(now) {
         repair: repairPhase(e.repairAt === null ? 0 : (now - e.repairAt) / 1000 + 1e-3, cls),
       });
       if (now < (e.jammedUntil ?? 0)) fx.jam(toChest(spark.copy(e.pos), cls), dt);
+      if (health > 0) debug.hitbox(e.pos, classValue(cls, 'mech_radius'), classValue(cls, 'mech_height') * (repairing ? CROUCH : 1));
     }
     for (const [id, e] of remotes) if (!live.has(id)) { e.mech.dispose(); remotes.delete(id); }
   }
@@ -498,6 +549,7 @@ function frame(now) {
     if (kind === 1 && (a === myId || b === myId)) { message = a === myId ? 'ENEMY DESTROYED' : 'DESTROYED'; messageUntil = now + 2500; }
     if (kind === 2) {
       blastAt.set(x, y, z);
+      debug.blast(blastAt, b);
       fx.explosion(blastAt, b / 5);
       sound.blast(b, blastAt);
       fx.muzzleLight(blastAt);
@@ -544,8 +596,10 @@ function frame(now) {
     const blend = Math.min((age + ahead) / LAUNCH_BLEND, 1);
     if (blend < 1) p.lerp(shot.from, 1 - blend);
     drawn.push({ pos: p, vel: new THREE.Vector3(vx, vy, vz), cls: CLASS_KEYS[cls], age: age + ahead, primary: !!primary, grenade: n === GRENADE_N });
+    if (!primary) debug.shell(key, n === GRENADE_N ? 'Tumbler' : classes[CLASS_KEYS[cls]].secondary.name, p, age + ahead);
   }
   for (const key of launches.keys()) if (!live.has(key)) launches.delete(key);
+  debug.endShells(live);
   fx.projectiles(drawn, dt);
   drawOrbs(now, dt, alive);
 
@@ -633,6 +687,8 @@ function frame(now) {
     hud.banner.textContent = ended ? `${winner < 0 ? 'DRAW' : winner === team ? 'VICTORY' : 'DEFEAT'} · next match in ${secondsLeft}s` : '';
   }
 
+  if (!firstPerson && alive) debug.hitbox(pos, T('mech_radius'), T('mech_height') * (curr[S.REPAIR_T] > 0 || curr[S.STAND] > 0 ? CROUCH : 1));
+  debug.update(dt);
   if (quality === 'high') composer.render(dt);
   else renderer.render(scene, camera);
   if (firstPerson) {

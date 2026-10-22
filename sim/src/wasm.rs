@@ -54,12 +54,14 @@ fn ray_distance(arena: &Arena, origin: [f32; 3], dir: [f32; 3], max: f32) -> f32
     arena.cast_ray(&Ray::new(Vector::from_array(origin), dir), max).unwrap_or(max)
 }
 
-/// Offline sandbox. The sliders edit the base (B) tuning; the chosen class's overrides sit on top.
+/// Offline sandbox. The sliders edit the base (B) tuning and the other classes' overrides.
 #[wasm_bindgen]
 pub struct WasmSim {
     sim: Sim,
     base: Tuning,
     class: MechClass,
+    /// classes.json as the sliders left it; None until they touch it.
+    classes: Option<serde_json::Value>,
 }
 
 #[wasm_bindgen]
@@ -69,12 +71,19 @@ impl WasmSim {
     pub fn new(tuning_json: &str, map: u8) -> Result<WasmSim, JsError> {
         let base = Tuning::from_json(tuning_json)?;
         let map = usize::from(map).min(map::MAPS.len() - 1);
-        Ok(WasmSim { sim: Sim::with_map(base.clone(), map), base, class: MechClass::B })
+        Ok(WasmSim { sim: Sim::with_map(base.clone(), map), base, class: MechClass::B, classes: None })
     }
 
     pub fn set_tuning(&mut self, tuning_json: &str) -> Result<(), JsError> {
         self.base = Tuning::from_json(tuning_json)?;
-        self.sim.tuning = self.base.for_class(self.class);
+        self.sim.tuning = self.class_tuning();
+        Ok(())
+    }
+
+    /// Replaces the compiled-in classes.json overrides.
+    pub fn set_classes(&mut self, classes_json: &str) -> Result<(), JsError> {
+        self.classes = Some(serde_json::from_str(classes_json)?);
+        self.sim.tuning = self.class_tuning();
         Ok(())
     }
 
@@ -82,7 +91,7 @@ impl WasmSim {
     pub fn set_class(&mut self, class: u8) {
         self.class = MechClass::from_index(class).unwrap_or_default();
         self.sim.class = self.class;
-        self.sim.tuning = self.base.for_class(self.class);
+        self.sim.tuning = self.class_tuning();
     }
 
     pub fn reset(&mut self) {
@@ -125,6 +134,12 @@ impl WasmSim {
     #[allow(clippy::too_many_arguments)]
     pub fn cast_ray(&self, ox: f32, oy: f32, oz: f32, dx: f32, dy: f32, dz: f32, max: f32) -> f32 {
         ray_distance(self.sim.arena(), [ox, oy, oz], [dx, dy, dz], max)
+    }
+}
+
+impl WasmSim {
+    fn class_tuning(&self) -> Tuning {
+        self.classes.as_ref().map_or_else(|| self.base.for_class(self.class), |c| self.base.with_classes(c, self.class))
     }
 }
 
