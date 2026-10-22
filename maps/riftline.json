@@ -2,7 +2,7 @@
   "name": "Riftline",
   "size": [240, 240],
   "night": true,
-  "palette": {"sky":{"horizon":"#a58fc4", "zenith":"#1e1640", "sun":"#ffd0ec", "stars":0.15}, "fog":[60, 240], "haze":["#8064c0", 0.05, 6], "light":{"sky":"#b6a6e6", "ground":"#3a2c4a", "ambient":1.7, "sun":"#ffc6e6", "direct":1.5}, "lamp":"#f0b8ff", "tint":"#c3bad8", "pad":"#ff6be0"},
+  "palette": {"sky":{"horizon":"#a58fc4", "zenith":"#1e1640", "sun":"#ffd0ec", "stars":0.15}, "fog":[60, 240], "haze":["#8064c0", 0.05, 6], "light":{"sky":"#b6a6e6", "ground":"#3a2c4a", "ambient":1.7, "sun":"#ffc6e6", "direct":1.5}, "lamp":"#f0b8ff", "tint":"#c3bad8"},
   "solids": [
     {"box":[0,-13,78],"half":[120,12,42],"mat":"rock"},
     {"box":[0,-0.5,78],"half":[120,0.5,42],"mat":"ground"},

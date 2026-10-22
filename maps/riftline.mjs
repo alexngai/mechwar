@@ -131,6 +131,5 @@ const palette = {
   light: { sky: '#b6a6e6', ground: '#3a2c4a', ambient: 1.7, sun: '#ffc6e6', direct: 1.5 },
   lamp: '#f0b8ff',
   tint: '#c3bad8',
-  pad: MAGENTA,
 };
 write(new URL('./riftline.json', import.meta.url), { name: 'Riftline', size: [240, 240], night: true, palette }, north);

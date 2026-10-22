@@ -21,7 +21,7 @@ const TILE = 8; // ground texture repeat, meters
 const LAMP = { color: 0xffc98a, radius: 16, power: 1.4 };
 const FURNACE = { color: 0xff8a3a, radius: 15, power: 4 };
 const SIGN = { radius: 12, power: 2 };
-const PAD = '#3de0ff'; // jump pads, unless the palette names its own color
+const PAD = '#a8ffc4'; // jump pads: a light green on every map
 const PAD_RADIUS = 2.5; // the sim's
 const AO_STEPS = [0.4, 0.9, 1.6, 2.5, 3.6]; // sample distances along the normal, meters
 const UP = new THREE.Vector3(0, 1, 0), WHITE = new THREE.Color(1, 1, 1);
@@ -274,20 +274,17 @@ function bakeLights(geometry, lights, boxes) {
 }
 
 /**
- * A jump pad (`map.pads`): a metal disc with a glowing ring, a chevron pointing where it throws,
- * a light column (High, at night), and a light of its own at night.
+ * A jump pad (`map.pads`): an octagonal plate whose face glows a soft green inside a bright rim,
+ * with a light column (High, at night) and a light of its own at night.
  */
-function padParts(p, solid, glow, hex) {
+function padParts(p, solid, glow) {
   const [x, y, z] = p.at;
-  solid.push(paint(new THREE.CylinderGeometry(PAD_RADIUS, PAD_RADIUS + 0.2, 0.16, 32).translate(x, y + 0.08, z), COLORS.pole));
-  glow.push(paint(new THREE.RingGeometry(PAD_RADIUS - 0.45, PAD_RADIUS - 0.15, 40).rotateX(-Math.PI / 2).translate(x, y + 0.17, z), hex, 1, true));
-  const yaw = Math.atan2(p.to[0] - x, p.to[2] - z);
-  for (const side of [-1, 1]) {
-    const bar = new THREE.BoxGeometry(0.3, 0.04, 1.6).translate(0, 0, -0.8).rotateY(side * 0.7).translate(0, 0, 0.9);
-    glow.push(paint(bar.rotateY(yaw).translate(x, y + 0.18, z), hex, 1, true));
-  }
-  glow.shafts.push(paint(new THREE.CylinderGeometry(PAD_RADIUS - 0.3, PAD_RADIUS - 0.3, 8, 24, 1, true).translate(x, y + 4.2, z), hex, 0.25, true));
-  glow.signs.push({ at: new THREE.Vector3(x, y + 1.5, z), color: hex });
+  const flat = (geometry, lift) => geometry.rotateX(-Math.PI / 2).translate(x, y + lift, z);
+  solid.push(paint(new THREE.CylinderGeometry(PAD_RADIUS, PAD_RADIUS + 0.2, 0.16, 8).translate(x, y + 0.08, z), COLORS.pole));
+  glow.push(paint(flat(new THREE.CircleGeometry(PAD_RADIUS - 0.45, 8), 0.17), PAD, 0.35, true));
+  glow.push(paint(flat(new THREE.RingGeometry(PAD_RADIUS - 0.45, PAD_RADIUS - 0.12, 8), 0.17), PAD, 1, true));
+  glow.shafts.push(paint(new THREE.CylinderGeometry(PAD_RADIUS - 0.3, PAD_RADIUS - 0.3, 8, 8, 1, true).translate(x, y + 4.2, z), PAD, 0.25, true));
+  glow.signs.push({ at: new THREE.Vector3(x, y + 1.5, z), color: PAD });
 }
 
 /** Has a Lambert material add the baked `glow` attribute as light of its own. */
@@ -434,7 +431,7 @@ export function buildArena(scene, map) {
     }
   });
   for (const d of map.decor ?? []) decorParts(d, solid, glow, lamp);
-  for (const p of map.pads ?? []) padParts(p, solid, glow, palette.pad ?? PAD);
+  for (const p of map.pads ?? []) padParts(p, solid, glow);
   const lit = (m) => (map.night ? glowing(m) : m);
   const light = (at, l) => ({ at, ...l, rgb: new THREE.Color(l.color) });
   const lights = map.night
