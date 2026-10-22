@@ -21,6 +21,8 @@ const TILE = 8; // ground texture repeat, meters
 const LAMP = { color: 0xffc98a, radius: 16, power: 1.4 };
 const FURNACE = { color: 0xff8a3a, radius: 15, power: 4 };
 const SIGN = { radius: 12, power: 2 };
+const PAD = '#3de0ff'; // jump pads, unless the palette names its own color
+const PAD_RADIUS = 2.5; // the sim's
 const AO_STEPS = [0.4, 0.9, 1.6, 2.5, 3.6]; // sample distances along the normal, meters
 const UP = new THREE.Vector3(0, 1, 0), WHITE = new THREE.Color(1, 1, 1);
 const tint = new THREE.Color(1, 1, 1); // the building map's palette tint, for `paint`
@@ -271,6 +273,23 @@ function bakeLights(geometry, lights, boxes) {
   geometry.setAttribute('glow', new THREE.BufferAttribute(glow, 3));
 }
 
+/**
+ * A jump pad (`map.pads`): a metal disc with a glowing ring, a chevron pointing where it throws,
+ * a light column (High, at night), and a light of its own at night.
+ */
+function padParts(p, solid, glow, hex) {
+  const [x, y, z] = p.at;
+  solid.push(paint(new THREE.CylinderGeometry(PAD_RADIUS, PAD_RADIUS + 0.2, 0.16, 32).translate(x, y + 0.08, z), COLORS.pole));
+  glow.push(paint(new THREE.RingGeometry(PAD_RADIUS - 0.45, PAD_RADIUS - 0.15, 40).rotateX(-Math.PI / 2).translate(x, y + 0.17, z), hex, 1, true));
+  const yaw = Math.atan2(p.to[0] - x, p.to[2] - z);
+  for (const side of [-1, 1]) {
+    const bar = new THREE.BoxGeometry(0.3, 0.04, 1.6).translate(0, 0, -0.8).rotateY(side * 0.7).translate(0, 0, 0.9);
+    glow.push(paint(bar.rotateY(yaw).translate(x, y + 0.18, z), hex, 1, true));
+  }
+  glow.shafts.push(paint(new THREE.CylinderGeometry(PAD_RADIUS - 0.3, PAD_RADIUS - 0.3, 8, 24, 1, true).translate(x, y + 4.2, z), hex, 0.25, true));
+  glow.signs.push({ at: new THREE.Vector3(x, y + 1.5, z), color: hex });
+}
+
 /** Has a Lambert material add the baked `glow` attribute as light of its own. */
 function glowing(material) {
   material.onBeforeCompile = (shader) => {
@@ -415,6 +434,7 @@ export function buildArena(scene, map) {
     }
   });
   for (const d of map.decor ?? []) decorParts(d, solid, glow, lamp);
+  for (const p of map.pads ?? []) padParts(p, solid, glow, palette.pad ?? PAD);
   const lit = (m) => (map.night ? glowing(m) : m);
   const light = (at, l) => ({ at, ...l, rgb: new THREE.Color(l.color) });
   const lights = map.night
@@ -462,6 +482,7 @@ export function buildArena(scene, map) {
   // Smoke rises from the top of each stack (its square half; the diamond is the same stack).
   meshes.vents = map.solids.filter((s) => s.mat === 'stack' && !s.yaw).map((s) => new THREE.Vector3(s.box[0], s.box[1] + s.half[1] + 0.5, s.box[2]));
   meshes.furnaces = glow.furnaces;
+  meshes.pads = map.pads ?? [];
   meshes.lights = lights; // night lights, for the cockpit
   return meshes;
 }

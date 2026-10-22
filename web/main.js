@@ -477,6 +477,9 @@ function frame(now) {
     if (net) {
       const bytes = net.tick(...input, now);
       if (ws.readyState === WebSocket.OPEN) ws.send(bytes);
+/** The jump pad each mech stood on last frame, by remote id ('me' for us). */
+const padStands = new Map(), padAt = new THREE.Vector3();
+
     } else {
       sim.step(...input);
     }
@@ -745,6 +748,16 @@ function frame(now) {
     const state = full ? 'server full' : connection || (curr[S.HEALTH] <= 0 ? 'DESTROYED, respawning' : '');
     hud.net.textContent = `K ${kills}  D ${deaths}  ping ${Math.round(ping)} ms  corr ${correction.toFixed(3)} m  ${now < messageUntil ? message : state}`;
     const clock = `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')}`;
+  // A jump pad fires as a mech leaves it upward: a pulse on the pad and a thump.
+  const onPad = (p) => arena.pads?.find((d) => Math.abs(p.y - d.at[1]) < 1 && Math.hypot(p.x - d.at[0], p.z - d.at[2]) < 2.5);
+  for (const [key, p] of [['me', { x: curr[S.POS], y: curr[S.POS + 1], z: curr[S.POS + 2] }], ...[...remotes].map(([id, e]) => [id, e.pos])]) {
+    const was = padStands.get(key), now = onPad(p);
+    if (was && !now && p.y > was.at[1] + 1) {
+      fx.pulse(padAt.set(...was.at), 3);
+      sound.pad(key === 'me' ? null : padAt);
+    }
+    padStands.set(key, now);
+  }
     hud.score.textContent = `${team === 0 ? '▸ ' : ''}BLUE ${blue} – ${red} RED${team === 1 ? ' ◂' : ''}   ${ended ? '' : clock}`;
     const next = MAPS[map_name(nextMap)]?.name ?? '';
     hud.banner.textContent = ended ? `${winner < 0 ? 'DRAW' : winner === team ? 'VICTORY' : 'DEFEAT'} · next match on ${next} in ${secondsLeft}s` : '';

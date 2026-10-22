@@ -6,7 +6,7 @@
 // The north half (z > 0), the east half of the z = 0 street and the center are authored here;
 // `write` (maps/kit.mjs) adds the 180-degree twin. Metrics as the other maps': 10 m streets, 7.5 m
 // under the deck, ramps near 24 degrees, 3 m hover-up crates. Bots walk, so every way up is a ramp.
-import { box, lamp, once, point, railing, ramp, sign, write } from './kit.mjs';
+import { box, lamp, once, pad, point, railing, ramp, sign, write } from './kit.mjs';
 
 const CYAN = '#3de0ff', BLUE = '#5a8cff', AMBER = '#ffb347';
 
@@ -99,6 +99,9 @@ for (const at of [[-25, 0, 50], [25, 0, 50], [-24, 0, 72], [-50, 0, 64]]) lamp(a
 box([75, -9, -76], [76, 0, 76], 'concrete');
 box([75, 0, -76], [76, 24, 76], 'tower');
 box([-76, 0, 75], [76, 24, 76], 'tower');
+
+// --- Jump pad: from the x = 40 well's corner, out over the ramp well onto the hall's deck --------
+pad([42.5, -8, 30.5], [27, 0, 14], 4);
 
 // --- Waypoints -----------------------------------------------------------------------------------
 once(() => point([0, -8, 0], [0, 0, 0]));

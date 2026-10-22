@@ -5,7 +5,7 @@
 // both teams get the same map. Wrap pieces that are their own twin in `once`.
 import { writeFileSync } from 'node:fs';
 
-export const solids = [], decor = [], nav = [];
+export const solids = [], decor = [], nav = [], pads = [];
 const single = new Set(); // pieces that are their own twin
 export const r3 = (v) => Math.round(v * 1000) / 1000;
 
@@ -53,6 +53,11 @@ export const furnace = (from, to, at) => decor.push({ kind: 'furnace', from, to,
 /** A glowing sign panel from corner `from` to `to` in `color`, its light (night maps) at `at`. */
 export const sign = (from, to, at, color) => decor.push({ kind: 'sign', from, to, at, color });
 export const point = (...points) => nav.push(...points);
+/** A jump pad at `at` that throws a mech over an arc topping out at height `apex`, down onto `to`. Waypoints at both ends let bots ride it. */
+export const pad = (at, to, apex) => {
+  pads.push({ at, to, apex });
+  point(at, to);
+};
 export const once = (build) => {
   const before = [solids.length, nav.length];
   build();
@@ -73,13 +78,14 @@ export function write(file, meta, north) {
   // Every point a prop has (at, from, to) turns with it.
   for (const d of [...decor]) decor.push(Object.fromEntries(Object.entries(d).map(([k, val]) => [k, Array.isArray(val) ? flip(val) : val])));
   for (const p of [...nav]) if (!single.has(p)) nav.push(flip(p));
+  for (const p of [...pads]) pads.push({ at: flip(p.at), to: flip(p.to), apex: p.apex });
   // Ramps and turned boxes keep a yaw; the twin's is 180 more. Untilted boxes need no yaw at all.
   for (const s of solids) if (s.yaw === 0 || s.yaw === undefined) delete s.yaw;
 
-  const map = { ...meta, solids, decor, spawns: [north, north.map(flip)], nav };
+  const map = { ...meta, solids, decor, pads, spawns: [north, north.map(flip)], nav };
   // One solid, prop or waypoint per line, so edits diff cleanly.
   const lines = (key) => `"${key}": [\n    ${map[key].map((v) => JSON.stringify(v)).join(',\n    ')}\n  ]`;
   const head = Object.entries(meta).map(([k, v]) => `"${k}": ${JSON.stringify(v).replaceAll(',', ', ')}`).join(',\n  ');
-  writeFileSync(file, `{\n  ${head},\n  ${['solids', 'decor'].map(lines).join(',\n  ')},\n  "spawns": ${JSON.stringify(map.spawns)},\n  ${lines('nav')}\n}\n`);
-  console.log(`${meta.name}: ${solids.length} solids, ${decor.length} decor, ${nav.length} waypoints`);
+  writeFileSync(file, `{\n  ${head},\n  ${['solids', 'decor', ...(pads.length ? ['pads'] : [])].map(lines).join(',\n  ')},\n  "spawns": ${JSON.stringify(map.spawns)},\n  ${lines('nav')}\n}\n`);
+  console.log(`${meta.name}: ${solids.length} solids, ${decor.length} decor, ${pads.length} pads, ${nav.length} waypoints`);
 }

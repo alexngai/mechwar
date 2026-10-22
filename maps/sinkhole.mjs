@@ -7,7 +7,7 @@
 // (maps/kit.mjs) adds the 180-degree twin. Metrics as Riftline's: 8 m terraces, 6.5 m+ under
 // every deck, ramps near 24 degrees. A side "facing" d degrees has its outward normal d degrees
 // clockwise from north; on it, p runs outward from the center and s runs clockwise along it.
-import { box, lamp, once, point, r3, railing, ramp, sign, turned, write } from './kit.mjs';
+import { box, lamp, once, pad, point, r3, railing, ramp, sign, turned, write } from './kit.mjs';
 
 const BASE = -29; // bottom of every rock mass
 const CYAN = '#3de0ff';
@@ -129,6 +129,10 @@ for (const [deg, p, s, y] of [[0, 52, -14, 0], [90, 52, 10, 0], [45, 47, -14, -7
 for (const at_ of [[-25, 0, 70], [25, 0, 70], [-24, 0, 96]]) lamp(at_);
 box([100, -1, -101], [101, 20, 101], 'rock'); // perimeter cliffs
 box([-101, -1, 100], [101, 20, 101], 'rock');
+
+// --- Jump pads: the pit floor out to the east rim, and the -21 terrace up onto the gantry -------
+pad([21, -28, 0], [58, 0, 0], 3);
+pad([-11, -21, 28], [0, -7, 28], -2);
 
 // --- Waypoints -----------------------------------------------------------------------------------
 // The floor, then each terrace: a point at every side's middle and corner, except where a ramp

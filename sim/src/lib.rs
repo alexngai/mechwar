@@ -19,7 +19,7 @@ pub mod weapon;
 mod wasm;
 
 pub use arsenal::{Arsenal, Loadout};
-pub use map::Map;
+pub use map::{Map, Pad};
 pub use rapier3d::prelude::Vector;
 
 pub const TICK_HZ: f32 = 30.0;
@@ -294,11 +294,26 @@ pub struct Mech {
     /// Set on ticks a grenade was thrown, and an EMP went off.
     pub threw: bool,
     pub pulsed: bool,
+    /// Riding a jump pad's arc: no steering or boost until it lands, or hovers or dodges out.
+    pub pad_arc: bool,
 }
 
-/// Static arena colliders for scene queries. Shared by the offline sim, the server and the client.
+/// Static arena colliders for scene queries, and the map's jump pads. Shared by the offline sim,
+/// the server and the client.
 pub struct Arena {
     pub(crate) world: PhysicsWorld,
+    pub pads: Vec<Pad>,
+}
+
+/// A jump pad fires for feet this close to its center (and within half a meter of its height).
+pub const PAD_RADIUS: f32 = 2.5;
+
+/// The launch that carries a mech from `from` up to a pad's apex and down onto its landing.
+pub fn pad_velocity(pad: &Pad, from: Vector, gravity: f32) -> Vector {
+    let to = Vector::from_array(pad.to);
+    let up = (2.0 * gravity * (pad.apex - from.y).max(0.0)).sqrt();
+    let time = up / gravity + (2.0 * (pad.apex - to.y).max(0.0) / gravity).sqrt();
+    Vector::new(to.x - from.x, 0.0, to.z - from.z) / time.max(DT) + Vector::Y * up
 }
 
 impl Arena {
@@ -314,7 +329,7 @@ impl Arena {
         }
         // Builds the broad phase so scene queries see the static colliders. No physics step runs.
         world.detect_collisions(&(), &());
-        Self { world }
+        Self { world, pads: map.pads.clone() }
     }
 }
 
@@ -515,7 +530,7 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     // Starting needs boost_min_fuel so an empty tank doesn't flicker boost on each regen tick.
     let fuel_ok = slipstream || (m.fuel > 0.0 && (m.boosting || m.fuel >= t.boost_min_fuel));
     // Thrusters push forward: boost needs a forward input (W, or W with a strafe to curve).
-    m.boosting = !brace && m.jammed <= 0.0 && input.boost && input.move_z > 0.1 && fuel_ok;
+    m.boosting = !brace && !m.pad_arc && m.jammed <= 0.0 && input.boost && input.move_z > 0.1 && fuel_ok;
     if m.boosting && !slipstream {
         m.fuel -= t.boost_drain * DT;
         used_fuel = true;
@@ -532,6 +547,7 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
         used_fuel = true;
         m.dodge_cooldown = t.dodge_cooldown;
         m.dodge_time = t.dodge_duration;
+        m.pad_arc = false; // a dodge breaks a pad's arc
     }
 
     let can_hover = m.fuel > 0.0 && (m.hovering || m.fuel >= t.hover_min_fuel);
@@ -540,6 +556,7 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
             m.hover_time = 0.0;
         }
         m.hovering = true;
+        m.pad_arc = false; // so does a hover
         m.fuel -= t.hover_drain * DT;
         used_fuel = true;
     } else {
@@ -575,11 +592,14 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     if !m.grounded {
         accel *= t.air_control;
     }
-    let h = Vector::new(m.vel.x, 0.0, m.vel.z);
-    let dv = target - h;
-    let h = h + dv.clamp_length_max(accel * DT);
-    m.vel.x = h.x;
-    m.vel.z = h.z;
+    // On a pad's arc the horizontal speed is left alone, so the mech lands where the pad aims.
+    if !m.pad_arc {
+        let h = Vector::new(m.vel.x, 0.0, m.vel.z);
+        let dv = target - h;
+        let h = h + dv.clamp_length_max(accel * DT);
+        m.vel.x = h.x;
+        m.vel.z = h.z;
+    }
 
     // Vertical: authored hover curve while hovering, gravity otherwise.
     if m.hovering {
@@ -629,6 +649,19 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     m.grounded = moved.grounded;
     if m.grounded && m.vel.y < 0.0 {
         m.vel.y = 0.0;
+    }
+    if m.grounded {
+        m.pad_arc = false;
+        // Standing on a jump pad throws the mech (not one shut down for repairs).
+        let on = |p: &&Pad| {
+            let (dx, dz) = (m.pos.x - p.at[0], m.pos.z - p.at[2]);
+            (m.pos.y - p.at[1]).abs() < 0.5 && dx * dx + dz * dz < PAD_RADIUS * PAD_RADIUS
+        };
+        if let Some(pad) = arena.pads.iter().find(on).filter(|_| !shutdown) {
+            m.vel = pad_velocity(pad, m.pos, t.gravity);
+            m.pad_arc = true;
+            m.grounded = false;
+        }
     }
 
     // Aim ray from the eye against the arena; the server adds mechs to this for hits.

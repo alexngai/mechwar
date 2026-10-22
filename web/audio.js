@@ -339,6 +339,16 @@ export class Sound {
     this.noise(out, 'brown', 'lowpass', 650, 240, 0.02, 0.3, 0.55);
   }
 
+  /** A jump pad firing: a deep magnetic thump under a rush of air sweeping up. */
+  pad(pos) {
+    const out = this.voice(pos, 1.0, undefined, 0.3);
+    if (!out) return;
+    out.gain.value = pos ? 1 : 0.9;
+    this.tone(out, 'sine', 72, 30, 0.002, 0.28, 1.0);
+    this.tone(out, 'triangle', 140, 420, 0.01, 0.35, 0.22);
+    this.noise(out, 'white', 'bandpass', 300, 2200, 0.04, 0.7, 0.5, 2);
+  }
+
   /** A dash: the mech skids sideways, so a low grinding scrape and a skid rumble, not a hiss. */
   dash(pos) {
     const out = this.voice(pos, 0.5);

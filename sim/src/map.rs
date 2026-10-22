@@ -31,6 +31,15 @@ pub struct Solid {
     pub tilt: f32,
 }
 
+/// A jump pad: a mech standing on `at` is thrown over an arc topping out at height `apex` that
+/// lands on `to`.
+#[derive(Deserialize, Clone, Copy, Debug)]
+pub struct Pad {
+    pub at: [f32; 3],
+    pub to: [f32; 3],
+    pub apex: f32,
+}
+
 #[derive(Deserialize, Clone, Debug)]
 pub struct Map {
     pub name: String,
@@ -39,6 +48,8 @@ pub struct Map {
     pub spawns: [Vec<[f32; 3]>; 2],
     /// Bot waypoints; `bot::Nav` generates the edges by walking between them.
     pub nav: Vec<[f32; 3]>,
+    #[serde(default)]
+    pub pads: Vec<Pad>,
 }
 
 impl Map {

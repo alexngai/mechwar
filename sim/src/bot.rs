@@ -36,11 +36,15 @@ impl Nav {
 
     pub fn generate(arena: &Arena, points: &[[f32; 3]], t: &Tuning) -> Nav {
         let nodes: Vec<Vector> = points.iter().map(|p| Vector::from_array(*p)).collect();
+        // A jump pad's waypoint links to its landing however far the pad throws.
+        let thrown = |a: Vector, b: Vector| {
+            arena.pads.iter().any(|p| Vector::from_array(p.at).distance(a) < 0.5 && Vector::from_array(p.to).distance(b) < 0.5)
+        };
         let mut edges = Vec::new();
         for a in 0..nodes.len() {
             for b in 0..nodes.len() {
                 let (na, nb) = (nodes[a], nodes[b]);
-                if a != b && na.distance(nb) <= LINK_RANGE && walkable(arena, t, na, nb) {
+                if a != b && (na.distance(nb) <= LINK_RANGE || thrown(na, nb)) && walkable(arena, t, na, nb) {
                     edges.push((a, b));
                 }
             }
@@ -418,7 +422,7 @@ impl Bot {
         if toward.length() < self.best - 0.5 {
             self.best = toward.length();
             self.progress_at = tick;
-        } else if tick - self.progress_at > secs(1.5) {
+        } else if tick - self.progress_at > secs(1.5) && !me.pad_arc {
             self.hover_until = tick + secs(1.0);
             match self.path.first() {
                 Some(&n) if (nav.node(n).y - me.pos.y).abs() < 2.0 => _ = self.path.remove(0),

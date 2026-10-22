@@ -63,6 +63,70 @@ fn rotationally_symmetric(name: &str, map: &Map) {
     }
     let [a, b] = &map.spawns;
     assert!(a.iter().zip(b).all(|(p, q)| p[0] == -q[0] && p[1] == q[1] && p[2] == -q[2]), "{name}: spawns aren't mirrored");
+    let turned = |p: [f32; 3], q: [f32; 3]| (p[0] + q[0]).abs() < 0.01 && (p[1] - q[1]).abs() < 0.01 && (p[2] + q[2]).abs() < 0.01;
+    for p in &map.pads {
+        let twin = map.pads.iter().any(|q| turned(p.at, q.at) && turned(p.to, q.to) && p.apex == q.apex);
+        assert!(twin, "{name}: pad at {:?} has no 180-degree twin", p.at);
+    }
+}
+
+/// Every jump pad, taken by a Bulwark (the widest) with no input, lands where it's aimed and
+/// stays there: nothing in the way of the arc, and the landing holds the slide after it.
+#[test]
+fn pads_land_where_aimed() {
+    let t = Tuning::default().for_class(MechClass::C);
+    for (index, (name, _)) in MAPS.iter().enumerate() {
+        let map = Map::load(index);
+        let arena = Arena::new(&map);
+        for pad in &map.pads {
+            let (at, to) = (Vector::from_array(pad.at), Vector::from_array(pad.to));
+            let mut m = spawn_mech(&t, at + Vector::Y * 0.1);
+            let mut flew = false;
+            for _ in 0..(6.0 * TICK_HZ) as u32 {
+                step_mech(&arena, &t, &mut m, &Input::default());
+                flew |= m.pad_arc;
+                if flew && m.grounded {
+                    break;
+                }
+            }
+            let off = Vector::new(m.pos.x - to.x, 0.0, m.pos.z - to.z).length();
+            assert!(flew && m.grounded && off < 2.0 && (m.pos.y - to.y).abs() < 0.5, "{name}: pad at {at} landed at {} (aimed at {to})", m.pos);
+            for _ in 0..TICK_HZ as u32 {
+                step_mech(&arena, &t, &mut m, &Input::default());
+            }
+            assert!((m.pos.y - to.y).abs() < 0.5, "{name}: from the pad at {at}, the landing at {to} slid off to {}", m.pos);
+        }
+    }
+}
+
+/// On a pad's arc steering and boost do nothing; a hover breaks the arc, and landing ends it.
+#[test]
+fn pad_arc_is_ballistic() {
+    let map = Map::load(Map::index("riftline").unwrap());
+    let (arena, t) = (Arena::new(&map), Tuning::default());
+    let mut m = spawn_mech(&t, Vector::from_array(map.pads[0].at) + Vector::Y * 0.1);
+    while !m.pad_arc {
+        step_mech(&arena, &t, &mut m, &Input::default());
+    }
+    let flat = |m: &sim::Mech| Vector::new(m.vel.x, 0.0, m.vel.z);
+    let (launch, push) = (flat(&m), Input { move_z: 1.0, move_x: 1.0, boost: true, ..Input::default() });
+    for _ in 0..10 {
+        step_mech(&arena, &t, &mut m, &push);
+        assert!(m.pad_arc && !m.boosting && flat(&m) == launch, "steering or boost moved the arc: {} vs {launch}", flat(&m));
+    }
+    step_mech(&arena, &t, &mut m, &Input { hover: true, ..push });
+    assert!(!m.pad_arc && m.hovering, "a hover should break the arc");
+
+    let mut m = spawn_mech(&t, Vector::from_array(map.pads[0].at) + Vector::Y * 0.1);
+    let mut flew = false;
+    for _ in 0..(10.0 * TICK_HZ) as u32 {
+        step_mech(&arena, &t, &mut m, &Input::default());
+        flew |= m.pad_arc;
+        if flew && m.grounded {
+            break;
+        }
+    }
+    assert!(flew && m.grounded && !m.pad_arc, "landing should end the arc");
 }
 
 #[test]
@@ -133,6 +197,26 @@ fn bot_crosses_the_rift() {
     let map = Map::load(Map::index("riftline").unwrap());
     let ended = bot_reaches("riftline", Vector::from_array(map.spawns[0][0]), Vector::new(-15.0, 0.1, -50.0), 45.0);
     assert!(ended.is_ok(), "bot never got across the chasm; ended at {}", ended.unwrap_err());
+}
+
+#[test]
+fn bot_takes_the_riftline_pad() {
+    // A short-sighted bot on the chasm floor, after a target on the rim above the pad's landing.
+    let index = Map::index("riftline").unwrap();
+    let t = Tuning { weapon_range: 12.0, ..Tuning::default() };
+    let (arena, nav) = (Arena::new(&Map::load(index)), Nav::for_map(index));
+    let (mut me, target) = (spawn_mech(&t, Vector::new(-80.0, -23.9, 2.0)), spawn_mech(&t, Vector::new(-92.0, 0.1, 52.0)));
+    let (mut bot, mut rode) = (Bot::new(7), false);
+    for tick in 0..(8.0 * TICK_HZ) as u32 {
+        if sees(&arena, &t, &me, &target) {
+            assert!(rode, "bot got up without the pad");
+            return;
+        }
+        let input = bot.think(&arena, nav, &t, &me, Some(&target), tick);
+        step_mech(&arena, &t, &mut me, &input);
+        rode |= me.pad_arc;
+    }
+    panic!("bot never rode the pad out of the chasm; ended at {}", me.pos);
 }
 
 #[test]

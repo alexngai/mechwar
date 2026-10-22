@@ -7,7 +7,7 @@
 // (maps/kit.mjs) adds the 180-degree twin. Metrics as the other maps': 9-10 m lanes and gates,
 // 6.5 m+ under decks, ramps near 24 degrees, 3 m hover ledges. Hover lasts about 5 s and a dash is
 // 8.5 m, so a 12 m gap takes a hover; there's no fall damage, so the chasm is a slow road, not a pit.
-import { box, lamp, once, point, railing, ramp, sign, turned, write } from './kit.mjs';
+import { box, lamp, once, pad, point, railing, ramp, sign, turned, write } from './kit.mjs';
 
 const BASE = -25; // bottom of every rock mass
 const MAGENTA = '#ff6be0', LILAC = '#c9a2ff';
@@ -106,6 +106,10 @@ for (const at of [[-25, 0, 84], [25, 0, 84], [-24, 0, 116], [20, 7, 108]]) lamp(
 box([120, BASE, -121], [121, 18, 121], 'concrete'); // perimeter, down to the chasm floor
 box([-121, 0, 120], [121, 18, 121], 'concrete');
 
+// --- Jump pads: the chasm floor straight up to the rim, and the rim onto the rail deck ----------
+pad([-92, -24, 10], [-92, 0, 46], 3);
+pad([-20, 0, 58], [0, 10, 58], 13);
+
 // --- Waypoints ---------------------------------------------------------------------------------
 point([10, -24, 0], [40, -24, 0], [70, -24, 0], [100, -24, 0]); // floor (twins cover x < 0)
 for (const a of STAIRS) {
@@ -127,5 +131,6 @@ const palette = {
   light: { sky: '#b6a6e6', ground: '#3a2c4a', ambient: 1.7, sun: '#ffc6e6', direct: 1.5 },
   lamp: '#f0b8ff',
   tint: '#c3bad8',
+  pad: MAGENTA,
 };
 write(new URL('./riftline.json', import.meta.url), { name: 'Riftline', size: [240, 240], night: true, palette }, north);

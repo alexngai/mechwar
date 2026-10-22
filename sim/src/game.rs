@@ -838,6 +838,7 @@ mod tests {
             solids: vec![solid([0.0, -0.5, 0.0], [50.0, 0.5, 50.0]), solid([0.0, 1.5, 0.0], [4.0, 1.5, 0.25]), solid([0.0, 2.0, 16.0], [2.0, 2.0, 2.0])],
             spawns: [vec![], vec![]],
             nav: vec![],
+            pads: vec![],
         };
         // Returns the blast, where the rocket was a tick before plus that tick's travel, and the
         // enemy's health after.
