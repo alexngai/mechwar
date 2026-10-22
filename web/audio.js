@@ -5,6 +5,7 @@
 const MAX_VOICES = 24; // world (3D) one-shots at once; past that, new ones are dropped
 const MAX_DISTANCE = 150; // m: farther world sounds aren't started
 const THRUST_SLOTS = 3; // remote thruster loops, for the nearest boosting or hovering mechs
+const EXHAUST_SLOTS = 4; // exhaust loops, for the nearest rockets and darts in flight
 const WEIGHT = { A: 0.65, B: 1, C: 1.5 }; // shot and landing heft by class
 const STEP_DEPTH = { A: 1, B: 1.5, C: 2.1 }; // footsteps: even the Wisp stomps; the Bulwark shakes the ground
 // Outside sounds reach us through the cockpit's armor: highs cut, low body lifted.
@@ -65,6 +66,7 @@ export class Sound {
     this.brown = buffer(ctx, () => (last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02) * 3.5);
     this.applyVolume();
     this.loops = { own: this.loop(null), remote: Array.from({ length: THRUST_SLOTS }, () => this.loop(ctx.createPanner())) };
+    this.jets = Array.from({ length: EXHAUST_SLOTS }, () => this.jet(ctx.createPanner()));
     this.remoteThrust = new Map();
     this.cockpitLoops();
   }
@@ -273,6 +275,8 @@ export class Sound {
     this.noise(out, 'white', 'bandpass', 400, 2600, 0.01, 0.36, 0.5, 1.5);
     this.tone(out, 'sine', 120, 55, 0.003, 0.16, 0.5);
     if (sound === 'mortar') this.tone(out, 'triangle', 190, 120, 0.002, 0.12, 0.45);
+    if (sound === 'furnace') this.noise(out, 'brown', 'lowpass', 600, 120, 0.01, 0.5, 0.7);
+    if (sound === 'mines') this.tone(out, 'square', 900, 700, 0.001, 0.05, 0.12);
   }
 
   /** A burst of radius `radius` m at `pos`: a deep boom and rumble (the hull filter softens it). */
@@ -372,6 +376,21 @@ export class Sound {
     this.growl(out, 'sawtooth', 70, 300, 900, 0.02, 0.45, 0.16);
     this.tone(out, 'sine', 900, 1900, 0.01, 0.22, 0.05);
     this.noise(out, 'brown', 'lowpass', 420, 110, 0.02, 0.8, 0.45, 1, 0.05);
+  }
+
+  /**
+   * A shell or grenade bouncing off something hard at `speed` m/s: a metallic clank, inharmonic
+   * partials over a short knock, pitched up for a (lighter) grenade.
+   */
+  clank(pos, speed, light) {
+    const out = this.voice(pos, 0.45, undefined, 0.25);
+    if (!out) return;
+    const k = Math.min(speed / 20, 1.2) + 0.2, f = light ? 1.5 : 1;
+    this.tone(out, 'triangle', 620 * f, 560 * f, 0.001, 0.2, 0.3 * k);
+    this.tone(out, 'square', 1340 * f, 1250 * f, 0.001, 0.07, 0.07 * k);
+    this.tone(out, 'sine', 2290 * f, 2240 * f, 0.001, 0.28, 0.06 * k);
+    this.noise(out, 'white', 'bandpass', 3200 * f, 1800 * f, 0.001, 0.04, 0.4 * k, 3);
+    this.tone(out, 'sine', 170 * f, 90, 0.001, 0.08, 0.35 * k);
   }
 
   /** A dash: the mech skids sideways, so a low grinding scrape and a skid rumble, not a hiss. */
@@ -492,6 +511,50 @@ export class Sound {
         loop.panner.positionZ.setTargetAtTime(o.z, t, 0.02);
       } else {
         loop.panner.setPosition(o.x, o.y, o.z);
+      }
+    });
+  }
+
+  /** A projectile's exhaust: a hissing roar through a band-pass over a low rumble, silent until driven. */
+  jet(panner) {
+    const { ctx } = this;
+    const hiss = ctx.createBufferSource(), roar = ctx.createBufferSource();
+    hiss.buffer = this.white;
+    roar.buffer = this.brown;
+    hiss.loop = roar.loop = true;
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.Q.value = 0.9;
+    const low = ctx.createBiquadFilter();
+    low.type = 'lowpass';
+    low.frequency.value = 280;
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    hiss.connect(band).connect(gain);
+    roar.connect(low).connect(gain);
+    Object.assign(panner, { panningModel: 'equalpower', distanceModel: 'inverse', refDistance: 6, maxDistance: 300 });
+    gain.connect(panner).connect(this.world);
+    hiss.start(0, Math.random());
+    roar.start(0, Math.random());
+    return { band, gain, panner };
+  }
+
+  /** Rockets and darts in flight this frame, as [{ x, y, z, dart }]: the nearest few roar along with them. */
+  exhausts(list) {
+    if (!this.running) return;
+    const l = this.listener, t = this.ctx.currentTime;
+    const near = list.sort((a, b) => dist2(a, l) - dist2(b, l)).slice(0, EXHAUST_SLOTS);
+    this.jets.forEach((jet, i) => {
+      const o = near[i];
+      jet.gain.gain.setTargetAtTime(o ? (o.dart ? 0.2 : 0.55) : 0, t, o ? 0.02 : 0.06);
+      if (!o) return;
+      jet.band.frequency.setTargetAtTime(o.dart ? 2600 : 1100, t, 0.02);
+      if (jet.panner.positionX) {
+        jet.panner.positionX.setTargetAtTime(o.x, t, 0.01);
+        jet.panner.positionY.setTargetAtTime(o.y, t, 0.01);
+        jet.panner.positionZ.setTargetAtTime(o.z, t, 0.01);
+      } else {
+        jet.panner.setPosition(o.x, o.y, o.z);
       }
     });
   }

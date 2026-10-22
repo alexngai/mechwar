@@ -20,7 +20,7 @@ import riftline from '../maps/riftline.json';
 import sump from '../maps/sump.json';
 import sinkhole from '../maps/sinkhole.json';
 import blockout from '../maps/blockout.json';
-import { CROUCH, Mech, TEAMS, armament, ownLoadout, showRound, windUp } from './mech.js';
+import { CROUCH, Mech, TEAMS, armament, ownLoadout, showRound, stoke, windUp } from './mech.js';
 import { Debug } from './debug.js';
 import { Cockpit } from './cockpit.js';
 import { Sound } from './audio.js';
@@ -87,6 +87,8 @@ if (net) {
 const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, SPIN: 31, CHARGE: 32, BLOOM: 33, FIRE_WAIT: 34, OFFSET: 35 };
 // Volley index of thrown grenades; matches projectile::GRENADE in sim/src/projectile.rs.
 const GRENADE_N = 255;
+// A shell turning more than this between frames (cos of ~35 degrees) has bounced off something.
+const BOUNCE_COS = 0.82;
 // Seconds before a second RMB can burst an own shell; matches projectile::ARM.
 const ARM = 0.2;
 
@@ -649,7 +651,7 @@ function frame(now) {
   // Projectiles: own ones extrapolated like the own mech, others already at render time. Each is
   // drawn leaving its launcher (primary fire: a gun) and eases onto its sim path (which starts at
   // the eye). A primary shot's pellets all leave the barrel its first pellet picked.
-  const pr = game.projectiles(now), drawn = [], live = new Set();
+  const pr = game.projectiles(now), drawn = [], live = new Set(), jets = [];
   let gunAt = null;
   burstable = false;
   for (let i = 0; i < pr.length; i += 15) {
@@ -676,13 +678,21 @@ function frame(now) {
     const p = new THREE.Vector3(x + vx * ahead, y + vy * ahead, z + vz * ahead);
     const blend = Math.min((age + ahead) / LAUNCH_BLEND, 1);
     if (blend < 1) p.lerp(shot.from, 1 - blend);
-    const look = (primary ? weapons.primaries[weapon] : secondary)?.projectile;
-    drawn.push({ pos: p, vel: new THREE.Vector3(vx, vy, vz), look, charge, age: age + ahead, primary: !!primary, grenade: n === GRENADE_N });
+    const look = (primary ? weapons.primaries[weapon] : secondary)?.projectile, vel = new THREE.Vector3(vx, vy, vz);
+    // A shell or grenade whose flight turns sharply between frames has bounced: it clanks.
+    if (!primary && shot.vel) {
+      const before = shot.vel.length(), after = vel.length();
+      if (before > 2 && after > 1 && shot.vel.dot(vel) < BOUNCE_COS * before * after) sound.clank(p, before, n === GRENADE_N);
+    }
+    shot.vel = vel;
+    if (look === 'rocket' || look === 'dart') jets.push({ x: p.x, y: p.y, z: p.z, dart: look === 'dart' });
+    drawn.push({ pos: p, vel, look, charge, age: age + ahead, primary: !!primary, grenade: n === GRENADE_N });
     if (!primary) debug.shell(key, n === GRENADE_N ? 'Tumbler' : secondary.name, p, age + ahead);
   }
   for (const key of launches.keys()) if (!live.has(key)) launches.delete(key);
   debug.endShells(live);
   fx.projectiles(drawn, dt);
+  sound.exhausts(jets);
   drawOrbs(now, dt, alive);
 
   // Look is applied at render rate for responsiveness; position is interpolated. In the cockpit
@@ -714,6 +724,7 @@ function frame(now) {
   cockpit.windUp(curr[S.SPIN], curr[S.CHARGE], curr[S.ALT_WAIT] <= 0, dt);
   windUp(me.guns[0].pod, curr[S.SPIN], curr[S.CHARGE], dt);
   showRound(me.arms[1], curr[S.ALT_WAIT] <= 0);
+  for (const pod of [me.arms[1], cockpit.weapons?.launcher.pod]) if (pod) stoke(pod, curr[S.HEAT] / T('heat_max'));
   // ...and light it from the night lamps and flashes nearby (not our own guns': the cockpit flashes those).
   if (firstPerson) {
     const flashes = fx.lights
