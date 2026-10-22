@@ -359,12 +359,19 @@ export class Sound {
 
   /** A jump pad firing: a deep magnetic thump under a rush of air sweeping up. */
   pad(pos) {
-    const out = this.voice(pos, 1.0, undefined, 0.3);
+    const out = this.voice(pos, 1.1, undefined, 0.35);
     if (!out) return;
     out.gain.value = pos ? 1 : 0.9;
-    this.tone(out, 'sine', 72, 30, 0.002, 0.28, 1.0);
-    this.tone(out, 'triangle', 140, 420, 0.01, 0.35, 0.22);
-    this.noise(out, 'white', 'bandpass', 300, 2200, 0.04, 0.7, 0.5, 2);
+    // The piston: a heavy thunk with a metal clank on top.
+    this.tone(out, 'sine', 90, 36, 0.002, 0.24, 1.0);
+    this.tone(out, 'triangle', 170, 70, 0.001, 0.06, 0.4);
+    // The pneumatic release: a sharp hiss falling as the pressure drains, and the rush of air under it.
+    this.noise(out, 'white', 'highpass', 3200, 900, 0.003, 0.42, 0.75);
+    this.noise(out, 'white', 'bandpass', 1800, 380, 0.01, 0.6, 0.5, 0.8);
+    // The energy: a charge zinging up, and the exhaust settling after.
+    this.growl(out, 'sawtooth', 70, 300, 900, 0.02, 0.45, 0.16);
+    this.tone(out, 'sine', 900, 1900, 0.01, 0.22, 0.05);
+    this.noise(out, 'brown', 'lowpass', 420, 110, 0.02, 0.8, 0.45, 1, 0.05);
   }
 
   /** A dash: the mech skids sideways, so a low grinding scrape and a skid rumble, not a hiss. */
