@@ -92,7 +92,7 @@ fn mechs_stay_inside_the_map() {
     }
 }
 
-/// Every jump pad, taken by a Bulwark (the widest) with no input, lands where it's aimed and
+/// Every jump pad, taken by a Heavy (the widest) with no input, lands where it's aimed and
 /// stays there: nothing in the way of the arc, and the landing holds the slide after it.
 #[test]
 fn pads_land_where_aimed() {

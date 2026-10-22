@@ -330,7 +330,7 @@ export class Effects {
     for (let i = 0; i < 3; i++) this.soft.spawn(p, scatter(UP, 1, 1), { life: rand(0.5, 0.9), size: [0.5, 1.8], color: DUST, alpha: 0.45, drag: 2 });
   }
 
-  /** `cool` flames are Slipstream's blue-white. */
+  /** `cool` flames are the Speed boost's blue-white. */
   thrust(p, dir, power, dt, cool = false) {
     for (let i = count(70 * power, dt); i > 0; i--) {
       this.glow.spawn(p, scatter(dir, rand(8, 14), 1.2), { life: rand(0.06, 0.13) * power, size: [0.75 * power, 0.15], color: cool ? COOL_FLAME : FLAME, drag: 4 });

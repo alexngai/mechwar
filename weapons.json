@@ -1,7 +1,7 @@
 {
   "primaries": [
     {
-      "id": "stitcher", "name": "Stitcher", "desc": "Rapid vulcan; the spread blooms while held, and hits fade past 30 m", "sound": "vulcan",
+      "id": "stitcher", "name": "SMG", "desc": "Rapid fire; the spread blooms while held, and hits fade past 30 m", "sound": "vulcan",
       "stats": {
         "fire_rate": 14, "shot_damage": 3.4, "heat_per_shot": 2.9,
         "spread_deg": 0.6, "bloom_per_shot": 0.4, "bloom_max": 4.5, "bloom_recovery": 3,
@@ -9,7 +9,7 @@
       }
     },
     {
-      "id": "triplet", "name": "Triplet", "desc": "Burst rifle: three hard, accurate rounds a pull, then a beat", "sound": "burst",
+      "id": "triplet", "name": "Burst", "desc": "Three hard, accurate rounds a pull, then a beat", "sound": "burst",
       "stats": {
         "fire_rate": 2.2, "burst": 3, "burst_gap": 0.07, "shot_damage": 7.5, "heat_per_shot": 3.5,
         "spread_deg": 0.25, "bloom_per_shot": 0.25, "bloom_max": 1.5, "bloom_recovery": 4,
@@ -17,11 +17,11 @@
       }
     },
     {
-      "id": "pike", "name": "Pike", "desc": "Accurate rifle with mild bloom and long reach", "sound": "rifle",
+      "id": "pike", "name": "Rifle", "desc": "Accurate, with mild bloom and long reach", "sound": "rifle",
       "stats": {}
     },
     {
-      "id": "gyre", "name": "Gyre", "desc": "Rotary cannon: spins up while held, from a chug to a torrent, and runs hot", "sound": "rotary",
+      "id": "gyre", "name": "Gatling", "desc": "Spins up while held, from a chug to a torrent, and runs hot", "sound": "rotary",
       "stats": {
         "fire_rate": 18, "spin_up": 1.2, "spin_down": 0.8, "spin_start": 0.2, "shot_damage": 2.6, "heat_per_shot": 2.1,
         "spread_deg": 1, "bloom_per_shot": 0.12, "bloom_max": 2.5, "bloom_recovery": 3,
@@ -29,7 +29,7 @@
       }
     },
     {
-      "id": "squall", "name": "Squall", "desc": "Flak cannon: five slow pellets in a cone, bursting at 60 m", "sound": "flak",
+      "id": "squall", "name": "Flak", "desc": "Five slow pellets in a cone, bursting at 60 m", "sound": "flak",
       "stats": {
         "fire_rate": 1.6, "shot_damage": 7, "heat_per_shot": 16, "weapon_range": 60,
         "pellets": 5, "spread_deg": 2.5, "bloom_per_shot": 0, "bloom_max": 0,
@@ -37,7 +37,7 @@
       }
     },
     {
-      "id": "kiln", "name": "Kiln", "desc": "Heat cannon: hold to charge a burning slug that bursts on impact; charging widens the burst from 1 to 3.5 m and speeds the slug", "sound": "rail", "projectile": "slug",
+      "id": "kiln", "name": "HEAT", "desc": "Hold to charge a burning slug that bursts on impact; charging widens the burst from 1 to 3.5 m and speeds the slug", "sound": "rail", "projectile": "slug",
       "stats": {
         "fire_rate": 2, "charge_time": 0.9, "charge_damage": 1.5, "charge_speed": 2.5, "charge_radius": 3.5,
         "shot_damage": 16, "heat_per_shot": 8, "spread_deg": 0.1, "bloom_per_shot": 0, "bloom_max": 0,
@@ -47,14 +47,14 @@
   ],
   "secondaries": [
     {
-      "id": "darts", "name": "Dart rack", "desc": "Three fast darts in a tight fan", "sound": "darts", "projectile": "dart",
+      "id": "darts", "name": "Scatter", "desc": "Three fast darts in a tight fan", "sound": "darts", "projectile": "dart",
       "stats": {
         "alt_cooldown": 3, "alt_heat": 12, "alt_count": 3, "alt_spread_deg": 4, "alt_speed": 80,
         "alt_fuse": 1.5, "alt_damage": 7, "alt_radius": 2
       }
     },
     {
-      "id": "hornet", "name": "Hornet", "desc": "Lock-on volley: middle-click locks the enemy nearest your aim within 30° in 0.35 s, and the lock holds 2.5 s wherever you look; fire four missiles that curve onto it, even round a corner", "sound": "hornet", "projectile": "dart",
+      "id": "hornet", "name": "Hellfire", "desc": "Lock-on volley: middle-click locks the enemy nearest your aim within 30° in 0.35 s, and the lock holds 2.5 s wherever you look; fire four missiles that curve onto it, even round a corner", "sound": "hornet", "projectile": "dart",
       "stats": {
         "alt_lock_time": 0.35, "alt_lock_cone": 30, "alt_lock_hold": 2.5, "alt_turn": 150, "alt_count": 4, "alt_spread_deg": 6,
         "alt_speed": 45, "alt_gravity": 0, "alt_loft_deg": 6, "alt_bounce": 0, "alt_fuse": 3, "alt_damage": 9, "alt_radius": 2,
@@ -62,7 +62,7 @@
       }
     },
     {
-      "id": "mender", "name": "Mender", "desc": "Repair beam: hold it on a teammate to mend 10 hp/s, or on an enemy to burn 6 hp/s, out to 28 m; runs warm while held", "sound": "mender",
+      "id": "mender", "name": "Repair torch", "desc": "Hold it on a teammate to mend 10 hp/s, or on an enemy to burn 6 hp/s, out to 28 m; runs warm while held", "sound": "mender",
       "stats": { "alt_beam": 28, "alt_beam_heal": 10, "alt_damage": 6, "alt_heat": 16, "alt_cooldown": 0 }
     },
     {
@@ -70,7 +70,7 @@
       "stats": {}
     },
     {
-      "id": "spindle", "name": "Spindle", "desc": "Rail rifle: middle-click toggles the scope; let go of the trigger to fire one fast, flat, heavy slug", "sound": "spindle", "projectile": "rail", "zoom": 2.5,
+      "id": "spindle", "name": "Rail gun", "desc": "Middle-click toggles the scope; let go of the trigger to fire one fast, flat, heavy slug", "sound": "spindle", "projectile": "rail", "zoom": 2.5,
       "stats": {
         "alt_release": 1, "alt_count": 1, "alt_speed": 320, "alt_gravity": 0, "alt_loft_deg": 0, "alt_bounce": 0,
         "alt_fuse": 1.2, "alt_damage": 34, "alt_radius": 0.8, "alt_cooldown": 3.5, "alt_heat": 22
@@ -84,21 +84,21 @@
       }
     },
     {
-      "id": "mortar", "name": "Mortar", "desc": "Lobbed shell that bounces once or twice, then bursts wide", "sound": "mortar", "projectile": "shell",
+      "id": "mortar", "name": "Grenade launcher", "desc": "Lobbed shell that bounces once or twice, then bursts wide", "sound": "mortar", "projectile": "shell",
       "stats": {
         "alt_cooldown": 5, "alt_heat": 25, "alt_speed": 36, "alt_loft_deg": 10, "alt_gravity": 18,
         "alt_bounce": 0.45, "alt_fuse": 1.4, "alt_damage": 40, "alt_radius": 5.5
       }
     },
     {
-      "id": "splitter", "name": "Splitter", "desc": "Cluster canister: bursts at its fuse or on a second press into six bomblets that rain down", "sound": "mortar", "projectile": "shell",
+      "id": "splitter", "name": "Cluster launcher", "desc": "A canister that bursts at its fuse or on a second press into six bomblets that rain down", "sound": "mortar", "projectile": "shell",
       "stats": {
         "alt_cooldown": 4, "alt_heat": 18, "alt_count": 1, "alt_speed": 50, "alt_gravity": 14, "alt_loft_deg": 10, "alt_bounce": 0,
         "alt_fuse": 1.4, "alt_damage": 12, "alt_radius": 2.5, "alt_split": 6, "alt_split_damage": 11, "alt_split_radius": 2.5, "alt_split_speed": 7
       }
     },
     {
-      "id": "warren", "name": "Warren", "desc": "Mine layer: three sticky mines that burst when an enemy comes within 3.5 m; six down at most", "sound": "mines", "projectile": "mine",
+      "id": "warren", "name": "Mine layer", "desc": "Three sticky mines that burst when an enemy comes within 3.5 m; six down at most", "sound": "mines", "projectile": "mine",
       "stats": {
         "alt_cooldown": 3, "alt_heat": 10, "alt_count": 3, "alt_spread_deg": 10, "alt_speed": 28, "alt_loft_deg": 10, "alt_gravity": 18,
         "alt_bounce": 0, "alt_stick": 1, "alt_trigger": 3.5, "alt_max": 6, "alt_fuse": 20, "alt_damage": 22, "alt_radius": 3.5

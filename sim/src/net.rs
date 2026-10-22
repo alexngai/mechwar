@@ -83,7 +83,7 @@ pub struct MechView {
     pub health: f32,
     pub boosting: bool,
     pub hovering: bool,
-    /// Class ability active (Slipstream or Brace; Vent is instant).
+    /// Class ability active (Speed boost or Bulwark; Vent is instant).
     pub ability: bool,
     pub repairing: bool,
     pub shielded: bool,

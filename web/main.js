@@ -309,7 +309,7 @@ const ease = (x) => x * x * (3 - 2 * x);
 
 // --- Tuning panel ----------------------------------------------------------
 // The sliders show and edit what's being played: the primary and secondary groups its weapons'
-// weapons.json entries, the rest its class's classes.json overrides. The Lancer's own weapons and
+// weapons.json entries, the rest its class's classes.json overrides. The Medium's own weapons and
 // body are tuning.json itself (• marks an override; moving any slider adds one).
 const gui = new GUI({ title: 'Tuning' });
 const folders = {}, sliders = [], values = {};
@@ -447,7 +447,7 @@ const dps = (v) => {
 // bay's build. Online the mech waits in the hangar until launched, and changes made out in the
 // arena apply at the next launch.
 let bay = 1, launching = false;
-const preview = new Preview($('preview'));
+const preview = new Preview($('preview'), Math.max(...CLASS_KEYS.map((_, i) => classValue(i, 'mech_height'))));
 /** Stat bars per slot: label, value from a lookup like `valueOf`'s, unit. */
 const STATS = {
   primaries: [
@@ -916,8 +916,8 @@ function tookHit(attacker, now) {
 function statusOf(e, now) {
   if (e.repairing) return 'REPAIRING';
   if (now < (e.jammedUntil ?? 0)) return 'JAMMED';
-  if (e.ability && e.cls === 2) return 'BRACED';
-  if (e.ability && e.cls === 0) return 'SLIPSTREAM';
+  if (e.ability && e.cls === 2) return 'BULWARK';
+  if (e.ability && e.cls === 0) return 'SPEED BOOST';
   return '';
 }
 

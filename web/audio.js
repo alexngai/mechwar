@@ -7,7 +7,7 @@ const MAX_DISTANCE = 150; // m: farther world sounds aren't started
 const THRUST_SLOTS = 3; // remote thruster loops, for the nearest boosting or hovering mechs
 const EXHAUST_SLOTS = 4; // exhaust loops, for the nearest rockets and darts in flight
 const WEIGHT = { A: 0.65, B: 1, C: 1.5 }; // shot and landing heft by class
-const STEP_DEPTH = { A: 1, B: 1.5, C: 2.1 }; // footsteps: even the Wisp stomps; the Bulwark shakes the ground
+const STEP_DEPTH = { A: 1, B: 1.5, C: 2.1 }; // footsteps: even the Light stomps; the Heavy shakes the ground
 // Outside sounds reach us through the cockpit's armor: highs cut, low body lifted.
 const COCKPIT_CUTOFF = 2400; // Hz
 
@@ -406,7 +406,7 @@ export class Sound {
     this.tone(out, 'sine', 70, 34, 0.004, 0.16, 0.4);
   }
 
-  /** Class ability cue: Vent hiss (B), Slipstream surge (A), Brace clunk (C). */
+  /** Class ability cue: Vent hiss (B), Speed boost surge (A), Bulwark clunk (C). */
   ability(cls, pos) {
     const out = this.voice(pos, 0.9);
     if (!out) return;

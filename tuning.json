@@ -77,7 +77,7 @@
   "ability_duration":  { "value": 0,      "min": 0,     "max": 15,    "step": 0.25,   "unit": "s",       "group": "ability","source": "own tuning" },
   "slipstream_boost_mult": { "value": 1.25, "min": 1,   "max": 2,     "step": 0.05,   "unit": "x boost", "group": "ability","source": "own tuning" },
   "brace_damage_mult": { "value": 0.6,    "min": 0,     "max": 1,     "step": 0.05,   "unit": "x damage","group": "ability","source": "own tuning" },
-  "brace_speed_mult":  { "value": 0.6,    "min": 0,     "max": 1,     "step": 0.05,   "unit": "x walk",  "group": "ability","source": "own tuning" },
+  "brace_speed_mult":  { "value": 1.25,   "min": 0,     "max": 2,     "step": 0.05,   "unit": "x walk",  "group": "ability","source": "own tuning" },
 
   "alt_cooldown":      { "value": 4,      "min": 0.2,   "max": 20,    "step": 0.1,    "unit": "s",        "group": "secondary", "source": "own tuning" },
   "alt_heat":          { "value": 18,     "min": 0,     "max": 100,   "step": 0.5,    "unit": "heat",     "group": "secondary", "source": "own tuning" },

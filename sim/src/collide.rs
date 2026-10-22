@@ -68,7 +68,7 @@ mod tests {
         tb.mech_mass / (ta.mech_mass + tb.mech_mass)
     }
 
-    /// A Bulwark at `bulwark_x` walks +X along z = 0 into a standing Wisp; returns both after `secs`.
+    /// A Heavy at `bulwark_x` walks +X along z = 0 into a standing Light; returns both after `secs`.
     fn bulwark_into_wisp(bulwark_x: f32, wisp_x: f32, secs: f32, mut each_tick: impl FnMut(&Tuning, &Mech, &Tuning, &Mech)) -> (Mech, Mech) {
         let arena = Arena::new(&Map::load(Map::index("blockout").unwrap()));
         let (tc, mut c) = setup(MechClass::C, [bulwark_x, 0.1, 0.0]);
@@ -95,7 +95,7 @@ mod tests {
 
     #[test]
     fn shove_respects_walls() {
-        // The east wall's inner face is at x = 50; start the Wisp just off it.
+        // The east wall's inner face is at x = 50; start the Light just off it.
         let ta = Tuning::default().for_class(MechClass::A);
         let wall = 50.0 - mech_capsule(&ta).radius;
         bulwark_into_wisp(40.0, wall - 0.2, 4.0, |tc, c, ta, a| {

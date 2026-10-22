@@ -9,7 +9,8 @@ const SPIN = 0.3; // rad/s
 const ZERO = new THREE.Vector3();
 
 export class Preview {
-  constructor(canvas) {
+  /** The camera frames a mech `frame` m tall (the tallest class), so every class shows at its true size. */
+  constructor(canvas, frame) {
     this.canvas = canvas;
     this.renderer = null;
     this.scene = new THREE.Scene();
@@ -23,6 +24,9 @@ export class Preview {
     pad.position.y = -0.07;
     this.scene.add(pad);
     this.camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
+    // The whole tallest mech, a little from above.
+    this.camera.position.set(0, frame * 0.8, frame * 3.1);
+    this.camera.lookAt(0, frame * 0.48, 0);
     this.mech = null;
     this.shown = '';
     this.yaw = Math.PI - 0.6; // its front, three-quarters
@@ -49,9 +53,6 @@ export class Preview {
     this.mech?.dispose();
     this.mech = new Mech(this.scene, NO_FX, cls, loadout);
     this.height = height;
-    // Frame the whole mech, a little from above.
-    this.camera.position.set(0, height * 0.8, height * 3.1);
-    this.camera.lookAt(0, height * 0.48, 0);
   }
 
   /** One frame, painted in `team`'s colors (-1 for none yet). */

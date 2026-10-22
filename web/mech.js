@@ -192,7 +192,7 @@ function put(parent, obj, x, y, z, rx = 0, rz = 0) {
 // Materials: `m.hull` personal paint, `m.pods` team paint, `m.trim` metal, `m.hazard` stripes,
 // `m.accent` team-colored lights.
 
-// B (Lancer), medium: the original reverse-joint walker with a gun pod and a rocket pod at its sides.
+// B (Medium): the original reverse-joint walker with a gun pod and a rocket pod at its sides.
 const LANCER = {
   height: 5, hipY: 2.9, hipX: 0.72, thigh: 1.75, shin: 1.7, ankleY: 0.3, knee: 1,
   stance: 0.85, stride: [0.2, 0.3, 2.4], bob: 0.12, lift: 0.6, sink: 1.5, dust: 1,
@@ -215,7 +215,7 @@ const LANCER = {
   },
 };
 
-// A (Wisp), light: short legs under a narrow pod, swept tail fins and slim arms.
+// A (Light): short legs under a narrow pod, swept tail fins and slim arms.
 const WISP = {
   height: 3.5, hipY: 2.05, hipX: 0.5, thigh: 1.35, shin: 1.3, ankleY: 0.22, knee: 1,
   stance: 0.62, stride: [0.167, 0.3, 2.42], bob: 0.12, lift: 0.5, sink: 1.1, dust: 1,
@@ -240,7 +240,7 @@ const WISP = {
   },
 };
 
-// C (Bulwark), heavy: a wide armored box behind a front slab on thick forward-kneed legs, with its
+// C (Heavy): a wide armored box behind a front slab on thick forward-kneed legs, with its
 // weapons on shoulder turrets.
 const BULWARK = {
   height: 5.8, hipY: 2.7, hipX: 1.15, thigh: 1.75, shin: 1.65, ankleY: 0.35, knee: -1,
@@ -533,7 +533,7 @@ function solveJoint(root, end, a, b, bendDir, out) {
 
 export class Mech {
   /**
-   * `cls` is 'A' (Wisp), 'B' (Lancer) or 'C' (Bulwark), carrying `loadout` (see `ownLoadout`).
+   * `cls` is 'A' (Light), 'B' (Medium) or 'C' (Heavy), carrying `loadout` (see `ownLoadout`).
    * Scale by tuning mech_height / `height`.
    */
   constructor(scene, fx, cls = 'B', loadout = ownLoadout(cls)) {
@@ -615,7 +615,7 @@ export class Mech {
     });
 
 
-    // Brace shell: a faint pulsing shield around the Bulwark.
+    // Bulwark shell: a faint pulsing shield around the Heavy.
     this.shellMat = new THREE.MeshBasicMaterial({ color: 0x7fe0ff, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
     this.shell = put(root, new THREE.Mesh(new THREE.IcosahedronGeometry(spec.height * 0.55, 1), this.shellMat), 0, spec.height * 0.5, 0);
     this.shell.visible = false;
@@ -738,7 +738,7 @@ export class Mech {
     // Lowest when the feet are spread, highest as they pass: as a walker does, and it lends reach.
     const bob = moving ? spec.bob * (1 + Math.cos(2 * this.phase)) * Math.min(speed / 6, 1) : 0;
     const sway = alive && s.hovering ? 0.06 * Math.sin(this.t * 5) : 0;
-    // Brace sinks the Bulwark into a lower stance.
+    // The bulwark sinks the Heavy into a lower stance.
     this.brace = damp(this.brace, alive && s.ability && this.cls === 'C' ? 1 : 0, 8, dt);
     // Shut down for repair: it crouches as low as its hit shape does (CROUCH in sim/src/lib.rs)
     // and the guns droop.
@@ -803,7 +803,7 @@ export class Mech {
     if (slipstream) this.nozzleMat.emissive.setRGB(0.4, 0.7, 1);
     else this.nozzleMat.emissive.setRGB(thrusting ? 1 : 0.15, thrusting ? 0.45 : 0.05, 0);
     if (thrusting) {
-      // Boost pushes flame back, hover straight down; Slipstream burns longer and blue-white.
+      // Boost pushes flame back, hover straight down; the Speed boost burns longer and blue-white.
       if (s.hovering) flame.set(0, -1, 0.15).normalize();
       else flame.set(0, -0.35, 1).normalize().applyQuaternion(root.quaternion);
       const power = s.hovering ? 1.4 : slipstream ? 1.6 : 1;
@@ -830,7 +830,7 @@ export class Mech {
       this.fx.dashTrail(body.getWorldPosition(world), this.dashDir, dt, this.dashTrail > DASH_TRAIL - 0.15);
       this.dashTrail -= dt;
     }
-    // The shell shows a Brace, or a fresh launch's shield (brighter, pulsing slower).
+    // The shell shows a Bulwark, or a fresh launch's shield (brighter, pulsing slower).
     this.guard = damp(this.guard, alive && s.shielded ? 1 : 0, 6, dt);
     this.shell.visible = this.brace > 0.05 || this.guard > 0.05;
     this.shellMat.opacity = Math.max(this.brace * (0.12 + 0.05 * Math.sin(this.t * 8)), this.guard * (0.2 + 0.08 * Math.sin(this.t * 4)));
@@ -900,7 +900,7 @@ export class Mech {
     return from;
   }
 
-  /** One-off cue when the class ability fires: Vent steam, a Slipstream kick, or a Brace pulse. */
+  /** One-off cue when the class ability fires: Vent steam, a Speed boost kick, or a Bulwark pulse. */
   ability() {
     Mech.audio?.ability(this.cls, this.own ? null : this.body.getWorldPosition(world));
     if (this.cls === 'B') {

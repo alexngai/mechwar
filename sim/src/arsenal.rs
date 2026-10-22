@@ -1,6 +1,6 @@
 //! Weapons and loadouts. `weapons.json` lists the primaries and secondaries; each sets tuning
 //! values in its slot's tuning.json group (`primary` or `secondary`) over tuning.json's own,
-//! which are the Lancer's weapons. A mech's tuning is tuning.json, then its class's
+//! which are the Medium's weapons. A mech's tuning is tuning.json, then its class's
 //! `classes.json` overrides (which set no weapon values), then its primary's and secondary's.
 
 use std::sync::OnceLock;
@@ -153,10 +153,10 @@ mod tests {
         let arsenal = Arsenal::new(&base);
         let (wisp, bulwark) = (Loadout::of(MechClass::A), Loadout::of(MechClass::C));
         assert_ne!(wisp, bulwark);
-        // The Lancer's own weapons are tuning.json's.
+        // The Medium's own weapons are tuning.json's.
         let lancer = arsenal.get(MechClass::B, Loadout::of(MechClass::B));
         assert_eq!((lancer.fire_rate, lancer.alt_damage), (base.fire_rate, base.alt_damage));
-        // A Wisp body with the Bulwark's weapons: the Wisp's health, the flak and the mortar.
+        // A Light body with the Heavy's weapons: the Light's health, the flak and the grenade launcher.
         let swapped = arsenal.get(MechClass::A, bulwark);
         let (own, heavy) = (arsenal.get(MechClass::A, wisp), arsenal.get(MechClass::C, bulwark));
         assert_eq!(swapped.health_max, own.health_max);

@@ -872,8 +872,8 @@ mod tests {
 
     #[test]
     fn a_picked_loadout_fires_its_weapons() {
-        // A Wisp carrying the Bulwark's weapons fires flak pellets and a mortar shell, not the
-        // Stitcher's hitscan or the darts.
+        // A Light carrying the Heavy's weapons fires flak pellets and a grenade, not the SMG's
+        // hitscan or the scatter darts.
         let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
         game.bots = false;
         let id = game.join().unwrap();

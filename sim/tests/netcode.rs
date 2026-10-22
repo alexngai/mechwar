@@ -481,7 +481,7 @@ fn class_applies_now_then_at_the_next_launch() {
     let classes = class_tunings();
     let (mut game, shooter, victim) = duel_game();
 
-    // Picked before any input: spawn as a Bulwark right away.
+    // Picked before any input: spawn as a Heavy right away.
     game.pick_class(victim, MechClass::C);
     game.step();
     assert_eq!(player(&game, victim).class, MechClass::C);
@@ -512,7 +512,7 @@ fn brace_cuts_damage() {
     game.pick_class(victim, MechClass::C);
     game.step();
 
-    // Brace on the first tick, then a burst inside the 5 s window and another after it.
+    // Bulwark on the first tick, then a burst inside the 5 s window and another after it.
     let (mut shooter_seq, mut victim_seq) = (0, 0);
     let (mut braced, mut unbraced) = (Vec::new(), Vec::new());
     let mut last = game.snapshot(victim).me.health;

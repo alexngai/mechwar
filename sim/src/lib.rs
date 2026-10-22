@@ -598,13 +598,16 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     m.dodge_cooldown = (m.dodge_cooldown - DT).max(0.0);
     m.dodge_time = (m.dodge_time - DT).max(0.0);
 
-    // Class ability: Slipstream (A) frees and speeds up boost, Vent (B) dumps heat at once,
-    // Brace (C) trades speed and boost for less damage (applied by the server).
+    // Class ability: Speed boost (A) refills fuel then frees and speeds up boost, Vent (B) dumps
+    // heat at once, Bulwark (C) trades boost for less damage (applied by the server) and more speed.
     m.ability_time = (m.ability_time - DT).max(0.0);
     m.ability_cooldown = (m.ability_cooldown - DT).max(0.0);
     if input.ability && m.ability_cooldown <= 0.0 {
         m.ability_time = t.ability_duration;
         m.ability_cooldown = t.ability_cooldown;
+        if m.class == MechClass::A {
+            m.fuel = t.fuel_max;
+        }
         if m.class == MechClass::B {
             m.heat = 0.0;
             m.overheated = false;
@@ -969,7 +972,7 @@ mod tests {
         assert!((charged.shot_damage - 1.5 * sim.tuning.shot_damage).abs() < 1e-3 && (projectile::radius(&sim.tuning, &p) - 3.5).abs() < 1e-4);
     }
 
-    /// A Lancer sim with its tuning changed by `set`.
+    /// A Medium sim with its tuning changed by `set`.
     fn weapon_sim(set: impl Fn(&mut Tuning)) -> Sim {
         let (mut sim, _) = class_sim(MechClass::B);
         set(&mut sim.tuning);
@@ -1233,38 +1236,40 @@ mod tests {
             let moved = sim.mech.pos.x - start.x;
             let widths = moved / (2.0 * t.mech_radius);
             assert!(speed(&sim) < 0.05, "{class:?} still sliding at {} m/s", speed(&sim));
-            // The slim Wisp covers a few more of its own widths.
+            // The slim Light covers a few more of its own widths.
             assert!((2.0..=5.5).contains(&widths), "{class:?} dashed {moved} m, {widths} widths");
             if class == MechClass::B {
-                assert!((7.0..=9.5).contains(&moved), "Lancer dashed {moved} m");
+                assert!((7.0..=9.5).contains(&moved), "Medium dashed {moved} m");
             }
         }
     }
 
     #[test]
-    fn slipstream_boosts_free_and_faster() {
+    fn speed_boost_refills_fuel_then_boosts_free_and_faster() {
         let (mut sim, t) = class_sim(MechClass::A);
+        sim.mech.fuel = 1.0;
         sim.step(&Input { ability: true, ..Input::default() });
+        assert_eq!(sim.mech.fuel, t.fuel_max, "speed boost didn't refill the tank");
         let boost = Input { move_z: 1.0, boost: true, ..Input::default() };
         run(&mut sim, boost, 30);
-        assert_eq!(sim.mech.fuel, t.fuel_max, "slipstream burned fuel");
+        assert_eq!(sim.mech.fuel, t.fuel_max, "speed boost burned fuel");
         assert!((speed(&sim) - t.boost_speed * t.slipstream_boost_mult).abs() < 0.05, "speed {}", speed(&sim));
         // Wait out the 4 s back at the start, then boost again.
         sim.mech.pos = Vector::new(0.0, 0.1, 45.0);
         run(&mut sim, Input::default(), 100);
         run(&mut sim, boost, 30);
-        assert!(sim.mech.fuel < t.fuel_max, "boost stayed free after slipstream");
+        assert!(sim.mech.fuel < t.fuel_max, "boost stayed free after the speed boost");
         assert!((speed(&sim) - t.boost_speed).abs() < 0.05, "speed {}", speed(&sim));
     }
 
     #[test]
-    fn brace_slows_and_grounds_boost() {
+    fn bulwark_speeds_up_on_foot_and_grounds_boost() {
         let (mut sim, t) = class_sim(MechClass::C);
         sim.step(&Input { ability: true, ..Input::default() });
         let boost = Input { move_z: 1.0, boost: true, ..Input::default() };
         run(&mut sim, boost, 60);
-        assert!(!sim.mech.boosting, "boosted while braced");
-        assert!((speed(&sim) - t.walk_speed * t.brace_speed_mult).abs() < 0.05, "speed {}", speed(&sim));
+        assert!(!sim.mech.boosting, "boosted behind the bulwark");
+        assert!(t.brace_speed_mult > 1.0 && (speed(&sim) - t.walk_speed * t.brace_speed_mult).abs() < 0.05, "speed {}", speed(&sim));
         run(&mut sim, boost, 120); // past the 5 s
         assert!(sim.mech.boosting);
         assert!((speed(&sim) - t.boost_speed).abs() < 0.05, "speed {}", speed(&sim));

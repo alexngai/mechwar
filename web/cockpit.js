@@ -37,7 +37,7 @@ const RIM = 0.035, RIM_DEPTH = 0.07; // bezel around each screen: bar width, how
 const LOCAL = 3; // world lights (lamps, flashes) the cockpit takes at once
 // Each class's canopy: frame paint, top bar depth, rib and brow thickness, how far the brow dips
 // at the middle, and whether it has hydraulic rams, a second glazing rib or armored rib sleeves.
-// The Wisp's is slim, pale and pointed; the Bulwark's squat, dark and armored.
+// The Light's is slim, pale and pointed; the Heavy's squat, dark and armored.
 const CANOPY = {
   A: { paint: 0x6c737d, bar: 0.1, rib: 0.03, brow: 0.018, dip: 0.13, rams: false, glazing: 2, armor: false },
   B: { paint: 0x5a5f66, bar: 0.12, rib: 0.042, brow: 0.026, dip: 0.09, rams: true, glazing: 1, armor: false },
