@@ -278,18 +278,29 @@ export class Sound {
 
   /**
    * Secondary fire with weapons.json `sound` leaving its launcher; the mortar adds a hollow knock.
-   * A flak volley booms like a gun instead.
+   * A flak volley booms like a gun instead, and a mine is dispensed rather than launched.
    */
   launch(sound, pos) {
     if (sound === 'flak') return this.shot(sound, pos);
     const out = this.voice(pos, 0.5);
     if (!out) return;
     out.gain.value = pos ? 1 : 0.6;
+    if (sound === 'mines') {
+      // Mine layer, all steel: the magazine clacks a mine into the chute (a sharp clack, ringing
+      // inharmonic partials and a hollow knock), then the spring catches and kicks it out.
+      this.noise(out, 'white', 'bandpass', 2600, 2200, 0.001, 0.03, 0.7, 4);
+      this.tone(out, 'triangle', 880, 820, 0.001, 0.16, 0.35);
+      this.tone(out, 'sine', 1970, 1930, 0.001, 0.22, 0.12);
+      this.tone(out, 'square', 3150, 3100, 0.001, 0.05, 0.04);
+      this.tone(out, 'sine', 210, 120, 0.001, 0.09, 0.45);
+      this.noise(out, 'white', 'bandpass', 1500, 1100, 0.001, 0.025, 0.4, 5, 0.07);
+      this.tone(out, 'sawtooth', 520, 300, 0.002, 0.12, 0.08, 0.07);
+      return;
+    }
     this.noise(out, 'white', 'bandpass', 400, 2600, 0.01, 0.36, 0.5, 1.5);
     this.tone(out, 'sine', 120, 55, 0.003, 0.16, 0.5);
     if (sound === 'mortar') this.tone(out, 'triangle', 190, 120, 0.002, 0.12, 0.45);
     if (sound === 'furnace') this.noise(out, 'brown', 'lowpass', 600, 120, 0.01, 0.5, 0.7);
-    if (sound === 'mines') this.tone(out, 'square', 900, 700, 0.001, 0.05, 0.12);
     if (sound === 'hornet') this.noise(out, 'white', 'bandpass', 1800, 3000, 0.005, 0.25, 0.4, 2);
     if (sound === 'spindle') this.tone(out, 'sawtooth', 1400, 260, 0.001, 0.14, 0.25);
   }
