@@ -17,6 +17,9 @@ pub const PROJECTILE_RADIUS: f32 = 0.25;
 const EDGE_DAMAGE: f32 = 0.3;
 /// Bursts sit this far back from the surface they hit, so splash rays start outside it.
 const STANDOFF: f32 = 0.1;
+/// Seconds a secondary shell flies before its owner's next press can burst it, so the click that
+/// fired it can't burst it at the muzzle.
+pub const ARM: f32 = 0.2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Projectile {
@@ -93,6 +96,19 @@ pub fn tuning_for(t: &Tuning, n: u8) -> Cow<'_, Tuning> {
 /// How wide a burst of projectile `p`'s kind spreads, given its class's tuning `t`.
 pub fn radius(t: &Tuning, p: &Projectile) -> f32 {
     ballistics(&tuning_for(t, p.n), p.primary).radius
+}
+
+/// Whether `p` is a secondary shell (not a grenade or primary fire) its owner can burst yet.
+pub fn armed(p: &Projectile) -> bool {
+    !p.primary && p.n != GRENADE && p.age >= ARM - DT * 0.5
+}
+
+/// A fresh secondary press by `owner` (`Mech::alt_pressed`): each of its armed shells bursts at
+/// the end of its next tick of flight, as if its fuse had run out.
+pub fn detonate<'a>(owner: u8, shells: impl IntoIterator<Item = &'a mut Projectile>) {
+    for p in shells.into_iter().filter(|p| p.owner == owner && armed(p)) {
+        p.age = f32::INFINITY;
+    }
 }
 
 /// Advances `p` one tick: gravity, then this tick's path against the arena and `hit_mech`, which

@@ -280,7 +280,16 @@ impl Game {
                 .map(|p| p.mech);
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
-            let input = bot.think(&self.arena, self.nav, t, &p.mech, target.as_ref(), self.tick);
+            let mut input = bot.think(&self.arena, self.nav, t, &p.mech, target.as_ref(), self.tick);
+            // Burst a shell that has flown past the target with the target inside its blast.
+            if let Some(tm) = &target {
+                let tt = &self.classes[tm.class.index()];
+                let chest = tm.pos + Vector::Y * (tt.mech_height * 0.5);
+                input.alt_fire |= self.projectiles.iter().any(|f| {
+                    let ts = &self.classes[f.p.class.index()];
+                    f.p.owner == p.id && projectile::armed(&f.p) && f.p.vel.dot(chest - f.p.pos) < 0.0 && projectile::splash(&self.arena, ts, false, f.p.pos, tt, tm) > 0.0
+                });
+            }
             bot.seq += 1;
             p.inputs.push_back(InputMsg { seq: bot.seq, input, view_tick: self.tick as f32 });
         }
@@ -300,6 +309,9 @@ impl Game {
                 p.ack_seq = msg.seq;
                 let t = &self.classes[p.class.index()];
                 step_mech(&self.arena, t, &mut p.mech, &msg.input);
+                if p.mech.alt_pressed {
+                    projectile::detonate(p.id, self.projectiles.iter_mut().map(|f| &mut f.p));
+                }
                 let mut shells = Vec::new();
                 if p.mech.launched {
                     shells = projectile::volley(t, &p.mech, p.id, msg.seq);
@@ -638,5 +650,80 @@ mod tests {
             assert!((ticks as f32 * DT - t.emp_jam).abs() <= DT, "jam lasted {ticks} ticks");
             break;
         }
+    }
+
+    #[test]
+    fn rocket_airburst_clips_a_mech_behind_cover() {
+        // A thin wall 3 m high, the shooter on a pedestal 16 m in front of it, and an enemy right
+        // behind it. The rocket is aimed into the wall's face just under its top.
+        let t = Tuning::default();
+        let solid = |center, half| crate::map::Solid { center, half, yaw: 0.0, tilt: 0.0 };
+        let map = Map {
+            name: "cover".into(),
+            solids: vec![solid([0.0, -0.5, 0.0], [50.0, 0.5, 50.0]), solid([0.0, 1.5, 0.0], [4.0, 1.5, 0.25]), solid([0.0, 2.0, 16.0], [2.0, 2.0, 2.0])],
+            spawns: [vec![], vec![]],
+            nav: vec![],
+        };
+        // Returns the blast, where the rocket was a tick before plus that tick's travel, and the
+        // enemy's health after.
+        let shoot = |burst: bool| {
+            let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+            game.bots = false;
+            game.arena = Arena::new(&map);
+            let (shooter, hider) = (game.join().unwrap(), game.join().unwrap());
+            for (id, pos) in [(shooter, Vector::new(0.0, 4.1, 16.0)), (hider, Vector::new(0.0, 0.1, -1.85))] {
+                game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = pos;
+            }
+            for _ in 0..10 {
+                send(&mut game, shooter, Input::default());
+                send(&mut game, hider, Input::default());
+                game.step();
+            }
+            let d = Vector::new(0.0, 2.7, 0.25) - (mech(&game, shooter).pos + Vector::Y * t.eye_height);
+            let aim = Input { yaw: (-d.x).atan2(-d.z), pitch: d.y.atan2(d.x.hypot(d.z)), ..Input::default() };
+            send(&mut game, shooter, Input { alt_fire: true, ..aim });
+            game.step();
+            for _ in 0..60 {
+                // Pressed when this tick's flight ends just before the wall, still above its top.
+                let p = game.projectiles.first().expect("rocket in flight").p;
+                let was = p.pos + p.vel * DT;
+                send(&mut game, shooter, Input { alt_fire: burst && was.z < 3.3, ..aim });
+                game.step();
+                if let Some(at) = game.events.iter().find_map(|e| if let Event::Blast { pos, .. } = *e { Some(pos) } else { None }) {
+                    return (at, was, mech(&game, hider).health);
+                }
+            }
+            panic!("no blast");
+        };
+
+        let (at, _, health) = shoot(false);
+        assert!((at.z - 0.25).abs() < 0.2 && at.y < 3.0, "impact at {at}, not the wall's face");
+        assert_eq!(health, t.health_max, "the wall should have stopped the splash");
+
+        let (at, was, health) = shoot(true);
+        assert!(at.distance(was) < 1e-4, "burst at {at}, not where the rocket was ({was})");
+        assert!(at.z > 0.25 && at.y > 3.0, "burst at {at} isn't over the front of the wall");
+        assert!(health < t.health_max, "the burst missed the enemy behind the wall");
+    }
+
+    #[test]
+    fn bots_burst_shells_that_pass_their_target() {
+        let t = Tuning::default();
+        let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+        game.bots = false;
+        let human = game.join().unwrap();
+        let bot = game.add_player(1, Some(Bot::new(1)), MechClass::B).unwrap();
+        for (id, pos) in [(human, Vector::new(0.0, 0.1, 0.0)), (bot, Vector::new(0.0, 0.1, -20.0))] {
+            let m = &mut game.players.iter_mut().find(|p| p.id == id).unwrap().mech;
+            m.pos = pos;
+            m.alt_wait = 10.0; // so the bot doesn't press to fire
+        }
+        // The bot's rocket, 2 m past the human's chest and flying on.
+        let chest = Vector::new(0.0, 0.1 + t.mech_height * 0.5, 0.0);
+        let p = Projectile { owner: bot, seq: 1, n: 0, primary: false, class: MechClass::B, pos: chest + Vector::Z * 2.0, vel: Vector::Z * t.alt_speed, age: 0.5 };
+        game.projectiles.push(Flying { p, team: 1 });
+        game.step();
+        let hits = game.events.iter().find_map(|e| if let Event::Blast { owner, hits, .. } = *e { Some((owner, hits)) } else { None });
+        assert_eq!(hits, Some((bot, 1 << human)));
     }
 }
