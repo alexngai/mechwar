@@ -57,14 +57,19 @@ const mapIndex = (name) => {
 };
 const sim = net ? null : new WasmSim(JSON.stringify(tuning), mapIndex(params.get('map') ?? 'foundry'));
 const game = net ?? sim;
-// Until there's a loadout picker, ?primary=<id>&secondary=<id> (weapons.json ids) arm any class.
-const urlLoadout = Object.fromEntries(
-  [['primary', 'primaries'], ['secondary', 'secondaries']]
-    .map(([slot, list]) => [slot, weapons[list].findIndex((w) => w.id === params.get(slot))])
-    .filter(([, i]) => i >= 0),
-);
+// Each class's loadout as last picked on its card (saved locally by weapon id), else its own weapons.
+const picks = CLASS_KEYS.map((key) => {
+  const own = ownLoadout(key);
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(`webhawk.loadout.${key}`)); } catch { /* private mode, or not JSON */ }
+  const at = (list, id, fallback) => {
+    const k = weapons[list].findIndex((w) => w.id === id);
+    return k < 0 ? fallback : k;
+  };
+  return { primary: at('primaries', saved?.primary, own.primary), secondary: at('secondaries', saved?.secondary, own.secondary) };
+});
 /** The loadout picking class `i` spawns with. */
-const loadoutFor = (i) => ({ ...ownLoadout(CLASS_KEYS[i]), ...urlLoadout });
+const loadoutFor = (i) => picks[i];
 let ws = null, connection = server ? 'connecting' : '', picked = null;
 if (net) {
   ws = new WebSocket(server);
@@ -412,17 +417,36 @@ const nameOf = (id) => (net ? net.name(id) || `Pilot-${String(id).padStart(2, '0
 const esc = (text) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 // Recent kills for the feed: names and team colors when they happened.
 const feed = [];
+// Class cards: chips pick each slot's weapon (any weapon fits any class), and a click anywhere
+// else on the card, its Deploy button or its number key deploys in it.
 CLASS_KEYS.forEach((key, i) => {
-  const c = classes[key], own = ownLoadout(key), { primary, secondary } = armament(own), v = (name) => valueOf(i, own, name);
-  const card = document.createElement('button');
+  const c = classes[key], card = document.createElement('div');
   card.className = 'card';
+  const chips = (slot, list) => weapons[list].map((w, k) => `<label class="chip"><input type="radio" name="${key}-${slot}" value="${k}">${w.name}</label>`).join('');
   card.innerHTML = `<span class="key">${i + 1}</span><b>${c.name}</b>${c.role}<dl>
-    <dt>HP</dt><dd>${v('health_max')}</dd><dt>Speed</dt><dd>${v('walk_speed')} m/s</dd>
-    <dt>DPS</dt><dd>${Math.round(v('fire_rate') * v('shot_damage') * v('pellets'))}</dd></dl>
-    <p><b>LMB · ${primary.name}</b>${primary.desc}</p>
-    <p><b>RMB · ${secondary.name}</b>${secondary.desc}</p>
-    <p><b>F · ${c.ability.name}</b>${c.ability.desc}</p>`;
-  card.addEventListener('click', () => pick(i));
+    <dt>HP</dt><dd>${classValue(i, 'health_max')}</dd><dt>Speed</dt><dd>${classValue(i, 'walk_speed')} m/s</dd>
+    <dt>DPS</dt><dd class="dps"></dd></dl>
+    <div class="slot"><b>LMB</b><div class="chips">${chips('primary', 'primaries')}</div><p class="primary"></p></div>
+    <div class="slot"><b>RMB</b><div class="chips">${chips('secondary', 'secondaries')}</div><p class="secondary"></p></div>
+    <p><b>F · ${c.ability.name}</b>${c.ability.desc}</p>
+    <button class="deploy">Deploy</button>`;
+  const show = () => {
+    const l = picks[i], { primary, secondary } = armament(l), v = (name) => valueOf(i, l, name);
+    card.querySelector(`[name="${key}-primary"][value="${l.primary}"]`).checked = true;
+    card.querySelector(`[name="${key}-secondary"][value="${l.secondary}"]`).checked = true;
+    card.querySelector('.dps').textContent = Math.round(v('fire_rate') * v('shot_damage') * v('pellets'));
+    card.querySelector('p.primary').textContent = primary.desc;
+    card.querySelector('p.secondary').textContent = secondary.desc;
+  };
+  card.addEventListener('change', () => {
+    const at = (slot) => +card.querySelector(`[name="${key}-${slot}"]:checked`).value;
+    picks[i] = { primary: at('primary'), secondary: at('secondary') };
+    const { primary, secondary } = armament(picks[i]);
+    try { localStorage.setItem(`webhawk.loadout.${key}`, JSON.stringify({ primary: primary.id, secondary: secondary.id })); } catch { /* private mode */ }
+    show();
+  });
+  card.addEventListener('click', (e) => { if (!e.target.closest('.chips')) pick(i); });
+  show();
   $('cards').append(card);
 });
 function pick(i) {
