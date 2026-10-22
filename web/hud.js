@@ -1,7 +1,7 @@
 // Glass HUD: one canvas over the game, redrawn each frame from the `frame` object main.js fills.
 // Our own layout: an aim frame (heat on both arcs, the secondary's recharge and a slow gun's
 // refire inside them) around spread ticks at the aim point, target tags and damage arcs. The
-// mech's state (hull, fuel, systems), radar, compass, speed and altitude are on the cockpit's dash
+// mech's state (hull, fuel, systems), radar, speed and altitude are on the cockpit's dash
 // (cockpit.js, which draws the radar with `radar` below); only in the chase view, where the dash
 // isn't seen, does the glass show the radar and hull. Everything is drawn in device pixels scaled
 // by `u` (1/1000 of the height).
