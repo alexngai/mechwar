@@ -32,6 +32,11 @@
     #callsign:focus { border-color: #ffc46a; outline: none; }
     #volume-row { display: flex; gap: 10px; align-items: center; letter-spacing: 2px; opacity: 0.9; }
     #volume { width: 180px; accent-color: #ffc46a; }
+    #graphics-row, #high-fx { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; align-items: center; letter-spacing: 2px; opacity: 0.9; }
+    #high-fx { margin: 0; padding: 0; border: 0; opacity: 1; }
+    #high-fx:disabled { opacity: 0.4; }
+    #graphics-row input { accent-color: #ffc46a; }
+    #quality { font: inherit; letter-spacing: 1px; padding: 4px 6px; background: #0d1014; color: #ffc46a; border: 1px solid #fff3; }
     #muted { color: #ffc46a; opacity: 0.8; }
     #board { position: fixed; top: 14%; left: 50%; transform: translateX(-50%); padding: 12px 16px; background: #0a0d10e0; border: 1px solid #ffc46a55; color: #ffc46a; pointer-events: none; }
     #board[hidden] { display: none; }
@@ -59,6 +64,14 @@
   <div id="picker">
     <label id="callsign-row">CALLSIGN <input id="callsign" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Pilot"></label>
     <label id="volume-row">VOLUME <input id="volume" type="range" min="0" max="1" step="0.05"></label>
+    <div id="graphics-row">GRAPHICS <select id="quality"><option value="high">HIGH</option><option value="low">LOW</option></select>
+      <fieldset id="high-fx">
+        <label><input type="checkbox" id="bloom">BLOOM</label>
+        <label><input type="checkbox" id="shafts">LIGHT SHAFTS</label>
+        <label><input type="checkbox" id="aa">ANTI-ALIASING</label>
+      </fieldset>
+      <label><input type="checkbox" id="haze">HAZE</label>
+    </div>
     <h2>CHOOSE YOUR MECH</h2>
     <div id="cards"></div>
     <div id="picker-note"></div>

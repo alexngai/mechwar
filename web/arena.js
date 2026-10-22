@@ -5,7 +5,7 @@
 import * as THREE from 'three';
 import { halo, hot } from './fx.js';
 
-// Camera layers for quality-specific extras: halos stand in for bloom in Low; High has light shafts.
+// Camera layers for quality-specific extras: halos stand in for bloom when it's off; High has light shafts.
 export const LOW_ONLY = 1, HIGH_ONLY = 2;
 
 const COLORS = {

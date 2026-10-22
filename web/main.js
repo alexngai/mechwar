@@ -59,8 +59,12 @@ const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTI
 const GRENADE_N = 255;
 
 // --- Scene ---------------------------------------------------------------
-// ?quality=low|high (default high). High drops to Low once if it can't hold 45 fps.
-let quality = params.get('quality') === 'low' ? 'low' : 'high';
+const stored = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
+// Graphics are set on the picker and remembered; ?quality=low|high overrides the stored quality.
+// High drops to Low if it can't hold 45 fps.
+const gfx = { quality: 'high', bloom: true, shafts: true, haze: true, aa: true };
+try { Object.assign(gfx, JSON.parse(stored('webhawk.graphics'))); } catch { /* corrupt: defaults */ }
+let quality = (params.get('quality') ?? gfx.quality) === 'low' ? 'low' : 'high';
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.info.autoReset = false; // the world and cockpit passes both count toward the stats
 const glass = new Hud(document.getElementById('glass'));
@@ -148,24 +152,28 @@ const ensureArena = (index) => {
 ensureArena(sim ? mapIndex(params.get('map') ?? 'foundry') : -1);
 
 function applyQuality() {
-  const high = quality === 'high';
+  const high = quality === 'high', bloomed = high && gfx.bloom;
   renderer.setPixelRatio(Math.min(devicePixelRatio, high ? 2 : 1));
   renderer.shadowMap.enabled = sun.castShadow = high;
   fx.setQuality(high);
-  HOT.value = high ? 2 : 1;
+  bloom.enabled = bloomed;
+  HOT.value = bloomed ? 2 : 1;
+  sky.setHaze(gfx.haze);
   // The target's MSAA is most of High's cost: 11-11-10 float (no alpha) halves it against 16-bit
   // RGBA, and on a 2x screen two samples look as smooth as four.
-  composer.reset(new THREE.WebGLRenderTarget(1, 1, { type: THREE.UnsignedInt101111Type, format: THREE.RGBFormat, samples: renderer.getPixelRatio() > 1 ? 2 : 4 }));
+  composer.reset(new THREE.WebGLRenderTarget(1, 1, { type: THREE.UnsignedInt101111Type, format: THREE.RGBFormat, samples: !gfx.aa ? 0 : renderer.getPixelRatio() > 1 ? 2 : 4 }));
   camera.layers.set(0);
-  camera.layers.enable(high ? HIGH_ONLY : LOW_ONLY);
+  if (high && gfx.shafts) camera.layers.enable(HIGH_ONLY);
+  if (!bloomed) camera.layers.enable(LOW_ONLY);
   document.getElementById('glass').classList.toggle('glow', high);
+  $('quality').value = quality;
+  $('high-fx').disabled = !high;
   // Shadow support is compiled into materials, so they need rebuilding.
   scene.traverse((o) => {
     if (o.material) o.material.needsUpdate = true;
   });
   resize();
 }
-applyQuality();
 // Other players by id: their mech, team, class, and a velocity estimated from interpolated motion.
 const remotes = new Map();
 const shots = []; // own predicted shots, drawn once this frame's pose is set
@@ -181,7 +189,6 @@ const hits = [], damageFrom = [], lastFired = new Map();
 const keys = new Set();
 let yaw = 0, pitch = 0, dodge = 0, ability = false, grenade = false, emp = false, firing = false, altFiring = false;
 // First-person cockpit unless the player last chose the chase camera (V).
-const stored = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
 let firstPerson = stored('webhawk.view') !== 'chase';
 const locked = () => document.pointerLockElement === renderer.domElement;
 // Chrome rejects a re-lock right after Esc; the next click simply tries again.
@@ -207,7 +214,7 @@ addEventListener('mouseup', (e) => {
 });
 addEventListener('contextmenu', (e) => e.preventDefault());
 addEventListener('keydown', (e) => {
-  if (e.target instanceof HTMLInputElement) return;
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
   if (e.code === 'Space') e.preventDefault();
   if (e.repeat) return;
   keys.add(e.code);
@@ -285,6 +292,15 @@ function setMuted(muted) {
   try { localStorage.setItem('webhawk.muted', muted ? '1' : ''); } catch { /* private mode */ }
 }
 setMuted(stored('webhawk.muted') === '1');
+// Graphics (picker): applied and remembered on every change.
+for (const id of ['bloom', 'shafts', 'haze', 'aa']) $(id).checked = gfx[id];
+$('graphics-row').addEventListener('change', ({ target }) => {
+  if (target.id === 'quality') quality = gfx.quality = target.value;
+  else gfx[target.id] = target.checked;
+  try { localStorage.setItem('webhawk.graphics', JSON.stringify(gfx)); } catch { /* private mode */ }
+  applyQuality();
+});
+applyQuality();
 const callsignInput = $('callsign');
 callsignInput.value = stored('webhawk.name') ?? '';
 const callsign = () => callsignInput.value.trim();
@@ -736,6 +752,7 @@ function watchPerformance(now, dt) {
     slowFor = fps < 45 ? slowFor + dt : 0;
     if (slowFor > 5) {
       quality = 'low';
+      slowFor = 0;
       applyQuality();
       console.info('quality: dropped to low (under 45 fps)');
     }

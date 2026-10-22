@@ -222,9 +222,9 @@ function skylineMaterial(push) {
 
 /**
  * Adds the sky dome and distant skyline to `scene`, and sets its fog and background to the horizon color.
- * `sunDir` points toward the sun (normalized), or the moon at night. Returns `{ fit(map) }`, which
- * moves the skyline clear of the map's `size`, sets the sky for its `night` and lays the haze on
- * its lowest floor.
+ * `sunDir` points toward the sun (normalized), or the moon at night. Returns `{ fit(map), setHaze(on) }`:
+ * `fit` moves the skyline clear of the map's `size`, sets the sky for its `night` and lays the haze
+ * on its lowest floor.
  */
 export function createSky(scene, sunDir) {
   scene.background = new THREE.Color(SKY.day.horizon);
@@ -238,6 +238,7 @@ export function createSky(scene, sunDir) {
   skyline.matrixAutoUpdate = false;
   scene.add(dome, skyline);
   const color = new THREE.Color();
+  let density = 0, hazy = true;
   const fit = (map) => {
     const { size: [w, d], night } = map;
     const look = night ? SKY.night : SKY.day, u = dome.material.uniforms;
@@ -247,9 +248,10 @@ export function createSky(scene, sunDir) {
     u.stars.value = look.stars;
     scene.fog.color.setHex(look.horizon);
     scene.background.setHex(look.horizon);
-    const [haze, density, falloff] = look.haze;
+    const [haze, , falloff] = look.haze;
+    density = look.haze[1];
     const floor = Math.min(...map.solids.filter((s) => s.mat === 'ground').map((s) => s.box[1] + s.half[1]));
-    HAZE.set([density, falloff, floor, 0.85]);
+    HAZE.set([hazy ? density : 0, falloff, floor, 0.85]);
     color.setHex(haze).convertLinearToSRGB().toArray(HAZE_COLOR);
     const value = Math.max(0, (Math.hypot(w, d) - LAID_OUT_FOR) / 2);
     if (value === push.value) return;
@@ -257,5 +259,6 @@ export function createSky(scene, sunDir) {
     skyline.geometry.dispose();
     skyline.geometry = skylineGeometry(value);
   };
-  return { fit };
+  const setHaze = (on) => { hazy = on; HAZE[0] = on ? density : 0; };
+  return { fit, setHaze };
 }
