@@ -450,10 +450,10 @@ impl Bot {
     /// the one to fight: in view now, scored by distance, less for one that hit us lately or is
     /// wounded (and a little less for the current target). None when no enemy is in view.
     pub fn perceive(&mut self, arena: &Arena, t: &Tuning, me: &Mech, enemies: &[(u8, Mech, f32)], tick: u32) -> Option<u8> {
-        self.contacts.retain(|c| enemies.iter().any(|e| e.0 == c.id) && tick - c.at < secs(MEMORY));
+        self.contacts.retain(|c| enemies.iter().any(|e| e.0 == c.id) && tick.saturating_sub(c.at) < secs(MEMORY));
         for &(id, ref m, hull) in enemies {
             let known = self.contacts.iter().position(|c| c.id == id);
-            let recently = known.and_then(|k| self.contacts[k].seen_at).is_some_and(|at| tick - at < secs(TRACK));
+            let recently = known.and_then(|k| self.contacts[k].seen_at).is_some_and(|at| tick.saturating_sub(at) < secs(TRACK));
             let seen = in_view(arena, t, me, m, recently);
             let heard = m.pos.distance(me.pos) < noise(m);
             if let Some(k) = known {
@@ -475,7 +475,7 @@ impl Bot {
             }
         }
         let score = |c: &Contact| {
-            let grudge = c.hit_at.is_some_and(|at| tick - at < secs(GRUDGE));
+            let grudge = c.hit_at.is_some_and(|at| tick.saturating_sub(at) < secs(GRUDGE));
             c.pos.distance(me.pos) - if grudge { THREAT_M } else { 0.0 } - WOUNDED_M * (1.0 - c.hull) - if self.focus == Some(c.id) { STICKY_M } else { 0.0 }
         };
         self.focus = self.contacts.iter().filter(|c| c.seen).min_by(|a, b| score(a).total_cmp(&score(b))).map(|c| c.id);
@@ -566,7 +566,7 @@ impl Bot {
             // its last spot; otherwise go where an enemy was last known to be, watching that spot
             // when it's near, or patrol.
             self.seen.clear();
-            let ducked = self.contacts.iter().find(|c| !c.seen && c.seen_at.is_some_and(|at| tick - at < secs(FLUSH_AFTER))).map(|c| c.pos);
+            let ducked = self.contacts.iter().find(|c| !c.seen && c.seen_at.is_some_and(|at| tick.saturating_sub(at) < secs(FLUSH_AFTER))).map(|c| c.pos);
             if let Some(spot) = ducked.filter(|s| (t.grenade_radius + 2.0..GRENADE_RANGE).contains(&s.distance(me.pos)))
                 && me.grenades > 0
                 && tick >= self.grenade_at
@@ -795,7 +795,7 @@ impl Bot {
         if toward.length() < self.best - 0.5 {
             self.best = toward.length();
             self.progress_at = tick;
-        } else if tick - self.progress_at > secs(1.5) && !me.pad_arc {
+        } else if tick.saturating_sub(self.progress_at) > secs(1.5) && !me.pad_arc {
             self.hover_until = tick + secs(1.0);
             match self.path.first() {
                 Some(&n) if (nav.node(n).y - me.pos.y).abs() < 2.0 => _ = self.path.remove(0),
