@@ -1,8 +1,9 @@
 //! Every compiled-in map: spawns are standable, the generated nav graph is connected, the real
-//! maps are fair (180-degree symmetric), and bots can navigate Saltworks and climb Foundry.
+//! maps are fair (180-degree symmetric), and bots can navigate Saltworks, climb Foundry and spread
+//! over all of it.
 
 use sim::bot::{Bot, Nav, sees};
-use sim::game::TEAM_SIZE;
+use sim::game::{Game, TEAM_SIZE};
 use sim::map::MAPS;
 use sim::{Arena, Input, Map, MechClass, TICK_HZ, Tuning, Vector, spawn_mech, step_mech};
 
@@ -32,9 +33,13 @@ fn spawns_are_standable_for_every_class() {
 fn nav_graph_connects_every_waypoint() {
     for (index, (name, _)) in MAPS.iter().enumerate() {
         let map = Map::load(index);
-        let reachable = Nav::for_map(index).reachable(0);
+        let nav = Nav::for_map(index);
+        let reachable = nav.reachable(0);
         let stranded: Vec<_> = map.nav.iter().zip(&reachable).filter(|(_, r)| !**r).map(|(p, _)| *p).collect();
         assert!(stranded.is_empty(), "{name}: waypoints unreachable from {:?}: {stranded:?}", map.nav[0]);
+        // Edges are one-way, so also check the way back.
+        let stuck: Vec<_> = (0..map.nav.len()).filter(|&i| !nav.reachable(i)[0]).map(|i| map.nav[i]).collect();
+        assert!(stuck.is_empty(), "{name}: waypoints with no way to {:?}: {stuck:?}", map.nav[0]);
     }
 }
 
@@ -108,4 +113,38 @@ fn bot_climbs_to_the_skybridge_on_foundry() {
         step_mech(&arena, &t, &mut me, &input);
     }
     panic!("bot never reached the gantry level; ended at {}", me.pos);
+}
+
+#[test]
+fn skybridge_drops_to_the_courtyard() {
+    let arena = Arena::new(&Map::load(Map::index("foundry").unwrap()));
+    // On the north skybridge, and on the courtyard floor beside it.
+    let nav = Nav::generate(&arena, &[[-5.0, 14.0, 40.0], [-20.0, 0.0, 40.0]], &Tuning::default().for_class(MechClass::C));
+    assert!(nav.reachable(0)[1], "no drop off the skybridge");
+    assert!(!nav.reachable(1)[0], "climbed 14 m without a ramp");
+}
+
+#[test]
+fn bots_spread_over_foundry() {
+    let mut game = Game::new(Tuning::default(), Map::index("foundry").unwrap());
+    let me = game.join().unwrap();
+    // Bot samples in the channel, on the ground, decks and gantries; in the west and east lanes.
+    let (mut levels, mut lanes, mut n) = ([0; 4], [0; 2], 0);
+    for _ in 0..(180.0 * TICK_HZ) as u32 {
+        game.step();
+        for p in game.snapshot(me).players.iter().filter(|p| p.bot && p.view.health > 0.0) {
+            let pos = p.view.pos;
+            if let Some(level) = [-5.0, 0.0, 7.0, 14.0].iter().position(|y| (pos.y - y).abs() < 1.0) {
+                levels[level] += 1;
+            }
+            if pos.x.abs() > 60.0 {
+                lanes[usize::from(pos.x > 0.0)] += 1;
+            }
+            n += 1;
+        }
+    }
+    let share = |count: usize| count as f32 / n as f32;
+    let (levels, lanes) = (levels.map(share), lanes.map(share));
+    let enough = levels.iter().zip([0.01, 0.0, 0.02, 0.005]).all(|(s, min)| *s > min) && lanes.iter().all(|s| *s > 0.005) && lanes[0] + lanes[1] > 0.04;
+    assert!(enough, "too little time off the courtyard floor: levels {levels:?}, lanes {lanes:?}");
 }
