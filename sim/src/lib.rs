@@ -144,13 +144,15 @@ pub struct Tuning {
     pub alt_stick: f32,
     pub alt_trigger: f32,
     pub alt_max: f32,
-    /// `alt_release` 1: the secondary fires when its trigger is let go, not pressed. Held, a
-    /// lock-on launcher (`alt_lock_time` > 0) locks the enemy nearest its aim within
-    /// `alt_lock_cone` degrees once it's held there that long, and its shells home on a locked
-    /// target, turning up to `alt_turn` degrees a second.
+    /// `alt_release` 1: the secondary fires when its trigger is let go, not pressed.
     pub alt_release: f32,
+    /// A lock-on launcher (`alt_lock_time` > 0): pressing `aux` picks the enemy nearest its aim
+    /// within `alt_lock_cone` degrees, which locks once kept there that long; the lock then holds
+    /// `alt_lock_hold` seconds wherever the mech looks, and its shells home on it, turning up to
+    /// `alt_turn` degrees a second (`projectile::track`).
     pub alt_lock_time: f32,
     pub alt_lock_cone: f32,
+    pub alt_lock_hold: f32,
     pub alt_turn: f32,
     /// A splitting shell bursting in the air (its fuse, or a press) scatters `alt_split` bomblets
     /// in a ring at `alt_split_speed`, each bursting on contact for `alt_split_damage` over
@@ -270,6 +272,8 @@ pub struct Input {
     /// Items, also only on the tick the key went down.
     pub grenade: bool,
     pub emp: bool,
+    /// The secondary's second control (middle mouse), held: a lock-on launcher locks with it.
+    pub aux: bool,
 }
 
 impl Input {
@@ -340,6 +344,9 @@ pub struct Mech {
     /// the mech's armed shells in flight (`projectile::detonate`).
     pub alt_held: bool,
     pub alt_pressed: bool,
+    /// The same for the secondary's second control (`Input::aux`).
+    pub aux_held: bool,
+    pub aux_pressed: bool,
     /// Seconds into the current repair; 0 when not repairing.
     pub repair_time: f32,
     /// Seconds left standing back up after a repair: still shut down, and still crouched.
@@ -543,6 +550,7 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     m.shot = false;
     m.launched = false;
     m.alt_pressed = false;
+    m.aux_pressed = false;
     m.threw = false;
     m.pulsed = false;
     m.beaming = false;
@@ -784,6 +792,8 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     // Mines go off by themselves: a press lays more rather than bursting those down.
     m.alt_pressed = input.alt_fire && !m.alt_held && t.alt_stick < 0.5 && t.alt_release < 0.5 && !beam;
     m.alt_held = input.alt_fire;
+    m.aux_pressed = input.aux && !m.aux_held;
+    m.aux_held = input.aux;
     if m.shot {
         (m.shot_charge, m.charge) = (m.charge, 0.0);
         let burst = t.burst.max(1.0);
@@ -1012,23 +1022,55 @@ mod tests {
     }
 
     #[test]
-    fn lock_on_builds_on_an_enemy_in_the_cone_and_shells_home() {
+    fn lock_on_picks_on_a_press_locks_then_holds_off_aim_and_shells_home() {
         let mut t = Tuning::default();
-        (t.alt_lock_time, t.alt_lock_cone, t.alt_turn, t.alt_speed, t.alt_fuse) = (0.5, 8.0, 180.0, 40.0, 3.0);
+        (t.alt_lock_time, t.alt_lock_cone, t.alt_lock_hold, t.alt_turn, t.alt_speed, t.alt_fuse) = (0.5, 30.0, 1.0, 180.0, 40.0, 3.0);
         let arena = Arena::new(&map::Map::load(map::Map::index("blockout").unwrap()));
         let mut m = spawn_mech(&t, Vector::new(0.0, 0.1, 45.0));
         let eye = aim_ray(&t, &m).origin;
-        let (ahead, aside) = ((7, eye + Vector::NEG_Z * 20.0), (9, eye + Vector::X * 20.0));
-        for _ in 0..(0.5 * TICK_HZ) as usize + 1 {
-            projectile::track(&arena, &t, &mut m, true, &[ahead, aside]);
+        // Both are in the cone; the press picks the one nearer the aim.
+        let (ahead, aside) = ((7, eye + Vector::new(3.0, 0.0, -20.0)), (9, eye + Vector::new(8.0, 0.0, -20.0)));
+        let press = |m: &mut Mech, chests: &[(u8, Vector)]| {
+            m.aux_pressed = true;
+            projectile::track(&arena, &t, m, chests);
+            m.aux_pressed = false;
+        };
+        let ticks = |s: f32| (s * TICK_HZ) as usize + 1;
+
+        // Looking away before the lock is made drops it.
+        press(&mut m, &[ahead, aside]);
+        assert_eq!((m.lock, m.lock_time), (8, 0.0));
+        m.yaw = 1.5;
+        projectile::track(&arena, &t, &mut m, &[ahead, aside]);
+        assert_eq!(m.lock, 0, "kept a lock it lost before it was made");
+
+        // Kept in the cone, it locks; then it holds wherever the mech looks, for `alt_lock_hold`.
+        m.yaw = 0.0;
+        press(&mut m, &[ahead, aside]);
+        for _ in 0..ticks(t.alt_lock_time) {
+            projectile::track(&arena, &t, &mut m, &[ahead, aside]);
         }
         assert!(m.lock == 8 && m.lock_time >= t.alt_lock_time, "lock {} for {}", m.lock, m.lock_time);
+        m.yaw = 1.5;
+        for _ in 0..ticks(t.alt_lock_hold) - 3 {
+            projectile::track(&arena, &t, &mut m, &[ahead, aside]);
+        }
+        assert_eq!(m.lock, 8, "lost the lock looking away");
         let mut p = projectile::volley(&t, &m, 0, 1)[0];
         assert_eq!(p.target, 8);
-        projectile::track(&arena, &t, &mut m, false, &[ahead]);
-        assert_eq!((m.lock, m.lock_time), (0, 0.0), "let go, the lock stays");
+        for _ in 0..4 {
+            projectile::track(&arena, &t, &mut m, &[ahead, aside]);
+        }
+        assert_eq!(m.lock, 0, "held past alt_lock_hold");
+
+        // Firing spends a lock.
+        press(&mut m, &[ahead]);
+        m.launched = true;
+        projectile::track(&arena, &t, &mut m, &[ahead]);
+        assert_eq!(m.lock, 0, "kept the lock after firing");
         // Homing on a goal off to the side turns the shell toward it.
-        let goal = p.pos + Vector::new(15.0, 0.0, -15.0);
+        let dir = p.vel.normalize();
+        let goal = p.pos + dir * 15.0 + Vector::Y.cross(dir) * 15.0;
         for _ in 0..10 {
             projectile::home(&t, &mut p, goal);
             p.pos += p.vel * DT;

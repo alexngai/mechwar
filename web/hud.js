@@ -182,6 +182,13 @@ export class Hud {
       g.font = font(16, 'bold');
       g.fillText('BOOST JAMMED', cx, bottom + 34 * u);
     }
+    // A made lock holds a while wherever we look: say so, and for how long, under the frame.
+    if (f.lock?.progress >= 1) {
+      g.textAlign = 'center';
+      g.fillStyle = '#ffffff';
+      g.font = font(13, 'bold');
+      g.fillText(`LOCKED ${Math.max(f.lock.left, 0).toFixed(1)} s`, cx, bottom + 56 * u);
+    }
 
     // --- Reticle at the aim point, with hit markers -----------------------------------------
     if (f.aim) {

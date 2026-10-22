@@ -119,9 +119,9 @@ impl WasmSim {
     #[allow(clippy::too_many_arguments)]
     pub fn step(
         &mut self, move_x: f32, move_z: f32, yaw: f32, pitch: f32, boost: bool, hover: bool, dodge: i8, fire: bool, alt_fire: bool, ability: bool,
-        repair: bool, grenade: bool, emp: bool,
+        repair: bool, grenade: bool, emp: bool, aux: bool,
     ) {
-        self.sim.step(&Input { move_x, move_z, yaw, pitch, boost, hover, dodge, fire, alt_fire, ability, repair, grenade, emp });
+        self.sim.step(&Input { move_x, move_z, yaw, pitch, boost, hover, dodge, fire, alt_fire, ability, repair, grenade, emp, aux });
     }
 
     /// Same layout as `WasmNetClient::projectiles`; offline they're all own and predicted.
@@ -179,9 +179,9 @@ impl WasmNetClient {
     #[allow(clippy::too_many_arguments)]
     pub fn tick(
         &mut self, move_x: f32, move_z: f32, yaw: f32, pitch: f32, boost: bool, hover: bool, dodge: i8, fire: bool, alt_fire: bool, ability: bool,
-        repair: bool, grenade: bool, emp: bool, now: f64,
+        repair: bool, grenade: bool, emp: bool, aux: bool, now: f64,
     ) -> Vec<u8> {
-        self.0.tick(Input { move_x, move_z, yaw, pitch, boost, hover, dodge, fire, alt_fire, ability, repair, grenade, emp }, now)
+        self.0.tick(Input { move_x, move_z, yaw, pitch, boost, hover, dodge, fire, alt_fire, ability, repair, grenade, emp, aux }, now)
     }
 
     /// Projectiles to draw now; see `projectile_floats`. Predicted ones are extrapolated by the

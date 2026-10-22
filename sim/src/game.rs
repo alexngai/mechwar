@@ -377,7 +377,7 @@ impl Game {
                     let team = self.players[i].team;
                     let chests = self.chests(|q| q.team != team);
                     let t = self.arsenal.of(&self.players[i].mech).clone();
-                    projectile::track(&self.arena, &t, &mut self.players[i].mech, msg.input.alt_fire, &chests);
+                    projectile::track(&self.arena, &t, &mut self.players[i].mech, &chests);
                 }
             }
         }

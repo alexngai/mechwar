@@ -155,7 +155,7 @@ impl NetClient {
         if t.alt_lock_time > 0.0 {
             let chests: Vec<_> = self.obstacles.iter().filter(|(_, team, m)| *team != self.team && m.health > 0.0).map(|(id, _, m)| (*id, m.pos + Vector::Y * (self.arsenal.of(m).mech_height * 0.5))).collect();
             let t = t.clone();
-            projectile::track(&self.arena, &t, &mut self.mech, input.alt_fire, &chests);
+            projectile::track(&self.arena, &t, &mut self.mech, &chests);
         }
         if self.mech.beaming {
             let others = self.obstacles.iter().filter(|(_, _, m)| m.health > 0.0).map(|(id, _, m)| (*id, self.arsenal.of(m), m));

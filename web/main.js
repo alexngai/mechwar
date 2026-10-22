@@ -234,6 +234,9 @@ const hits = [], damageFrom = [], lastFired = new Map();
 // --- Input ---------------------------------------------------------------
 const keys = new Set();
 let yaw = 0, pitch = 0, dodge = 0, ability = false, grenade = false, emp = false, firing = false, altFiring = false;
+// The middle button: held (and latched until the next tick, so a quick click still reaches the
+// sim), and a scoped secondary's zoom it toggles.
+let auxHeld = false, aux = false, scoped = false;
 // Always the cockpit, except while repairing: the camera pulls back to watch the mech shut down
 // and returns once it has stood back up. `chase` eases from 0 (cockpit) to 1 (full chase distance).
 let firstPerson = true, chase = 0;
@@ -242,7 +245,7 @@ const locked = () => document.pointerLockElement === renderer.domElement;
 renderer.domElement.addEventListener('click', () => renderer.domElement.requestPointerLock()?.catch?.(() => {}));
 document.addEventListener('pointerlockchange', () => {
   document.body.classList.toggle('locked', locked());
-  if (!locked()) firing = altFiring = false;
+  if (!locked()) firing = altFiring = auxHeld = false;
 });
 addEventListener('mousemove', (e) => {
   if (!locked()) return;
@@ -256,10 +259,16 @@ addEventListener('mousedown', (e) => {
   if (!locked()) return;
   if (e.button === 0) firing = true;
   if (e.button === 2) altFiring = true;
+  if (e.button === 1) {
+    e.preventDefault();
+    auxHeld = aux = true;
+    if (zoomOf() > 1) scoped = !scoped;
+  }
 });
 addEventListener('mouseup', (e) => {
   if (e.button === 0) firing = false;
   if (e.button === 2) altFiring = false;
+  if (e.button === 1) auxHeld = false;
 });
 addEventListener('contextmenu', (e) => e.preventDefault());
 addEventListener('keydown', (e) => {
@@ -287,7 +296,7 @@ addEventListener('keyup', (e) => {
   keys.delete(e.code);
   if (e.code === 'Tab') boardOpen = false;
 });
-addEventListener('blur', () => { keys.clear(); firing = altFiring = false; });
+addEventListener('blur', () => { keys.clear(); firing = altFiring = auxHeld = false; });
 const axis = (pos, neg) => (keys.has(pos) ? 1 : 0) - (keys.has(neg) ? 1 : 0);
 const shift = () => keys.has('ShiftLeft') || keys.has('ShiftRight');
 // Quick 180°: the view sweeps half a turn over TURN_TIME, eased, on top of the mouse.
@@ -464,6 +473,7 @@ CLASS_KEYS.forEach((key, i) => {
 });
 function pick(i) {
   pickerOpen = false;
+  scoped = false;
   picked = i;
   const l = loadoutFor(i);
   if (net) {
@@ -515,7 +525,7 @@ function frame(now) {
     // Shift+W boosts (the sim only boosts forward); with Shift held, S is the turn, not a step back.
     const forward = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') && !shift() ? 1 : 0);
     const input = [axis('KeyD', 'KeyA'), forward, yaw, pitch,
-      shift(), keys.has('Space'), dodge, firing, altFiring, ability, keys.has('KeyR'), grenade, emp];
+      shift(), keys.has('Space'), dodge, firing, altFiring, ability, keys.has('KeyR'), grenade, emp, aux];
     if (net) {
       const bytes = net.tick(...input, now);
       if (ws.readyState === WebSocket.OPEN) ws.send(bytes);
@@ -528,6 +538,7 @@ function frame(now) {
     if (ability && curr[S.ABILITY_CD] > prev[S.ABILITY_CD]) me.ability();
     dodge = 0;
     ability = grenade = emp = false;
+    aux = auxHeld;
     acc -= DT;
     // Hitscan pellets, where each stopped against the arena.
     const ends = game.take_shots();
@@ -730,8 +741,9 @@ function frame(now) {
   shake *= Math.exp(-6 * dt);
   // A small FOV kick while boosting sells the speed.
   boostKick += ((curr[S.BOOSTING] ? 1 : 0) - boostKick) * (1 - Math.exp(-6 * dt));
-  // A scoped secondary (weapons.json `zoom`) narrows the view while its trigger's held.
-  zoomKick += ((firstPerson && altFiring && zoomOf() > 1 ? 1 : 0) - zoomKick) * (1 - Math.exp(-10 * dt));
+  // A scoped secondary (weapons.json `zoom`) narrows the view while its trigger's held, or
+  // while toggled on with the middle button.
+  zoomKick += ((firstPerson && (altFiring || scoped) && zoomOf() > 1 ? 1 : 0) - zoomKick) * (1 - Math.exp(-10 * dt));
   const fov = (T('fov') + BOOST_FOV * boostKick) / (1 + (zoomOf() - 1) * zoomKick);
   if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }
   camera.updateMatrixWorld();
@@ -973,7 +985,10 @@ function drawGlass(now, myTeam) {
     heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     alt: 1 - curr[S.ALT_WAIT] / Math.max(T('alt_cooldown'), 1e-6), altReady: curr[S.ALT_WAIT] <= 0,
     altBurst: burstable,
-    lock: curr[S.LOCK] > 0 ? { unit: curr[S.LOCK] - 1, progress: Math.min(curr[S.LOCK_T] / Math.max(T('alt_lock_time'), 1e-6), 1) } : null,
+    lock: curr[S.LOCK] > 0 ? {
+      unit: curr[S.LOCK] - 1, progress: Math.min(curr[S.LOCK_T] / Math.max(T('alt_lock_time'), 1e-6), 1),
+      left: T('alt_lock_time') + T('alt_lock_hold') - curr[S.LOCK_T], // s the lock holds once made
+    } : null,
     windup: T('charge_time') > 0 ? curr[S.CHARGE] : T('spin_up') > 0 ? curr[S.SPIN] : 0,
     // The cone the next shot lands in (base spread plus bloom) as a fraction of the half-height,
     // and a slow primary's refire, 0 to 1 (null for fast guns and spinning ones).

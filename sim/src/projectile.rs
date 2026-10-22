@@ -168,30 +168,34 @@ pub fn cap<'a>(t: &Tuning, owner: u8, shells: impl IntoIterator<Item = &'a mut P
     }
 }
 
-/// Lock-on, after `m`'s tick: while its lock-on launcher (`t.alt_lock_time` > 0) is `held`, the
-/// enemy nearest its aim within the cone, in sight and in reach (of `chests`, by player id), builds
-/// lock; anything else starts it over.
-pub fn track(arena: &Arena, t: &Tuning, m: &mut Mech, held: bool, chests: &[(u8, Vector)]) {
-    if t.alt_lock_time <= 0.0 || !held || m.health <= 0.0 {
+/// Lock-on, after `m`'s tick (`t.alt_lock_time` > 0): pressing `aux` picks the enemy nearest
+/// the aim within the cone, in sight and in reach (of `chests`, by player id). Kept there for
+/// `alt_lock_time` it locks, and the lock then holds `alt_lock_hold` wherever the mech looks, so
+/// a volley can curve onto it from an angle. Losing it before then, its death, or firing drops it.
+pub fn track(arena: &Arena, t: &Tuning, m: &mut Mech, chests: &[(u8, Vector)]) {
+    if t.alt_lock_time <= 0.0 || m.health <= 0.0 || m.launched {
         (m.lock, m.lock_time) = (0, 0.0);
         return;
     }
     let ray = aim_ray(t, m);
     let (reach, cone) = (t.alt_speed * t.alt_fuse, t.alt_lock_cone.to_radians());
-    let nearest = chests
-        .iter()
-        .filter_map(|&(id, chest)| {
-            let to = chest - ray.origin;
-            let (dist, angle) = (to.length(), ray.dir.angle_between(to));
-            let clear = || arena.cast_ray(&Ray::new(ray.origin, to / dist), dist).is_none();
-            (dist <= reach && angle <= cone && clear()).then_some((id, angle))
-        })
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map_or(0, |(id, _)| id + 1);
-    if nearest != 0 && nearest == m.lock {
-        m.lock_time += DT;
-    } else {
-        (m.lock, m.lock_time) = (nearest, 0.0);
+    // How far off the aim `chest` is, if it's in the cone, in sight and in reach.
+    let sighted = |chest: Vector| {
+        let to = chest - ray.origin;
+        let (dist, angle) = (to.length(), ray.dir.angle_between(to));
+        let clear = || arena.cast_ray(&Ray::new(ray.origin, to / dist), dist).is_none();
+        (dist <= reach && angle <= cone && clear()).then_some(angle)
+    };
+    if m.aux_pressed {
+        let nearest = chests.iter().filter_map(|&(id, chest)| Some((id, sighted(chest)?))).min_by(|a, b| a.1.total_cmp(&b.1));
+        (m.lock, m.lock_time) = (nearest.map_or(0, |(id, _)| id + 1), 0.0);
+        return;
+    }
+    let chest = chests.iter().find(|(id, _)| m.lock == id + 1).map(|&(_, chest)| chest);
+    let made = m.lock_time >= t.alt_lock_time;
+    match chest {
+        Some(chest) if (made || sighted(chest).is_some()) && m.lock_time < t.alt_lock_time + t.alt_lock_hold => m.lock_time += DT,
+        _ => (m.lock, m.lock_time) = (0, 0.0),
     }
 }
 
