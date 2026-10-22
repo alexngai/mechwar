@@ -274,17 +274,16 @@ function bakeLights(geometry, lights, boxes) {
 }
 
 /**
- * A jump pad (`map.pads`): an octagonal plate whose face glows a soft green inside a bright rim,
- * with a light column (High, at night) and a light of its own at night.
+ * A jump pad (`map.pads`): an octagonal plate whose face glows a soft green inside a bright rim
+ * (into `lit`, which pulses), and a light of its own at night (into `signs`).
  */
-function padParts(p, solid, glow) {
+function padParts(p, solid, lit, signs) {
   const [x, y, z] = p.at;
   const flat = (geometry, lift) => geometry.rotateX(-Math.PI / 2).translate(x, y + lift, z);
   solid.push(paint(new THREE.CylinderGeometry(PAD_RADIUS, PAD_RADIUS + 0.2, 0.16, 8).translate(x, y + 0.08, z), COLORS.pole));
-  glow.push(paint(flat(new THREE.CircleGeometry(PAD_RADIUS - 0.45, 8), 0.17), PAD, 0.35, true));
-  glow.push(paint(flat(new THREE.RingGeometry(PAD_RADIUS - 0.45, PAD_RADIUS - 0.12, 8), 0.17), PAD, 1, true));
-  glow.shafts.push(paint(new THREE.CylinderGeometry(PAD_RADIUS - 0.3, PAD_RADIUS - 0.3, 8, 8, 1, true).translate(x, y + 4.2, z), PAD, 0.25, true));
-  glow.signs.push({ at: new THREE.Vector3(x, y + 1.5, z), color: PAD });
+  lit.push(paint(flat(new THREE.CircleGeometry(PAD_RADIUS - 0.45, 8), 0.17), PAD, 0.35, true));
+  lit.push(paint(flat(new THREE.RingGeometry(PAD_RADIUS - 0.45, PAD_RADIUS - 0.12, 8), 0.17), PAD, 1, true));
+  signs.push({ at: new THREE.Vector3(x, y + 1.5, z), color: PAD });
 }
 
 /** Has a Lambert material add the baked `glow` attribute as light of its own. */
@@ -431,7 +430,8 @@ export function buildArena(scene, map) {
     }
   });
   for (const d of map.decor ?? []) decorParts(d, solid, glow, lamp);
-  for (const p of map.pads ?? []) padParts(p, solid, glow);
+  const padGlow = [];
+  for (const p of map.pads ?? []) padParts(p, solid, padGlow, glow.signs);
   const lit = (m) => (map.night ? glowing(m) : m);
   const light = (at, l) => ({ at, ...l, rgb: new THREE.Color(l.color) });
   const lights = map.night
@@ -451,6 +451,12 @@ export function buildArena(scene, map) {
   // Sun shadows: the floor only receives; solids and their trim cast and receive.
   meshes[0].receiveShadow = true;
   meshes[1].castShadow = meshes[1].receiveShadow = true;
+  if (padGlow.length) {
+    // Jump pads breathe: their glow swells and fades on a sine, once every second and a half or so.
+    const pads = new THREE.Mesh(mergeGeometries(padGlow), hot(new THREE.MeshBasicMaterial({ vertexColors: true })));
+    pads.onBeforeRender = () => pads.material.color.setScalar(0.72 + 0.28 * Math.sin(performance.now() / 250));
+    meshes.push(pads);
+  }
   for (const p of glow.lamps) {
     const h = halo(palette.lamp ?? 0xffd29a, map.night ? 4 : 2.6);
     h.position.copy(p);
