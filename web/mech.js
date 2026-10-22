@@ -28,6 +28,9 @@ const warheadMat = new THREE.MeshLambertMaterial({ color: 0xb8442c, flatShading:
 const dartMat = new THREE.MeshLambertMaterial({ color: 0xd8a640, flatShading: true });
 const mineLampMat = hot(new THREE.MeshBasicMaterial({ color: 0xff3020 }));
 const mendLensMat = hot(new THREE.MeshBasicMaterial({ color: 0x60ffb0 }));
+// Canopy glass: dark and smooth, with a sky-tinted shine. Both sides, so no edge shows a hole.
+const glassMat = new THREE.MeshPhongMaterial({ color: 0x1e2e3a, specular: 0xa8c8dc, shininess: 80, side: THREE.DoubleSide });
+const frameMat = new THREE.MeshPhongMaterial({ color: 0x74787a, specular: 0x8a8a8a, shininess: 40 }); // canopy braces
 
 // Paint for box parts, patched into Lambert. Patterns live in each part's own space so they ride
 // with it as legs re-pose. Every vertex of a one-segment box is a corner, so abs(position) is the
@@ -73,7 +76,8 @@ function patchPaint(shader) {
   Object.assign(shader.uniforms, this.userData.uniforms);
   shader.vertexShader = shader.vertexShader
     .replace('#include <common>', '#include <common>\nvarying vec3 vLocal, vHalf;')
-    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLocal = position;\nvHalf = abs(position);');
+    // Curved parts have no box edges to wear: push their "edges" far off.
+    .replace('#include <begin_vertex>', `#include <begin_vertex>\nvLocal = position;\nvHalf = abs(position)${this.userData.curved ? ' + 10.0' : ''};`);
   shader.fragmentShader = shader.fragmentShader
     .replace('#include <common>', `#include <common>\n${PAINT_PARS}`)
     .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb = paint(diffuseColor.rgb);')
@@ -84,6 +88,14 @@ function paintMaterial(wear, color, second = color, pattern = 'plain') {
   const m = new THREE.MeshLambertMaterial({ color, flatShading: true });
   m.userData.uniforms = { ...wear, uSecond: { value: new THREE.Color(second) }, uPattern: { value: PATTERNS[pattern] }, uSeed: { value: 0 } };
   m.onBeforeCompile = patchPaint;
+  return m;
+}
+/** `paint` (a box part's material) for curved parts: the same color, pattern and wear, no edges. */
+function curvedPaint(paint) {
+  const m = paintMaterial({}, 0);
+  m.color = paint.color;
+  m.userData = { uniforms: paint.userData.uniforms, curved: true };
+  m.customProgramCacheKey = () => 'curved-paint';
   return m;
 }
 
@@ -118,6 +130,48 @@ const DASH_TRAIL = 0.2; // s of smoke laid behind a dash
 const DASH_SPOT = 22; // m/s sideways, and mostly sideways: only a dash does that (a diagonal boost doesn't)
 const REPAIR_GLOW = 0x6dff9a;
 
+/**
+ * A cockpit pod: glass over the top half of an ellipsoid with radii (rx, ry, rz) at (x, y, z),
+ * pitched by `tilt` (negative lowers the front, so it sweeps back like a fighter's), on a blocky
+ * hull base `depth` deep: a tapered block of `sides` flat faces, a little wider than the glass so
+ * its top makes a deck round it (six point a prow at the nose; five and four give a flat front), with a
+ * team-lit seam where glass meets deck. Two roll bars brace the glass from outside, one over each
+ * side, leaning in: straight pipe runs with bent corners, rising from the deck ahead of the glass,
+ * across above it and down behind.
+ */
+function canopy(parent, m, rx, ry, rz, x, y, z, tilt, depth, sides) {
+  const glass = put(parent, new THREE.Mesh(new THREE.SphereGeometry(1, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), glassMat), x, y, z, tilt);
+  glass.scale.set(rx, ry, rz);
+  // The polygon's flat faces sit at cos(PI / sides) of its corners: spread them just past the glass.
+  const spread = 1.12 / Math.cos(Math.PI / sides);
+  const turn = sides === 4 ? Math.PI / 4 : 0;
+  const tub = new THREE.Mesh(new THREE.CylinderGeometry(1, 0.6, 1, sides, 1, false, turn).translate(0, -0.5, 0), m.hullCurved);
+  tub.scale.set(spread, depth / ry, spread);
+  const seam = new THREE.Mesh(new THREE.TorusGeometry(1, 0.03, 4, 48).rotateX(Math.PI / 2), m.accent);
+  seam.scale.y = 0.6 / ry;
+  glass.add(tub, seam);
+  // Each bar leans in: its feet stand out near the deck's edge (x = ±0.84 rx), its top run sits
+  // over the glass's shoulder (x = ±0.5 rx, where the glass is 0.87 ry tall at most), and the
+  // corners are placed so the straight runs clear the glass. Built unscaled so the pipe stays round.
+  const brace = put(parent, new THREE.Group(), x, y, z, tilt);
+  const r = Math.max(0.05 * rx, 0.035), bend = 3 * r, top = 1.02 * ry + r;
+  for (const side of [-1, 1]) {
+    const corners = [[0.84, 0, -0.84], [0.5, top, -0.48], [0.5, top, 0.4], [0.84, 0, 0.95]].map(([bx, h, f]) => new THREE.Vector3(side * bx * rx, h, f * rz));
+    const path = new THREE.CurvePath();
+    let from = corners[0];
+    for (let i = 1; i < corners.length - 1; i++) {
+      const c = corners[i], before = c.clone().lerp(from, bend / c.distanceTo(from)), after = c.clone().lerp(corners[i + 1], bend / c.distanceTo(corners[i + 1]));
+      path.add(new THREE.LineCurve3(from, before));
+      path.add(new THREE.QuadraticBezierCurve3(before, c, after)); // the bend
+      from = after;
+    }
+    path.add(new THREE.LineCurve3(from, corners.at(-1)));
+    brace.add(new THREE.Mesh(new THREE.TubeGeometry(path, 64, r, 6), frameMat));
+    put(brace, box(3 * r, 2 * r, 4 * r, jointMat), corners[0].x, r, corners[0].z); // mount on the deck
+  }
+  return glass;
+}
+
 /** Add `obj` to `parent` at (x, y, z) with pitch rx and roll rz. */
 function put(parent, obj, x, y, z, rx = 0, rz = 0) {
   obj.position.set(x, y, z);
@@ -143,14 +197,13 @@ const LANCER = {
   height: 5, hipY: 2.9, hipX: 0.72, thigh: 1.75, shin: 1.7, ankleY: 0.3, knee: 1,
   stance: 0.85, stride: [0.2, 0.3, 2.4], bob: 0.12, lift: 0.6, sink: 1.5, dust: 1,
   nozzles: [[-0.4, 0.35, 1.55], [0.4, 0.35, 1.55]],
-  strip: [2.24, 1.27, 0.1, 1.6], plate: [1.34, 0.3, 0.9, 1.3],
+  strip: [2.24, 1.2, 0.35, 1.25], plate: [1.34, 0.3, 0.9, 1.3],
   arm: [1.45, 0.9, -0.1],
   hull(body, m) {
     put(body, box(1.5, 0.5, 1.2, m.hazard), 0, 0, 0.05); // hip block
-    put(body, box(2.2, 1.1, 1.8, m.hull), 0, 0.8, 0.1); // main hull
-    put(body, box(2.0, 0.7, 1.0, m.hull), 0, 0.75, -0.95, 0.45); // sloped nose
-    put(body, box(1.3, 0.16, 0.06, m.accent), 0, 0.95, -1.38, 0.45); // visor slit
-    put(body, box(1.7, 0.3, 1.4, m.hull), 0, 1.45, 0.25, -0.06); // roof plate
+    put(body, box(2.2, 1.1, 1.4, m.hull), 0, 0.8, 0.3); // main hull
+    canopy(body, m, 0.92, 0.8, 1.12, 0, 0.82, -0.5, -0.08, 0.6, 5); // rounder canopy on a five-faced, flat-fronted base
+    put(body, box(1.7, 0.3, 1.0, m.hull), 0, 1.45, 0.55, -0.06); // roof plate
     put(body, box(1.3, 1.0, 0.7, m.trim), 0, 0.85, 1.3); // backpack
     put(body, box(0.06, 0.9, 0.06, m.trim), -0.75, 1.95, 0.7); // antenna
   },
@@ -167,17 +220,16 @@ const WISP = {
   height: 3.5, hipY: 2.05, hipX: 0.5, thigh: 1.35, shin: 1.3, ankleY: 0.22, knee: 1,
   stance: 0.62, stride: [0.167, 0.3, 2.42], bob: 0.12, lift: 0.5, sink: 1.1, dust: 1,
   nozzles: [[-0.22, 0.3, 1.05, 0.7], [0.22, 0.3, 1.05, 0.7]],
-  strip: [1.24, 0.9, 0.15, 1.2], plate: [1.24, 0.25, 0.5, 0.55],
+  strip: [1.24, 0.9, 0.3, 1.0], plate: [1.24, 0.25, 0.5, 0.55],
   arm: [0.78, 0.6, -0.05],
   hull(body, m) {
     put(body, box(0.95, 0.4, 0.8, m.hazard), 0, 0, 0.05); // hip block
-    put(body, box(1.2, 0.8, 1.4, m.hull), 0, 0.6, 0.15); // main hull
-    put(body, box(0.75, 0.45, 1.0, m.hull), 0, 0.6, -0.95, 0.35); // pointed nose
-    put(body, box(0.5, 0.1, 0.06, m.accent), 0, 0.78, -1.43, 0.35); // visor slit
-    put(body, box(0.25, 0.2, 1.5, m.trim), 0, 1.05, 0.2); // dorsal spine
+    put(body, box(1.2, 0.8, 1.1, m.hull), 0, 0.6, 0.3); // main hull
+    canopy(body, m, 0.52, 0.52, 1.2, 0, 0.72, -0.5, -0.14, 0.45, 6); // long teardrop bubble on a six-faced prow
+    put(body, box(0.25, 0.2, 1.1, m.trim), 0, 1.05, 0.45); // dorsal spine, behind the bubble
     put(body, box(0.75, 0.6, 0.5, m.trim), 0, 0.55, 0.95); // backpack
-    put(body, box(0.25, 0.25, 0.55, m.trim), -0.36, 1.12, -0.35); // sensor pod
-    put(body, box(0.12, 0.08, 0.04, m.accent), -0.36, 1.14, -0.64); // sensor lens
+    put(body, box(0.2, 0.22, 0.5, m.trim), -0.66, 0.85, 0.05); // sensor pod on the flank
+    put(body, box(0.1, 0.08, 0.04, m.accent), -0.66, 0.87, -0.22); // sensor lens
     for (const side of [-1, 1]) put(body, box(0.05, 0.9, 0.5, m.pods), side * 0.4, 1.3, 0.7, 0.7, -side * 0.4); // swept fin
   },
   leg(m) {
@@ -199,10 +251,10 @@ const BULWARK = {
   hull(body, m) {
     put(body, box(2.0, 0.6, 1.4, jointMat), 0, 0, 0); // hip block
     put(body, box(3.0, 1.6, 2.4, m.hull), 0, 1.05, 0.15); // main hull
-    put(body, box(3.3, 1.5, 0.4, m.hull), 0, 0.7, -1.3, 0.15); // front armor slab
+    put(body, box(3.3, 1.1, 0.4, m.hull), 0, 0.45, -1.3, 0.15); // front armor slab, the canopy's sill
     put(body, box(3.0, 0.25, 0.5, m.hazard), 0, -0.1, -1.25); // slab lip
-    put(body, box(1.6, 0.14, 0.06, m.accent), 0, 1.62, -1.06); // visor slit over the slab
-    put(body, box(2.6, 0.35, 2.0, m.hull), 0, 2.0, 0.3, -0.04); // roof plate
+    canopy(body, m, 1.25, 0.78, 1.05, 0, 1.02, -0.62, -0.06, 0.55, 4); // broad armored canopy on a flat-fronted block
+    put(body, box(2.6, 0.35, 1.2, m.hull), 0, 2.0, 0.75, -0.04); // roof plate
     put(body, box(2.2, 1.4, 0.9, m.trim), 0, 0.9, 1.75); // reactor pack
     for (const side of [-1, 1]) {
       put(body, box(0.3, 0.9, 1.9, m.hull), side * 1.62, 0.8, 0.1); // side armor
@@ -499,6 +551,7 @@ export class Mech {
     this.wear = { uDamage: { value: 0 }, uWreck: { value: 0 }, uFlash: { value: 0 } };
     const scheme = SCHEMES[0];
     this.hull = paintMaterial(this.wear, scheme.base, scheme.second, scheme.pattern);
+    this.hullCurved = curvedPaint(this.hull);
     this.pods = paintMaterial(this.wear, TEAMS[-1].paint);
     this.trim = paintMaterial(this.wear, 0x2f3236);
     this.hazard = paintMaterial(this.wear, 0xc9a227, 0x1d1d1d, 'hazard');
@@ -873,7 +926,7 @@ export class Mech {
     this.root.traverse((o) => o.geometry?.dispose());
     this.root.traverse((o) => o.isSprite && o.material.dispose());
     this.plateMat.map.dispose();
-    for (const m of [this.hull, this.pods, this.trim, this.hazard, this.accent, this.plateMat, this.barrels, this.nozzleMat, this.shellMat, this.beamMat]) m.dispose();
+    for (const m of [this.hull, this.hullCurved, this.pods, this.trim, this.hazard, this.accent, this.plateMat, this.barrels, this.nozzleMat, this.shellMat, this.beamMat]) m.dispose();
   }
 }
 

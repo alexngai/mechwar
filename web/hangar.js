@@ -25,7 +25,7 @@ export class Preview {
     this.camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
     this.mech = null;
     this.shown = '';
-    this.yaw = 0.7;
+    this.yaw = Math.PI - 0.6; // its front, three-quarters
     this.height = 5;
     let drag = null;
     canvas.addEventListener('pointerdown', (e) => {
