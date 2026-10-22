@@ -477,6 +477,9 @@ const spark = new THREE.Vector3();
 /** Moves feet position `p` up to the chest of a class `cls` mech. */
 const toChest = (p, cls) => { p.y += classValue(cls, 'mech_height') * 0.5; return p; };
 
+/** The jump pad each mech stood on last frame, by remote id ('me' for us). */
+const padStands = new Map(), padAt = new THREE.Vector3();
+
 function frame(now) {
   renderer.info.reset();
   const dt = Math.min((now - last) / 1000, 0.25);
@@ -501,9 +504,6 @@ function frame(now) {
     if (net) {
       const bytes = net.tick(...input, now);
       if (ws.readyState === WebSocket.OPEN) ws.send(bytes);
-/** The jump pad each mech stood on last frame, by remote id ('me' for us). */
-const padStands = new Map(), padAt = new THREE.Vector3();
-
     } else {
       sim.step(...input);
     }
@@ -748,6 +748,16 @@ const padStands = new Map(), padAt = new THREE.Vector3();
     alive, heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     hull: curr[S.HEALTH] / T('health_max'), repairing: repairPhase(curr[S.REPAIR_T]), jammed: curr[S.JAMMED] > 0,
   }, dt);
+  // A jump pad fires as a mech leaves it upward: a pulse on the pad and a thump.
+  const onPad = (p) => arena.pads?.find((d) => Math.abs(p.y - d.at[1]) < 1 && Math.hypot(p.x - d.at[0], p.z - d.at[2]) < 2.5);
+  for (const [key, p] of [['me', { x: curr[S.POS], y: curr[S.POS + 1], z: curr[S.POS + 2] }], ...[...remotes].map(([id, e]) => [id, e.pos])]) {
+    const was = padStands.get(key), now = onPad(p);
+    if (was && !now && p.y > was.at[1] + 1) {
+      fx.pulse(padAt.set(...was.at), 3);
+      sound.pad(key === 'me' ? null : padAt);
+    }
+    padStands.set(key, now);
+  }
   // Stacks smoke and spark, furnaces spit sparks, and an industrial map's air carries cinders.
   for (const p of arena.vents) {
     fx.plume(p, dt);
@@ -772,16 +782,6 @@ const padStands = new Map(), padAt = new THREE.Vector3();
     const state = full ? 'server full' : connection || (curr[S.HEALTH] <= 0 ? 'DESTROYED, respawning' : '');
     hud.net.textContent = `K ${kills}  D ${deaths}  ping ${Math.round(ping)} ms  corr ${correction.toFixed(3)} m  ${now < messageUntil ? message : state}`;
     const clock = `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')}`;
-  // A jump pad fires as a mech leaves it upward: a pulse on the pad and a thump.
-  const onPad = (p) => arena.pads?.find((d) => Math.abs(p.y - d.at[1]) < 1 && Math.hypot(p.x - d.at[0], p.z - d.at[2]) < 2.5);
-  for (const [key, p] of [['me', { x: curr[S.POS], y: curr[S.POS + 1], z: curr[S.POS + 2] }], ...[...remotes].map(([id, e]) => [id, e.pos])]) {
-    const was = padStands.get(key), now = onPad(p);
-    if (was && !now && p.y > was.at[1] + 1) {
-      fx.pulse(padAt.set(...was.at), 3);
-      sound.pad(key === 'me' ? null : padAt);
-    }
-    padStands.set(key, now);
-  }
     hud.score.textContent = `${team === 0 ? '▸ ' : ''}BLUE ${blue} – ${red} RED${team === 1 ? ' ◂' : ''}   ${ended ? '' : clock}`;
     const next = MAPS[map_name(nextMap)]?.name ?? '';
     hud.banner.textContent = ended ? `${winner < 0 ? 'DRAW' : winner === team ? 'VICTORY' : 'DEFEAT'} · next match on ${next} in ${secondsLeft}s` : '';
