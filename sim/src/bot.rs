@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use std::f32::consts::{PI, TAU};
 use std::sync::OnceLock;
 
+use libm::{asinf, atan2f, hypotf};
 use rapier3d::prelude::{Ray, Rotation};
 
 use crate::item;
@@ -134,7 +135,7 @@ fn walkable(arena: &Arena, t: &Tuning, from: Vector, to: Vector) -> bool {
         if flat(d).length() < ARRIVE && d.y.abs() < 1.0 {
             return true;
         }
-        step_mech(arena, t, &mut m, &Input { move_z: 1.0, yaw: (-d.x).atan2(-d.z), ..Input::default() });
+        step_mech(arena, t, &mut m, &Input { move_z: 1.0, yaw: atan2f(-d.x, -d.z), ..Input::default() });
         false
     })
 }
@@ -287,7 +288,7 @@ impl Bot {
             {
                 // Range d on flat ground: sin(2θ) = g d / v².
                 let r = (s.alt_gravity * flat(chest - eye).length() / (s.alt_speed * s.alt_speed)).min(1.0);
-                pitch = 0.5 * r.asin() - s.alt_loft_deg.to_radians();
+                pitch = 0.5 * asinf(r) - s.alt_loft_deg.to_radians();
             }
             let (want_yaw, want_pitch) = (yaw + self.wobble.0, pitch + self.wobble.1);
             let new_yaw = me.yaw + wrap(want_yaw - me.yaw).clamp(-max_turn, max_turn);
@@ -341,7 +342,7 @@ impl Bot {
         // No line of sight: walk the waypoint graph toward the target.
         let toward = self.route(arena, nav, t, me, target, tick);
         let dir = toward.normalize_or_zero();
-        let want_yaw = (-dir.x).atan2(-dir.z);
+        let want_yaw = atan2f(-dir.x, -dir.z);
         let new_yaw = me.yaw + wrap(want_yaw - me.yaw).clamp(-max_turn, max_turn);
         let rot = Rotation::from_rotation_y(new_yaw);
         Input {
@@ -452,7 +453,7 @@ fn flat(v: Vector) -> Vector {
 /// Yaw and pitch that point from `from` at `to`, matching `aim_ray`.
 fn look_at(from: Vector, to: Vector) -> (f32, f32) {
     let d = to - from;
-    ((-d.x).atan2(-d.z), d.y.atan2(d.x.hypot(d.z)))
+    (atan2f(-d.x, -d.z), atan2f(d.y, hypotf(d.x, d.z)))
 }
 
 fn wrap(angle: f32) -> f32 {

@@ -32,6 +32,13 @@ function ramp(low, high, width, mat = 'metal') {
   const center = [0, 1, 2].map((i) => r3((low[i] + high[i]) / 2 - T * n[i]));
   const deg = (r) => r3((r * 180) / Math.PI);
   solids.push({ box: center, half: [width / 2, T, r3(Math.hypot(run, dy) / 2)], yaw: deg(yaw), tilt: deg(tilt), mat });
+  // A ramp up from the floor is filled under its upper half, so a mech can't walk in beneath
+  // the high end and wedge there; what's left under the low half is too low to enter.
+  if (low[1] === 0) {
+    const at = (f) => [0, 2].map((i) => low[i] + f * (high[i] - low[i]));
+    const [x, z] = at(0.75);
+    turned([r3(x), r3(dy / 4), r3(z)], [width / 2, r3(dy / 4), r3(run / 4)], deg(yaw), 'concrete');
+  }
 }
 
 /** A smokestack: two boxes, square and diamond, whose union is a fluted, eight-pointed shaft. */

@@ -1032,6 +1032,7 @@ dependencies = [
 name = "sim"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "postcard",
  "rapier3d",
  "serde",

@@ -99,10 +99,12 @@ fn foundry_has_four_levels() {
 fn bot_climbs_to_the_skybridge_on_foundry() {
     let index = Map::index("foundry").unwrap();
     let map = Map::load(index);
-    let (arena, nav, t) = (Arena::new(&map), Nav::for_map(index), Tuning::default());
+    // Short-sighted, so it can't spot the target from below and fight from there: it has to climb.
+    let t = Tuning { weapon_range: 10.0, ..Tuning::default() };
+    let (arena, nav) = (Arena::new(&map), Nav::for_map(index));
     let mut me = spawn_mech(&t, Vector::from_array(map.spawns[0][0]));
-    // Up on the south team's skybridge.
-    let target = spawn_mech(&t, Vector::new(5.0, 14.1, -40.0));
+    // In the middle of the smelter roof, up with the skybridges.
+    let target = spawn_mech(&t, Vector::new(0.0, 14.1, 0.0));
     assert!(!sees(&arena, &t, &me, &target), "target should start hidden");
     let mut bot = Bot::new(7);
     for tick in 0..(50.0 * TICK_HZ) as u32 {
@@ -130,7 +132,8 @@ fn bots_spread_over_foundry() {
     let me = game.join().unwrap();
     // Bot samples in the channel, on the ground, decks and gantries; in the west and east lanes.
     let (mut levels, mut lanes, mut n) = ([0; 4], [0; 2], 0);
-    for _ in 0..(180.0 * TICK_HZ) as u32 {
+    // Six minutes: shorter runs swing too much as bots group up early on.
+    for _ in 0..(360.0 * TICK_HZ) as u32 {
         game.step();
         for p in game.snapshot(me).players.iter().filter(|p| p.bot && p.view.health > 0.0) {
             let pos = p.view.pos;
