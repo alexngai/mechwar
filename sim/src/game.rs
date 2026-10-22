@@ -532,7 +532,8 @@ impl Game {
             // After the match ends shots still fly, but don't hit anyone.
             let hit = hit.filter(|_| matches!(self.phase, Phase::Playing { .. }));
             self.events.push(Event::Shot { shooter: shooter_id, end: ray.point_at(best), hit: hit.map(|j| self.players[j].id) });
-            hits.extend(hit.map(|j| (j, t.shot_damage * weapon::falloff(t, best))));
+            // ponytail: charge scales hitscan damage only; projectile primaries fly at their base damage.
+            hits.extend(hit.map(|j| (j, t.shot_damage * m.shot_power * weapon::falloff(t, best))));
         }
         for (j, damage) in hits {
             self.apply_damage(Some(shooter), j, damage);

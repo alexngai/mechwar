@@ -227,11 +227,32 @@ const KITS = {
     put(pod, box(0.15, 0.15, 0.25, m.trim), 0.04, -0.12, -3.0); // muzzle brake
     return put(pod, new THREE.Object3D(), 0.04, -0.12, -3.2);
   } },
+  // Three short barrels stacked over a receiver on a slim forearm.
+  triplet: { home: 'A', build(pod, m) {
+    pod.add(box(0.34, 0.34, 0.34, jointMat)); // shoulder
+    put(pod, box(0.28, 0.36, 0.8, m.pods), 0.04, -0.12, -0.35); // forearm
+    put(pod, box(0.22, 0.34, 0.5, m.trim), 0.04, -0.06, -0.9); // receiver
+    for (const y of [-0.16, -0.06, 0.04]) put(pod, cyl(0.035, 0.04, 0.75, m.barrels), 0.04, y, -1.45, ALONG_Z); // barrels
+    put(pod, box(0.18, 0.34, 0.1, m.trim), 0.04, -0.06, -1.8); // muzzle shroud
+    return put(pod, new THREE.Object3D(), 0.04, -0.06, -1.9);
+  } },
   // A gun pod with one tapered barrel.
   pike: { home: 'B', build(pod, m) {
     pod.add(box(0.55, 0.6, 1.3, m.pods));
     put(pod, cyl(0.1, 0.13, 1.4, m.barrels), 0, -0.05, -1.3, ALONG_Z);
     return put(pod, new THREE.Object3D(), 0, -0.05, -2.0);
+  } },
+  // Six barrels round a spinner (`userData.spinner`, turned by `windUp`), out of a gun pod.
+  gyre: { home: 'B', build(pod, m) {
+    pod.add(box(0.55, 0.6, 1.0, m.pods));
+    const spinner = put(pod, new THREE.Group(), 0, -0.05, -0.5);
+    for (let k = 0; k < 6; k++) {
+      const a = (k / 6) * Math.PI * 2;
+      put(spinner, cyl(0.045, 0.045, 1.3, m.barrels), Math.cos(a) * 0.12, Math.sin(a) * 0.12, -0.65, ALONG_Z);
+    }
+    for (const z of [-0.1, -1.2]) put(spinner, cyl(0.19, 0.19, 0.08, m.trim), 0, 0, z, ALONG_Z); // collars
+    pod.userData.spinner = spinner;
+    return put(pod, new THREE.Object3D(), 0, -0.05, -1.85);
   } },
   // A cannon on a shoulder turret.
   squall: { home: 'C', build(pod, m) {
@@ -240,6 +261,21 @@ const KITS = {
     put(pod, cyl(0.17, 0.21, 1.7, m.barrels), 0, 0.1, -1.85, ALONG_Z); // barrel
     put(pod, box(0.5, 0.5, 0.4, m.trim), 0, 0.1, -2.75); // muzzle block
     return put(pod, new THREE.Object3D(), 0, 0.1, -3.0);
+  } },
+  // A long barrel through coils that glow as it charges (`userData.charge`, lit by `windUp`), on a
+  // shoulder turret.
+  kiln: { home: 'C', build(pod, m) {
+    put(pod, box(0.5, 0.4, 0.6, jointMat), 0, -0.3, 0.1); // turret ring
+    put(pod, box(0.8, 0.65, 1.5, m.pods), 0, 0.1, 0); // housing
+    put(pod, cyl(0.13, 0.15, 2.4, m.barrels), 0, 0.1, -1.9, ALONG_Z); // barrel
+    const glow = hot(new THREE.MeshBasicMaterial({ color: COILS_COLD }));
+    for (const z of [-1.1, -1.5, -1.9, -2.3]) {
+      put(pod, cyl(0.26, 0.26, 0.09, m.trim), 0, 0.1, z, ALONG_Z); // coil
+      put(pod, cyl(0.22, 0.22, 0.14, glow), 0, 0.1, z - 0.15, ALONG_Z); // its glow
+    }
+    put(pod, box(0.36, 0.36, 0.25, m.trim), 0, 0.1, -3.15); // muzzle
+    pod.userData.charge = glow;
+    return put(pod, new THREE.Object3D(), 0, 0.1, -3.3);
   } },
   // A rack of three tubes on a slim forearm.
   darts: { home: 'A', build(pod, m) {
@@ -264,6 +300,15 @@ const KITS = {
     return put(pod, new THREE.Object3D(), 0, 0.15 + 1.15 * Math.sin(0.3), -0.9 - 1.15 * Math.cos(0.3));
   } },
 };
+
+const COILS_COLD = new THREE.Color(0x2a1206), COILS_HOT = new THREE.Color(0xff9a40);
+
+/** Turns weapon `pod`'s spinner by `spin` (0-1) over `dt`, and lights its coils by `charge` (0-1). */
+export function windUp(pod, spin, charge, dt) {
+  const { spinner, charge: coils } = pod.userData;
+  if (spinner) spinner.rotation.z += spin * 30 * dt;
+  coils?.color.lerpColors(COILS_COLD, COILS_HOT, charge);
+}
 
 /** Class `cls`'s own weapons as a loadout: indices into weapons.json's primaries and secondaries. */
 export function ownLoadout(cls) {

@@ -6,7 +6,7 @@
 // palette, nearby lamps and flashes), shades under cover, and flashes with the guns.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CLASSES, TEAMS, mountWeapon } from './mech.js';
+import { CLASSES, TEAMS, mountWeapon, windUp } from './mech.js';
 import { radar } from './hud.js';
 
 const frameMat = new THREE.MeshLambertMaterial({ color: 0x5a5f66, flatShading: true });
@@ -343,6 +343,11 @@ export class Cockpit {
     this.scene.add(group);
     this.weapons = { group, guns, launcher, arms: [...guns, launcher] };
     this.next = 0;
+  }
+
+  /** Spins the primary's barrels by `spin` and lights its coils by `charge` (see mech.js `windUp`). */
+  windUp(spin, charge, dt) {
+    if (this.weapons) windUp(this.weapons.guns[0].pod, spin, charge, dt);
   }
 
   /** Matches the world's `hemi` and `sun` lights, a little dimmer: the canopy is under a roof. */

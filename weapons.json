@@ -9,8 +9,24 @@
       }
     },
     {
+      "id": "triplet", "name": "Triplet", "desc": "Burst rifle: three hard, accurate rounds a pull, then a beat", "sound": "burst",
+      "stats": {
+        "fire_rate": 2.2, "burst": 3, "burst_gap": 0.07, "shot_damage": 7.5, "heat_per_shot": 3.5,
+        "spread_deg": 0.25, "bloom_per_shot": 0.25, "bloom_max": 1.5, "bloom_recovery": 4,
+        "falloff_start": 40, "falloff_end": 90, "falloff_floor": 0.5
+      }
+    },
+    {
       "id": "pike", "name": "Pike", "desc": "Accurate rifle with mild bloom and long reach", "sound": "rifle",
       "stats": {}
+    },
+    {
+      "id": "gyre", "name": "Gyre", "desc": "Rotary cannon: spins up while held, from a chug to a torrent, and runs hot", "sound": "rotary",
+      "stats": {
+        "fire_rate": 18, "spin_up": 1.2, "spin_down": 0.8, "spin_start": 0.2, "shot_damage": 2.6, "heat_per_shot": 2.1,
+        "spread_deg": 1, "bloom_per_shot": 0.12, "bloom_max": 2.5, "bloom_recovery": 3,
+        "falloff_start": 35, "falloff_end": 80, "falloff_floor": 0.5
+      }
     },
     {
       "id": "squall", "name": "Squall", "desc": "Flak cannon: five slow pellets in a cone, bursting at 60 m", "sound": "flak",
@@ -18,6 +34,14 @@
         "fire_rate": 1.6, "shot_damage": 7, "heat_per_shot": 16, "weapon_range": 60,
         "pellets": 5, "spread_deg": 2.5, "bloom_per_shot": 0, "bloom_max": 0,
         "shot_speed": 110, "shot_gravity": 4, "shot_radius": 1
+      }
+    },
+    {
+      "id": "kiln", "name": "Kiln", "desc": "Charge cannon: hold to charge, release to fire; full charge hits three times as hard", "sound": "rail",
+      "stats": {
+        "fire_rate": 2, "charge_time": 0.9, "charge_damage": 3, "shot_damage": 18, "heat_per_shot": 8,
+        "spread_deg": 0.05, "bloom_per_shot": 0, "bloom_max": 0,
+        "falloff_start": 80, "falloff_end": 160, "falloff_floor": 0.7
       }
     }
   ],

@@ -237,6 +237,24 @@ export class Sound {
       this.noise(out, 'brown', 'lowpass', 1100, 120, 0.002, 0.35, 0.8);
       this.noise(out, 'white', 'bandpass', 480, 420, 0.002, 0.04, 0.3, 2, 0.2);
       this.noise(out, 'white', 'bandpass', 330, 300, 0.002, 0.05, 0.3, 2, 0.29);
+    } else if (sound === 'rotary') {
+      // Rotary cannon: a light, quick report and a tick of the turning barrels; at full spin they
+      // run together into a roar.
+      this.noise(out, 'white', 'highpass', 1800, 1100, 0.001, 0.03, 0.6);
+      this.tone(out, 'sine', 170, 80, 0.001, 0.05, 0.45);
+      this.noise(out, 'brown', 'lowpass', 800, 200, 0.002, 0.05, 0.25);
+    } else if (sound === 'burst') {
+      // Burst rifle: a crisp, tight crack with a short body; three come close together.
+      this.noise(out, 'white', 'highpass', 1500, 900, 0.001, 0.04, 0.9);
+      this.noise(out, 'white', 'lowpass', 3400, 800, 0.001, 0.03, 0.35);
+      this.tone(out, 'sine', 140, 55, 0.002, 0.1, 0.7);
+      this.noise(out, 'brown', 'lowpass', 900, 160, 0.002, 0.1, 0.35);
+    } else if (sound === 'rail') {
+      // Charge cannon: a heavy slam and deep boom, and the coils' discharge zapping down.
+      this.noise(out, 'white', 'highpass', 600, 300, 0.001, 0.12, 1.0);
+      this.tone(out, 'sine', 80, 28, 0.002, 0.4, 1.0);
+      this.tone(out, 'sawtooth', 900, 160, 0.002, 0.18, 0.18);
+      this.noise(out, 'brown', 'lowpass', 1000, 120, 0.002, 0.4, 0.7);
     } else {
       // Rifle: a heavier report with a longer, deeper body and a slower action.
       this.noise(out, 'white', 'highpass', 1000, 600, 0.001, 0.07, 0.95);

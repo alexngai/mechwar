@@ -20,7 +20,7 @@ import riftline from '../maps/riftline.json';
 import sump from '../maps/sump.json';
 import sinkhole from '../maps/sinkhole.json';
 import blockout from '../maps/blockout.json';
-import { CROUCH, Mech, TEAMS, armament, ownLoadout } from './mech.js';
+import { CROUCH, Mech, TEAMS, armament, ownLoadout, windUp } from './mech.js';
 import { Debug } from './debug.js';
 import { Cockpit } from './cockpit.js';
 import { Sound } from './audio.js';
@@ -84,7 +84,7 @@ if (net) {
 }
 
 // Index layout of state(); keep in sync with mech_state in sim/src/wasm.rs.
-const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, OFFSET: 31 };
+const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, SPIN: 31, CHARGE: 32, OFFSET: 33 };
 // Volley index of thrown grenades; matches projectile::GRENADE in sim/src/projectile.rs.
 const GRENADE_N = 255;
 // Seconds before a second RMB can burst an own shell; matches projectile::ARM.
@@ -417,6 +417,11 @@ const nameOf = (id) => (net ? net.name(id) || `Pilot-${String(id).padStart(2, '0
 const esc = (text) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 // Recent kills for the feed: names and team colors when they happened.
 const feed = [];
+/** Damage a second from value lookup `v`'s primary, sustained at full spin or charge, before falloff and heat. */
+const dps = (v) => {
+  const hit = v('shot_damage') * v('pellets') * (v('charge_time') > 0 ? v('charge_damage') : 1);
+  return Math.round((hit * v('burst')) / (1 / v('fire_rate') + v('charge_time')));
+};
 // Class cards: chips pick each slot's weapon (any weapon fits any class), and a click anywhere
 // else on the card, its Deploy button or its number key deploys in it.
 CLASS_KEYS.forEach((key, i) => {
@@ -434,7 +439,7 @@ CLASS_KEYS.forEach((key, i) => {
     const l = picks[i], { primary, secondary } = armament(l), v = (name) => valueOf(i, l, name);
     card.querySelector(`[name="${key}-primary"][value="${l.primary}"]`).checked = true;
     card.querySelector(`[name="${key}-secondary"][value="${l.secondary}"]`).checked = true;
-    card.querySelector('.dps').textContent = Math.round(v('fire_rate') * v('shot_damage') * v('pellets'));
+    card.querySelector('.dps').textContent = dps(v);
     card.querySelector('p.primary').textContent = primary.desc;
     card.querySelector('p.secondary').textContent = secondary.desc;
   };
@@ -705,6 +710,8 @@ function frame(now) {
   // Shade the cockpit when anything stands between the eye and the sun.
   const shaded = firstPerson && game.cast_ray(eye.x, eye.y, eye.z, SUN_DIR.x, SUN_DIR.y, SUN_DIR.z, 150) < 150;
   cockpit.update(dt, camera, SUN_DIR, T('fov'), shaded);
+  cockpit.windUp(curr[S.SPIN], curr[S.CHARGE], dt);
+  windUp(me.guns[0].pod, curr[S.SPIN], curr[S.CHARGE], dt);
   // ...and light it from the night lamps and flashes nearby (not our own guns': the cockpit flashes those).
   if (firstPerson) {
     const flashes = fx.lights
@@ -922,6 +929,7 @@ function drawGlass(now, myTeam) {
     heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     alt: 1 - curr[S.ALT_WAIT] / Math.max(T('alt_cooldown'), 1e-6), altReady: curr[S.ALT_WAIT] <= 0,
     altBurst: burstable,
+    windup: T('charge_time') > 0 ? curr[S.CHARGE] : T('spin_up') > 0 ? curr[S.SPIN] : 0,
     ability: 1 - curr[S.ABILITY_CD] / Math.max(T('ability_cooldown'), 1e-6), abilityActive: curr[S.ABILITY_T] > 0, abilityName: c.ability.name,
     health: curr[S.HEALTH], healthMax: T('health_max'), fuel: curr[S.FUEL] / T('fuel_max'), className: c.name, hurt,
     boostMin: T('boost_min_fuel') / T('fuel_max'), boosting: !!curr[S.BOOSTING], hovering: !!curr[S.HOVERING],

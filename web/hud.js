@@ -214,6 +214,12 @@ export class Hud {
       g.lineWidth = 1.5 * u;
       g.strokeStyle = DIM;
       arc(g, x, y, 12 * u, 0, TAU);
+      // A charge, or a rotary's spin, fills a ring round it; white when full.
+      if (f.windup > 0) {
+        g.lineWidth = 2.5 * u;
+        g.strokeStyle = f.windup >= 1 ? '#ffffff' : AMBER;
+        arc(g, x, y, 19 * u, -Math.PI / 2, -Math.PI / 2 + TAU * f.windup);
+      }
       g.fillStyle = AMBER;
       g.beginPath();
       g.arc(x, y, 2.2 * u, 0, TAU);

@@ -51,6 +51,13 @@
   "shot_speed":        { "value": 0,      "min": 0,     "max": 400,   "step": 5,      "unit": "m/s (0 hitscan)", "group": "primary", "source": "own tuning" },
   "shot_gravity":      { "value": 0,      "min": 0,     "max": 60,    "step": 0.5,    "unit": "m/s²",     "group": "primary", "source": "own tuning" },
   "shot_radius":       { "value": 1,      "min": 0.1,   "max": 10,    "step": 0.1,    "unit": "m",        "group": "primary", "source": "own tuning" },
+  "spin_up":           { "value": 0,      "min": 0,     "max": 5,     "step": 0.05,   "unit": "s (0 none)", "group": "primary", "source": "own tuning" },
+  "spin_down":         { "value": 0.8,    "min": 0.05,  "max": 5,     "step": 0.05,   "unit": "s",        "group": "primary", "source": "own tuning" },
+  "spin_start":        { "value": 1,      "min": 0,     "max": 1,     "step": 0.05,   "unit": "x fire_rate", "group": "primary", "source": "own tuning" },
+  "burst":             { "value": 1,      "min": 1,     "max": 8,     "step": 1,      "unit": "shots",    "group": "primary", "source": "own tuning" },
+  "burst_gap":         { "value": 0.07,   "min": 0.033, "max": 0.5,   "step": 0.001,  "unit": "s",        "group": "primary", "source": "own tuning" },
+  "charge_time":       { "value": 0,      "min": 0,     "max": 5,     "step": 0.05,   "unit": "s (0 none)", "group": "primary", "source": "own tuning" },
+  "charge_damage":     { "value": 1,      "min": 1,     "max": 10,    "step": 0.1,    "unit": "x at full", "group": "primary", "source": "own tuning" },
 
   "mech_radius":       { "value": 1.4,    "min": 0.3,   "max": 4,     "step": 0.05,   "unit": "m",       "group": "body",   "source": "own tuning" },
   "mech_height":       { "value": 5,      "min": 1,     "max": 12,    "step": 0.1,    "unit": "m",       "group": "body",   "source": "own tuning" },

@@ -85,6 +85,18 @@ pub struct Tuning {
     pub shot_speed: f32,
     pub shot_gravity: f32,
     pub shot_radius: f32,
+    /// Spin-up primaries fire at `spin_start` of `fire_rate` from rest, reaching all of it after
+    /// `spin_up` s of trigger (0: no spin-up), and spin down over `spin_down` s.
+    pub spin_up: f32,
+    pub spin_down: f32,
+    pub spin_start: f32,
+    /// Burst primaries fire `burst` shots `burst_gap` s apart per pull, `fire_rate` bursts a second.
+    pub burst: f32,
+    pub burst_gap: f32,
+    /// Charge primaries build charge over `charge_time` s while held (0: none) and fire on
+    /// release, hitting (and heating) `charge_damage` times as hard at full charge.
+    pub charge_time: f32,
+    pub charge_damage: f32,
 
     pub mech_radius: f32,
     pub mech_height: f32,
@@ -270,6 +282,12 @@ pub struct Mech {
     pub alt_wait: f32,
     /// Degrees the primary's cone has grown from firing, on top of `spread_deg`.
     pub bloom: f32,
+    /// The primary's mechanics: spin 0-1 (spin-up weapons), shots left in a burst, charge 0-1
+    /// (charge weapons), and the last shot's damage and heat multiplier from its charge.
+    pub spin: f32,
+    pub burst_left: u8,
+    pub charge: f32,
+    pub shot_power: f32,
     /// Where the aim ray from the eye lands (for the crosshair).
     pub aim_point: Vector,
     /// Set on ticks a shot fired.
@@ -674,13 +692,43 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     m.fire_wait -= DT;
     m.alt_wait = (m.alt_wait - DT).max(0.0);
     m.bloom = (m.bloom - t.bloom_recovery * DT).max(0.0);
-    m.shot = input.fire && !m.overheated && m.fire_wait <= 0.0;
+    let ready = !m.overheated && m.fire_wait <= 0.0;
+    if m.overheated || shutdown {
+        (m.burst_left, m.charge) = (0, 0.0);
+    }
+    if t.spin_up > 0.0 {
+        m.spin = if input.fire && !m.overheated { (m.spin + DT / t.spin_up).min(1.0) } else { (m.spin - DT / t.spin_down.max(DT)).max(0.0) };
+    }
+    if t.charge_time > 0.0 {
+        // Held, the trigger charges a ready shot; let go and it fires.
+        if input.fire && ready {
+            m.charge = (m.charge + DT / t.charge_time).min(1.0);
+        }
+        m.shot = !input.fire && m.charge > 0.0 && ready;
+    } else {
+        // A burst, once started, fires out whether the trigger's held or not.
+        m.shot = (input.fire || m.burst_left > 0) && ready;
+    }
     m.launched = input.alt_fire && !m.overheated && m.alt_wait <= 0.0;
     m.alt_pressed = input.alt_fire && !m.alt_held;
     m.alt_held = input.alt_fire;
     if m.shot {
-        m.fire_wait += 1.0 / t.fire_rate;
-        m.heat += t.heat_per_shot;
+        m.shot_power = 1.0 + (t.charge_damage - 1.0) * m.charge;
+        m.charge = 0.0;
+        let burst = t.burst.max(1.0);
+        m.burst_left = if m.burst_left > 0 { m.burst_left - 1 } else { burst as u8 - 1 };
+        let spun = if t.spin_up > 0.0 { t.spin_start + (1.0 - t.spin_start) * m.spin } else { 1.0 };
+        let cycle = 1.0 / (t.fire_rate * spun).max(1e-3);
+        // Within a burst the next shot follows the gap; the gaps come out of the cycle, so
+        // `fire_rate` stays bursts per second.
+        m.fire_wait += if m.burst_left > 0 {
+            t.burst_gap
+        } else if burst > 1.0 {
+            (cycle - t.burst_gap * (burst - 1.0)).max(t.burst_gap)
+        } else {
+            cycle
+        };
+        m.heat += t.heat_per_shot * m.shot_power;
     }
     if m.launched {
         m.alt_wait = t.alt_cooldown;
@@ -777,6 +825,49 @@ mod tests {
 
     fn speed(sim: &Sim) -> f32 {
         sim.mech.vel.x.hypot(sim.mech.vel.z)
+    }
+
+    #[test]
+    fn spin_up_ramps_the_fire_rate() {
+        let mut sim = weapon_sim(|t| (t.fire_rate, t.spin_up, t.spin_start, t.heat_per_shot) = (20.0, 1.0, 0.1, 0.0));
+        let fired = shots(&mut sim, Input { fire: true, ..Input::default() }, 60);
+        let (early, late) = (fired.iter().filter(|&&i| i < 15).count(), fired.iter().filter(|&&i| i >= 45).count());
+        assert!(late > 2 * early, "early {early}, late {late}");
+        run(&mut sim, Input::default(), 30);
+        assert_eq!(sim.mech.spin, 0.0, "never spun down");
+    }
+
+    #[test]
+    fn a_tap_fires_a_whole_burst() {
+        let mut sim = weapon_sim(|t| (t.fire_rate, t.burst, t.burst_gap, t.heat_per_shot) = (2.0, 3.0, 0.07, 0.0));
+        let mut fired = shots(&mut sim, Input { fire: true, ..Input::default() }, 1);
+        fired.extend(shots(&mut sim, Input::default(), 30).iter().map(|i| i + 1));
+        assert_eq!(fired, [0, 2, 4]);
+    }
+
+    #[test]
+    fn charge_fires_on_release_harder_the_longer_its_held() {
+        let mut sim = weapon_sim(|t| (t.fire_rate, t.charge_time, t.charge_damage, t.heat_per_shot) = (2.0, 1.0, 3.0, 0.0));
+        let fire = Input { fire: true, ..Input::default() };
+        assert!(shots(&mut sim, fire, 45).is_empty(), "fired while held");
+        sim.step(&Input::default());
+        assert!(sim.mech.shot && (sim.mech.shot_power - 3.0).abs() < 1e-4, "full charge: {}", sim.mech.shot_power);
+        run(&mut sim, Input::default(), 30);
+        sim.step(&fire);
+        sim.step(&Input::default());
+        assert!(sim.mech.shot && sim.mech.shot_power < 1.1, "a tap: {}", sim.mech.shot_power);
+    }
+
+    /// A Lancer sim with its tuning changed by `set`.
+    fn weapon_sim(set: impl Fn(&mut Tuning)) -> Sim {
+        let (mut sim, _) = class_sim(MechClass::B);
+        set(&mut sim.tuning);
+        sim
+    }
+
+    /// The ticks, of the next `ticks`, that `input` fires the primary on.
+    fn shots(sim: &mut Sim, input: Input, ticks: usize) -> Vec<usize> {
+        (0..ticks).filter(|_| (sim.step(&input), sim.mech.shot).1).collect()
     }
 
     #[test]
