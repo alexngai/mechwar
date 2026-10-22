@@ -70,7 +70,7 @@
       "stats": {}
     },
     {
-      "id": "spindle", "name": "Spindle", "desc": "Rail rifle: hold to zoom (or middle-click to toggle it), let go to fire one fast, flat, heavy slug", "sound": "spindle", "projectile": "rail", "zoom": 2.5,
+      "id": "spindle", "name": "Spindle", "desc": "Rail rifle: middle-click toggles the scope; let go of the trigger to fire one fast, flat, heavy slug", "sound": "spindle", "projectile": "rail", "zoom": 2.5,
       "stats": {
         "alt_release": 1, "alt_count": 1, "alt_speed": 320, "alt_gravity": 0, "alt_loft_deg": 0, "alt_bounce": 0,
         "alt_fuse": 1.2, "alt_damage": 34, "alt_radius": 0.8, "alt_cooldown": 3.5, "alt_heat": 22

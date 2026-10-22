@@ -741,9 +741,8 @@ function frame(now) {
   shake *= Math.exp(-6 * dt);
   // A small FOV kick while boosting sells the speed.
   boostKick += ((curr[S.BOOSTING] ? 1 : 0) - boostKick) * (1 - Math.exp(-6 * dt));
-  // A scoped secondary (weapons.json `zoom`) narrows the view while its trigger's held, or
-  // while toggled on with the middle button.
-  zoomKick += ((firstPerson && (altFiring || scoped) && zoomOf() > 1 ? 1 : 0) - zoomKick) * (1 - Math.exp(-10 * dt));
+  // A scoped secondary (weapons.json `zoom`) narrows the view while toggled on with the middle button.
+  zoomKick += ((firstPerson && scoped && zoomOf() > 1 ? 1 : 0) - zoomKick) * (1 - Math.exp(-10 * dt));
   const fov = (T('fov') + BOOST_FOV * boostKick) / (1 + (zoomOf() - 1) * zoomKick);
   if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }
   camera.updateMatrixWorld();
