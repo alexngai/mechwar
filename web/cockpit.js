@@ -23,12 +23,13 @@ const TAU = Math.PI * 2;
 // The console, in its own flat space (x along its face, y up it from its foot, z toward the pilot):
 // it reaches SPAN either side, stands HUMP tall over the middle screen and WING over the sides, and
 // is then bent around an upright axis BEND ahead of its face and leaned back by TILT.
-const SPAN = 1.3, HUMP = 0.355, WING = 0.325, BEND = 2.5, TILT = 0.3;
+const SPAN = 1.3, HUMP = 0.3, WING = 0.275, BEND = 2.5, TILT = 0.55;
+const DASH = 0.93; // the dash's back edge sits this fraction of the view's half-height below center
 // Instruments, w x h in meters, centered at SCREEN_AT on the console: vitals (hull and fuel) in the
 // middle, the round radar scope lower left, systems right.
-const SCREENS = { vitals: [0.54, 0.24], radar: [0.24, 0.24], systems: [0.36, 0.2] };
-const SCREEN_AT = { vitals: [0, 0.185], radar: [-0.53, 0.16], systems: [0.58, 0.16] };
-const SEAM = 0.34; // panel seams between the middle and the sides
+const SCREENS = { vitals: [0.48, 0.2], radar: [0.2, 0.2], systems: [0.3, 0.17] };
+const SCREEN_AT = { vitals: [0, 0.15], radar: [-0.45, 0.13], systems: [0.49, 0.13] };
+const SEAM = 0.295; // panel seams between the middle and the sides
 const RIM = 0.035, RIM_DEPTH = 0.07; // bezel around each screen: bar width, how far it stands out
 const LOCAL = 3; // world lights (lamps, flashes) the cockpit takes at once
 // Each class's canopy: frame paint, top bar depth, rib and brow thickness, how far the brow dips
@@ -75,13 +76,10 @@ function bolt(x, y, z, r = 0.007) {
 
 /**
  * Slides gun `pod` (in `group`, camera space) outward, then up if that isn't enough, so none of it
- * hangs in front of the dash screens: what's below the line from the eye over the housings' tops
- * stays outside the screens' span.
+ * hangs over the dash or the lower middle of the view: what's below `line` stays outside `span`.
  */
-function clearDash(group, pod, fov) {
-  const halfH = Math.tan(THREE.MathUtils.degToRad(fov / 2)) * DEPTH;
-  // Slopes per meter ahead: over the console's hump, and out past the side screens.
-  const line = (-halfH * 0.75 + HUMP * Math.cos(TILT)) / (DEPTH + HUMP * Math.sin(TILT)), span = 0.95;
+function clearDash(group, pod) {
+  const line = -0.27, span = 0.95; // slopes per meter ahead
   const out = Math.sign(pod.position.x) || 1, scale = group.scale.x;
   let slide = 0, lift = 0;
   group.updateMatrixWorld(true);
@@ -185,7 +183,7 @@ export class Cockpit {
     const halfH = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * DEPTH;
     const halfW = halfH * aspect;
     const z = -DEPTH;
-    const top = -halfH * 0.75, width = 2 * halfW + 0.6;
+    const top = -halfH * DASH, width = 2 * halfW + 0.6;
     // The canopy, styled per class (CANOPY): a top bar with a curved brow under it, lit along its
     // edge in the team's color; ribs that rise from the dash, bow out along the view's edges and
     // curve in to meet the brow; thin glazing ribs across the upper corners; braces into the dash;
@@ -233,7 +231,7 @@ export class Cockpit {
     panel.updateMatrix();
     const onPanel = (x, y, dz) => bendPoint(new THREE.Vector3(x, y, dz)).applyMatrix4(panel.matrix);
     const S = THREE.MathUtils.smoothstep;
-    const edge = (x) => WING + (HUMP - WING) * (1 - S(Math.abs(x), SEAM - 0.03, SEAM + 0.03)) - (WING - 0.08) * S(Math.abs(x), 0.85, 1.15);
+    const edge = (x) => WING + (HUMP - WING) * (1 - S(Math.abs(x), SEAM - 0.03, SEAM + 0.03)) - (WING - 0.08) * S(Math.abs(x), 0.7, 1.0);
     const face = new THREE.PlaneGeometry(2 * SPAN, 1, 156, 4), p = face.attributes.position;
     for (let i = 0; i < p.count; i++) p.setY(i, (p.getY(i) + 0.5) * edge(p.getX(i)));
     flat.add(new THREE.Mesh(face, frameMat));
@@ -243,7 +241,7 @@ export class Cockpit {
       return new THREE.CatmullRomCurve3(points);
     };
     flat.add(new THREE.Mesh(new THREE.TubeGeometry(rim(-SPAN, SPAN, 0, 0), 260, 0.02, 6), frameMat));
-    flat.add(new THREE.Mesh(new THREE.TubeGeometry(rim(-0.9, 0.9, 0.012, 0.014), 180, 0.006, 5), this.lampMat));
+    flat.add(new THREE.Mesh(new THREE.TubeGeometry(rim(-0.75, 0.75, 0.012, 0.014), 150, 0.006, 5), this.lampMat));
     for (const side of [-1, 1]) flat.add(rod(new THREE.Vector3(side * SEAM, 0.01, 0.002), new THREE.Vector3(side * SEAM, edge(side * SEAM) - 0.02, 0.002), 0.005, trimMat));
     for (let x = -1.2; x <= 1.2 + 1e-6; x += 0.15) flat.add(bolt(x, 0.015, 0.004));
     for (const [name, s] of Object.entries(this.screens)) {
@@ -252,11 +250,11 @@ export class Cockpit {
       this.glows[name].position.copy(onPanel(x, y, 0.14));
     }
     const [vw, vh] = SCREENS.vitals, vy = SCREEN_AT.vitals[1] + vh / 2 + RIM;
-    const hood = box(vw + 2 * RIM + 0.05, 0.012, 0.09, frameMat);
-    hood.position.set(0, vy + 0.008, 0.045);
+    const hood = box(vw + 2 * RIM + 0.05, 0.012, 0.05, frameMat);
+    hood.position.set(0, vy + 0.008, 0.025);
     hood.rotation.x = 0.25;
     flat.add(hood);
-    for (const side of [-1, 1]) flat.add(box(0.012, 0.05, 0.09, frameMat).translateX(side * (vw / 2 + RIM + 0.02)).translateY(vy - 0.02).translateZ(0.045));
+    for (const side of [-1, 1]) flat.add(box(0.012, 0.05, 0.05, frameMat).translateX(side * (vw / 2 + RIM + 0.02)).translateY(vy - 0.02).translateZ(0.025));
     flat.updateMatrixWorld(true);
     flat.traverse((o) => o.isMesh && panel.add(new THREE.Mesh(bend(o.geometry.applyMatrix4(o.matrixWorld)), o.material)));
     this.frame.add(panel);
@@ -337,7 +335,7 @@ export class Cockpit {
       const pod = new THREE.Group();
       group.add(pod);
       const tip = build(pod);
-      clearDash(group, pod, this.camera.fov);
+      clearDash(group, pod);
       return { pod, tip, rest: pod.position.clone(), kick: 0 };
     };
     const guns = spec.guns.map((side) => arm((pod) => spec.gun(pod, side, mech)));
@@ -494,20 +492,20 @@ function vitalsScreen(s, f) {
   g.textAlign = 'center';
   g.fillStyle = DIM;
   g.font = font(24);
-  g.fillText(`HULL · ${f.className.toUpperCase()}`, mid, 16);
+  g.fillText(`HULL · ${f.className.toUpperCase()}`, mid, 14);
   g.fillStyle = color;
-  g.font = font(112, 'bold');
-  g.fillText(String(Math.ceil(f.health)), mid, 40);
-  bar(g, left, 150, right - left, 16, f.health / f.healthMax, color);
+  g.font = font(104, 'bold');
+  g.fillText(String(Math.ceil(f.health)), mid, 36);
+  bar(g, left, 140, right - left, 16, f.health / f.healthMax, color);
   const status = f.standing ? 'RESTARTING' : f.repair >= 1 ? 'REPAIRING' : f.repair > 0 ? 'SHUTTING DOWN' : '';
   if (status) {
     g.fillStyle = REPAIR;
-    g.font = font(28, 'bold');
-    g.fillText(status, mid, 178);
+    g.font = font(26, 'bold');
+    g.fillText(status, mid, 168);
   }
   g.textAlign = 'left';
   [['DODGE', f.dodge >= 1, AMBER], ['BOOST', f.boosting, FUEL], ['JAM', f.jammed, WARN]].forEach(([name, on, lit], i) => {
-    const x = 394, y = 30 + i * 62;
+    const x = 394, y = 26 + i * 58;
     g.fillStyle = on ? lit : FAINT;
     g.beginPath();
     g.arc(x + 9, y + 12, 9, 0, TAU);
