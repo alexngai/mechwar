@@ -39,6 +39,27 @@ export function ramp(low, high, width, mat = 'metal', fill = low[1] === 0) {
   }
 }
 
+/** A box from point `a` to point `b`, `w` wide and `t` thick, at any slope: a beam, strut or brace. */
+export function beam(a, b, w, t, mat = 'metal') {
+  const [dx, dy, dz] = [0, 1, 2].map((i) => b[i] - a[i]);
+  const run = Math.hypot(dx, dz), deg = (r) => r3((r * 180) / Math.PI), tilt = deg(Math.atan2(dy, run));
+  solids.push({ box: [0, 1, 2].map((i) => r3((a[i] + b[i]) / 2)), half: [w / 2, t / 2, r3(Math.hypot(run, dy) / 2)], yaw: deg(Math.atan2(-dx, -dz)), ...(tilt && { tilt }), mat });
+}
+
+/**
+ * A branch off a tower: a beam whose top runs level from `root` (a point on the trunk's face)
+ * `reach` m out along `dir` ([dx, dz], unit), braced underneath back into the trunk. With `deck`
+ * it carries a square platform that wide at its tip (top level with the beam); with `lit`, a lamp
+ * there. Clearance under a branch is the caller's: keep it 6.5 m+ over anywhere mechs walk.
+ */
+export function branch(root, dir, reach, { w = 2.4, t = 0.8, deck = 0, lit = false, mat = 'metal' } = {}) {
+  const [x, y, z] = root, [dx, dz] = dir, at = (d, h) => [r3(x + dx * d), r3(h), r3(z + dz * d)];
+  beam(at(-0.3, y - t / 2), at(reach, y - t / 2), w, t, mat);
+  beam(at(-0.3, y - t - 0.55 * reach), at(0.6 * reach, y - t), 0.5, 0.5, mat);
+  if (deck) beam(at(reach - deck / 2, y - 0.25), at(reach + deck / 2, y - 0.25), deck, 0.5, mat);
+  if (lit) lamp(at(reach, y));
+}
+
 /** A smokestack: two boxes, square and diamond, whose union is a fluted, eight-pointed shaft. */
 export function stack(x, z, r = 3, h = 34) {
   box([x - r, 0, z - r], [x + r, h, z + r], 'stack');
