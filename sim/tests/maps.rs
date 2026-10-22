@@ -70,6 +70,28 @@ fn rotationally_symmetric(name: &str, map: &Map) {
     }
 }
 
+/// No mech gets off a map: thrown out over each edge above every wall, hovering and boosting
+/// outward, it stays inside the map's size.
+#[test]
+fn mechs_stay_inside_the_map() {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    let t = Tuning::default();
+    for (index, (name, _)) in MAPS.iter().enumerate() {
+        let map = Map::load(index);
+        let arena = Arena::new(&map);
+        let [hx, hz] = map.size.map(|s| s / 2.0);
+        for (out, yaw) in [(Vector::X, -FRAC_PI_2), (Vector::NEG_X, FRAC_PI_2), (Vector::Z, PI), (Vector::NEG_Z, 0.0)] {
+            let mut m = spawn_mech(&t, Vector::new(out.x * (hx - 10.0), 40.0, out.z * (hz - 10.0)));
+            m.vel = out * 40.0;
+            let push = Input { move_z: 1.0, boost: true, hover: true, yaw, ..Input::default() };
+            for _ in 0..(5.0 * TICK_HZ) as u32 {
+                step_mech(&arena, &t, &mut m, &push);
+                assert!(m.pos.x.abs() <= hx && m.pos.z.abs() <= hz, "{name}: a mech got off the map at {}", m.pos);
+            }
+        }
+    }
+}
+
 /// Every jump pad, taken by a Bulwark (the widest) with no input, lands where it's aimed and
 /// stays there: nothing in the way of the arc, and the landing holds the slide after it.
 #[test]

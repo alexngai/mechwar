@@ -327,6 +327,8 @@ pub struct Mech {
 pub struct Arena {
     pub(crate) world: PhysicsWorld,
     pub pads: Vec<Pad>,
+    /// Half the map's width and depth: no mech gets past these, however high it flies.
+    pub half: [f32; 2],
 }
 
 /// A jump pad fires for feet this close to its center (and within half a meter of its height).
@@ -353,7 +355,7 @@ impl Arena {
         }
         // Builds the broad phase so scene queries see the static colliders. No physics step runs.
         world.detect_collisions(&(), &());
-        Self { world, pads: map.pads.clone() }
+        Self { world, pads: map.pads.clone(), half: map.size.map(|s| s / 2.0) }
     }
 }
 
@@ -673,6 +675,17 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     m.grounded = moved.grounded;
     if m.grounded && m.vel.y < 0.0 {
         m.vel.y = 0.0;
+    }
+    // The map's edge: the perimeter walls stand on it, and above them it holds anyone hovering,
+    // dashing or thrown over.
+    let [hx, hz] = arena.half.map(|h| h - radius);
+    if m.pos.x.abs() > hx {
+        m.pos.x = m.pos.x.clamp(-hx, hx);
+        m.vel.x = 0.0;
+    }
+    if m.pos.z.abs() > hz {
+        m.pos.z = m.pos.z.clamp(-hz, hz);
+        m.vel.z = 0.0;
     }
     if m.grounded {
         m.pad_arc = false;

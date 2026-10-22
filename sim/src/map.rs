@@ -50,6 +50,8 @@ pub struct Map {
     pub nav: Vec<[f32; 3]>,
     #[serde(default)]
     pub pads: Vec<Pad>,
+    /// Width (x) and depth (z), centered on the origin: the perimeter walls stand on its edge.
+    pub size: [f32; 2],
 }
 
 impl Map {

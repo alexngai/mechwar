@@ -881,6 +881,7 @@ mod tests {
             spawns: [vec![], vec![]],
             nav: vec![],
             pads: vec![],
+            size: [100.0, 100.0],
         };
         // Returns the blast, where the rocket was a tick before plus that tick's travel, and the
         // enemy's health after.
