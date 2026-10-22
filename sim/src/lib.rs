@@ -66,8 +66,11 @@ pub struct Tuning {
     pub heat_max: f32,
     pub fire_rate: f32,
     pub heat_per_shot: f32,
+    /// Heat sheds `heat_decay` a second when full, rising to `heat_decay_cool` times that as it
+    /// empties, from `heat_decay_delay` s after the trigger's let go.
     pub heat_decay: f32,
     pub heat_decay_delay: f32,
+    pub heat_decay_cool: f32,
     pub overheat_decay: f32,
     pub overheat_release: f32,
     pub weapon_range: f32,
@@ -736,16 +739,19 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
         m.alt_wait = t.alt_cooldown;
         m.heat += t.alt_heat;
     }
-    if m.shot || m.launched {
+    if (m.shot || m.launched) && m.heat >= t.heat_max {
+        m.heat = t.heat_max;
+        m.overheated = true;
+    }
+    // Heat sheds once the trigger's let go (holding it counts as firing, between shots too), and
+    // faster the cooler it runs, so short bursts pay.
+    if m.shot || m.launched || (input.fire && !m.overheated) {
         m.heat_wait = t.heat_decay_delay;
-        if m.heat >= t.heat_max {
-            m.heat = t.heat_max;
-            m.overheated = true;
-        }
     } else {
         m.heat_wait = (m.heat_wait - DT).max(0.0);
         if m.heat_wait == 0.0 {
-            let decay = if m.overheated { t.overheat_decay } else { t.heat_decay };
+            let cool = 1.0 + (t.heat_decay_cool - 1.0) * (1.0 - m.heat / t.heat_max.max(1.0));
+            let decay = if m.overheated { t.overheat_decay } else { t.heat_decay * cool };
             m.heat = (m.heat - decay * DT).max(0.0);
         }
     }
@@ -891,8 +897,7 @@ mod tests {
         let (mut sim, t) = class_sim(MechClass::B);
         let fire = Input { fire: true, ..Input::default() };
         let vent = Input { ability: true, ..Input::default() };
-        run(&mut sim, fire, 120);
-        assert!(sim.mech.overheated);
+        fire_until_overheated(&mut sim);
         sim.step(&vent);
         assert_eq!(sim.mech.heat, 0.0);
         assert!(!sim.mech.overheated);
@@ -901,6 +906,37 @@ mod tests {
         let heat = sim.mech.heat;
         sim.step(&vent);
         assert!(sim.mech.heat > 0.0 && sim.mech.heat <= heat, "vented again during the cooldown");
+    }
+
+    /// Holds the primary's trigger until the mech overheats (within 20 s).
+    fn fire_until_overheated(sim: &mut Sim) {
+        let fire = Input { fire: true, ..Input::default() };
+        for _ in 0..(20.0 * TICK_HZ) as usize {
+            sim.step(&fire);
+            if sim.mech.overheated {
+                return;
+            }
+        }
+        panic!("never overheated");
+    }
+
+    #[test]
+    fn heat_sheds_once_the_trigger_is_let_go_faster_when_cool() {
+        let (mut sim, t) = class_sim(MechClass::B);
+        let fire = Input { fire: true, ..Input::default() };
+        // Held between shots, it doesn't cool.
+        run(&mut sim, fire, 2);
+        let held = sim.mech.heat;
+        sim.step(&Input { fire: true, ..Input::default() });
+        assert!(sim.mech.heat >= held, "cooled with the trigger held");
+        // Let go, it cools at once, faster low than high.
+        sim.mech.heat = 0.9 * t.heat_max;
+        sim.step(&Input::default());
+        let high = 0.9 * t.heat_max - sim.mech.heat;
+        sim.mech.heat = 0.1 * t.heat_max;
+        sim.step(&Input::default());
+        let low = 0.1 * t.heat_max - sim.mech.heat;
+        assert!(high > 0.0 && low > 2.0 * high, "high {high}, low {low}");
     }
 
     #[test]
@@ -914,9 +950,9 @@ mod tests {
         sim.step(&alt);
         assert!(!sim.mech.launched, "fired again during the cooldown");
 
-        // Firing for the length of the cooldown overheats with the secondary ready again.
-        run(&mut sim, Input { fire: true, ..Input::default() }, (t.alt_cooldown * TICK_HZ) as usize);
-        assert!(sim.mech.overheated && sim.mech.alt_wait <= 0.0, "test needs a ready secondary while overheated");
+        // Overheating takes longer than the cooldown, so the secondary is ready again.
+        fire_until_overheated(&mut sim);
+        assert!(sim.mech.alt_wait <= 0.0, "test needs a ready secondary while overheated");
         sim.step(&Input { fire: true, alt_fire: true, ..Input::default() });
         assert!(!sim.mech.launched && !sim.mech.shot, "fired while overheated");
     }

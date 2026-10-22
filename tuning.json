@@ -31,13 +31,14 @@
   "fuel_regen":        { "value": 25,     "min": 0,     "max": 200,   "step": 0.5,    "unit": "fuel/s",  "group": "fuel",   "source": "own tuning" },
   "fuel_regen_delay":  { "value": 0.8,    "min": 0,     "max": 5,     "step": 0.05,   "unit": "s",       "group": "fuel",   "source": "own tuning" },
 
-  "heat_max":          { "value": 100,    "min": 1,     "max": 300,   "step": 1,      "unit": "heat",    "group": "heat",   "source": "own tuning" },
+  "heat_max":          { "value": 200,    "min": 1,     "max": 300,   "step": 1,      "unit": "heat",    "group": "heat",   "source": "own tuning" },
   "fire_rate":         { "value": 8,      "min": 0.5,   "max": 30,    "step": 0.5,    "unit": "shots/s", "group": "primary", "source": "own tuning" },
   "heat_per_shot":     { "value": 4.5,    "min": 0,     "max": 50,    "step": 0.1,    "unit": "heat",    "group": "primary", "source": "own tuning" },
   "heat_decay":        { "value": 30,     "min": 0,     "max": 200,   "step": 1,      "unit": "heat/s",  "group": "heat",   "source": "own tuning" },
-  "heat_decay_delay":  { "value": 0.4,    "min": 0,     "max": 5,     "step": 0.05,   "unit": "s",       "group": "heat",   "source": "own tuning" },
-  "overheat_decay":    { "value": 20,     "min": 0,     "max": 200,   "step": 1,      "unit": "heat/s",  "group": "heat",   "source": "own tuning" },
-  "overheat_release":  { "value": 25,     "min": 0,     "max": 300,   "step": 1,      "unit": "heat",    "group": "heat",   "source": "own tuning" },
+  "heat_decay_delay":  { "value": 0,      "min": 0,     "max": 5,     "step": 0.05,   "unit": "s",       "group": "heat",   "source": "own tuning" },
+  "heat_decay_cool":   { "value": 3,      "min": 1,     "max": 10,    "step": 0.1,    "unit": "x near empty", "group": "heat", "source": "own tuning" },
+  "overheat_decay":    { "value": 40,     "min": 0,     "max": 200,   "step": 1,      "unit": "heat/s",  "group": "heat",   "source": "own tuning" },
+  "overheat_release":  { "value": 50,     "min": 0,     "max": 300,   "step": 1,      "unit": "heat",    "group": "heat",   "source": "own tuning" },
   "weapon_range":      { "value": 300,    "min": 10,    "max": 1000,  "step": 10,     "unit": "m",       "group": "primary", "source": "own tuning" },
 
   "spread_deg":        { "value": 0.15,   "min": 0,     "max": 15,    "step": 0.05,   "unit": "deg",      "group": "primary", "source": "own tuning" },

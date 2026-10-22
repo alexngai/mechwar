@@ -196,6 +196,8 @@ pub struct Bot {
     last_health: f32,
     /// No grenade before this tick, so charges go one every few seconds.
     grenade_at: u32,
+    /// Holding fire to cool: set near the overheat lockout, cleared once heat is well down.
+    cooling: bool,
 }
 
 impl Bot {
@@ -216,6 +218,7 @@ impl Bot {
             seen: VecDeque::new(),
             last_health: 0.0,
             grenade_at: 0,
+            cooling: false,
         };
         bot.respawned();
         bot
@@ -235,6 +238,7 @@ impl Bot {
             Role::Sneak
         };
         (self.path_goal, self.vantage) = (None, None);
+        self.cooling = false;
     }
 
     /// xorshift64, uniform in [0, 1).
@@ -304,16 +308,23 @@ impl Bot {
                 self.strafe_until = tick + secs(0.8 + 1.2 * self.rand());
             }
             let dodge = took_damage && me.dodge_cooldown <= 0.0 && self.rand() < 0.3;
+            // Fire in bursts: stop near the lockout and let heat fall well down (it sheds fastest
+            // low) before firing again.
+            if me.overheated || me.heat >= 0.85 * t.heat_max {
+                self.cooling = true;
+            } else if me.heat <= 0.4 * t.heat_max {
+                self.cooling = false;
+            }
             let throw = throw && on_target;
             if throw {
                 self.grenade_at = tick + secs(4.0 + 4.0 * self.rand());
             }
             // Far off, keep walking the route (firing on the way) rather than straight at the
             // target: on a tiered map that keeps bots on their ramps and decks, not off ledges.
-            // Perches keep climbing to their vantage too, then hold it. In range, hold the band
-            // and strafe.
+            // Perches keep climbing to their vantage too, then hold it, and a bot cooling off
+            // repositions along its route. In range, hold the band and strafe.
             let perch = self.role == Role::Perch && self.vantage.is_some();
-            let (move_x, move_z) = if range > FAR || perch {
+            let (move_x, move_z) = if range > FAR || perch || self.cooling {
                 let dir = self.route(arena, nav, t, me, target, tick).normalize_or_zero();
                 let rot = Rotation::from_rotation_y(new_yaw);
                 (dir.dot(rot * Vector::X), dir.dot(rot * Vector::NEG_Z))
@@ -326,8 +337,7 @@ impl Bot {
                 yaw: new_yaw,
                 pitch: new_pitch,
                 dodge: if dodge && !self.perched(nav, me) { self.strafe as i8 } else { 0 },
-                // Stay under the overheat lockout rather than spraying into it.
-                fire: shell.is_none() && on_target && !me.overheated && me.heat < 0.85 * t.heat_max,
+                fire: shell.is_none() && on_target && !self.cooling,
                 alt_fire: alt && alt_cool && on_target,
                 grenade: throw,
                 hover: tick < self.hover_until,
