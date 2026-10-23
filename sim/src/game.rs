@@ -102,6 +102,8 @@ pub struct Game {
     pub tick: u32,
     /// Fill empty slots with bots while at least one human is connected.
     pub bots: bool,
+    /// Bots' skill, 0 (raw) to 1 (sharp): each bot's own spreads around it.
+    pub bot_skill: f32,
     /// Team kills that win the match.
     pub score_limit: u16,
     pub match_seconds: f32,
@@ -147,6 +149,7 @@ impl Game {
             arsenal: Arsenal::new(&tuning),
             tick: 0,
             bots: true,
+            bot_skill: 0.5,
             score_limit: 25,
             match_seconds: 600.0,
             players: Vec::new(),
@@ -286,7 +289,7 @@ impl Game {
                 while self.bots && self.team_count(team) < TEAM_SIZE {
                     let seed = u64::from(self.tick) << 8 | self.players.len() as u64;
                     let class = MechClass::ALL[(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33) as usize % 3];
-                    self.add_player(team, Some(Bot::new(seed)), class);
+                    self.add_player(team, Some(Bot::with_skill(seed, self.bot_skill)), class);
                 }
             }
         } else {
@@ -322,9 +325,44 @@ impl Game {
         }
 
         // Bots queue one input per tick. Each knows only the enemies it has seen, heard or felt
-        // (`Bot::perceive`), skipping fresh launches it can't hurt yet, and fights the one it
-        // picks from those in view. A bot with a repair torch also gets the most hurt teammate it
-        // can see within twice its beam's reach.
+        // (`Bot::perceive`), skipping fresh launches it can't hurt yet, plus what its teammates
+        // radio in of those they see; it fights the one it picks from those in view, favoring one
+        // a teammate is already on. With nothing to go on it groups on its team's lead (a human
+        // if there's one alive), and a repair torch follows the nearest teammate and gets the
+        // most hurt one it can see within twice its beam's reach.
+        let alive = |p: &Player| p.mech.health > 0.0;
+        let lead_of = |team: u8| {
+            let mates = || self.players.iter().filter(move |p| p.team == team && alive(p));
+            mates().find(|p| p.bot.is_none()).or_else(|| mates().min_by_key(|p| p.id)).map(|p| p.id)
+        };
+        let leads = [lead_of(0), lead_of(1)];
+        let engaged: [Vec<u8>; 2] = [0, 1].map(|team| self.players.iter().filter(|p| p.team == team).filter_map(|p| p.bot.as_ref()?.focus()).collect());
+        // First every bot looks and listens...
+        let mut seen: Vec<(Option<u8>, Vec<(u8, Mech, f32)>)> = Vec::with_capacity(self.players.len());
+        let mut radio: [Vec<(u8, u8, Vector)>; 2] = [Vec::new(), Vec::new()]; // (from, enemy, where)
+        for i in 0..self.players.len() {
+            let me = &self.players[i];
+            if me.bot.is_none() {
+                seen.push((None, Vec::new()));
+                continue;
+            }
+            let t = self.arsenal.of(&me.mech);
+            let hurt = |q: &Player| q.mech.health / self.arsenal.of(&q.mech).health_max;
+            let enemies: Vec<(u8, Mech, f32)> = self
+                .players
+                .iter()
+                .filter(|q| q.team != me.team && q.mech.health > 0.0 && q.mech.shield <= 0.0)
+                .map(|q| (q.id, q.mech, hurt(q)))
+                .collect();
+            let (team, id) = (usize::from(me.team), me.id);
+            let p = &mut self.players[i];
+            let bot = p.bot.as_mut().expect("checked above");
+            bot.engaged.clone_from(&engaged[team]);
+            let focus = bot.perceive(&self.arena, t, &p.mech, &enemies, self.tick);
+            radio[team].extend(bot.sightings().map(|(enemy, at)| (id, enemy, at)));
+            seen.push((focus, enemies));
+        }
+        // ...then hears its team's radio, and acts.
         for i in 0..self.players.len() {
             let me = &self.players[i];
             if me.bot.is_none() {
@@ -332,27 +370,35 @@ impl Game {
             }
             let t = self.arsenal.of(&me.mech);
             let hurt = |q: &&Player| q.mech.health / self.arsenal.of(&q.mech).health_max;
-            let enemies: Vec<(u8, Mech, f32)> = self
-                .players
-                .iter()
-                .filter(|q| q.team != me.team && q.mech.health > 0.0 && q.mech.shield <= 0.0)
-                .map(|q| (q.id, q.mech, hurt(&q)))
-                .collect();
+            let mates = || self.players.iter().filter(|q| q.team == me.team && q.id != me.id && alive(q));
             let heal = (t.alt_beam > 0.0)
                 .then(|| {
-                    self.players
-                        .iter()
-                        .filter(|q| q.team == me.team && q.id != me.id && q.mech.health > 0.0 && hurt(q) < 0.8)
+                    mates()
+                        .filter(|q| hurt(q) < 0.8)
                         .filter(|q| q.mech.pos.distance(me.mech.pos) < 2.0 * t.alt_beam && bot::sees(&self.arena, t, &me.mech, &q.mech))
                         .min_by(|a, b| hurt(a).total_cmp(&hurt(b)))
                         .map(|q| q.mech)
                 })
                 .flatten();
+            let dist = |q: &&Player| q.mech.pos.distance(me.mech.pos);
+            let lead = if t.alt_beam > 0.0 {
+                mates().min_by(|a, b| dist(a).total_cmp(&dist(b)))
+            } else {
+                leads[usize::from(me.team)].filter(|&l| l != me.id).and_then(|l| mates().find(|q| q.id == l))
+            }
+            .map(|q| q.mech.pos);
+            let team = usize::from(me.team);
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
-            let focus = bot.perceive(&self.arena, t, &p.mech, &enemies, self.tick);
+            for &(from, enemy, at) in &radio[team] {
+                if from != p.id {
+                    bot.told(enemy, at, self.tick);
+                }
+            }
+            bot.lead = lead;
             bot.orbs.clear();
             bot.orbs.extend(self.orbs.iter().map(|o| o.pos));
+            let (focus, enemies) = &seen[i];
             let target = focus.and_then(|id| enemies.iter().find(|e| e.0 == id)).map(|e| e.1);
             let mut input = bot.think_with(&self.arena, self.nav, t, &p.mech, target.as_ref(), heal.as_ref(), self.tick);
             // Burst a shell that has flown past the target with the target inside its blast.
@@ -1006,6 +1052,35 @@ mod tests {
         game.pick(pilot, MechClass::C, Loadout::of(MechClass::C));
         game.step();
         assert_eq!(mech(&game, pilot).class, MechClass::C);
+    }
+
+    #[test]
+    fn bots_spread_skill_around_the_server_default() {
+        let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
+        game.bot_skill = 0.9;
+        game.join().unwrap();
+        game.step();
+        let skills: Vec<f32> = game.players.iter().filter_map(|p| p.bot.as_ref()).map(|b| b.skill).collect();
+        assert!(skills.len() > 4 && skills.iter().all(|s| (0.65..=1.0).contains(s)), "{skills:?}");
+        assert!(skills.iter().any(|&s| s != skills[0]), "every bot alike: {skills:?}");
+    }
+
+    #[test]
+    fn bots_radio_their_team_what_they_see() {
+        let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
+        game.bots = false;
+        let human = game.join().unwrap();
+        // One bot looking north at the human; one far off, looking away.
+        let (spotter, deaf) = (game.add_player(1, Some(Bot::new(1)), MechClass::B).unwrap(), game.add_player(1, Some(Bot::new(2)), MechClass::B).unwrap());
+        for (id, pos, yaw) in [(human, Vector::new(0.0, 0.1, 0.0), 0.0), (spotter, Vector::new(0.0, 0.1, 20.0), 0.0), (deaf, Vector::new(40.0, 0.1, 40.0), std::f32::consts::PI)] {
+            let m = &mut game.players.iter_mut().find(|p| p.id == id).unwrap().mech;
+            (m.pos, m.yaw) = (pos, yaw);
+        }
+        unshield(&mut game);
+        let knows = |game: &Game, id: u8| game.players.iter().find(|p| p.id == id).unwrap().bot.as_ref().unwrap().knows(human);
+        game.step();
+        assert!(knows(&game, spotter), "the spotter never saw the human");
+        assert!(knows(&game, deaf), "the other bot wasn't told");
     }
 
     #[test]

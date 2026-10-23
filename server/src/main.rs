@@ -1,6 +1,7 @@
 //! Serves the built client and the game WebSocket (`/ws`) on one port. One 30 Hz loop owns the
 //! match; each connection gets a reader and a writer task. Env: `PORT` (9001), `STATIC_DIR`
-//! (`dist`), `MAP` (`saltworks`), `LAG_MS` (one-way delay for testing), `SCORE_LIMIT`, `MATCH_SECONDS`.
+//! (`dist`), `MAP` (`saltworks`), `LAG_MS` (one-way delay for testing), `SCORE_LIMIT`, `MATCH_SECONDS`,
+//! `BOT_SKILL` (`easy`, `normal`, `hard`, or 0 to 1; bots spread around it).
 
 use std::future::IntoFuture;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -89,6 +90,14 @@ async fn game_loop(mut cmds: mpsc::UnboundedReceiver<Cmd>) {
     }
     if let Ok(v) = env::var("MATCH_SECONDS") {
         game.match_seconds = v.parse().expect("MATCH_SECONDS must be seconds");
+    }
+    if let Ok(v) = env::var("BOT_SKILL") {
+        game.bot_skill = match v.as_str() {
+            "easy" => 0.25,
+            "normal" => 0.5,
+            "hard" => 0.75,
+            _ => v.parse::<f32>().expect("BOT_SKILL must be easy, normal, hard or 0 to 1").clamp(0.0, 1.0),
+        };
     }
     let mut outboxes: Vec<(u8, Outbox)> = Vec::new();
     let mut roster_sent = u32::MAX;

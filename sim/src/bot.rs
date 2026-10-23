@@ -199,6 +199,17 @@ const GRUDGE: f32 = 3.0;
 const THREAT_M: f32 = 25.0;
 const WOUNDED_M: f32 = 30.0;
 const STICKY_M: f32 = 5.0;
+/// An enemy a teammate is already fighting counts as this much closer: bots focus fire.
+const FOCUS_M: f32 = 10.0;
+/// A bot following its lead with nothing to do holds within this distance of it.
+const FOLLOW: f32 = 10.0;
+/// Farther than this from its lead, a bot rejoins it before going after a vague contact: one it
+/// was only told of, or only heard from farther than `URGENT` (one it saw, felt, or heard close
+/// it goes after at once).
+const REGROUP: f32 = 30.0;
+const URGENT: f32 = 40.0;
+/// Bots' skill spreads this far (in all) around the server's default.
+const SKILL_SPREAD: f32 = 0.5;
 /// Patrol: a fresh random waypoint after this long without reaching the last.
 const PATROL_FOR: f32 = 40.0;
 /// A last known position this close is watched while walking to it, not the way ahead.
@@ -245,6 +256,16 @@ struct Contact {
     seen_at: Option<u32>,
     hull: f32,
     hit_at: Option<u32>,
+    /// Only heard of from a teammate.
+    told: bool,
+}
+
+/// What a bot with no enemy in view is heading for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Goal {
+    Contact,
+    Lead,
+    Patrol,
 }
 
 /// How a bot works its secondary, read off the weapon's stats so it follows any retuning.
@@ -347,6 +368,13 @@ pub struct Bot {
     /// Falling back to cover or an orb, and the health orbs about (they glow: always known).
     retreat: Option<Retreat>,
     pub orbs: Vec<Vector>,
+    /// Teamwork, set by the server each tick: the teammate to group on (none for the lead
+    /// itself), and the enemies teammates are fighting.
+    pub lead: Option<Vector>,
+    pub engaged: Vec<u8>,
+    /// 0 (raw) to 1 (sharp): scales reaction time, aim wander and turn rate off the tuning's
+    /// (which are skill 0.5's).
+    pub skill: f32,
 }
 
 impl Bot {
@@ -374,6 +402,9 @@ impl Bot {
             patrol_until: 0,
             retreat: None,
             orbs: Vec::new(),
+            lead: None,
+            engaged: Vec::new(),
+            skill: 0.5,
         };
         bot.respawned();
         bot
@@ -436,7 +467,7 @@ impl Bot {
         let (yaw, _) = look_at(eye, spot);
         let r = (g.alt_gravity * flat(spot - eye).length() / (g.alt_speed * g.alt_speed)).min(1.0);
         let pitch = 0.5 * asinf(r) - g.alt_loft_deg.to_radians();
-        let max_turn = t.bot_turn_rate_deg.to_radians() * DT;
+        let max_turn = self.max_turn(t);
         let new_yaw = me.yaw + wrap(yaw - me.yaw).clamp(-max_turn, max_turn);
         let new_pitch = me.pitch + (pitch - me.pitch).clamp(-max_turn, max_turn);
         let on = wrap(yaw - new_yaw).abs() < AIM_TOLERANCE && (pitch - new_pitch).abs() < AIM_TOLERANCE;
@@ -446,9 +477,53 @@ impl Bot {
         Input { yaw: new_yaw, pitch: new_pitch, grenade: on, ..Input::default() }
     }
 
+    /// A bot of a skill spread around `around` (each one rolls its own).
+    pub fn with_skill(seed: u64, around: f32) -> Self {
+        let mut bot = Self::new(seed);
+        bot.skill = (around + (bot.rand() - 0.5) * SKILL_SPREAD).clamp(0.0, 1.0);
+        bot
+    }
+
+    /// Its reaction time, aim wander (radians) and turn per tick (radians), by skill: each
+    /// factor of 2 in either direction across the skill range.
+    fn reaction(&self, t: &Tuning) -> f32 {
+        t.bot_reaction_s * 2f32.powf((0.5 - self.skill) * 1.4)
+    }
+    fn aim_error(&self, t: &Tuning) -> f32 {
+        t.bot_aim_error_deg.to_radians() * 2f32.powf((0.5 - self.skill) * 1.4)
+    }
+    fn max_turn(&self, t: &Tuning) -> f32 {
+        t.bot_turn_rate_deg.to_radians() * DT * 2f32.powf(self.skill - 0.5)
+    }
+
+    /// The enemy it's fighting, as of its last `perceive`.
+    pub fn focus(&self) -> Option<u8> {
+        self.focus
+    }
+
+    /// The enemies it has in view, and where: what it tells its teammates.
+    pub fn sightings(&self) -> impl Iterator<Item = (u8, Vector)> + '_ {
+        self.contacts.iter().filter(|c| c.seen).map(|c| (c.id, c.pos))
+    }
+
+    /// Whether it knows of enemy `id` at all (seen, heard, felt or told).
+    pub fn knows(&self, id: u8) -> bool {
+        self.contacts.iter().any(|c| c.id == id)
+    }
+
+    /// Told by a teammate that enemy `id` is at `pos`: a contact (not one in its own view).
+    pub fn told(&mut self, id: u8, pos: Vector, tick: u32) {
+        match self.contacts.iter_mut().find(|c| c.id == id) {
+            Some(c) if !c.seen => (c.pos, c.at) = (pos, tick),
+            Some(_) => {}
+            None => self.contacts.push(Contact { id, pos, at: tick, seen: false, seen_at: None, hull: 1.0, hit_at: None, told: true }),
+        }
+    }
+
     /// Updates what this bot knows of `enemies` (id, mech, hull fraction) as of `tick`, and picks
-    /// the one to fight: in view now, scored by distance, less for one that hit us lately or is
-    /// wounded (and a little less for the current target). None when no enemy is in view.
+    /// the one to fight: in view now, scored by distance, less for one that hit us lately, is
+    /// wounded, or a teammate is fighting (and a little less for the current target). None when
+    /// no enemy is in view.
     pub fn perceive(&mut self, arena: &Arena, t: &Tuning, me: &Mech, enemies: &[(u8, Mech, f32)], tick: u32) -> Option<u8> {
         self.contacts.retain(|c| enemies.iter().any(|e| e.0 == c.id) && tick.saturating_sub(c.at) < secs(MEMORY));
         for &(id, ref m, hull) in enemies {
@@ -465,18 +540,19 @@ impl Bot {
             let c = match known {
                 Some(k) => &mut self.contacts[k],
                 None => {
-                    self.contacts.push(Contact { id, pos: m.pos, at: tick, seen, seen_at: None, hull, hit_at: None });
+                    self.contacts.push(Contact { id, pos: m.pos, at: tick, seen, seen_at: None, hull, hit_at: None, told: false });
                     self.contacts.last_mut().expect("just pushed")
                 }
             };
-            (c.pos, c.at, c.hull) = (m.pos, tick, hull);
+            (c.pos, c.at, c.hull, c.told) = (m.pos, tick, hull, false);
             if seen {
                 c.seen_at = Some(tick);
             }
         }
         let score = |c: &Contact| {
             let grudge = c.hit_at.is_some_and(|at| tick.saturating_sub(at) < secs(GRUDGE));
-            c.pos.distance(me.pos) - if grudge { THREAT_M } else { 0.0 } - WOUNDED_M * (1.0 - c.hull) - if self.focus == Some(c.id) { STICKY_M } else { 0.0 }
+            let shared = if self.engaged.contains(&c.id) { FOCUS_M } else { 0.0 };
+            c.pos.distance(me.pos) - if grudge { THREAT_M } else { 0.0 } - WOUNDED_M * (1.0 - c.hull) - shared - if self.focus == Some(c.id) { STICKY_M } else { 0.0 }
         };
         self.focus = self.contacts.iter().filter(|c| c.seen).min_by(|a, b| score(a).total_cmp(&score(b))).map(|c| c.id);
         self.focus
@@ -485,17 +561,29 @@ impl Bot {
     /// Hit by enemy `id` standing at `pos`: the bot knows where it is, and holds a grudge.
     pub fn hurt_by(&mut self, id: u8, pos: Vector, tick: u32) {
         match self.contacts.iter_mut().find(|c| c.id == id) {
-            Some(c) => (c.pos, c.at, c.hit_at) = (pos, tick, Some(tick)),
-            None => self.contacts.push(Contact { id, pos, at: tick, seen: false, seen_at: None, hull: 1.0, hit_at: Some(tick) }),
+            Some(c) => (c.pos, c.at, c.hit_at, c.told) = (pos, tick, Some(tick), false),
+            None => self.contacts.push(Contact { id, pos, at: tick, seen: false, seen_at: None, hull: 1.0, hit_at: Some(tick), told: false }),
         }
     }
 
-    /// Where to go with no enemy in view: the freshest contact's last known position (one
-    /// reached with nobody there is forgotten), else a random waypoint it can reach, patrolled to.
-    fn goal(&mut self, arena: &Arena, nav: &Nav, me: &Mech, tick: u32) -> Vector {
+    /// Where to go with no enemy in view, and what that is: the freshest last known position of
+    /// an urgent contact (seen, felt, or heard close); else its lead, when far from it; else the
+    /// freshest of any contact; else its lead; else a random waypoint it can reach, patrolled to.
+    /// A last known position reached with nobody there is forgotten.
+    fn goal(&mut self, arena: &Arena, nav: &Nav, me: &Mech, tick: u32) -> (Vector, Goal) {
         self.contacts.retain(|c| c.seen || flat(c.pos - me.pos).length() > SEARCHED);
+        let urgent = |c: &&Contact| !c.told && (c.seen_at.is_some() || c.hit_at.is_some() || flat(c.pos - me.pos).length() < URGENT);
+        if let Some(c) = self.contacts.iter().filter(urgent).max_by_key(|c| c.at) {
+            return (c.pos, Goal::Contact);
+        }
+        if let Some(lead) = self.lead.filter(|l| flat(*l - me.pos).length() > REGROUP) {
+            return (lead, Goal::Lead);
+        }
         if let Some(c) = self.contacts.iter().max_by_key(|c| c.at) {
-            return c.pos;
+            return (c.pos, Goal::Contact);
+        }
+        if let Some(lead) = self.lead {
+            return (lead, Goal::Lead);
         }
         let here = nav.nearest(arena, me.pos);
         let arrived = self.patrol.is_some_and(|i| flat(nav.node(i) - me.pos).length() < 2.0 * ARRIVE);
@@ -505,7 +593,7 @@ impl Bot {
             self.patrol = reach.get(pick.min(reach.len().saturating_sub(1))).copied();
             self.patrol_until = tick + secs(PATROL_FOR);
         }
-        self.patrol.map_or(me.pos, |i| nav.node(i))
+        (self.patrol.map_or(me.pos, |i| nav.node(i)), Goal::Patrol)
     }
 
     /// xorshift64, uniform in [0, 1).
@@ -544,7 +632,7 @@ impl Bot {
             self.respawned();
             return idle;
         }
-        let max_turn = t.bot_turn_rate_deg.to_radians() * DT;
+        let max_turn = self.max_turn(t);
         // Falling back: until cooled or mended, or out of time, or cornered (then fight).
         if let Some(r) = self.retreat {
             let cornered = target.is_some_and(|m| m.health > 0.0 && m.pos.distance(me.pos) < CORNERED && sees(arena, t, me, m));
@@ -573,13 +661,18 @@ impl Bot {
             {
                 return self.lob(t, me, spot, tick);
             }
-            let spot = Mech { pos: self.goal(arena, nav, me, tick), ..Mech::default() };
-            let watch = !self.contacts.is_empty() && spot.pos.distance(me.pos) < WATCH;
+            let (pos, goal) = self.goal(arena, nav, me, tick);
+            let spot = Mech { pos, ..Mech::default() };
+            // With its lead and nothing else to go on, it holds there, looking about.
+            if goal == Goal::Lead && flat(pos - me.pos).length() < FOLLOW {
+                return Input { yaw: me.yaw + 0.5 * DT, pitch: me.pitch * 0.9, ..idle };
+            }
+            let watch = goal == Goal::Contact && pos.distance(me.pos) < WATCH;
             return self.walk(arena, nav, t, me, &spot, watch, tick);
         };
 
         self.seen.push_back(target.pos + Vector::Y * (t.mech_height * 0.5));
-        let reaction_ticks = (t.bot_reaction_s * TICK_HZ).round() as usize;
+        let reaction_ticks = (self.reaction(t) * TICK_HZ).round() as usize;
         while self.seen.len() > reaction_ticks + 1 {
             self.seen.pop_front();
         }
@@ -587,7 +680,7 @@ impl Bot {
         let (near, far) = band(t);
 
         if sees(arena, t, me, target) {
-            let err = t.bot_aim_error_deg.to_radians();
+            let err = self.aim_error(t);
             self.wobble.0 = (self.wobble.0 + (self.rand() - 0.5) * err * 0.3).clamp(-err, err);
             self.wobble.1 = (self.wobble.1 + (self.rand() - 0.5) * err * 0.3).clamp(-err, err);
             // The secondary, when ready and in its useful range, takes over the aim until it fires:
@@ -714,7 +807,7 @@ impl Bot {
     /// facing the way ahead, or with `watch`, facing the target itself.
     #[allow(clippy::too_many_arguments)]
     fn walk(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: &Mech, watch: bool, tick: u32) -> Input {
-        let max_turn = t.bot_turn_rate_deg.to_radians() * DT;
+        let max_turn = self.max_turn(t);
         let (range, far) = (flat(target.pos - me.pos).length(), band(t).1);
         let toward = self.route(arena, nav, t, me, target, tick);
         let dir = toward.normalize_or_zero();
@@ -964,7 +1057,7 @@ mod tests {
         // It fires: heard, 76 m off, so the bot goes there, still without a target in view.
         hidden.shot = true;
         assert_eq!(bot.perceive(&arena, &t, &me, &[(1, hidden, 1.0)], 1), None);
-        assert_eq!(bot.goal(&arena, nav, &me, 1), hidden.pos);
+        assert_eq!(bot.goal(&arena, nav, &me, 1).0, hidden.pos);
 
         // Standing silent 20 m behind it, in the open: unseen, until it hits the bot.
         let mut bot = Bot::new(1);
@@ -1095,6 +1188,60 @@ mod tests {
             me.threw
         });
         assert!(threw, "never lobbed a grenade after the target that ducked away");
+    }
+
+    #[test]
+    fn teammates_radio_what_they_see_and_focus_it() {
+        let (arena, nav, t) = blockout();
+        let me = spawn_mech(&t, Vector::new(0.0, 0.1, 40.0));
+        // Told where an enemy is: it goes there.
+        let mut bot = Bot::new(1);
+        let there = Vector::new(-30.0, 0.1, -20.0);
+        bot.told(5, there, 0);
+        assert_eq!(bot.goal(&arena, nav, &me, 0).0, there);
+        // With a lead far off, it rejoins the lead first.
+        bot.lead = Some(Vector::new(35.0, 0.1, 40.0));
+        assert_eq!(bot.goal(&arena, nav, &me, 0), (Vector::new(35.0, 0.1, 40.0), Goal::Lead));
+        // Of two in view, the one a teammate is on beats one a few metres nearer.
+        let (far, near) = (spawn_mech(&t, Vector::new(-3.0, 0.1, 20.2)), spawn_mech(&t, Vector::new(3.0, 0.1, 24.3)));
+        let mut bot = Bot::new(1);
+        bot.engaged = vec![1];
+        assert_eq!(bot.perceive(&arena, &t, &me, &[(1, far, 1.0), (2, near, 1.0)], 0), Some(1));
+    }
+
+    #[test]
+    fn bots_group_on_their_lead() {
+        let (arena, nav, t) = blockout();
+        let mut me = spawn_mech(&t, Vector::new(0.0, 0.1, 40.0));
+        let lead = Vector::new(-30.0, 0.1, 40.0);
+        let mut bot = Bot::new(1);
+        bot.lead = Some(lead);
+        for tick in 0..secs(6.0) {
+            let input = bot.think(&arena, nav, &t, &me, None, tick);
+            step_mech(&arena, &t, &mut me, &input);
+        }
+        assert!(flat(lead - me.pos).length() < FOLLOW, "ended {} m off its lead", flat(lead - me.pos).length());
+        assert!(flat(me.vel).length() < 1.0, "still walking once there");
+    }
+
+    #[test]
+    fn sharper_bots_turn_and_react_faster() {
+        let (arena, nav, t) = blockout();
+        // A target off to the right; where each is aiming after a third of a second.
+        let target = spawn_mech(&t, Vector::new(25.0, 0.1, 40.0));
+        let off = |skill: f32| {
+            let mut me = spawn_mech(&t, Vector::new(0.0, 0.1, 40.0));
+            let mut bot = Bot { skill, ..Bot::new(1) };
+            for tick in 0..10 {
+                let input = bot.think(&arena, nav, &t, &me, Some(&target), tick);
+                step_mech(&arena, &t, &mut me, &input);
+            }
+            let to = flat(target.pos - me.pos);
+            wrap(atan2f(-to.x, -to.z) - me.yaw).abs()
+        };
+        assert!(off(1.0) < off(0.0), "a sharp bot turned no faster ({} vs {})", off(1.0), off(0.0));
+        let (raw, sharp) = (Bot { skill: 0.0, ..Bot::new(1) }, Bot { skill: 1.0, ..Bot::new(1) });
+        assert!(sharp.reaction(&t) < raw.reaction(&t) && sharp.aim_error(&t) < raw.aim_error(&t));
     }
 
     fn build(arsenal: &Arsenal, primary: u8, secondary: u8) -> &Tuning {
