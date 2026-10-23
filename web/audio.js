@@ -638,7 +638,7 @@ export class Sound {
     const n = this.cockpitNodes, t = this.ctx.currentTime;
     n.whir.frequency.setTargetAtTime(s.repairing >= 1 ? 420 : s.beaming ? 560 : 300, t, 0.2);
     n.whirGain.gain.setTargetAtTime(s.repairing > 0 ? 0.05 : s.beaming ? 0.035 : 0, t, 0.1);
-    const spin = s.alive ? s.spin : 0, f = 140 + 760 * spin;
+    const spin = s.alive ? s.spin : 0, f = 140 + 460 * spin;
     for (const { osc, mult } of n.spool) osc.frequency.setTargetAtTime(f * mult, t, 0.05);
     n.spoolFilter.frequency.setTargetAtTime(f * 3, t, 0.05);
     n.spoolGain.gain.setTargetAtTime(0.02 * Math.sqrt(spin), t, 0.05);
