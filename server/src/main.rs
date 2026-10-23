@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::future::IntoFuture;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{env, thread};
 
@@ -205,17 +205,22 @@ async fn main() {
     std::process::exit(1);
 }
 
-/// The lobby's view: public rooms, busiest first, and the maps a room can be pinned to.
+/// The lobby's view: public rooms, busiest first, and the maps a room can be pinned to, each as
+/// [key, name] ("crashsite", "Crash Site").
 #[derive(Serialize)]
 struct Lobby {
     rooms: Vec<RoomInfo>,
-    maps: Vec<&'static str>,
+    maps: &'static [(&'static str, String)],
 }
+
+/// The rotation's maps with their names, read from the maps once.
+static MAP_NAMES: LazyLock<Vec<(&'static str, String)>> =
+    LazyLock::new(|| ROTATION.iter().map(|&key| (key, Map::load(Map::index(key).expect("rotation names a map")).name)).collect());
 
 async fn list(State(app): State<App>) -> Json<Lobby> {
     let mut rooms: Vec<RoomInfo> = infos(&app.rooms).into_iter().filter(|r| r.public).collect();
     rooms.sort_by(|a, b| b.humans.cmp(&a.humans).then_with(|| a.code.cmp(&b.code)));
-    Json(Lobby { rooms, maps: ROTATION.to_vec() })
+    Json(Lobby { rooms, maps: &MAP_NAMES })
 }
 
 async fn lookup(Path(code): Path<String>, State(app): State<App>) -> Result<Json<RoomInfo>, StatusCode> {

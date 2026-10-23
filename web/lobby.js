@@ -62,7 +62,11 @@ lobby.innerHTML = `
     <h3>JOIN BY CODE</h3>
     <div class="row"><input id="code" maxlength="4" placeholder="ABCD" autocomplete="off" spellcheck="false"><button id="join">JOIN</button></div>
   </section>
-  <a href="/?offline">Practice offline</a>
+  <section>
+    <h3>PRACTICE OFFLINE</h3>
+    <div class="row"><select id="practice-map"></select><button id="practice">PRACTICE</button></div>
+    <p class="hint">On your own, without a server: try out a map, with every weapon unlocked.</p>
+  </section>
   <footer>© 2026 Alex Ngai · <a href="https://github.com/alexngai" target="_blank" rel="noopener">GitHub</a>${
     COFFEE ? ` · <a href="${COFFEE}" target="_blank" rel="noopener">Buy me a coffee</a>` : ''
   }</footer>`;
@@ -152,17 +156,18 @@ async function api(path, body) {
 }
 
 const clock = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-let mapsShown = false;
+let mapNames = null; // key -> name, once the server has listed its maps ([key, name] pairs)
 async function refresh() {
   let lobbyState;
   try { lobbyState = await api('/api/rooms'); } catch { return; }
-  if (!mapsShown) {
-    mapsShown = true;
-    $('new-map').insertAdjacentHTML('beforeend', lobbyState.maps.map((m) => `<option value="${esc(m)}">${esc(m[0].toUpperCase() + m.slice(1))}</option>`).join(''));
+  if (!mapNames) {
+    mapNames = Object.fromEntries(lobbyState.maps);
+    const options = lobbyState.maps.map(([key, name]) => `<option value="${esc(key)}">${esc(name)}</option>`).join('');
+    for (const id of ['new-map', 'practice-map']) $(id).insertAdjacentHTML('beforeend', options);
   }
   $('games').innerHTML = lobbyState.rooms.length
     ? lobbyState.rooms.map((r) => `<tr>
-        <td>${esc(r.name)}</td><td>${esc(r.map)}</td>
+        <td>${esc(r.name)}</td><td>${esc(mapNames[r.map] ?? r.map)}</td>
         <td>${r.humans}/${r.capacity} pilots${r.bots ? ` · ${r.bots} bots` : ''}</td>
         <td>${r.ended ? 'between matches' : `${clock(r.seconds_left)} left · ${r.scores[0]}–${r.scores[1]}`}</td>
         <td><button data-code="${esc(r.code)}">JOIN</button></td></tr>`).join('')
@@ -186,6 +191,11 @@ $('create').addEventListener('click', async () => {
     bot_skill: skill || undefined,
   };
   try { go((await api('/api/rooms', settings)).code); } catch (e) { note(`Couldn't open the game: ${e.message}`); }
+});
+// Offline on the picked map (Foundry if the server never listed them).
+$('practice').addEventListener('click', () => {
+  const map = $('practice-map').value;
+  location.href = map ? `/?offline&map=${encodeURIComponent(map)}` : '/?offline';
 });
 const join = async () => {
   const code = $('code').value.trim().toUpperCase();
