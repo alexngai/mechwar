@@ -29,7 +29,7 @@ import { Cockpit } from './cockpit.js';
 import { Sound } from './audio.js';
 import { Hud, hex } from './hud.js';
 import { createSky } from './sky.js';
-import { STORE, levelAt, levelXp, owns, pointsLeft, readRecord } from './progress.js';
+import { STORE, fits, levelAt, levelXp, owns, pointsLeft, readRecord } from './progress.js';
 
 await init();
 const DT = tick_dt();
@@ -63,13 +63,14 @@ const mapIndex = (name) => {
 };
 const sim = net ? null : new WasmSim(JSON.stringify(tuning), mapIndex(params.get('map') ?? 'foundry'));
 const game = net ?? sim;
-// Each class's loadout as last picked on its card (saved locally by weapon and item id), else its own.
+// Each class's loadout as last picked on its card (saved locally by weapon, item and ability id),
+// else its own.
 const picks = CLASS_KEYS.map((key) => {
   const own = ownLoadout(key);
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(`mechwar.loadout.${key}`)); } catch { /* private mode, or not JSON */ }
   const at = (slot) => {
-    const k = weapons[LISTS[slot]].findIndex((w) => w.id === saved?.[slot]);
+    const k = weapons[LISTS[slot]].findIndex((w) => w.id === saved?.[slot] && fits(key, w));
     return k < 0 ? own[slot] : k;
   };
   return Object.fromEntries(Object.keys(LISTS).map((slot) => [slot, at(slot)]));
@@ -79,7 +80,7 @@ const loadoutFor = (i) => picks[i];
 /** Bytes asking the server for class `i` carrying its picked loadout. */
 const pickMsg = (i) => {
   const l = loadoutFor(i);
-  return net.pick(i, l.primary, l.secondary, l.offensive, l.support);
+  return net.pick(i, l.primary, l.secondary, l.offensive, l.support, l.ability);
 };
 /** How far the carried secondary's scope zooms (1 for none). */
 const zoomOf = () => armament(loadout).secondary.zoom ?? 1;
@@ -534,13 +535,14 @@ const bays = CLASS_KEYS.map((key, i) => {
 });
 function showBay(i) {
   bay = i;
-  const key = CLASS_KEYS[i], c = classes[key], l = picks[i], { primary, secondary, offensive, support } = armament(l);
+  const key = CLASS_KEYS[i], c = classes[key], l = picks[i], { primary, secondary, offensive, support, ability } = armament(l);
   bays.forEach((b, k) => {
     const w = armament(picks[k]);
     b.classList.toggle('on', k === i);
     b.innerHTML = `${k + 1} · ${classes[CLASS_KEYS[k]].name}<small>${w.primary.name} · ${w.secondary.name}</small>`;
   });
   const chips = (slot, list) => weapons[list].map((w, k) => {
+    if (!fits(key, w)) return '';
     const lock = ownsWeapon(i, list, k) ? '' : `<i>${w.unlock}</i>`;
     return `<label class="chip${lock && ' locked'}"><input type="radio" name="${slot}" value="${k}"${k === l[slot] ? ' checked' : ''}>${w.name}${lock}</label>`;
   }).join('');
@@ -551,7 +553,7 @@ function showBay(i) {
     <div class="slot"><b>SECONDARY<span>RMB · MMB</span></b><div class="chips">${chips('secondary', 'secondaries')}</div><div class="bars">${statBars(i, l, 'secondary', 'secondaries')}</div><p>${secondary.desc}</p>${unlockRow(i, 'secondaries', l.secondary)}</div>
     <div class="slot"><b>ITEM<span>G</span></b><div class="chips">${chips('offensive', 'offensive')}</div><p>${offensive.desc}</p>${unlockRow(i, 'offensive', l.offensive)}</div>
     <div class="slot"><b>SUPPORT ITEM<span>T</span></b><div class="chips">${chips('support', 'support')}</div><p>${support.desc}</p>${unlockRow(i, 'support', l.support)}</div>
-    <div class="slot"><b>ABILITY<span>F</span></b>${c.ability.name}: ${c.ability.desc}</div>`;
+    <div class="slot"><b>ABILITY<span>F</span></b><div class="chips">${chips('ability', 'abilities')}</div><p>${ability.desc}</p>${unlockRow(i, 'abilities', l.ability)}</div>`;
   preview.show(key, l, classValue(i, 'mech_height'));
 }
 $('slots').addEventListener('change', () => {
@@ -589,7 +591,7 @@ function launch(i) {
     pickerOpen = false;
     classIdx = i;
     loadout = l;
-    sim.set_class(i, l.primary, l.secondary, l.offensive, l.support);
+    sim.set_class(i, l.primary, l.secondary, l.offensive, l.support, l.ability);
     sim.reset();
     prev = curr = sim.state();
     faceCenter();
@@ -605,6 +607,8 @@ const eye = new THREE.Vector3(), offset = new THREE.Vector3(), aim = new THREE.V
 const pos = new THREE.Vector3(), vel = new THREE.Vector3(), seen = new THREE.Vector3(), step = new THREE.Vector3();
 const beamFrom = new THREE.Vector3(), beamTo = new THREE.Vector3();
 const BEAM_HOLD = 120; // ms a remote's beam stays drawn after the server last said it was on
+// How faint camouflage draws a mech: our own or a teammate's, and an enemy's (a shimmer at most).
+const CLOAK_SEEN = 0.25, CLOAK_HIDDEN = 0.06;
 const ray = new THREE.Ray(), sphere = new THREE.Sphere(), crossing = new THREE.Vector3();
 const heading = new THREE.Vector3(), chest = new THREE.Vector3(), to = new THREE.Vector3(), look = new THREE.Vector3(), ndc = new THREE.Vector3(), muzzle = new THREE.Vector3();
 const spark = new THREE.Vector3();
@@ -672,7 +676,7 @@ function frame(now) {
   if (net) ensureArena(net.map());
   const hudState = net ? net.hud() : null;
   const [myId, myTeam] = hudState ? [hudState[0], hudState[6]] : [-1, -1];
-  if (hudState) [classIdx, loadout] = [hudState[12], { primary: hudState[14], secondary: hudState[15], offensive: hudState[17], support: hudState[18] }];
+  if (hudState) [classIdx, loadout] = [hudState[12], { primary: hudState[14], secondary: hudState[15], offensive: hudState[17], support: hudState[18], ability: hudState[19] }];
   if (meKit !== `${classIdx}:${JSON.stringify(loadout)}`) {
     me.dispose();
     me = new Mech(scene, fx, CLASS_KEYS[classIdx], loadout);
@@ -701,21 +705,21 @@ function frame(now) {
     grounded: !!curr[S.GROUNDED], boosting: !!curr[S.BOOSTING], hovering: !!curr[S.HOVERING],
     health: curr[S.HEALTH], heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     ability: curr[S.ABILITY_T] > 0, damage: 1 - curr[S.HEALTH] / T('health_max'), shielded: !!curr[S.SHIELD],
-    repair: repairPhase(curr[S.REPAIR_T]),
+    repair: repairPhase(curr[S.REPAIR_T]), cloak: curr[S.ABILITY_T] > 0 && armament(loadout).ability.id === 'cloak' ? CLOAK_SEEN : 0,
   });
   if (curr[S.JAMMED] > 0) fx.jam(toChest(spark.copy(pos), classIdx), dt);
 
   if (net) {
     const r = net.remotes(now), live = new Set();
-    for (let i = 0; i < r.length; i += 18) {
-      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering, bot, abilityOn, repairing, primary, secondary, docked, shielded] = r.subarray(i, i + 18);
+    for (let i = 0; i < r.length; i += 19) {
+      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering, bot, abilityOn, repairing, primary, secondary, docked, shielded, ability] = r.subarray(i, i + 19);
       if (docked) continue; // in the hangar: nothing to draw
       let e = remotes.get(id);
-      if (e && (e.cls !== cls || e.mech.loadout.primary !== primary || e.mech.loadout.secondary !== secondary)) {
+      if (e && (e.cls !== cls || e.mech.loadout.primary !== primary || e.mech.loadout.secondary !== secondary || e.mech.loadout.ability !== ability)) {
         e.mech.dispose();
         e = null;
       }
-      if (!e) remotes.set(id, (e = { mech: new Mech(scene, fx, CLASS_KEYS[cls], { primary, secondary }), cls, team, pos: new THREE.Vector3(x, y, z), vel: new THREE.Vector3() }));
+      if (!e) remotes.set(id, (e = { mech: new Mech(scene, fx, CLASS_KEYS[cls], { primary, secondary, ability }), cls, team, pos: new THREE.Vector3(x, y, z), vel: new THREE.Vector3() }));
       live.add(id);
       // Gait speed comes from interpolated motion; a jump (respawn, slot reuse) resets it.
       seen.set(x, y, z);
@@ -727,6 +731,8 @@ function frame(now) {
       // Remotes only say whether they're repairing; time the wind-up from when it started.
       e.repairAt = repairing ? e.repairAt ?? now : null;
       Object.assign(e, { bot: !!bot, ability: !!abilityOn, repairing: !!repairing, boosting: !!boosting, hovering: !!hovering });
+      // Camouflage hides an enemy all but completely; a teammate shows as a ghost.
+      e.cloaked = !!abilityOn && e.mech.weapons.ability.id === 'cloak';
       e.mech.setTeam(team);
       e.mech.setUnit(id);
       e.mech.update(dt, {
@@ -734,6 +740,7 @@ function frame(now) {
         grounded: !hovering && Math.abs(e.vel.y) < 1.5, boosting: !!boosting, hovering: !!hovering, health,
         ability: !!abilityOn, damage: 1 - health / classValue(cls, 'health_max'), shielded: !!shielded,
         repair: repairPhase(e.repairAt === null ? 0 : (now - e.repairAt) / 1000 + 1e-3, cls),
+        cloak: e.cloaked ? (team === myTeam ? CLOAK_SEEN : CLOAK_HIDDEN) : 0,
       });
       if (now - (e.beamAt ?? -Infinity) < BEAM_HOLD) fx.mend(id + 1, e.mech.launcher.getWorldPosition(beamFrom), e.beamTo, dt);
       if (now < (e.jammedUntil ?? 0)) fx.jam(toChest(spark.copy(e.pos), cls), dt);
@@ -1050,9 +1057,7 @@ function tookHit(attacker, now, from = remotes.get(attacker)?.pos) {
 function statusOf(e, now) {
   if (e.repairing) return 'REPAIRING';
   if (now < (e.jammedUntil ?? 0)) return 'JAMMED';
-  if (e.ability && e.cls === 2) return 'BULWARK';
-  if (e.ability && e.cls === 0) return 'SPEED BOOST';
-  return '';
+  return e.ability ? e.mech.weapons.ability.name.toUpperCase() : '';
 }
 
 /** The Tab scoreboard: both teams sorted by kills, our row marked. */
@@ -1260,6 +1265,8 @@ function drawGlass(now, myTeam) {
     chest.copy(e.pos).y += h * 0.5;
     const dist = chest.distanceTo(eye);
     let visible = !enemy;
+    // Camouflage hides an enemy's tag and radar contact.
+    if (enemy && e.cloaked) continue;
     if (enemy && dist <= T('weapon_range')) {
       to.subVectors(chest, eye).normalize();
       visible = game.cast_ray(eye.x, eye.y, eye.z, to.x, to.y, to.z, dist) >= dist - 0.5 && !smoked(eye, chest);
@@ -1302,7 +1309,7 @@ function drawGlass(now, myTeam) {
     // and a slow primary's refire, 0 to 1 (null for fast guns and spinning ones).
     spread: Math.tan(THREE.MathUtils.degToRad(T('spread_deg') + curr[S.BLOOM])) / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)),
     cycle: T('spin_up') > 0 || refireTime() < SLOW_REFIRE ? null : 1 - Math.max(curr[S.FIRE_WAIT], 0) / refireTime(),
-    ability: 1 - curr[S.ABILITY_CD] / Math.max(T('ability_cooldown'), 1e-6), abilityActive: curr[S.ABILITY_T] > 0, abilityName: c.ability.name,
+    ability: 1 - curr[S.ABILITY_CD] / Math.max(T(`${armament(loadout).ability.id}_cooldown`), 1e-6), abilityActive: curr[S.ABILITY_T] > 0, abilityName: armament(loadout).ability.name,
     health: curr[S.HEALTH], healthMax: T('health_max'), fuel: curr[S.FUEL] / T('fuel_max'), className: c.name, hurt,
     boostMin: T('boost_min_fuel') / T('fuel_max'), boosting: !!curr[S.BOOSTING], hovering: !!curr[S.HOVERING],
     friendColor: hex(FRIEND.accent), enemyColor: hex(FOE.accent),

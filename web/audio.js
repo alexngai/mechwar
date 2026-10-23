@@ -447,15 +447,24 @@ export class Sound {
     this.tone(out, 'sine', 70, 34, 0.004, 0.16, 0.4);
   }
 
-  /** Class ability cue: Vent hiss (B), Speed boost surge (A), Bulwark clunk (C). */
-  ability(cls, pos) {
+  /**
+   * Ability cue, by weapons.json id: a Vent hiss, a Speed boost surge, Camouflage fading out, a
+   * Power shot charging up, or a clunk (Bulwark, Barrage, Artillery).
+   */
+  ability(id, pos) {
     const out = this.voice(pos, 0.9);
     if (!out) return;
-    if (cls === 'B') {
+    if (id === 'vent') {
       this.noise(out, 'white', 'highpass', 2500, 1200, 0.03, 0.8, 0.35);
-    } else if (cls === 'A') {
+    } else if (id === 'slipstream') {
       this.noise(out, 'white', 'bandpass', 600, 3200, 0.05, 0.45, 0.4, 1.5);
       this.tone(out, 'sawtooth', 180, 640, 0.05, 0.4, 0.06);
+    } else if (id === 'cloak') {
+      this.noise(out, 'white', 'bandpass', 3000, 500, 0.05, 0.7, 0.25, 2);
+      this.tone(out, 'sine', 900, 220, 0.02, 0.6, 0.12);
+    } else if (id === 'power') {
+      this.tone(out, 'sawtooth', 120, 900, 0.02, 0.35, 0.08);
+      this.tone(out, 'sine', 240, 1800, 0.02, 0.35, 0.1);
     } else {
       this.tone(out, 'square', 70, 50, 0.002, 0.09, 0.25);
       this.noise(out, 'brown', 'lowpass', 600, 200, 0.004, 0.2, 0.6);

@@ -2,8 +2,9 @@
 //! tuning values in its slot's tuning.json group (`primary` or `secondary`) over tuning.json's
 //! own, which are the Medium's weapons. A mech's tuning is tuning.json, then its class's
 //! `classes.json` overrides (which set no weapon values), then its primary's and secondary's.
-//! It also lists the items for the offensive and support slots (`item.rs`), which set nothing:
-//! their values are tuning.json's.
+//! It also lists the items for the offensive and support slots (`item.rs`) and the abilities
+//! (`ability.rs`), which set nothing: their values are tuning.json's, which a class may adjust.
+//! An entry with `classes` fits only those classes; the rest fit every class.
 
 use std::sync::OnceLock;
 
@@ -12,25 +13,26 @@ use serde_json::{Map, Value};
 
 use crate::{Mech, MechClass, Tuning};
 
-/// What a mech carries: indices into weapons.json's `primaries`, `secondaries`, `offensive` and
-/// `support` lists.
+/// What a mech carries: indices into weapons.json's `primaries`, `secondaries`, `offensive`,
+/// `support` and `abilities` lists.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Loadout {
     pub primary: u8,
     pub secondary: u8,
     pub offensive: u8,
     pub support: u8,
+    pub ability: u8,
 }
 
 impl Loadout {
-    /// `class`'s own weapons and items, from classes.json's `weapons`.
+    /// `class`'s own weapons, items and ability, from classes.json's `weapons`.
     pub fn of(class: MechClass) -> Loadout {
         static OWN: OnceLock<[Loadout; 3]> = OnceLock::new();
         OWN.get_or_init(|| {
             MechClass::ALL.map(|class| {
                 let mut own = Loadout::default();
                 for slot in Slot::ALL {
-                    let id = classes_json()[class.key()]["weapons"][slot.key()].as_str().expect("classes.json names each class's weapons and items");
+                    let id = classes_json()[class.key()]["weapons"][slot.key()].as_str().expect("classes.json names each class's weapons, items and ability");
                     let at = slot.list(weapons_json()).iter().position(|w| w["id"] == id);
                     *own.get_mut(slot) = u8::try_from(at.unwrap_or_else(|| panic!("classes.json names unknown `{id}`"))).expect("under 256 a slot");
                 }
@@ -46,6 +48,7 @@ impl Loadout {
             Slot::Secondary => self.secondary,
             Slot::Offensive => self.offensive,
             Slot::Support => self.support,
+            Slot::Ability => self.ability,
         }
     }
 
@@ -55,6 +58,7 @@ impl Loadout {
             Slot::Secondary => &mut self.secondary,
             Slot::Offensive => &mut self.offensive,
             Slot::Support => &mut self.support,
+            Slot::Ability => &mut self.ability,
         }
     }
 
@@ -64,24 +68,25 @@ impl Loadout {
         self
     }
 
-    /// The weapons with ids `primary` and `secondary`, and the starting items.
+    /// The weapons with ids `primary` and `secondary`, and the first items and ability.
     #[cfg(test)]
     pub(crate) fn named(primary: &str, secondary: &str) -> Loadout {
         Loadout::default().with(Slot::Primary, index(Slot::Primary, primary)).with(Slot::Secondary, index(Slot::Secondary, secondary))
     }
 }
 
-/// Where a weapon or item goes: weapons.json's list for it.
+/// Where a weapon, item or ability goes: weapons.json's list for it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Slot {
     Primary,
     Secondary,
     Offensive,
     Support,
+    Ability,
 }
 
 impl Slot {
-    pub const ALL: [Slot; 4] = [Slot::Primary, Slot::Secondary, Slot::Offensive, Slot::Support];
+    pub const ALL: [Slot; 5] = [Slot::Primary, Slot::Secondary, Slot::Offensive, Slot::Support, Slot::Ability];
 
     /// The weapon slot, primary or not.
     pub fn weapon(primary: bool) -> Slot {
@@ -100,6 +105,7 @@ impl Slot {
             Slot::Secondary => "secondary",
             Slot::Offensive => "offensive",
             Slot::Support => "support",
+            Slot::Ability => "ability",
         }
     }
 
@@ -110,6 +116,7 @@ impl Slot {
             Slot::Secondary => "secondaries",
             Slot::Offensive => "offensive",
             Slot::Support => "support",
+            Slot::Ability => "abilities",
         };
         weapons[key].as_array().filter(|list| !list.is_empty()).unwrap_or_else(|| panic!("weapons.json needs {key}"))
     }
@@ -126,8 +133,8 @@ pub(crate) fn index(slot: Slot, id: &str) -> u8 {
 pub struct Arsenal {
     primaries: usize,
     secondaries: usize,
-    /// How many offensive and support items there are.
-    items: [usize; 2],
+    /// How many offensive and support items, and abilities, there are.
+    items: [usize; 3],
     /// By class, then primary, then secondary.
     tunings: Vec<Tuning>,
 }
@@ -152,7 +159,7 @@ impl Arsenal {
                 }
             }
         }
-        let items = [Slot::Offensive.list(weapons).len(), Slot::Support.list(weapons).len()];
+        let items = [Slot::Offensive, Slot::Support, Slot::Ability].map(|slot| slot.list(weapons).len());
         Self { primaries: primaries.len(), secondaries: secondaries.len(), items, tunings }
     }
 
@@ -179,6 +186,7 @@ impl Arsenal {
             secondary: loadout.secondary.min(last(self.secondaries)),
             offensive: loadout.offensive.min(last(self.items[0])),
             support: loadout.support.min(last(self.items[1])),
+            ability: loadout.ability.min(last(self.items[2])),
         }
     }
 }
@@ -198,14 +206,20 @@ fn merge(values: &Value, overrides: &Value, slot: Option<Slot>) -> Value {
     merged
 }
 
-/// The id and unlock price (weapons.json's `id` and `unlock`) of the weapon or item in `slot` at
-/// `index` into its list; None past the end.
+/// The id and unlock price (weapons.json's `id` and `unlock`) of the weapon, item or ability in
+/// `slot` at `index` into its list; None past the end.
 pub fn weapon(slot: Slot, index: u8) -> Option<(&'static str, u32)> {
     let w = slot.list(weapons_json()).get(usize::from(index))?;
     Some((w["id"].as_str().unwrap_or_default(), w["unlock"].as_u64().map_or(0, |p| p as u32)))
 }
 
-/// The unlock price of the weapon or item with id `id` (0 for none).
+/// Whether `class` may carry the entry at `index` in `slot`'s list: it's there, and its
+/// `classes`, if it lists any, include `class`.
+pub fn fits(class: MechClass, slot: Slot, index: u8) -> bool {
+    slot.list(weapons_json()).get(usize::from(index)).is_some_and(|w| w["classes"].as_array().is_none_or(|c| c.iter().any(|k| k == class.key())))
+}
+
+/// The unlock price of the weapon, item or ability with id `id` (0 for none).
 pub fn price(id: &str) -> u32 {
     Slot::ALL.iter().flat_map(|s| s.list(weapons_json())).find(|w| w["id"] == id).and_then(|w| w["unlock"].as_u64()).map_or(0, |p| p as u32)
 }
@@ -253,10 +267,10 @@ mod tests {
     #[test]
     fn out_of_range_loadouts_clamp() {
         let arsenal = Arsenal::new(&Tuning::default());
-        let wild = arsenal.clamp(Loadout { primary: 200, secondary: 200, offensive: 200, support: 200 });
+        let wild = arsenal.clamp(Loadout { primary: 200, secondary: 200, offensive: 200, support: 200, ability: 200 });
         assert!(usize::from(wild.primary) < arsenal.primaries && usize::from(wild.secondary) < arsenal.secondaries);
-        assert!(usize::from(wild.offensive) < arsenal.items[0] && usize::from(wild.support) < arsenal.items[1]);
-        let _ = arsenal.get(MechClass::C, Loadout { primary: 200, secondary: 200, offensive: 200, support: 200 });
+        assert!(usize::from(wild.offensive) < arsenal.items[0] && usize::from(wild.support) < arsenal.items[1] && usize::from(wild.ability) < arsenal.items[2]);
+        let _ = arsenal.get(MechClass::C, Loadout { primary: 200, secondary: 200, offensive: 200, support: 200, ability: 200 });
     }
 
     #[test]

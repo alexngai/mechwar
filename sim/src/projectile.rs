@@ -9,6 +9,7 @@ use rapier3d::parry::query::RayCast;
 use rapier3d::prelude::{Capsule, Pose, Ray, Rotation};
 use serde::{Deserialize, Serialize};
 
+use crate::ability::Ability;
 use crate::item::Item;
 use crate::{Arena, DT, Loadout, Mech, MechClass, Tuning, Vector, aim_ray, hit_shape, weapon};
 
@@ -35,6 +36,8 @@ pub struct Projectile {
     pub loadout: Loadout,
     /// The shot's charge, 0-1 (see `tuning_for`).
     pub charge: f32,
+    /// Boosted by its owner's ability (`Mech::boosted`) at launch: hits harder, maybe wider.
+    pub boosted: bool,
     /// The player a homing shell is locked on (their id + 1; 0 for none): see `home`.
     pub target: u8,
     pub pos: Vector,
@@ -94,7 +97,7 @@ pub fn volley(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Vec<Projectile> {
             };
             let target = if t.alt_lock_time > 0.0 && m.lock_time >= t.alt_lock_time { m.lock } else { 0 };
             let speed = t.alt_speed * (1.0 + t.alt_speed_jitter * weapon::jitter(seq, u32::from(n)));
-            Projectile { owner, seq, n, primary: false, class: m.class, loadout: m.loadout, charge: m.alt_charge, target, pos: eye, vel: dir * speed, age: 0.0 }
+            Projectile { owner, seq, n, primary: false, class: m.class, loadout: m.loadout, charge: m.alt_charge, boosted: m.boosted, target, pos: eye, vel: dir * speed, age: 0.0 }
         })
         .collect()
 }
@@ -134,9 +137,21 @@ pub fn thrown(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Projectile {
 }
 
 /// The tuning projectile `p` flies and bursts with, given its owner's tuning `t`: thrown items
-/// swap their ballistics into the secondary's fields, and a charged shell (a primary's charge,
-/// or a heat-fed secondary's) hits harder and wider.
+/// swap their ballistics into the secondary's fields, a charged shell (a primary's charge, or a
+/// heat-fed secondary's) hits harder and wider, and so may a boosted one.
 pub fn tuning_for<'a>(t: &'a Tuning, p: &Projectile) -> Cow<'a, Tuning> {
+    let tuned = unboosted(t, p);
+    if !p.boosted {
+        return tuned;
+    }
+    let (damage, radius) = Ability::of(p.loadout).boost(t);
+    let mut b = tuned.into_owned();
+    (b.shot_damage, b.alt_damage) = (b.shot_damage * damage, b.alt_damage * damage);
+    (b.shot_radius, b.alt_radius) = (b.shot_radius * radius, b.alt_radius * radius);
+    Cow::Owned(b)
+}
+
+fn unboosted<'a>(t: &'a Tuning, p: &Projectile) -> Cow<'a, Tuning> {
     if let Some(item) = item(p) {
         return Cow::Owned(t.thrown(item));
     }

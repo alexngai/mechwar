@@ -5,6 +5,7 @@ use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterCo
 use rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 
+pub mod ability;
 pub mod arsenal;
 pub mod bot;
 pub mod client;
@@ -20,6 +21,7 @@ pub mod weapon;
 #[cfg(feature = "wasm")]
 mod wasm;
 
+pub use ability::Ability;
 pub use arsenal::{Arsenal, Loadout, Slot};
 pub use map::{Map, Pad};
 pub use rapier3d::prelude::Vector;
@@ -119,11 +121,27 @@ pub struct Tuning {
     /// Seconds a launch is shielded at most (`Mech::shield`).
     pub spawn_shield: f32,
 
-    pub ability_cooldown: f32,
-    pub ability_duration: f32,
+    /// Abilities (`ability.rs`): each one's cooldown and how long it stays on, and what it does.
+    pub slipstream_cooldown: f32,
+    pub slipstream_duration: f32,
     pub slipstream_boost_mult: f32,
+    pub vent_cooldown: f32,
+    pub brace_cooldown: f32,
+    pub brace_duration: f32,
     pub brace_damage_mult: f32,
     pub brace_speed_mult: f32,
+    pub cloak_cooldown: f32,
+    pub cloak_duration: f32,
+    pub power_cooldown: f32,
+    pub power_duration: f32,
+    pub power_damage_mult: f32,
+    pub barrage_cooldown: f32,
+    pub barrage_duration: f32,
+    pub barrage_damage_mult: f32,
+    pub artillery_cooldown: f32,
+    pub artillery_duration: f32,
+    pub artillery_damage_mult: f32,
+    pub artillery_radius_mult: f32,
 
     /// Secondary weapon: a volley of `alt_count` projectiles; see `projectile.rs`.
     pub alt_cooldown: f32,
@@ -330,7 +348,7 @@ pub struct Input {
     pub fire: bool,
     /// Secondary weapon, held like `fire`.
     pub alt_fire: bool,
-    /// Class ability; like `dodge`, only on the tick the key went down.
+    /// The ability (`ability.rs`); like `dodge`, only on the tick the key went down.
     pub ability: bool,
     /// Held to repair; see `step_mech`.
     pub repair: bool,
@@ -359,15 +377,17 @@ impl Input {
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct Mech {
-    /// Picks the ability `step_mech` applies.
     pub class: MechClass,
-    /// The weapons carried; with `class`, picks this mech's tuning (`Arsenal::of`).
+    /// The weapons, items and ability carried; with `class`, picks this mech's tuning
+    /// (`Arsenal::of`).
     pub loadout: Loadout,
     /// Dead at 0 or below: `step_mech` leaves a dead mech alone.
     pub health: f32,
-    /// Seconds the ability stays active, and until it can be used again.
+    /// Seconds the ability stays on, and until it can be used again.
     pub ability_time: f32,
     pub ability_cooldown: f32,
+    /// Set on ticks what the mech fires or throws is boosted by its ability (`ability::fired`).
+    pub boosted: bool,
     /// Feet position (bottom of the capsule).
     pub pos: Vector,
     pub vel: Vector,
@@ -709,23 +729,11 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     m.dodge_cooldown = (m.dodge_cooldown - DT).max(0.0);
     m.dodge_time = (m.dodge_time - DT).max(0.0);
 
-    // Class ability: Speed boost (A) refills fuel then frees and speeds up boost, Vent (B) dumps
-    // heat at once, Bulwark (C) trades boost for less damage (applied by the server) and more speed.
-    m.ability_time = (m.ability_time - DT).max(0.0);
-    m.ability_cooldown = (m.ability_cooldown - DT).max(0.0);
-    if input.ability && m.ability_cooldown <= 0.0 {
-        m.ability_time = t.ability_duration;
-        m.ability_cooldown = t.ability_cooldown;
-        if m.class == MechClass::A {
-            m.fuel = t.fuel_max;
-        }
-        if m.class == MechClass::B {
-            m.heat = 0.0;
-            m.overheated = false;
-        }
-    }
-    let slipstream = m.class == MechClass::A && m.ability_time > 0.0;
-    let brace = m.class == MechClass::C && m.ability_time > 0.0;
+    // The ability: Speed boost frees and speeds up boost, and Bulwark trades it for less damage
+    // (applied by the server) and more speed on foot. What it does to firing comes after it.
+    ability::step(t, m, input.ability);
+    let slipstream = ability::on(m, Ability::Slipstream);
+    let brace = ability::on(m, Ability::Brace);
     item::step(t, m, input);
 
     // Fuel spenders: boost, dodge, hover.
@@ -962,6 +970,7 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     if m.overheated && m.heat <= t.overheat_release {
         m.overheated = false;
     }
+    ability::fired(m);
 }
 
 /// Target vertical speed `time` seconds into a hover: eases from the rise speed down to a slow sink.
@@ -1240,7 +1249,7 @@ mod tests {
         sim.step(&vent);
         assert_eq!(sim.mech.heat, 0.0);
         assert!(!sim.mech.overheated);
-        assert_eq!(sim.mech.ability_cooldown, t.ability_cooldown);
+        assert_eq!(sim.mech.ability_cooldown, t.vent_cooldown);
         run(&mut sim, fire, 30);
         let heat = sim.mech.heat;
         sim.step(&vent);

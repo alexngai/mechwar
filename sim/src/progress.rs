@@ -180,25 +180,27 @@ impl Record {
         (POINTS_PER_LEVEL * self.level.saturating_sub(1)).saturating_sub(spent)
     }
 
-    /// Whether `class` may carry the weapon or item at `index` in `slot`'s list: its own, or
-    /// unlocked for it.
+    /// Whether `class` may carry the weapon, item or ability at `index` in `slot`'s list: its own,
+    /// or one that fits it (`arsenal::fits`) unlocked for it.
     pub fn owns(&self, class: MechClass, slot: Slot, index: u8) -> bool {
         index == Loadout::of(class).get(slot)
-            || arsenal::weapon(slot, index).is_some_and(|(id, _)| self.unlocks.get(class.key()).is_some_and(|ids| ids.iter().any(|u| u == id)))
+            || arsenal::fits(class, slot, index)
+                && arsenal::weapon(slot, index).is_some_and(|(id, _)| self.unlocks.get(class.key()).is_some_and(|ids| ids.iter().any(|u| u == id)))
     }
 
-    /// `loadout` for `class`, with each weapon and item this pilot hasn't unlocked for it swapped
-    /// for its own.
+    /// `loadout` for `class`, with each weapon, item and ability this pilot doesn't own for it
+    /// swapped for its own.
     pub fn allowed(&self, class: MechClass, loadout: Loadout) -> Loadout {
         let own = Loadout::of(class);
         Slot::ALL.into_iter().fold(loadout, |l, slot| if self.owns(class, slot, l.get(slot)) { l } else { l.with(slot, own.get(slot)) })
     }
 
-    /// Spends points unlocking the weapon or item at `index` in `slot`'s list for `class`. False,
-    /// changing nothing, if there's no such thing, it's owned already or the points fall short.
+    /// Spends points unlocking the weapon, item or ability at `index` in `slot`'s list for
+    /// `class`. False, changing nothing, if there's no such thing, it doesn't fit the class, it's
+    /// owned already or the points fall short.
     pub fn unlock(&mut self, class: MechClass, slot: Slot, index: u8) -> bool {
         let Some((id, price)) = arsenal::weapon(slot, index) else { return false };
-        if self.owns(class, slot, index) || price > self.points() {
+        if !arsenal::fits(class, slot, index) || self.owns(class, slot, index) || price > self.points() {
             return false;
         }
         self.unlocks.entry(class.key().into()).or_default().push(id.into());
@@ -302,6 +304,27 @@ mod tests {
         assert_eq!(r.allowed(light, wanted), Loadout { support: orb, ..Loadout::of(light) });
         assert!(!r.unlock(light, Slot::Offensive, limpet), "unlocked past the points left");
         assert!(!r.unlock(light, Slot::Support, 200), "no such item");
+    }
+
+    #[test]
+    fn abilities_fit_their_classes_and_unlock_like_items() {
+        let (light, medium, heavy) = (MechClass::A, MechClass::B, MechClass::C);
+        let (cloak, power) = (arsenal::index(Slot::Ability, "cloak"), arsenal::index(Slot::Ability, "power"));
+        let mut r = Record { level: 3, ..Record::guest(1, "Ace") };
+        // Each mech starts with its own ability, which fits it, and owns no other.
+        for class in MechClass::ALL {
+            let own = Loadout::of(class).ability;
+            assert!(arsenal::fits(class, Slot::Ability, own) && r.owns(class, Slot::Ability, own));
+            assert!(!r.owns(class, Slot::Ability, power));
+        }
+        // One that doesn't fit the class can't be unlocked or carried, points or not.
+        assert!(!r.unlock(heavy, Slot::Ability, cloak), "unlocked one that doesn't fit");
+        assert!(r.unlock(light, Slot::Ability, power) && r.unlock(medium, Slot::Ability, power));
+        assert_eq!(r.allowed(light, Loadout { ability: power, ..Loadout::of(light) }).ability, power);
+        assert_eq!(r.allowed(heavy, Loadout { ability: power, ..Loadout::of(heavy) }).ability, Loadout::of(heavy).ability);
+        // Nor one a record somehow holds for a class it doesn't fit (say, refit since).
+        r.unlocks.entry("C".into()).or_default().push("cloak".into());
+        assert!(!r.owns(heavy, Slot::Ability, cloak));
     }
 
     #[test]

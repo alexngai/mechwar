@@ -8,10 +8,12 @@ use std::sync::OnceLock;
 use libm::{asinf, atan2f, hypotf};
 use rapier3d::prelude::{Ray, Rotation};
 
+use crate::ability::Ability;
+use crate::arsenal;
 use crate::item::{self, Item};
 use crate::map::{MAPS, Map};
 use crate::net::Cloud;
-use crate::{Arena, Arsenal, DT, Input, Loadout, Mech, MechClass, TICK_HZ, Tuning, Vector, spawn_mech, step_mech};
+use crate::{Arena, Arsenal, DT, Input, Loadout, Mech, MechClass, Slot, TICK_HZ, Tuning, Vector, spawn_mech, step_mech};
 
 /// A waypoint links to another this close when a mech can walk there.
 const LINK_RANGE: f32 = 35.0;
@@ -455,9 +457,9 @@ impl Bot {
     }
 
     /// Falling back: to the spot, then holding it, out of sight of `target` if any. A mending bot
-    /// repairs once there and hidden (an orb mends by itself), a Light speed boosts away, and a
-    /// Heavy raises its bulwark when hit on the way; a Medium vents if it can. Hit with a shield
-    /// dome to hand, it puts it up.
+    /// repairs once there and hidden (an orb mends by itself), speed boosts or slips away under
+    /// camouflage, and raises a bulwark when hit on the way; one overheated vents if it can. Hit
+    /// with a shield dome to hand, it puts it up.
     #[allow(clippy::too_many_arguments)]
     fn hold(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, r: Retreat, target: Option<&Mech>, hit: bool, tick: u32) -> Input {
         let spot = Mech { pos: r.spot, ..Mech::default() };
@@ -469,10 +471,11 @@ impl Bot {
         let seen = target.is_some_and(|m| sees(arena, t, me, m));
         let at_orb = self.orbs.iter().any(|o| flat(*o - me.pos).length() < AT_ORB);
         input.repair = r.why == Why::Mend && here && !seen && !at_orb;
-        input.ability = match me.class {
-            MechClass::A => r.why == Why::Mend && !here,
-            MechClass::B => me.overheated,
-            MechClass::C => r.why == Why::Mend && hit,
+        input.ability = match Ability::of(me.loadout) {
+            Ability::Slipstream | Ability::Cloak => r.why == Why::Mend && !here,
+            Ability::Vent => me.overheated,
+            Ability::Brace => r.why == Why::Mend && hit,
+            Ability::Power | Ability::Barrage | Ability::Artillery => false,
         };
         input.emp = hit && me.emps > 0 && Item::of(me.loadout, false) == Item::Dome;
         input
@@ -623,7 +626,8 @@ impl Bot {
     }
 
     /// A build for this life, as a player would pick in the hangar: any primary and secondary,
-    /// rolled again until the guardrails (`sensible`) pass, and items it knows how to use.
+    /// rolled again until the guardrails (`sensible`) pass, and items it knows how to use and an
+    /// ability that fits the class.
     pub fn pick_loadout(&mut self, arsenal: &Arsenal, class: MechClass) -> Loadout {
         let (primaries, secondaries) = arsenal.counts();
         loop {
@@ -633,7 +637,9 @@ impl Bot {
                 // Off the state without drawing from it, so the rest of a life rolls as before.
                 let offensive = [Item::Grenade, Item::MgTurret, Item::RocketTurret][(self.rng >> 20) as usize % 3];
                 let support = [Item::Emp, Item::Dome, Item::Barrier][(self.rng >> 40) as usize % 3];
-                return Loadout { offensive: offensive.index(), support: support.index(), ..loadout };
+                let fitting: Vec<u8> = (0..).map_while(|i| arsenal::weapon(Slot::Ability, i).map(|_| i)).filter(|&i| arsenal::fits(class, Slot::Ability, i)).collect();
+                let ability = fitting[(self.rng >> 30) as usize % fitting.len()];
+                return Loadout { offensive: offensive.index(), support: support.index(), ability, ..loadout };
             }
         }
     }
@@ -759,7 +765,7 @@ impl Bot {
                 self.cooling = false;
             }
             // Badly hurt, or too hot with no vent to hand: fall back, to an orb or out of sight.
-            let vent = me.class == MechClass::B && me.ability_cooldown <= 0.0;
+            let vent = Ability::of(me.loadout) == Ability::Vent && me.ability_cooldown <= 0.0;
             let why = if me.health < RETREAT_HULL * t.health_max {
                 Some(Why::Mend)
             } else if self.cooling && !vent {
@@ -831,12 +837,16 @@ impl Bot {
                         Item::Dome => took_damage && me.health < DOME_HULL * t.health_max,
                         _ => false,
                     },
-                // Lights speed boost to close on a far target; Mediums vent before stalling;
-                // Heavies raise their bulwark once hurt and under fire.
-                ability: match me.class {
-                    MechClass::A => range > far,
-                    MechClass::B => me.overheated || me.heat >= 0.8 * t.heat_max,
-                    MechClass::C => took_damage && me.health < 0.75 * t.health_max,
+                // Speed boost to close on a far target; vent before stalling; raise the bulwark
+                // once hurt and under fire; power up a volley as it goes, and boost a fight once
+                // on target in range. Camouflage is for falling back (see `hold`).
+                ability: match Ability::of(me.loadout) {
+                    Ability::Slipstream => range > far,
+                    Ability::Vent => me.overheated || me.heat >= 0.8 * t.heat_max,
+                    Ability::Brace => took_damage && me.health < 0.75 * t.health_max,
+                    Ability::Power => alt_fire,
+                    Ability::Barrage | Ability::Artillery => fire && range <= far,
+                    Ability::Cloak => false,
                 },
                 ..Input::default()
             };
@@ -865,8 +875,8 @@ impl Bot {
             pitch: me.pitch * 0.9,
             // Boost on long legs only: at boost speed a bot overshoots turns onto ramps.
             boost: range > far && me.fuel > 0.5 * t.fuel_max && toward.length() > BOOST_LEG,
-            // Lights speed boost on long runs.
-            ability: me.class == MechClass::A && range > far,
+            // Speed boost on long runs.
+            ability: Ability::of(me.loadout) == Ability::Slipstream && range > far,
             hover: tick < self.hover_until,
             // Hurt and out of sight: stop and repair until full or seen again.
             repair: me.repair_time > 0.0 || me.health < 0.3 * t.health_max,
@@ -1371,6 +1381,9 @@ mod tests {
             assert!(builds.iter().all(|&l| sensible(arsenal.get(class, l))), "a build past the guardrails");
             let distinct = |f: fn(&Loadout) -> u8| builds.iter().map(f).collect::<std::collections::HashSet<u8>>().len();
             assert_eq!((distinct(|l| l.primary), distinct(|l| l.secondary)), (primaries, secondaries), "{class:?} never rolled some weapon");
+            let fitting = (0..).map_while(|i| arsenal::weapon(Slot::Ability, i)).enumerate().filter(|&(i, _)| arsenal::fits(class, Slot::Ability, i as u8)).count();
+            assert!(builds.iter().all(|l| arsenal::fits(class, Slot::Ability, l.ability)), "{class:?} rolled an ability that doesn't fit");
+            assert_eq!(distinct(|l| l.ability), fitting, "{class:?} never rolled some ability");
         }
         let all = (0..primaries as u8).flat_map(|p| (0..secondaries as u8).map(move |s| (p, s)));
         assert!(all.into_iter().any(|(p, s)| !sensible(build(&arsenal, p, s))), "the guardrails turn nothing away");

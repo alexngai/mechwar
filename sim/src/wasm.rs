@@ -121,9 +121,9 @@ impl WasmSim {
 
     /// Class 0 = A, 1 = B, 2 = C, carrying weapons.json's `primary` and `secondary`, and its
     /// `offensive` and `support` items. Takes effect at once; call `reset` to respawn in it.
-    pub fn set_class(&mut self, class: u8, primary: u8, secondary: u8, offensive: u8, support: u8) {
+    pub fn set_class(&mut self, class: u8, primary: u8, secondary: u8, offensive: u8, support: u8, ability: u8) {
         self.sim.class = MechClass::from_index(class).unwrap_or_default();
-        self.sim.loadout = Loadout { primary, secondary, offensive, support };
+        self.sim.loadout = Loadout { primary, secondary, offensive, support, ability };
         self.retune();
         (self.sim.mech.class, self.sim.mech.loadout) = (self.sim.class, self.sim.loadout);
     }
@@ -241,7 +241,7 @@ impl WasmNetClient {
     }
 
     /// Bytes spending unlock points on entry `index` of slot 0 = primaries, 1 = secondaries,
-    /// 2 = offensive items, 3 = support items, for class 0 = A, 1 = B, 2 = C.
+    /// 2 = offensive items, 3 = support items, 4 = abilities, for class 0 = A, 1 = B, 2 = C.
     pub fn unlock(&self, class: u8, slot: u8, index: u8) -> Vec<u8> {
         self.0.unlock_msg(MechClass::from_index(class).unwrap_or_default(), Slot::from_index(slot).unwrap_or(Slot::Primary), index)
     }
@@ -289,9 +289,9 @@ impl WasmNetClient {
     }
 
     /// Bytes asking for class 0 = A, 1 = B, 2 = C carrying weapons.json's `primary` and
-    /// `secondary`, and its `offensive` and `support` items, at the next spawn.
-    pub fn pick(&self, class: u8, primary: u8, secondary: u8, offensive: u8, support: u8) -> Vec<u8> {
-        self.0.pick(MechClass::from_index(class).unwrap_or_default(), Loadout { primary, secondary, offensive, support })
+    /// `secondary`, its `offensive` and `support` items, and its `ability`, at the next spawn.
+    pub fn pick(&self, class: u8, primary: u8, secondary: u8, offensive: u8, support: u8, ability: u8) -> Vec<u8> {
+        self.0.pick(MechClass::from_index(class).unwrap_or_default(), Loadout { primary, secondary, offensive, support, ability })
     }
 
     /// `mech_state` plus the render offset (3 floats) that smooths corrections.
@@ -306,8 +306,9 @@ impl WasmNetClient {
         ray_distance(self.0.arena(), [ox, oy, oz], [dx, dy, dz], max)
     }
 
-    /// Eighteen floats per remote mech: id, team, class, feet xyz, yaw, pitch, health, boosting, hovering, bot,
-    /// ability active, repairing, primary, secondary, docked (in the hangar: not drawn), shielded.
+    /// Nineteen floats per remote mech: id, team, class, feet xyz, yaw, pitch, health, boosting, hovering, bot,
+    /// ability on, repairing, primary, secondary, docked (in the hangar: not drawn), shielded, ability (an
+    /// index into weapons.json's abilities).
     pub fn remotes(&self, now: f64) -> Vec<f32> {
         let b = |v: bool| if v { 1.0 } else { 0.0 };
         self.0
@@ -315,7 +316,7 @@ impl WasmNetClient {
             .iter()
             .flat_map(|p| {
                 let v = &p.view;
-                [f32::from(p.id), f32::from(p.team), p.class.index() as f32, v.pos.x, v.pos.y, v.pos.z, v.yaw, v.pitch, v.health, b(v.boosting), b(v.hovering), b(p.bot), b(v.ability), b(v.repairing), f32::from(p.loadout.primary), f32::from(p.loadout.secondary), b(p.docked), b(v.shielded)]
+                [f32::from(p.id), f32::from(p.team), p.class.index() as f32, v.pos.x, v.pos.y, v.pos.z, v.yaw, v.pitch, v.health, b(v.boosting), b(v.hovering), b(p.bot), b(v.ability), b(v.repairing), f32::from(p.loadout.primary), f32::from(p.loadout.secondary), b(p.docked), b(v.shielded), f32::from(p.loadout.ability)]
             })
             .collect()
     }
@@ -353,7 +354,7 @@ impl WasmNetClient {
     /// id (-1 until welcomed), kills, deaths, ping ms, last correction m, full (0/1), team,
     /// team 0 score, team 1 score, seconds left, ended (0/1), winner (-1 for none or a draw), class,
     /// next match's map, primary, secondary, seconds until we can launch from the hangar (-1 when
-    /// out in the arena), offensive item, support item.
+    /// out in the arena), offensive item, support item, ability.
     pub fn hud(&self) -> Vec<f32> {
         let (c, s) = (&self.0, &self.0.state);
         vec![
@@ -376,6 +377,7 @@ impl WasmNetClient {
             c.hangar.unwrap_or(-1.0),
             f32::from(c.loadout.offensive),
             f32::from(c.loadout.support),
+            f32::from(c.loadout.ability),
         ]
     }
 }

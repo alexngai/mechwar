@@ -35,5 +35,8 @@ const priceOf = (id) => Object.values(weapons).flat().find((w) => w.id === id)?.
 export const pointsLeft = (record) =>
   Math.max(0, POINTS_PER_LEVEL * (record.level - 1) - Object.values(record.unlocks ?? {}).flat().reduce((sum, id) => sum + priceOf(id), 0));
 
-/** Whether mech `key` (`A`, `B`, `C`) may carry weapon or item `id` under `record` (null: its own only). */
+/** Whether mech `key` (`A`, `B`, `C`) may carry weapons.json entry `w` at all: one listing `classes` fits only those. */
+export const fits = (key, w) => !w.classes || w.classes.includes(key);
+
+/** Whether mech `key` (`A`, `B`, `C`) may carry weapon, item or ability `id` under `record` (null: its own only). */
 export const owns = (record, key, id) => Object.values(classes[key].weapons).includes(id) || (record?.unlocks?.[key] ?? []).includes(id);

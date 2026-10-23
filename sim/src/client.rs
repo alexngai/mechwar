@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
+use crate::ability::{self, Ability};
 use crate::deploy::{self, Deployable};
 use crate::item::Item;
 use crate::net::{self, ClientMsg, Cloud, Event, InputMsg, MatchState, Orb, PlayerNet, ServerMsg, Snapshot};
@@ -180,7 +181,7 @@ impl NetClient {
         // Lock-on, against enemies where they were last seen.
         let t = self.arsenal.of(&self.mech);
         if t.alt_lock_time > 0.0 {
-            let chests: Vec<_> = self.obstacles.iter().filter(|(_, team, m)| *team != self.team && m.health > 0.0).map(|(id, _, m)| (*id, m.pos + Vector::Y * (self.arsenal.of(m).mech_height * 0.5))).collect();
+            let chests: Vec<_> = self.obstacles.iter().filter(|(_, team, m)| *team != self.team && m.health > 0.0 && !ability::on(m, Ability::Cloak)).map(|(id, _, m)| (*id, m.pos + Vector::Y * (self.arsenal.of(m).mech_height * 0.5))).collect();
             let t = t.clone();
             projectile::track(&self.arena, &t, &mut self.mech, &chests);
         }
@@ -212,7 +213,7 @@ impl NetClient {
         self.projectiles.retain_mut(|p| {
             let enemies = || obstacles.iter().filter(|(_, t, m)| *t != team && m.health > 0.0).map(|(_, _, m)| (arsenal.of(m), m));
             let t = projectile::tuning_for(arsenal.get(p.class, p.loadout), p);
-            if let Some((_, _, m)) = obstacles.iter().find(|(id, _, _)| p.target == id + 1) {
+            if let Some((_, _, m)) = obstacles.iter().find(|(id, _, m)| p.target == id + 1 && !ability::on(m, Ability::Cloak)) {
                 projectile::home(&t, p, m.pos + Vector::Y * (arsenal.of(m).mech_height * 0.5));
             }
             let hit = projectile::fly(arena, &t, p, |ray, max| {
@@ -336,8 +337,12 @@ impl NetClient {
                 .players
                 .iter()
                 .filter(|p| p.id != own)
-                // Repairing ones crouch (`hit_shape`); any repair time will do.
-                .map(|p| (p.id, p.team, Mech { class: p.class, loadout: p.loadout, pos: p.view.pos, health: p.view.health, repair_time: if p.view.repairing { DT } else { 0.0 }, ..Mech::default() }))
+                // Repairing ones crouch (`hit_shape`), and camouflaged ones can't be locked or homed
+                // on (`ability::on`); any repair or ability time will do.
+                .map(|p| {
+                    let (repair_time, ability_time) = (if p.view.repairing { DT } else { 0.0 }, if p.view.ability { DT } else { 0.0 });
+                    (p.id, p.team, Mech { class: p.class, loadout: p.loadout, pos: p.view.pos, health: p.view.health, repair_time, ability_time, ..Mech::default() })
+                })
                 .collect();
             // Reconcile: take the server's state at ack_seq and replay what it hasn't seen yet.
             let predicted = self.mech.pos;
@@ -365,9 +370,9 @@ impl NetClient {
             match *e {
                 Event::Launch(p) if !self.predicts(p.id()) => self.replays.push(Replay { launched: s.tick, p, flown: 0, done: false }),
                 Event::Launch(_) => {}
-                Event::Blast { owner, seq, n, primary, class, loadout, charge, pos, hits } => {
+                Event::Blast { owner, seq, n, primary, class, loadout, charge, boosted, pos, hits } => {
                     let id = (owner, seq, n, primary);
-                    let shape = Projectile { owner, seq, n, primary, class, loadout, charge, target: 0, pos, vel: Vector::ZERO, age: 0.0 };
+                    let shape = Projectile { owner, seq, n, primary, class, loadout, charge, boosted, target: 0, pos, vel: Vector::ZERO, age: 0.0 };
                     let radius = projectile::radius(self.arsenal.get(class, loadout), &shape);
                     self.hits.extend((0..16).filter(|v| hits & 1 << v != 0).map(|v| (owner, v)));
                     if !self.predicts(id) {
@@ -427,9 +432,10 @@ impl NetClient {
         let mut drawn: Vec<Drawn> = self.projectiles.iter().map(|&p| Drawn { p, predicted: true }).collect();
         for r in &mut self.replays {
             let t = projectile::tuning_for(self.arsenal.get(r.p.class, r.p.loadout), &r.p);
-            // A homing shell turns toward its target as it last stood (or as we stand, if it's us).
+            // A homing shell turns toward its target as it last stood (or as we stand, if it's us),
+            // unless camouflage hides it.
             let us = self.id.map(|id| (id, self.team, self.mech));
-            let goal = self.obstacles.iter().chain(us.iter()).find(|(id, _, _)| r.p.target == id + 1).map(|(_, _, m)| m.pos + Vector::Y * (self.arsenal.of(m).mech_height * 0.5));
+            let goal = self.obstacles.iter().chain(us.iter()).find(|(id, _, m)| r.p.target == id + 1 && !ability::on(m, Ability::Cloak)).map(|(_, _, m)| m.pos + Vector::Y * (self.arsenal.of(m).mech_height * 0.5));
             // State after `flown` ticks is as of tick `launched - 1 + flown`.
             let due = (at - r.launched as f32 + 1.0).floor().max(0.0) as u32;
             while r.flown < due && !r.done {

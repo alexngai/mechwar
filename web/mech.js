@@ -127,6 +127,8 @@ const cyl = (top, bottom, h, mat) => new THREE.Mesh(new THREE.CylinderGeometry(t
 const damp = (from, to, rate, dt) => from + (to - from) * (1 - Math.exp(-rate * dt));
 const clamp = THREE.MathUtils.clamp;
 const DASH_TRAIL = 0.2; // s of smoke laid behind a dash
+/** Effects that go nowhere: what a camouflaged mech emits. */
+const QUIET = new Proxy({}, { get: () => () => {} });
 const DASH_SPOT = 22; // m/s sideways, and mostly sideways: only a dash does that (a diagonal boost doesn't)
 const REPAIR_GLOW = 0x6dff9a;
 
@@ -493,11 +495,11 @@ export function showRound(pod, ready) {
 }
 
 /** The weapons.json list for each loadout slot. */
-export const LISTS = { primary: 'primaries', secondary: 'secondaries', offensive: 'offensive', support: 'support' };
+export const LISTS = { primary: 'primaries', secondary: 'secondaries', offensive: 'offensive', support: 'support', ability: 'abilities' };
 
 /**
- * Class `cls`'s own weapons and items as a loadout: indices into weapons.json's primaries,
- * secondaries, offensive and support items.
+ * Class `cls`'s own weapons, items and ability as a loadout: indices into weapons.json's
+ * primaries, secondaries, offensive and support items, and abilities.
  */
 export function ownLoadout(cls) {
   const own = (classes[cls] ?? classes.B).weapons;
@@ -549,7 +551,7 @@ export class Mech {
     this.weapons = armament(loadout);
     this.height = spec.height;
     this.scene = scene;
-    this.fx = fx;
+    this.fx = this.realFx = fx;
     this.team = -1;
     this.unit = -1;
     /** The player's own mech: its sounds play flat, as heard from the cockpit. */
@@ -566,6 +568,9 @@ export class Mech {
     this.flicker = 0;
     this.barrels = new THREE.MeshLambertMaterial({ color: 0x2a2c30, flatShading: true });
     this.nozzleMat = new THREE.MeshLambertMaterial({ color: 0x3a2f28, flatShading: true });
+    // Camouflage draws every part in this, faintly (see `update`).
+    this.ghostMat = new THREE.MeshBasicMaterial({ color: 0x9fd8ff, transparent: true, opacity: 0, depthWrite: false });
+    this.cloaked = false;
     this.t = 0;
     this.phase = 0;
     this.squash = 0;
@@ -686,8 +691,9 @@ export class Mech {
 
   /**
    * Pose from sim state: { pos, yaw, pitch, scale, vel, grounded, boosting, hovering, health,
-   * heat (0-1), overheated, ability (active), damage (0 full health to 1), repair (0 none, wind-up
-   * fraction, 1 healing) }. Also emits thruster, footstep, smoke, spark and death effects.
+   * heat (0-1), overheated, ability (on), damage (0 full health to 1), repair (0 none, wind-up
+   * fraction, 1 healing), cloak (how faint camouflage shows it, 0 for not hidden) }. Also emits
+   * thruster, footstep, smoke, spark and death effects.
    */
   update(dt, s) {
     this.t += dt;
@@ -745,7 +751,7 @@ export class Mech {
     const bob = moving ? spec.bob * (1 + Math.cos(2 * this.phase)) * Math.min(speed / 6, 1) : 0;
     const sway = alive && s.hovering ? 0.06 * Math.sin(this.t * 5) : 0;
     // The bulwark sinks the Heavy into a lower stance.
-    this.brace = damp(this.brace, alive && s.ability && this.cls === 'C' ? 1 : 0, 8, dt);
+    this.brace = damp(this.brace, alive && s.ability && this.weapons.ability.id === 'brace' ? 1 : 0, 8, dt);
     // Shut down for repair: it crouches as low as its hit shape does (CROUCH in sim/src/lib.rs)
     // and the guns droop.
     const repair = alive ? s.repair ?? 0 : 0;
@@ -805,7 +811,7 @@ export class Mech {
 
     root.updateMatrixWorld(true);
     const thrusting = alive && (s.boosting || s.hovering);
-    const slipstream = alive && s.ability && this.cls === 'A';
+    const slipstream = alive && s.ability && this.weapons.ability.id === 'slipstream';
     if (slipstream) this.nozzleMat.emissive.setRGB(0.4, 0.7, 1);
     else this.nozzleMat.emissive.setRGB(thrusting ? 1 : 0.15, thrusting ? 0.45 : 0.05, 0);
     if (thrusting) {
@@ -850,6 +856,21 @@ export class Mech {
     this.wear.uWreck.value = this.wreck;
     this.wear.uFlash.value = this.flash;
     this.plateMat.color.setScalar(1 - 0.85 * this.wreck);
+
+    // Camouflage: every part swaps to the ghost material, casting no shadow, shimmering faintly;
+    // glows go dark and effects (thrust, dust, smoke, sparks) stop until it drops.
+    const cloaked = alive && s.cloak > 0;
+    if (cloaked !== this.cloaked) {
+      this.cloaked = cloaked;
+      this.fx = cloaked ? QUIET : this.realFx;
+      root.traverse((o) => {
+        if (o.isSprite) o.visible = !cloaked;
+        if (!o.isMesh || o === this.shell) return;
+        if (cloaked) [o.userData.coat, o.userData.shadow, o.material, o.castShadow] = [o.material, o.castShadow, this.ghostMat, false];
+        else [o.material, o.castShadow] = [o.userData.coat, o.userData.shadow];
+      });
+    }
+    if (cloaked) this.ghostMat.opacity = s.cloak * (0.75 + 0.25 * Math.sin(this.t * 6));
   }
 
   /** Drone over the backpack: rises with the wind-up, then circles and beams while healing. */
@@ -910,13 +931,14 @@ export class Mech {
     return from;
   }
 
-  /** One-off cue when the class ability fires: Vent steam, a Speed boost kick, or a Bulwark pulse. */
+  /** One-off cue when the ability's used: Vent steam, a Speed boost kick, or a pulse for the rest. */
   ability() {
-    Mech.audio?.ability(this.cls, this.own ? null : this.body.getWorldPosition(world));
-    if (this.cls === 'B') {
+    const id = this.weapons.ability.id;
+    Mech.audio?.ability(id, this.own ? null : this.body.getWorldPosition(world));
+    if (id === 'vent') {
       this.fx.steam(this.body.getWorldPosition(world));
       for (const gun of this.guns) this.fx.steam(gun.tip.getWorldPosition(world));
-    } else if (this.cls === 'A') {
+    } else if (id === 'slipstream') {
       this.fx.burst(this.body.getWorldPosition(world), flame.set(0, -0.2, 1).applyQuaternion(this.root.quaternion));
     } else {
       this.flash = 0.6;
@@ -936,7 +958,7 @@ export class Mech {
     this.root.traverse((o) => o.geometry?.dispose());
     this.root.traverse((o) => o.isSprite && o.material.dispose());
     this.plateMat.map.dispose();
-    for (const m of [this.hull, this.hullCurved, this.pods, this.trim, this.hazard, this.accent, this.plateMat, this.barrels, this.nozzleMat, this.shellMat, this.beamMat]) m.dispose();
+    for (const m of [this.hull, this.hullCurved, this.pods, this.trim, this.hazard, this.accent, this.plateMat, this.barrels, this.nozzleMat, this.shellMat, this.beamMat, this.ghostMat]) m.dispose();
   }
 }
 

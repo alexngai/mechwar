@@ -7,6 +7,7 @@ use std::collections::VecDeque;
 use rapier3d::parry::query::RayCast;
 use rapier3d::prelude::{Pose, Ray, Rotation};
 
+use crate::ability::{self, Ability};
 use crate::arsenal;
 use crate::bot::{self, Bot, Nav};
 use crate::collide;
@@ -397,7 +398,7 @@ impl Game {
             let enemies: Vec<(u8, Mech, f32)> = self
                 .players
                 .iter()
-                .filter(|q| q.team != me.team && q.mech.health > 0.0 && q.mech.shield <= 0.0)
+                .filter(|q| q.team != me.team && q.mech.health > 0.0 && q.mech.shield <= 0.0 && !cloaked(q))
                 .map(|q| (q.id, q.mech, hurt(q)))
                 .collect();
             let (team, id) = (usize::from(me.team), me.id);
@@ -520,7 +521,7 @@ impl Game {
                 }
                 if self.arsenal.of(&self.players[i].mech).alt_lock_time > 0.0 {
                     let team = self.players[i].team;
-                    let chests = self.chests(|q| q.team != team);
+                    let chests = self.chests(|q| q.team != team && !cloaked(q));
                     let t = self.arsenal.of(&self.players[i].mech).clone();
                     projectile::track(&self.arena, &t, &mut self.players[i].mech, &chests);
                 }
@@ -546,7 +547,7 @@ impl Game {
         // half the shooter's RTT if hits feel late.
         let mut flying = std::mem::take(&mut self.projectiles);
         let mut bursts = Vec::new();
-        let chests = self.chests(|_| true);
+        let chests = self.chests(|q| !cloaked(q));
         let sizes = items(&self.arsenal);
         flying.retain_mut(|f| {
             let enemies = || {
@@ -753,7 +754,7 @@ impl Game {
             // After the match ends shots still fly, but don't hit anyone.
             let hit = hit.filter(|_| matches!(self.phase, Phase::Playing { .. }));
             self.events.push(Event::Shot { shooter: shooter_id, end: ray.point_at(best), hit: hit.map(|j| self.players[j].id) });
-            let damage = t.shot_damage * weapon::power(t, m.shot_charge) * weapon::falloff(t, best);
+            let damage = t.shot_damage * weapon::power(t, m.shot_charge) * weapon::falloff(t, best) * ability::damage_mult(t, m);
             hits.extend(hit.map(|j| (j, damage)));
             wrecks.extend(turret.map(|(k, _)| (k, damage)));
         }
@@ -817,7 +818,7 @@ impl Game {
                 self.apply_damage_by(attacker, j, damage, cause);
             }
         }
-        self.events.push(Event::Blast { owner: p.owner, seq: p.seq, n: p.n, primary: p.primary, class: p.class, loadout: p.loadout, charge: p.charge, pos: at, hits });
+        self.events.push(Event::Blast { owner: p.owner, seq: p.seq, n: p.n, primary: p.primary, class: p.class, loadout: p.loadout, charge: p.charge, boosted: p.boosted, pos: at, hits });
         for bomblet in projectile::split(self.arsenal.get(p.class, p.loadout), &p, at) {
             self.events.push(Event::Launch(bomblet));
             self.projectiles.push(Flying { p: bomblet, team });
@@ -893,7 +894,7 @@ impl Game {
                 dist <= range && arena.cast_ray(&ray, dist).is_none() && !item::hidden(clouds, gun, chest) && deploy::stops(deployables, t, &ray, dist).is_none()
             };
             let target = (self.players.iter())
-                .filter(|q| q.team != d.team && q.mech.health > 0.0 && q.mech.shield <= 0.0)
+                .filter(|q| q.team != d.team && q.mech.health > 0.0 && q.mech.shield <= 0.0 && !cloaked(q))
                 .map(|q| (q.mech.pos + Vector::Y * (self.arsenal.of(&q.mech).mech_height * 0.5), q.mech.vel))
                 .filter(|&(chest, _)| sighted(chest))
                 .min_by(|a, b| a.0.distance(gun).total_cmp(&b.0.distance(gun)));
@@ -915,8 +916,8 @@ impl Game {
                 d.ready = tick + secs(t.rocket_turret_cooldown);
                 let dir = Rotation::from_rotation_y(d.yaw) * Rotation::from_rotation_x(d.pitch) * Vector::NEG_Z;
                 let p = Projectile {
-                    owner: d.owner, seq: tick, n: projectile::TURRET, primary: false, class: MechClass::B, loadout: rocket, charge: 0.0, target: 0,
-                    pos: gun, vel: dir * rt.alt_speed, age: 0.0,
+                    owner: d.owner, seq: tick, n: projectile::TURRET, primary: false, class: MechClass::B, loadout: rocket, charge: 0.0, boosted: false,
+                    target: 0, pos: gun, vel: dir * rt.alt_speed, age: 0.0,
                 };
                 self.events.push(Event::Launch(p));
                 self.projectiles.push(Flying { p, team: d.team });
@@ -980,7 +981,7 @@ impl Game {
         if let Some(toi) = deploy::stops(&self.deployables, t, &Ray::new(eye, (end - eye).normalize_or_zero()), end.distance(eye)) {
             (end, hit) = (eye + (end - eye).normalize_or_zero() * toi, None);
         }
-        let (owner, team, heal, burn) = (u.id, u.team, t.alt_beam_heal * DT, t.alt_damage * DT);
+        let (owner, team, heal, burn) = (u.id, u.team, t.alt_beam_heal * DT, t.alt_damage * DT * ability::damage_mult(t, &u.mech));
         self.players[user].mech.beam_end = end;
         self.events.push(Event::Beam { owner, end, hit });
         let Some(j) = hit.and_then(|id| self.players.iter().position(|q| q.id == id)) else { return };
@@ -1012,7 +1013,7 @@ impl Game {
             return;
         }
         let tt = self.arsenal.of(&target.mech);
-        let braced = target.mech.class == MechClass::C && target.mech.ability_time > 0.0;
+        let braced = ability::on(&target.mech, Ability::Brace);
         let damage = amount * if braced { tt.brace_damage_mult } else { 1.0 };
         let respawn_at = self.tick + secs(tt.respawn_delay);
         let (tick, from) = (self.tick, attacker.map(|a| (self.players[a].id, self.players[a].mech.pos)));
@@ -1124,6 +1125,13 @@ impl Game {
             state: self.match_state(),
         }
     }
+}
+
+/// Whether player `q` is camouflaged: out of sight of bots, turrets and lock-on.
+/// ponytail: snapshots still carry a hidden mech's position, so a hacked client can show it;
+/// leave it out of others' snapshots if that's ever abused.
+fn cloaked(q: &Player) -> bool {
+    ability::on(&q.mech, Ability::Cloak)
 }
 
 impl Game {
@@ -1466,6 +1474,62 @@ mod tests {
         let t = game.arsenal.of(&a);
         let d = b.pos + Vector::Y * (game.arsenal.of(&b).mech_height * 0.5) - (a.pos + Vector::Y * t.eye_height);
         Input { yaw: libm::atan2f(-d.x, -d.z), pitch: (d.y / d.length()).asin(), ..Input::default() }
+    }
+
+    #[test]
+    fn power_shots_hit_harder_once() {
+        let (mut game, owner, enemy) = standoff("emp");
+        game.pick(owner, MechClass::B, Loadout { ability: arsenal::index(Slot::Ability, "power"), ..Loadout::of(MechClass::B) });
+        unshield(&mut game);
+        let t = game.arsenal.of(&mech(&game, owner)).clone();
+        game.step(); // so shots have somewhere to rewind the enemy to
+        // A plain shot, a powered one, then plain again.
+        let aim = aim_at(&game, owner, enemy);
+        let mut dealt = Vec::new();
+        for ability in [false, true, false] {
+            let before = mech(&game, enemy).health;
+            send(&mut game, owner, Input { fire: true, ability, ..aim });
+            game.step();
+            dealt.push(before - mech(&game, enemy).health);
+            for _ in 0..10 {
+                send(&mut game, owner, aim);
+                game.step();
+            }
+        }
+        let want = [t.shot_damage, t.shot_damage * t.power_damage_mult, t.shot_damage];
+        assert!(dealt.iter().zip(want).all(|(d, w)| (d - w).abs() < 1e-3), "dealt {dealt:?}, want {want:?}");
+    }
+
+    #[test]
+    fn turrets_hold_fire_on_camouflage_until_it_drops() {
+        let t = Tuning { mg_turret_spread_deg: 0.0, ..Tuning::default() };
+        let (mut game, owner, foes) = turret_range(t.clone(), "mg_turret", &[Vector::new(0.0, 0.1, 22.0)]);
+        let light = MechClass::A;
+        game.pick(foes[0], light, Loadout { ability: arsenal::index(Slot::Ability, "cloak"), ..Loadout::of(light) });
+        unshield(&mut game);
+        send(&mut game, owner, Input { grenade: true, ..Input::default() });
+        send(&mut game, foes[0], Input { ability: true, ..Input::default() });
+        game.step();
+        let fired = |game: &Game| game.events.iter().any(|e| matches!(e, Event::TurretShot { .. }));
+        let mut ticks = 1;
+        // The foe idles, as a client sends input every tick.
+        loop {
+            send(&mut game, foes[0], Input::default());
+            game.step();
+            ticks += 1;
+            if !ability::on(&mech(&game, foes[0]), Ability::Cloak) {
+                break;
+            }
+            assert!(!fired(&game), "fired on a hidden mech after {ticks} ticks");
+        }
+        assert!(ticks >= secs(t.cloak_duration), "the camouflage dropped early");
+        let mut shot = false;
+        for _ in 0..secs(2.0) {
+            send(&mut game, foes[0], Input::default());
+            game.step();
+            shot |= fired(&game);
+        }
+        assert!(shot, "never fired once it showed");
     }
 
     #[test]
@@ -1813,7 +1877,7 @@ mod tests {
         unshield(&mut game);
         // The bot's rocket, 2 m past the human's chest and flying on.
         let chest = Vector::new(0.0, 0.1 + t.mech_height * 0.5, 0.0);
-        let p = Projectile { owner: bot, seq: 1, n: 0, primary: false, class: MechClass::B, loadout: Loadout::named("pike", "rocket"), charge: 0.0, target: 0, pos: chest + Vector::Z * 2.0, vel: Vector::Z * t.alt_speed, age: 0.5 };
+        let p = Projectile { owner: bot, seq: 1, n: 0, primary: false, class: MechClass::B, loadout: Loadout::named("pike", "rocket"), charge: 0.0, boosted: false, target: 0, pos: chest + Vector::Z * 2.0, vel: Vector::Z * t.alt_speed, age: 0.5 };
         game.projectiles.push(Flying { p, team: 1 });
         game.step();
         let hits = game.events.iter().find_map(|e| if let Event::Blast { owner, hits, .. } = *e { Some((owner, hits)) } else { None });
