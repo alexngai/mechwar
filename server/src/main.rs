@@ -2,12 +2,19 @@
 //! its own match on its own 30 Hz loop (a tokio task); each connection gets a reader and a writer
 //! task and joins one room. Env: `PORT` (9001), `STATIC_DIR` (`dist`), `LAG_MS` (one-way delay
 //! for testing), and quick play's room settings: `MAP` (one map; else the rotation),
-//! `SCORE_LIMIT`, `MATCH_SECONDS`, `BOT_SKILL` (`easy`, `normal`, `hard`, or 0 to 1).
+//! `SCORE_LIMIT`, `MATCH_SECONDS`, `BOT_SKILL` (`easy`, `normal`, `hard`, or 0 to 1). And
+//! `PROGRESS_KEY`, the secret that signs progression records (a dev key stands in without it).
 //!
 //! Lobby API: `GET /api/rooms` lists the public rooms and the maps; `POST /api/rooms` opens one
 //! from JSON settings; `POST /api/quick` picks a quick-play room (opening one if none fits);
 //! `GET /api/rooms/{code}` looks one up. Each room answers with its info, including the `code`
-//! that `/ws?room={code}` joins (`/ws` alone joins quick play).
+//! that `/ws?room={code}` joins (`/ws` alone joins quick play). `POST /api/progress` checks a
+//! progression record (the body) and answers what it holds, or 400.
+//!
+//! Progression has no database: the server signs each pilot's record and their browser keeps it.
+//! A pilot hands theirs over on joining (none or a bad one makes them a fresh guest); the room
+//! counts their match and sends the record back with it added, every few seconds while it's on
+//! and in full at its end.
 
 use std::collections::HashMap;
 use std::future::IntoFuture;
@@ -22,20 +29,26 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use futures_util::{SinkExt, StreamExt};
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use sim::bot::Nav;
 use sim::game::{Game, MAX_PLAYERS};
 use sim::map::{MAPS, ROTATION};
 use sim::net::{self, ClientMsg, ServerMsg};
+use sim::progress::{MatchXp, RECORD_VERSION, Record, Tally};
 use sim::{DT, Map, TICK_HZ, Tuning};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, Instant};
 use tower_http::services::{ServeDir, ServeFile};
 
-/// Clients send ~40-byte inputs; anything bigger is hostile.
-const MAX_MESSAGE_BYTES: usize = 1024;
+/// Clients send ~40-byte inputs, and a progression record of about 1 KB once; anything bigger
+/// is hostile.
+const MAX_MESSAGE_BYTES: usize = 4096;
 /// Most rooms open at once; opening another answers 503.
 const MAX_ROOMS: usize = 32;
 /// Quick play skips a room with less of its match left than this (s), unless between matches.
@@ -46,6 +59,11 @@ const IDLE_PRIVATE: Duration = Duration::from_secs(600);
 /// Room codes: four of these (no 0/O or 1/I lookalikes).
 const CODE_CHARS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const CODE_LEN: usize = 4;
+/// Signs records when the server has no `PROGRESS_KEY`: fine locally, worthless in production.
+const DEV_KEY: &[u8] = b"webhawk-dev-key-not-a-secret";
+/// While a match is on, a pilot's record goes out this often with their match so far (s), so
+/// leaving early loses at most this much.
+const CHECKPOINT_SECONDS: u32 = 10;
 
 /// Outgoing bytes, stamped when queued so `LAG_MS` delays every message by the same amount.
 type Outbox = mpsc::UnboundedSender<(Instant, Vec<u8>)>;
@@ -98,6 +116,46 @@ struct App {
     /// Quick play's settings, and the defaults for anything a new room leaves out.
     quick: Arc<Settings>,
     seed: Arc<AtomicU64>,
+    signer: Signer,
+}
+
+/// Signs progression records and checks them. A record travels as `base64url(json).base64url(tag)`,
+/// the tag its HMAC-SHA256 under the server's key: the browser keeps it but can't change it.
+#[derive(Clone)]
+struct Signer(Hmac<Sha256>);
+
+impl Signer {
+    fn new(key: &[u8]) -> Signer {
+        Signer(Hmac::new_from_slice(key).expect("HMAC takes keys of any length"))
+    }
+
+    fn mac(&self, payload: &[u8]) -> Hmac<Sha256> {
+        let mut mac = self.0.clone();
+        mac.update(payload);
+        mac
+    }
+
+    fn sign(&self, record: &Record) -> String {
+        let payload = B64.encode(serde_json::to_vec(record).expect("records serialize"));
+        let tag = B64.encode(self.mac(payload.as_bytes()).finalize().into_bytes());
+        format!("{payload}.{tag}")
+    }
+
+    /// The record `token` holds, if this key signed it and it's a format this server reads.
+    fn verify(&self, token: &str) -> Option<Record> {
+        let (payload, tag) = token.split_once('.')?;
+        self.mac(payload.as_bytes()).verify_slice(&B64.decode(tag).ok()?).ok()?;
+        let record: Record = serde_json::from_slice(&B64.decode(payload).ok()?).ok()?;
+        (1..=RECORD_VERSION).contains(&record.version).then_some(record)
+    }
+
+    /// A new guest's id: a keyed hash of the time and a count, so unguessable and as good as unique.
+    fn guest_id(&self) -> u64 {
+        static COUNT: AtomicU64 = AtomicU64::new(0);
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let seed = [now.to_le_bytes().as_slice(), &COUNT.fetch_add(1, Ordering::Relaxed).to_le_bytes()].concat();
+        u64::from_le_bytes(self.mac(&seed).finalize().into_bytes()[..8].try_into().expect("8 bytes"))
+    }
 }
 
 #[tokio::main]
@@ -120,16 +178,21 @@ async fn main() {
     if let Ok(v) = env::var("BOT_SKILL") {
         quick.bot_skill = skill(&v).expect("BOT_SKILL must be easy, normal, hard or 0 to 1");
     }
+    let signer = Signer::new(&env::var("PROGRESS_KEY").ok().filter(|k| !k.is_empty()).map(String::into_bytes).unwrap_or_else(|| {
+        eprintln!("warning: no PROGRESS_KEY set, so progression records are signed with the public dev key");
+        DEV_KEY.to_vec()
+    }));
     // Bot nav takes a moment per map: build every map's now, not when a room first loads it.
     thread::spawn(|| (0..MAPS.len()).for_each(|m| _ = Nav::for_map(m)));
 
-    let app = App { rooms: Rooms::default(), lag, quick: Arc::new(quick), seed: Arc::new(AtomicU64::new(seed)) };
+    let app = App { rooms: Rooms::default(), lag, quick: Arc::new(quick), seed: Arc::new(AtomicU64::new(seed)), signer };
     let client = ServeDir::new(&static_dir).fallback(ServeFile::new(format!("{static_dir}/index.html")));
     let router = Router::new()
         .route("/ws", get(upgrade))
         .route("/api/rooms", get(list).post(create))
         .route("/api/rooms/{code}", get(lookup))
         .route("/api/quick", post(quick_play))
+        .route("/api/progress", post(check_progress))
         .fallback_service(client)
         .with_state(app);
 
@@ -195,6 +258,11 @@ async fn quick_play(State(app): State<App>) -> Result<Json<RoomInfo>, (StatusCod
     let mut rooms = app.rooms.lock().expect("rooms lock");
     let code = quick_room(&app, &mut rooms).ok_or((StatusCode::SERVICE_UNAVAILABLE, "too many rooms open"))?;
     Ok(Json(rooms[&code].info.lock().expect("info lock").clone()))
+}
+
+/// A record a pilot brought from another browser, checked: what it holds, or 400.
+async fn check_progress(State(app): State<App>, token: String) -> Result<Json<Record>, (StatusCode, &'static str)> {
+    app.signer.verify(token.trim()).map(Json).ok_or((StatusCode::BAD_REQUEST, "not a record this server signed"))
 }
 
 #[derive(Deserialize)]
@@ -287,7 +355,7 @@ fn open(app: &App, rooms: &mut HashMap<String, Room>, settings: Settings) -> Opt
     rooms.insert(code.clone(), Room { cmds, info: info.clone() });
     println!("room {code} opened: {} ({})", settings.name, if settings.public { "public" } else { "private" });
     let idle = if settings.public { IDLE_PUBLIC } else { IDLE_PRIVATE };
-    let task = tokio::spawn(room_loop(game, cmd_rx, info, idle, settings));
+    let task = tokio::spawn(room_loop(game, cmd_rx, info, idle, settings, app.signer.clone()));
     let (rooms, closing) = (app.rooms.clone(), code.clone());
     tokio::spawn(async move {
         if let Err(e) = task.await {
@@ -329,11 +397,29 @@ fn describe(code: &str, settings: &Settings, game: &Game) -> RoomInfo {
     }
 }
 
+/// A pilot's progression this visit: the record they joined with (plus each match they've seen
+/// out here), and the tally their last record went out with.
+struct Pilot {
+    base: Record,
+    sent: Tally,
+}
+
+/// Message carrying `record`, stamped and with player `id`'s callsign, and signed; `end` is the
+/// match's XP, at its end.
+fn progress_msg(signer: &Signer, game: &Game, id: u8, mut record: Record, end: Option<MatchXp>) -> Vec<u8> {
+    record.callsign = game.name(id).unwrap_or_default().into();
+    record.issued = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    net::encode(&ServerMsg::Progress { record: signer.sign(&record), end })
+}
+
 /// One room's match: applies its players' messages each tick, steps the game and sends everyone
-/// their snapshot. Returns once nobody has been in it for `idle`.
-async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info: Arc<Mutex<RoomInfo>>, idle: Duration, settings: Settings) {
+/// their snapshot, and their progression record now and then. Returns once nobody has been in it
+/// for `idle`.
+async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info: Arc<Mutex<RoomInfo>>, idle: Duration, settings: Settings, signer: Signer) {
     let code = info.lock().expect("info lock").code.clone();
     let mut outboxes: Vec<(u8, Outbox)> = Vec::new();
+    let mut pilots: HashMap<u8, Pilot> = HashMap::new();
+    let mut ended = game.match_state().ended;
     let mut roster_sent = u32::MAX;
     let mut empty_since = Some(Instant::now());
     let mut interval = time::interval(Duration::from_secs_f32(DT));
@@ -354,10 +440,26 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
                 Cmd::Msg(id, ClientMsg::Input(msg)) => game.push_input(id, msg),
                 Cmd::Msg(id, ClientMsg::Pick(class, loadout)) => game.pick(id, class, loadout),
                 Cmd::Msg(id, ClientMsg::Name(name)) => game.set_name(id, &name),
+                // Once a visit: taking another record mid-match would count the match twice.
+                Cmd::Msg(id, ClientMsg::Progress(token)) if !pilots.contains_key(&id) => {
+                    let base = signer.verify(&token).unwrap_or_else(|| {
+                        if !token.is_empty() {
+                            println!("room {code}: player {id}'s record didn't verify; a fresh guest");
+                        }
+                        Record::guest(signer.guest_id(), "")
+                    });
+                    game.set_level(id, base.level);
+                    if let Some((_, out)) = outboxes.iter().find(|(i, _)| *i == id) {
+                        let _ = out.send((Instant::now(), progress_msg(&signer, &game, id, base.clone(), None)));
+                    }
+                    pilots.insert(id, Pilot { base, sent: Tally::default() });
+                }
+                Cmd::Msg(_, ClientMsg::Progress(_)) => {}
                 Cmd::Leave(id) => {
                     println!("room {code}: player {id} left");
                     game.leave(id);
                     outboxes.retain(|(i, _)| *i != id);
+                    pilots.remove(&id);
                 }
             }
         }
@@ -370,6 +472,30 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
         }
         game.step();
         let now = Instant::now();
+        // Progression: everyone's whole match as it ends, and checkpoints while it's on.
+        let state = game.match_state();
+        let checkpoint = !state.ended && game.tick % (CHECKPOINT_SECONDS * TICK_HZ as u32) == 0;
+        if (state.ended && !ended) || checkpoint {
+            for (id, out) in &outboxes {
+                let (Some(pilot), Some((tally, team))) = (pilots.get_mut(id), game.tally(*id)) else { continue };
+                let msg = if state.ended {
+                    let (record, xp) = pilot.base.with(tally, true, state.winner == Some(team));
+                    (pilot.base, pilot.sent) = (record.clone(), Tally::default());
+                    progress_msg(&signer, &game, *id, record, Some(xp))
+                } else if *tally != pilot.sent {
+                    pilot.sent = tally.clone();
+                    progress_msg(&signer, &game, *id, pilot.base.with(tally, false, false).0, None)
+                } else {
+                    continue;
+                };
+                let _ = out.send((now, msg));
+            }
+            for (id, pilot) in &pilots {
+                let level = if state.ended { pilot.base.level } else { pilot.base.with(&pilot.sent, false, false).0.level };
+                game.set_level(*id, level);
+            }
+        }
+        ended = state.ended;
         if game.roster_version() != roster_sent {
             roster_sent = game.roster_version();
             let roster = net::encode(&ServerMsg::Roster(game.roster()));
@@ -474,5 +600,64 @@ mod tests {
     fn settings_parse_and_clean() {
         assert_eq!((skill("easy"), skill("hard"), skill("0.9"), skill("2"), skill("sharp")), (Some(0.25), Some(0.75), Some(0.9), None, None));
         assert_eq!(callsign("  Friday\n night fights, all welcome!!  "), "Friday night fights, all");
+    }
+
+    #[test]
+    fn records_round_trip_and_tampering_is_refused() {
+        let signer = Signer::new(b"a key");
+        let mut tally = Tally::default();
+        tally.kill(Some("pike"), false);
+        let (record, _) = Record::guest(signer.guest_id(), "Ace").with(&tally, true, true);
+        let token = signer.sign(&record);
+        assert_eq!(signer.verify(&token), Some(record));
+
+        let (payload, tag) = token.split_once('.').unwrap();
+        let mut richer: Record = serde_json::from_slice(&B64.decode(payload).unwrap()).unwrap();
+        richer.xp = 1_000_000;
+        let forged = format!("{}.{tag}", B64.encode(serde_json::to_vec(&richer).unwrap()));
+        let mut future = Record::guest(1, "Ace");
+        future.version = RECORD_VERSION + 1;
+        let future = signer.sign(&future);
+        for bad in [forged.as_str(), payload, "", "x.y", &token[..token.len() - 2], &future] {
+            assert_eq!(signer.verify(bad), None, "took {bad:?}");
+        }
+        assert_eq!(Signer::new(b"another key").verify(&token), None);
+        assert_ne!(signer.guest_id(), signer.guest_id());
+    }
+
+    /// Joins a fresh room (on a server with `key`) bringing `record`, sees its one-second match
+    /// out, and returns the record it ends with and the XP it brought.
+    async fn visit(key: &[u8], record: &str) -> (Record, MatchXp) {
+        let settings = Settings { name: "Test".into(), public: false, map: None, score_limit: 25, match_seconds: 1.0, bots: false, bot_skill: 0.5 };
+        let game = new_game(&settings, 1);
+        let info = Arc::new(Mutex::new(describe("TEST", &settings, &game)));
+        let (cmds, cmd_rx) = mpsc::unbounded_channel();
+        let room = tokio::spawn(room_loop(game, cmd_rx, info, IDLE_PUBLIC, settings, Signer::new(key)));
+        let (out, mut inbox) = mpsc::unbounded_channel();
+        let (reply, id) = oneshot::channel();
+        cmds.send(Cmd::Join(out, reply)).unwrap();
+        let id = id.await.unwrap().unwrap();
+        cmds.send(Cmd::Msg(id, ClientMsg::Progress(record.into()))).unwrap();
+        loop {
+            let (_, bytes) = inbox.recv().await.unwrap();
+            if let Some(ServerMsg::Progress { record, end: Some(xp) }) = net::decode(&bytes) {
+                room.abort();
+                return (Signer::new(key).verify(&record).expect("the room signs what it sends"), xp);
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn records_carry_across_a_server_restart() {
+        let key = b"the server's key";
+        let (first, xp) = visit(key, "").await;
+        assert_eq!((xp.completion, first.stats.matches, first.xp), (100, 1, 100));
+        // Each visit is a new room loop and signer, as after a restart: only the key carries over.
+        let (second, _) = visit(key, &Signer::new(key).sign(&first)).await;
+        assert_eq!((&second.id, second.stats.matches, second.xp), (&first.id, 2, 200));
+        // A record from a server with another key (or a forged one) starts a fresh guest.
+        let (fresh, _) = visit(b"another key", &Signer::new(key).sign(&second)).await;
+        assert_ne!(fresh.id, first.id);
+        assert_eq!((fresh.stats.matches, fresh.xp), (1, 100));
     }
 }

@@ -210,6 +210,22 @@ impl WasmNetClient {
         self.0.name_msg(raw)
     }
 
+    /// Level of player `id` (0 for bots, or before the server has said).
+    pub fn level(&self, id: u8) -> u8 {
+        self.0.levels.get(&id).copied().unwrap_or(0)
+    }
+
+    /// Bytes handing the server our signed progression record ("" for none yet).
+    pub fn send_progress(&self, record: &str) -> Vec<u8> {
+        self.0.progress_msg(record)
+    }
+
+    /// The newest progression record from the server since last asked, as JSON `{ record, end }`
+    /// (`end` is the match's XP by source, or null mid-match); "" if none.
+    pub fn take_progress(&mut self) -> String {
+        self.0.progress.take().map_or_else(String::new, |(record, end)| serde_json::json!({ "record": record, "end": end }).to_string())
+    }
+
     /// Six floats per player, us included, for the scoreboard: id, team, class, bot (0/1), kills, deaths.
     pub fn board(&self) -> Vec<f32> {
         self.0

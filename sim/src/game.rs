@@ -11,6 +11,7 @@ use crate::bot::{self, Bot, Nav};
 use crate::collide;
 use crate::item;
 use crate::net::{Event, InputMsg, MatchState, MechView, Orb, PlayerNet, Snapshot};
+use crate::progress::{self, Tally};
 use crate::projectile::{self, Projectile};
 use crate::weapon;
 use crate::{Arena, Arsenal, DT, Loadout, Map, Mech, MechClass, TICK_HZ, Tuning, Vector, hit_shape, spawn_mech, step_mech};
@@ -82,7 +83,24 @@ struct Player {
     name: String,
     /// Tick of the last accepted rename, for rate limiting.
     renamed_at: Option<u32>,
+    /// This match's tally toward the player's progression, and their level (0 for bots).
+    tally: Tally,
+    level: u8,
+    /// Damage taken this life: (attacker id, amount, tick), for crediting assists.
+    ledger: Vec<(u8, f32, u32)>,
 }
+
+/// What dealt damage, for counting kills by weapon.
+#[derive(Clone, Copy, Debug)]
+pub enum Cause {
+    /// A primary (or secondary) weapon, by index into weapons.json's list.
+    Weapon { primary: bool, index: u8 },
+    Grenade,
+    Unknown,
+}
+
+/// Damage older than this doesn't count toward an assist (s).
+const ASSIST_WINDOW: f32 = 15.0;
 
 /// A projectile in flight and its owner's team, kept in case the owner leaves.
 struct Flying {
@@ -229,6 +247,9 @@ impl Game {
             launch: false,
             name: if bot.is_some() { BOT_NAMES[usize::from(id) % BOT_NAMES.len()].into() } else { format!("Pilot-{id:02}") },
             renamed_at: None,
+            tally: Tally::default(),
+            level: 0,
+            ledger: Vec::new(),
             bot,
         });
         self.roster_version += 1;
@@ -259,9 +280,28 @@ impl Game {
         self.roster_version
     }
 
-    /// Every player's id and callsign.
-    pub fn roster(&self) -> Vec<(u8, String)> {
-        self.players.iter().map(|p| (p.id, p.name.clone())).collect()
+    /// Every player's id, callsign and level (0 for bots).
+    pub fn roster(&self) -> Vec<(u8, String, u8)> {
+        self.players.iter().map(|p| (p.id, p.name.clone(), p.level)).collect()
+    }
+
+    /// Player `id`'s callsign.
+    pub fn name(&self, id: u8) -> Option<&str> {
+        self.players.iter().find(|p| p.id == id).map(|p| p.name.as_str())
+    }
+
+    /// Shows a human's level by their callsign.
+    pub fn set_level(&mut self, id: u8, level: u32) {
+        let level = level.min(u32::from(u8::MAX)) as u8;
+        if let Some(p) = self.players.iter_mut().find(|p| p.id == id && p.bot.is_none() && p.level != level) {
+            p.level = level;
+            self.roster_version += 1;
+        }
+    }
+
+    /// Player `id`'s tally this match, and their team.
+    pub fn tally(&self, id: u8) -> Option<(&Tally, u8)> {
+        self.players.iter().find(|p| p.id == id).map(|p| (&p.tally, p.team))
     }
 
     /// Queue a client's input. Clients are untrusted, so the input is sanitized here.
@@ -320,6 +360,7 @@ impl Game {
                 }
                 (p.class, p.loadout) = (p.next_class, p.next_loadout);
                 p.mech = spawn(&self.arsenal, p.class, p.loadout, pos);
+                p.ledger.clear();
                 (p.respawn_at, p.launch) = (None, false);
             }
         }
@@ -544,6 +585,8 @@ impl Game {
             p.respawn_at = None;
             p.kills = 0;
             p.deaths = 0;
+            p.tally = Tally::default();
+            p.ledger.clear();
         }
         // Humans start each match in the hangar.
         let humans: Vec<u8> = self.players.iter().filter(|p| p.bot.is_none()).map(|p| p.id).collect();
@@ -656,8 +699,9 @@ impl Game {
             self.events.push(Event::Shot { shooter: shooter_id, end: ray.point_at(best), hit: hit.map(|j| self.players[j].id) });
             hits.extend(hit.map(|j| (j, t.shot_damage * weapon::power(t, m.shot_charge) * weapon::falloff(t, best))));
         }
+        let cause = Cause::Weapon { primary: true, index: m.loadout.primary };
         for (j, damage) in hits {
-            self.apply_damage(Some(shooter), j, damage);
+            self.apply_damage_by(Some(shooter), j, damage, cause);
         }
     }
 
@@ -673,11 +717,16 @@ impl Game {
             .filter(|&(_, damage)| damage > 0.0)
             .collect();
         let attacker = self.players.iter().position(|q| q.id == p.owner);
+        let cause = if p.n == projectile::GRENADE {
+            Cause::Grenade
+        } else {
+            Cause::Weapon { primary: p.primary, index: if p.primary { p.loadout.primary } else { p.loadout.secondary } }
+        };
         let mut hits = 0;
         for (j, damage) in hurt {
             if matches!(self.phase, Phase::Playing { .. }) {
                 hits |= 1 << self.players[j].id;
-                self.apply_damage(attacker, j, damage);
+                self.apply_damage_by(attacker, j, damage, cause);
             }
         }
         self.events.push(Event::Blast { owner: p.owner, seq: p.seq, n: p.n, primary: p.primary, class: p.class, loadout: p.loadout, charge: p.charge, pos: at, hits });
@@ -722,15 +771,26 @@ impl Game {
         if self.players[j].team == team {
             let max = self.arsenal.of(&self.players[j].mech).health_max;
             let q = &mut self.players[j].mech;
-            q.health = (q.health + heal).min(max);
+            let healed = heal.min(max - q.health).max(0.0);
+            q.health += healed;
+            self.players[user].tally.healed += healed;
         } else {
-            self.apply_damage(Some(user), j, burn);
+            let index = self.players[user].mech.loadout.secondary;
+            self.apply_damage_by(Some(user), j, burn, Cause::Weapon { primary: false, index });
         }
     }
 
-    /// Damages player `j` (less while braced) while the match is on, ending any repair. A kill
-    /// drops a health orb, and scores for `attacker`, if they're still here.
+    /// `apply_damage_by` with no known cause.
+    #[cfg(test)]
     fn apply_damage(&mut self, attacker: Option<usize>, j: usize, amount: f32) {
+        self.apply_damage_by(attacker, j, amount, Cause::Unknown);
+    }
+
+    /// Damages player `j` (less while braced) while the match is on, ending any repair. A kill
+    /// drops a health orb, and scores for `attacker`, if they're still here; it goes on the
+    /// attacker's tally (by `cause`'s weapon), as an assist on the tally of anyone else who dealt
+    /// enough of the victim's recent damage, and as a death on the victim's.
+    fn apply_damage_by(&mut self, attacker: Option<usize>, j: usize, amount: f32, cause: Cause) {
         let target = &self.players[j];
         if !matches!(self.phase, Phase::Playing { .. }) || target.mech.health <= 0.0 || target.mech.shield > 0.0 {
             return;
@@ -746,14 +806,46 @@ impl Game {
             bot.hurt_by(id, pos, tick);
         }
         target.mech.end_repair(tt);
+        // Assist shares count the health a hit took, not its overkill.
+        if let Some((id, _)) = from {
+            target.ledger.push((id, damage.min(target.mech.health), tick));
+        }
         target.mech.health -= damage;
         if target.mech.health > 0.0 {
             return;
         }
         target.mech.health = 0.0;
         target.deaths += 1;
+        target.tally.stats.deaths += 1;
         target.respawn_at = Some(respawn_at);
+        // Credit: the killer by weapon, and assists by share of the recent damage.
+        let (bot, ledger) = (target.bot.is_some(), std::mem::take(&mut target.ledger));
         let (victim, fell) = (target.id, target.mech.pos);
+        let killer = from.map(|(id, _)| id);
+        let recent = |&&(_, _, at): &&(u8, f32, u32)| tick.saturating_sub(at) < secs(ASSIST_WINDOW);
+        let total: f32 = ledger.iter().filter(recent).map(|l| l.1).sum();
+        let mut shares: Vec<(u8, f32)> = Vec::new();
+        for &(id, dealt, _) in ledger.iter().filter(recent).filter(|l| Some(l.0) != killer) {
+            match shares.iter_mut().find(|s| s.0 == id) {
+                Some(s) => s.1 += dealt,
+                None => shares.push((id, dealt)),
+            }
+        }
+        for (id, dealt) in shares {
+            if total > 0.0 && dealt / total >= progress::ASSIST_SHARE
+                && let Some(p) = self.players.iter_mut().find(|p| p.id == id)
+            {
+                p.tally.assist(dealt / total, bot);
+            }
+        }
+        if let Some(a) = attacker {
+            let weapon = match cause {
+                Cause::Weapon { primary, index } => Some(self.arsenal.weapon_id(primary, index).to_string()),
+                Cause::Grenade => Some("grenade".to_string()),
+                Cause::Unknown => None,
+            };
+            self.players[a].tally.kill(weapon.as_deref(), bot);
+        }
         // Over the ground below, if it went down in the air.
         let ground = self.arena.cast_ray(&Ray::new(fell + Vector::Y * 0.5, Vector::NEG_Y), 60.0).map_or(fell, |d| fell + Vector::Y * (0.5 - d));
         self.orbs.push(Orb { pos: ground + Vector::Y * ORB_HEIGHT, health: ORB_HEALTH, fades_at: self.tick + secs(ORB_SECONDS) });
@@ -767,7 +859,6 @@ impl Game {
         }
     }
 
-    /// State for one recipient: its own full mech and input ack, everyone's views, the match.
     /// The match's map, score and clock, as players see them.
     pub fn match_state(&self) -> MatchState {
         let (ended, winner, until) = match self.phase {
@@ -790,6 +881,7 @@ impl Game {
         (self.players.len() - bots, bots)
     }
 
+    /// State for one recipient: its own full mech and input ack, everyone's views, the match.
     pub fn snapshot(&self, id: u8) -> Snapshot {
         let me = self.players.iter().find(|p| p.id == id);
         Snapshot {
@@ -919,6 +1011,27 @@ mod tests {
         let pos = mech(&game, id).pos;
         let spawns = Map::load(saltworks).spawns;
         assert!(spawns.iter().flatten().any(|p| Vector::from_array(*p).distance(pos) < 1.0), "not on a Saltworks spawn: {pos}");
+    }
+
+    #[test]
+    fn kills_and_assists_go_on_the_tallies() {
+        let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
+        game.bots = false;
+        let (killer, helper, victim) = (game.join().unwrap(), game.join().unwrap(), game.join().unwrap());
+        let at = |game: &Game, id| game.players.iter().position(|p| p.id == id).unwrap();
+        unshield(&mut game);
+        let v = at(&game, victim);
+        game.players[v].mech.health = 100.0;
+        game.apply_damage(Some(at(&game, helper)), v, 40.0);
+        // The killer's overkill doesn't dilute the helper's 40%.
+        game.apply_damage_by(Some(at(&game, killer)), v, 1e3, Cause::Weapon { primary: true, index: 0 });
+        let weapon = game.arsenal.weapon_id(true, 0).to_string();
+        let tally = |id| game.tally(id).unwrap().0.clone();
+        let (k, h, d) = (tally(killer), tally(helper), tally(victim));
+        assert_eq!((k.stats.kills, k.stats.weapon_kills.get(&weapon), k.stats.assists), (1, Some(&1), 0));
+        assert_eq!((h.stats.kills, h.stats.assists), (0, 1));
+        assert!((h.assist_share - 0.4).abs() < 1e-4, "share {}", h.assist_share);
+        assert_eq!(d.stats.deaths, 1);
     }
 
     #[test]

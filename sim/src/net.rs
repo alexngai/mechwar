@@ -1,6 +1,7 @@
 //! Wire protocol: postcard in WebSocket binary frames. Both ends link this crate, so the
 //! format can't drift between client and server.
 
+use crate::progress::MatchXp;
 use crate::projectile::Projectile;
 use crate::{Input, Loadout, Mech, MechClass, Vector};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -12,6 +13,9 @@ pub enum ClientMsg {
     Pick(MechClass, Loadout),
     /// The player's callsign, as typed; the server sanitizes it (`game::sanitize_name`).
     Name(String),
+    /// The player's progression record as the server last signed it ("" for none yet), sent on
+    /// joining; the server checks the signature, else starts a fresh guest.
+    Progress(String),
 }
 
 /// One per client tick. `view_tick` is the fractional server tick the client was rendering
@@ -29,8 +33,12 @@ pub enum ServerMsg {
     Welcome { id: u8, map: u8 },
     Full,
     Snapshot(Snapshot),
-    /// Every player's id and callsign; sent when anyone joins, leaves or renames.
-    Roster(Vec<(u8, String)>),
+    /// Every player's id, callsign and level (0 for bots); sent when anyone joins, leaves,
+    /// renames or levels up.
+    Roster(Vec<(u8, String, u8)>),
+    /// The player's progression record, signed, to keep and send back on the next join; sent
+    /// on joining and every few seconds while it changes, and with the match's XP at its end.
+    Progress { record: String, end: Option<MatchXp> },
 }
 
 /// Sent every server tick. `ack_seq` is the last input the server applied for the recipient,

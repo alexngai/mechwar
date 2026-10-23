@@ -4,6 +4,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::net::{self, ClientMsg, Event, InputMsg, MatchState, Orb, PlayerNet, ServerMsg, Snapshot};
+use crate::progress::MatchXp;
 use crate::projectile::{self, Id, Projectile};
 use crate::{Arena, Arsenal, DT, Input, Loadout, Map, Mech, MechClass, Tuning, Vector, collide, map, step_mech, weapon};
 
@@ -77,6 +78,11 @@ pub struct NetClient {
     pub hits: Vec<(u8, u8)>,
     /// Callsigns by player id, from the server's latest Roster.
     pub names: HashMap<u8, String>,
+    /// Players' levels, by id (0 for bots), from the roster.
+    pub levels: HashMap<u8, u8>,
+    /// The newest progression record the server sent (signed, to keep), and the match XP that
+    /// came with it at a match's end; taken by the page.
+    pub progress: Option<(String, Option<MatchXp>)>,
     pub ping_ms: f64,
     /// Server events not yet taken by the page.
     pub events: Vec<Event>,
@@ -116,6 +122,8 @@ impl Default for NetClient {
             blasts: Vec::new(),
             hits: Vec::new(),
             names: HashMap::new(),
+            levels: HashMap::new(),
+            progress: None,
             ping_ms: 0.0,
             events: Vec::new(),
             seq: 0,
@@ -210,6 +218,11 @@ impl NetClient {
         net::encode(&ClientMsg::Name(raw.into()))
     }
 
+    /// Message handing the server our signed progression record ("" for none yet).
+    pub fn progress_msg(&self, record: &str) -> Vec<u8> {
+        net::encode(&ClientMsg::Progress(record.into()))
+    }
+
     /// Everyone (us included) as of the newest snapshot, for the scoreboard.
     pub fn board(&self) -> Vec<PlayerNet> {
         self.snapshots.back().map_or_else(Vec::new, |s| s.players.clone())
@@ -232,7 +245,15 @@ impl NetClient {
                 self.id = Some(id);
             }
             Some(ServerMsg::Full) => self.full = true,
-            Some(ServerMsg::Roster(roster)) => self.names = roster.into_iter().collect(),
+            Some(ServerMsg::Roster(roster)) => {
+                self.levels = roster.iter().map(|(id, _, level)| (*id, *level)).collect();
+                self.names = roster.into_iter().map(|(id, name, _)| (id, name)).collect();
+            }
+            Some(ServerMsg::Progress { record, end }) => {
+                // A match's end summary outlives a later checkpoint that hasn't been taken yet.
+                let end = end.or_else(|| self.progress.take().and_then(|p| p.1));
+                self.progress = Some((record, end));
+            }
             Some(ServerMsg::Snapshot(s)) => self.apply(s, now_ms),
             None => {}
         }

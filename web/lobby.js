@@ -1,6 +1,10 @@
 // The landing page: quick play, the public games, opening a game (public or private) and joining
 // one by code. Rooms live on the server (`/api/...`, see server/src/main.rs); picking one loads
-// the game for it at `/?room=CODE`. The 3D game itself never loads here.
+// the game for it at `/?room=CODE`. The 3D game itself never loads here. It also shows the
+// pilot's progression record (see progress.js), and moves it between browsers as text.
+import weapons from '../weapons.json';
+import { STORE, levelXp, readRecord } from './progress.js';
+
 const $ = (id) => document.getElementById(id);
 const esc = (text) => String(text).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const stored = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
@@ -14,6 +18,13 @@ lobby.innerHTML = `
   <label class="row">CALLSIGN <input id="lobby-callsign" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Pilot"></label>
   <button id="quick">QUICK PLAY</button>
   <div id="lobby-note"></div>
+  <section>
+    <h3>PILOT</h3>
+    <div id="pilot"></div>
+    <div class="row"><button id="export">EXPORT</button><button id="import">IMPORT</button></div>
+    <div class="row" id="import-row" hidden><input id="import-text" placeholder="Paste an exported pilot record" autocomplete="off" spellcheck="false"><button id="import-go">LOAD</button></div>
+    <p class="hint">Your progress lives in this browser. Export it to carry it to another.</p>
+  </section>
   <section>
     <h3>GAMES</h3>
     <table id="games"></table>
@@ -43,7 +54,64 @@ if (gone) note(`Game ${gone} has closed.`);
 // Callsign: the same one the game uses (main.js sends it on joining).
 const callsign = $('lobby-callsign');
 callsign.value = stored('webhawk.name') ?? '';
-callsign.addEventListener('input', () => { try { localStorage.setItem('webhawk.name', callsign.value.trim()); } catch { /* private mode */ } });
+const saveCallsign = () => { try { localStorage.setItem('webhawk.name', callsign.value.trim()); } catch { /* private mode */ } };
+callsign.addEventListener('input', saveCallsign);
+
+// The pilot: level, XP toward the next, and lifetime stats from the stored record.
+const weaponNames = Object.fromEntries([...weapons.primaries, ...weapons.secondaries].map((w) => [w.id, w.name]));
+weaponNames.grenade = 'Tumbler';
+function showPilot() {
+  const r = readRecord(stored(STORE) ?? '');
+  if (!r) {
+    $('pilot').innerHTML = '<p class="hint">No record yet: play a match and one starts here.</p>';
+    return;
+  }
+  const s = r.stats;
+  const [from, to] = [levelXp(r.level), levelXp(r.level + 1)];
+  const weaponsUsed = Object.entries(s.weapon_kills).sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .map(([id, n]) => `${esc(weaponNames[id] ?? id)} ${n}`).join(' · ') || '–';
+  const stat = (name, value) => `<div><dt>${name}</dt><dd>${value}</dd></div>`;
+  $('pilot').innerHTML = `
+    <div class="level">LEVEL ${r.level} · ${r.xp} XP</div>
+    <div class="bar"><div style="width: ${r.level < 99 ? (100 * (r.xp - from)) / (to - from) : 100}%"></div></div>
+    <dl>${stat('MATCHES', `${s.matches} · ${s.wins} won`)}${stat('PILOTS DOWNED', s.kills)}${stat('DEATHS', s.deaths)}
+      ${stat('ASSISTS', s.assists)}${stat('BOTS DOWNED', `${s.bot_kills} · ${s.bot_assists} assists`)}${stat('HEALING', s.healing)}
+      ${stat('TOP WEAPONS', weaponsUsed)}</dl>`;
+}
+showPilot();
+
+$('export').addEventListener('click', async () => {
+  const token = stored(STORE);
+  if (!token) return note('Nothing to export yet.');
+  try {
+    await navigator.clipboard.writeText(token);
+    note('Pilot record copied: paste it into Import in another browser.');
+  } catch {
+    $('import-row').hidden = false;
+    $('import-text').value = token;
+    $('import-text').select();
+    note('Copy the record from the box.');
+  }
+});
+$('import').addEventListener('click', () => { $('import-row').hidden = false; $('import-text').focus(); });
+$('import-go').addEventListener('click', async () => {
+  const token = $('import-text').value.trim();
+  if (!token) return;
+  const res = await fetch('/api/progress', { method: 'POST', body: token }).catch(() => null);
+  if (!res?.ok) return note("That isn't a pilot record this server signed.");
+  const record = await res.json();
+  const mine = readRecord(stored(STORE) ?? '');
+  if (mine && mine.id !== record.id && !confirm(`Replace your level ${mine.level} pilot with this level ${record.level} one?`)) return;
+  try { localStorage.setItem(STORE, token); } catch { return note("This browser won't store it (private mode?)."); }
+  if (record.callsign) {
+    callsign.value = record.callsign;
+    saveCallsign();
+  }
+  $('import-row').hidden = true;
+  $('import-text').value = '';
+  note(`Welcome back, ${record.callsign || 'pilot'}.`);
+  showPilot();
+});
 
 /** `fetch` for the room API: the JSON answer, or throws with the server's reason. */
 async function api(path, body) {

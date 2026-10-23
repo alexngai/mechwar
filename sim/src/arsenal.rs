@@ -65,6 +65,8 @@ impl Slot {
 pub struct Arsenal {
     primaries: usize,
     secondaries: usize,
+    /// weapons.json's ids, by slot (primaries, then secondaries).
+    ids: [Vec<String>; 2],
     /// By class, then primary, then secondary.
     tunings: Vec<Tuning>,
 }
@@ -89,7 +91,8 @@ impl Arsenal {
                 }
             }
         }
-        Self { primaries: primaries.len(), secondaries: secondaries.len(), tunings }
+        let ids = [primaries, secondaries].map(|list| list.iter().map(|w| w["id"].as_str().unwrap_or_default().to_string()).collect());
+        Self { primaries: primaries.len(), secondaries: secondaries.len(), ids, tunings }
     }
 
     pub fn get(&self, class: MechClass, loadout: Loadout) -> &Tuning {
@@ -100,6 +103,11 @@ impl Arsenal {
     /// Mech `m`'s tuning.
     pub fn of(&self, m: &Mech) -> &Tuning {
         self.get(m.class, m.loadout)
+    }
+
+    /// The id of a primary (or secondary) weapon by index; "" past the end.
+    pub fn weapon_id(&self, primary: bool, index: u8) -> &str {
+        self.ids[usize::from(!primary)].get(usize::from(index)).map_or("", String::as_str)
     }
 
     /// How many primaries and secondaries there are to pick from.

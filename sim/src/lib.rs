@@ -13,6 +13,7 @@ pub mod game;
 pub mod item;
 pub mod map;
 pub mod net;
+pub mod progress;
 pub mod projectile;
 pub mod weapon;
 #[cfg(feature = "wasm")]

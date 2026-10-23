@@ -27,6 +27,7 @@ import { Cockpit } from './cockpit.js';
 import { Sound } from './audio.js';
 import { Hud, hex } from './hud.js';
 import { createSky } from './sky.js';
+import { STORE, levelAt, levelXp, readRecord } from './progress.js';
 
 await init();
 const DT = tick_dt();
@@ -83,6 +84,8 @@ if (net) {
     connection = '';
     if (picked !== null) ws.send(net.pick(picked, loadoutFor(picked).primary, loadoutFor(picked).secondary));
     if (callsign()) ws.send(net.set_name(callsign()));
+    // Our progression record, or "" for the server to start a guest one.
+    ws.send(net.send_progress(stored(STORE) ?? ''));
   };
   ws.onmessage = (e) => net.receive(new Uint8Array(e.data), performance.now());
   ws.onclose = () => { connection = 'disconnected'; };
@@ -403,7 +406,7 @@ gui.add(debugOn, 'on').name('Debug overlay').onChange((on) => {
   try { localStorage.setItem('webhawk.debug', on ? '1' : ''); } catch { /* private mode */ }
 });
 retune();
-const hud = { net: $('net'), score: $('score'), banner: $('banner'), damage: $('damage') };
+const hud = { net: $('net'), score: $('score'), banner: $('banner'), summary: $('summary'), damage: $('damage') };
 
 // --- Class picker ----------------------------------------------------------
 // Shown before the first deploy and on death; C reopens it. Online the pick applies on the next
@@ -449,6 +452,10 @@ callsignInput.addEventListener('input', () => {
 });
 /** Display name of player `id` (offline, only we exist). */
 const nameOf = (id) => (net ? net.name(id) || `Pilot-${String(id).padStart(2, '0')}` : callsign() || 'You');
+/** Player `id`'s level (0 for bots and offline). */
+const levelOf = (id) => (net ? net.level(id) : 0);
+// The last match's XP, shown with the banner until the next match starts.
+let summary = null, wasEnded = false;
 const esc = (text) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 // Recent kills for the feed: names and team colors when they happened.
 const feed = [];
@@ -914,6 +921,17 @@ function frame(now) {
     hud.score.textContent = `${team === 0 ? '▸ ' : ''}BLUE ${blue} – ${red} RED${team === 1 ? ' ◂' : ''}   ${ended ? '' : clock}`;
     const next = MAPS[map_name(nextMap)]?.name ?? '';
     hud.banner.textContent = ended ? `${winner < 0 ? 'DRAW' : winner === team ? 'VICTORY' : 'DEFEAT'} · next match on ${next} in ${secondsLeft}s` : '';
+    // Progression: keep each record the server sends; a match's end brings its XP.
+    const got = net.take_progress();
+    if (got) {
+      const { record, end } = JSON.parse(got);
+      try { localStorage.setItem(STORE, record); } catch { /* private mode: this visit only */ }
+      const after = readRecord(record);
+      if (end && after) summary = { end, after };
+    }
+    if (wasEnded && !ended) summary = null;
+    wasEnded = ended;
+    hud.summary.innerHTML = ended && summary ? summaryHtml(summary) : '';
   }
 
   if (!firstPerson && alive) debug.hitbox(pos, T('mech_radius'), T('mech_height') * (curr[S.REPAIR_T] > 0 || curr[S.STAND] > 0 ? CROUCH : 1));
@@ -951,6 +969,17 @@ function statusOf(e, now) {
 }
 
 /** The Tab scoreboard: both teams sorted by kills, our row marked. */
+/** The end-of-match XP lines: the total and level, where it came from, and the way to the next level. */
+function summaryHtml({ end, after }) {
+  const total = end.kills + end.assists + end.healing + end.completion + end.win;
+  const up = levelAt(after.xp - total) < after.level;
+  const parts = [['KILLS', end.kills], ['ASSISTS', end.assists], ['HEALING', end.healing], ['MATCH', end.completion], ['WIN', end.win]]
+    .filter(([, xp]) => xp > 0).map(([what, xp]) => `${what} ${xp}`);
+  const [from, to] = [levelXp(after.level), levelXp(after.level + 1)];
+  const toNext = after.level < 99 ? `<div>${after.xp - from} / ${to - from} XP to level ${after.level + 1}</div>` : '';
+  return `<b>+${total} XP</b> · ${up ? 'LEVEL UP: ' : 'LEVEL '}${after.level}<div>${parts.join(' · ')}</div>${toNext}`;
+}
+
 function renderBoard(myId, hudState) {
   const rows = [];
   const b = net ? net.board() : [];
@@ -965,7 +994,7 @@ function renderBoard(myId, hudState) {
     const body = rows
       .filter((r) => r.team === team)
       .sort((x, y) => y.kills - x.kills || x.deaths - y.deaths)
-      .map((r) => `<tr class="${r.id === myId ? 'me' : ''}"><td>${esc(nameOf(r.id))}${r.bot ? ' <i>BOT</i>' : ''}</td>`
+      .map((r) => `<tr class="${r.id === myId ? 'me' : ''}"><td>${esc(nameOf(r.id))}${r.bot ? ' <i>BOT</i>' : levelOf(r.id) ? ` <i>LV${levelOf(r.id)}</i>` : ''}</td>`
         + `<td>${classes[CLASS_KEYS[r.cls]].name}</td><td>${r.kills}</td><td>${r.deaths}</td></tr>`)
       .join('');
     return `<table class="team t${team}"><tr><th>${team ? 'RED' : 'BLUE'}</th><th>MECH</th><th>K</th><th>D</th></tr>${body}</table>`;
@@ -1039,7 +1068,7 @@ function drawGlass(now, myTeam) {
     if (ndc.z > 1 || Math.abs(ndc.x) > 1.1 || Math.abs(ndc.y) > 1.1) continue;
     const healthMax = classValue(e.cls, 'health_max');
     const tag = {
-      ...toScreen(ndc), dist, enemy, unit: id, name: nameOf(id), bot: e.bot, status: statusOf(e, now), focus: false,
+      ...toScreen(ndc), dist, enemy, unit: id, name: levelOf(id) ? `${nameOf(id)} ·LV${levelOf(id)}` : nameOf(id), bot: e.bot, status: statusOf(e, now), focus: false,
       health: e.health / healthMax, hp: Math.ceil(e.health), hpMax: healthMax, label: classes[CLASS_KEYS[e.cls]].name,
     };
     const angle = enemy ? look.angleTo(to.subVectors(chest, camera.position)) : Infinity;
