@@ -209,6 +209,16 @@ export class Hud {
       g.font = font(13, 'bold');
       g.fillText(`${Math.round(f.incoming)} m`, cx, top - 20 * u);
     }
+    // Our latest kill, over the frame where a missile warning goes (above one if both), fading out.
+    const since = f.eliminated ? f.now - f.eliminated.at : Infinity;
+    if (since < 2500) {
+      g.globalAlpha = Math.min(1, (2500 - since) / 500);
+      g.textAlign = 'center';
+      g.fillStyle = '#fff';
+      g.font = font(14, 'bold');
+      g.fillText(`ELIMINATED ${f.eliminated.name}`, cx, cy - R * Math.sin(span) - (f.incoming !== null ? 68 : 30) * u);
+      g.globalAlpha = 1;
+    }
     // A fresh launch is shielded until we act: say so under the frame.
     if (f.shielded) {
       g.textAlign = 'center';

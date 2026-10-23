@@ -514,6 +514,12 @@ let summary = null, wasEnded = false;
 const esc = (text) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 // Recent kills for the feed: names and team colors when they happened.
 const feed = [];
+// Our latest kill, named over the aim frame for a moment.
+let eliminated = null;
+// Destroyed online by someone else: the camera follows them, their loadout showing, until we can
+// launch again (or C opens the hangar sooner). `killcam` is their id, `killYaw` the camera's heading.
+let killcam = null, killYaw = 0, killcamHtml = '';
+const killEye = new THREE.Vector3();
 /** Damage a second from value lookup `v`'s primary, sustained at full spin or charge, before falloff and heat. */
 const dps = (v) => {
   const hit = v('shot_damage') * v('pellets') * (v('charge_time') > 0 ? v('charge_damage') : 1);
@@ -684,8 +690,8 @@ function frame(now) {
     }
     prev = curr;
     curr = game.state();
-    // Dying online opens the hangar (checked every tick: a slow frame can run several).
-    if (net && picked !== null && curr[S.HEALTH] <= 0 && prev[S.HEALTH] > 0) pickerOpen = true;
+    // Dying online opens the hangar (checked every tick: a slow frame can run several), after the killcam if there is one.
+    if (net && picked !== null && curr[S.HEALTH] <= 0 && prev[S.HEALTH] > 0 && killcam === null) pickerOpen = true;
     if (dodge && curr[S.DODGE_CD] > prev[S.DODGE_CD]) me.dodge(dodge);
     if (ability && curr[S.ABILITY_CD] > prev[S.ABILITY_CD]) me.ability();
     dodge = 0;
@@ -729,8 +735,13 @@ function frame(now) {
   pos.set(lerp(S.POS) + lerp(S.OFFSET), lerp(S.POS + 1) + lerp(S.OFFSET + 1), lerp(S.POS + 2) + lerp(S.OFFSET + 2));
   me.setTeam(myTeam);
   me.setUnit(myId);
+  // The server's respawn wait times it: our own predicted death can land a tick before or after the kill.
+  if (killcam !== null && (pickerOpen || !remotes.has(killcam) || !(hudState?.[16] > 0))) {
+    killcam = null;
+    if (hudState?.[16] >= 0) pickerOpen = true;
+  }
   chase += ((curr[S.REPAIR_T] > 0 || curr[S.STAND] > 0 ? 1 : 0) - chase) * (1 - Math.exp(-5 * dt));
-  firstPerson = chase < 0.02;
+  firstPerson = chase < 0.02 && killcam === null;
   me.root.visible = !firstPerson;
   me.update(dt, {
     pos, yaw, pitch, scale: T('mech_height') / me.height,
@@ -744,8 +755,8 @@ function frame(now) {
 
   if (net) {
     const r = net.remotes(now), live = new Set();
-    for (let i = 0; i < r.length; i += 19) {
-      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering, bot, abilityOn, repairing, primary, secondary, docked, shielded, ability] = r.subarray(i, i + 19);
+    for (let i = 0; i < r.length; i += 21) {
+      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering, bot, abilityOn, repairing, primary, secondary, docked, shielded, ability, offensive, support] = r.subarray(i, i + 21);
       if (docked) continue; // in the hangar: nothing to draw
       let e = remotes.get(id);
       if (e && (e.cls !== cls || e.mech.loadout.primary !== primary || e.mech.loadout.secondary !== secondary || e.mech.loadout.ability !== ability)) {
@@ -761,6 +772,8 @@ function frame(now) {
       e.pos.copy(seen);
       e.team = team;
       e.health = health;
+      e.yaw = ryaw;
+      e.loadout = { primary, secondary, offensive, support, ability };
       // Remotes only say whether they're repairing; time the wind-up from when it started.
       e.repairAt = repairing ? e.repairAt ?? now : null;
       Object.assign(e, { bot: !!bot, ability: !!abilityOn, repairing: !!repairing, boosting: !!boosting, hovering: !!hovering });
@@ -813,6 +826,13 @@ function frame(now) {
       const color = (id) => hex((teamOf(id) < 0 ? TEAMS[-1] : teamOf(id) === myTeam ? FRIEND : FOE).accent);
       feed.push({ at: now, killer: nameOf(a), victim: nameOf(b), killerColor: color(a), victimColor: color(b), mine: a === myId || b === myId });
       if (feed.length > 5) feed.shift();
+      if (a === myId && b !== myId) eliminated = { name: nameOf(b), at: now };
+      // Watch the killer first (if dying already opened the hangar this frame, close it).
+      if (b === myId && a !== myId && remotes.has(a)) {
+        killcam = a;
+        killYaw = remotes.get(a).yaw;
+        pickerOpen = false;
+      }
     }
     if (kind === 1 && (a === myId || b === myId)) { message = a === myId ? 'ENEMY DESTROYED' : 'DESTROYED'; messageUntil = now + 2500; }
     if (kind === 2) {
@@ -920,7 +940,22 @@ function frame(now) {
   // the view bobs with the gait and shakes when hit, but stays level (no roll).
   eye.copy(pos).y += T('eye_height');
   camera.position.copy(eye);
-  if (firstPerson) {
+  const killer = remotes.get(killcam);
+  if (killer) {
+    // Behind and above the killer, easing round as they turn; backed against a wall, from high
+    // over them instead. Either way pulled in front of what's in the way.
+    const turn = killer.yaw - killYaw;
+    killYaw += Math.atan2(Math.sin(turn), Math.cos(turn)) * (1 - Math.exp(-4 * dt));
+    killEye.copy(killer.pos).y += classValue(killer.cls, 'mech_height') * 0.8;
+    for (const [tilt, up, back] of [[-0.22, 2.5, 10], [-0.9, 7, 4]]) {
+      camera.rotation.set(tilt, killYaw, 0);
+      offset.set(0, up, back).applyQuaternion(camera.quaternion);
+      const want = offset.length();
+      const room = game.cast_ray(killEye.x, killEye.y, killEye.z, offset.x, offset.y, offset.z, want + 0.5) - 0.5;
+      camera.position.copy(killEye).addScaledVector(offset, Math.max(room, 0.5) / want);
+      if (room > want * 0.6) break;
+    }
+  } else if (firstPerson) {
     camera.rotation.set(pitch, yaw, 0);
     camera.position.y += (me.body.position.y - me.spec.hipY) * 0.6;
     if (shake > 0.01) camera.translateX((Math.random() - 0.5) * 0.14 * shake).translateY((Math.random() - 0.5) * 0.14 * shake);
@@ -1033,6 +1068,17 @@ function frame(now) {
     preview.render(dt, myTeam);
   }
   drawGlass(now, myTeam);
+  $('killcam').hidden = !killer;
+  $('glass').hidden = !!killer; // the reticle and our own hull have nothing to say about their view
+  if (killer) {
+    const { primary, secondary, offensive, support, ability } = armament(killer.loadout);
+    const level = levelOf(killcam), wait = Math.max(hudState[16], 0);
+    const html = `<small>ELIMINATED BY</small><b>${esc(nameOf(killcam))}</b>${killer.bot ? ' <i>BOT</i>' : level ? ` <i>LV${level}</i>` : ''}`
+      + `<div>${classes[CLASS_KEYS[killer.cls]].name} · ${Math.max(0, Math.round((100 * killer.health) / classValue(killer.cls, 'health_max')))}% armor</div>`
+      + `<dl>${[['PRIMARY', primary], ['SECONDARY', secondary], ['ITEM', offensive], ['SUPPORT', support], ['ABILITY', ability]].map(([slot, w]) => `<div><dt>${slot}</dt><dd>${esc(w.name)}</dd></div>`).join('')}</dl>`
+      + `<small>HANGAR IN ${wait.toFixed(1)} S · C TO OPEN NOW</small>`;
+    if (html !== killcamHtml) $('killcam').innerHTML = killcamHtml = html;
+  }
   $('board').hidden = !boardOpen && !menuOpen;
   if ((boardOpen || menuOpen) && now - boardAt > 250) {
     boardAt = now;
@@ -1333,7 +1379,7 @@ function drawGlass(now, myTeam) {
     alt: 1 - curr[S.ALT_WAIT] / Math.max(T('alt_cooldown'), 1e-6), altReady: curr[S.ALT_WAIT] <= 0,
     altBurst: burstable,
     shielded: !!curr[S.SHIELD],
-    incoming,
+    incoming, eliminated,
     lock: curr[S.LOCK] > 0 ? {
       unit: curr[S.LOCK] - 1, progress: Math.min(curr[S.LOCK_T] / Math.max(T('alt_lock_time'), 1e-6), 1),
       left: T('alt_lock_time') + T('alt_lock_hold') - curr[S.LOCK_T], // s the lock holds once made

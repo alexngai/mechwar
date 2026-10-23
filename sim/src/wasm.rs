@@ -306,9 +306,9 @@ impl WasmNetClient {
         ray_distance(self.0.arena(), [ox, oy, oz], [dx, dy, dz], max)
     }
 
-    /// Nineteen floats per remote mech: id, team, class, feet xyz, yaw, pitch, health, boosting, hovering, bot,
+    /// Twenty-one floats per remote mech: id, team, class, feet xyz, yaw, pitch, health, boosting, hovering, bot,
     /// ability on, repairing, primary, secondary, docked (in the hangar: not drawn), shielded, ability (an
-    /// index into weapons.json's abilities).
+    /// index into weapons.json's abilities), offensive and support item.
     pub fn remotes(&self, now: f64) -> Vec<f32> {
         let b = |v: bool| if v { 1.0 } else { 0.0 };
         self.0
@@ -316,7 +316,7 @@ impl WasmNetClient {
             .iter()
             .flat_map(|p| {
                 let v = &p.view;
-                [f32::from(p.id), f32::from(p.team), p.class.index() as f32, v.pos.x, v.pos.y, v.pos.z, v.yaw, v.pitch, v.health, b(v.boosting), b(v.hovering), b(p.bot), b(v.ability), b(v.repairing), f32::from(p.loadout.primary), f32::from(p.loadout.secondary), b(p.docked), b(v.shielded), f32::from(p.loadout.ability)]
+                [f32::from(p.id), f32::from(p.team), p.class.index() as f32, v.pos.x, v.pos.y, v.pos.z, v.yaw, v.pitch, v.health, b(v.boosting), b(v.hovering), b(p.bot), b(v.ability), b(v.repairing), f32::from(p.loadout.primary), f32::from(p.loadout.secondary), b(p.docked), b(v.shielded), f32::from(p.loadout.ability), f32::from(p.loadout.offensive), f32::from(p.loadout.support)]
             })
             .collect()
     }
