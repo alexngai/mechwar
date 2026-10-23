@@ -768,12 +768,30 @@ impl Game {
     }
 
     /// State for one recipient: its own full mech and input ack, everyone's views, the match.
-    pub fn snapshot(&self, id: u8) -> Snapshot {
-        let me = self.players.iter().find(|p| p.id == id);
+    /// The match's map, score and clock, as players see them.
+    pub fn match_state(&self) -> MatchState {
         let (ended, winner, until) = match self.phase {
             Phase::Playing { started_at } => (false, None, started_at + secs(self.match_seconds)),
             Phase::Ended { winner, restart_at } => (true, winner, restart_at),
         };
+        MatchState {
+            map: self.map as u8,
+            next_map: self.next_map as u8,
+            scores: self.scores,
+            seconds_left: (until.saturating_sub(self.tick) as f32 / TICK_HZ).ceil() as u16,
+            ended,
+            winner,
+        }
+    }
+
+    /// How many humans and bots are playing.
+    pub fn headcount(&self) -> (usize, usize) {
+        let bots = self.players.iter().filter(|p| p.bot.is_some()).count();
+        (self.players.len() - bots, bots)
+    }
+
+    pub fn snapshot(&self, id: u8) -> Snapshot {
+        let me = self.players.iter().find(|p| p.id == id);
         Snapshot {
             tick: self.tick,
             ack_seq: me.map_or(0, |p| p.ack_seq),
@@ -796,14 +814,7 @@ impl Game {
             events: self.events.clone(),
             orbs: self.orbs.clone(),
             hangar: me.and_then(|p| p.respawn_at).map(|at| at.saturating_sub(self.tick) as f32 * DT),
-            state: MatchState {
-                map: self.map as u8,
-                next_map: self.next_map as u8,
-                scores: self.scores,
-                seconds_left: (until.saturating_sub(self.tick) as f32 / TICK_HZ).ceil() as u16,
-                ended,
-                winner,
-            },
+            state: self.match_state(),
         }
     }
 }

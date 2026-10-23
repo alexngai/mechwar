@@ -68,6 +68,26 @@
     #board .t1 th:first-child { color: #ff5a36; }
     #board tr.me td { background: #ffc46a22; color: #fff; }
     #board i { font-style: normal; font-size: 10px; opacity: 0.6; }
+    #lobby { position: fixed; inset: 0; overflow-y: auto; display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 48px 16px; background: #12161b; }
+    #lobby[hidden] { display: none; }
+    body.lobby > :not(#lobby) { display: none !important; }
+    #lobby h1 { margin: 0; font-size: 40px; letter-spacing: 10px; color: #ffc46a; }
+    #lobby section { width: min(760px, 100%); }
+    #lobby h3 { margin: 0 0 8px; font-size: 13px; letter-spacing: 2px; opacity: 0.8; }
+    #lobby .row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; letter-spacing: 1px; }
+    #lobby input:not([type]), #lobby select { font: inherit; padding: 5px 7px; background: #0d1014; color: #ffc46a; border: 1px solid #fff3; }
+    #lobby button, #room-row button { padding: 6px 14px; border: 1px solid #7fe0ff; background: none; color: #7fe0ff; font: inherit; letter-spacing: 1px; cursor: pointer; }
+    #lobby button:hover, #room-row button:hover { background: #7fe0ff22; }
+    #lobby #quick { font-size: 18px; letter-spacing: 4px; padding: 12px 44px; }
+    #lobby table { width: 100%; border-collapse: collapse; }
+    #lobby td { padding: 6px 8px; border-top: 1px solid #fff1; }
+    #lobby td:last-child { text-align: right; }
+    #lobby .hint { margin: 6px 0 0; opacity: 0.6; }
+    #lobby a, #room-row a { color: #7fe0ff; }
+    #lobby-note { min-height: 1.4em; color: #ff8a6a; }
+    #room-row { display: flex; gap: 14px; align-items: center; letter-spacing: 2px; }
+    #room-row[hidden] { display: none; }
+    #room-row b { color: #ffc46a; letter-spacing: 3px; }
     #help { position: fixed; left: 16px; top: 40px; padding: 6px 10px; background: #0009; pointer-events: none; max-width: calc(100vw - 300px); }
     body.locked #help { display: none; }
   </style>
@@ -93,11 +113,13 @@
       <label><input type="checkbox" id="haze">HAZE</label>
     </div>
     <h2>HANGAR</h2>
+    <div id="room-row" hidden>GAME <b id="room-code"></b><button id="invite">COPY INVITE LINK</button><a href="/">LEAVE TO LOBBY</a></div>
     <div id="bays"></div>
     <div id="bay"><canvas id="preview"></canvas><div id="slots"></div></div>
     <div id="launch-row"><span id="picker-note"></span><button id="launch">LAUNCH</button></div>
   </div>
   <div id="help">Click to play · WASD move · Shift+W boost · Shift+A/D dash · Shift+S turn about · Space hover · F ability · G grenade · T EMP · LMB fire · RMB secondary (again to burst) · MMB lock / scope · C hangar · I stats · M mute · Tab scores · R hold to repair · K respawn · Esc release mouse</div>
-  <script type="module" src="/web/main.js"></script>
+  <div id="lobby" hidden></div>
+  <script type="module" src="/web/entry.js"></script>
 </body>
 </html>

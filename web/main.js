@@ -47,7 +47,9 @@ const T = (name) => valueOf(classIdx, loadout, name);
 // Dev (Vite): ?server=ws://host:port/ws plays online, otherwise the offline sandbox. A production
 // build plays online against the server that served it, unless ?offline.
 const params = new URLSearchParams(location.search);
-const sameOrigin = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
+// In a room (`?room=CODE`, from the lobby) it joins that one; without, quick play picks one.
+const room = params.get('room');
+const sameOrigin = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws${room ? `?room=${encodeURIComponent(room)}` : ''}`;
 const server = params.get('server') ?? (import.meta.env.PROD && !params.has('offline') ? sameOrigin : null);
 const net = server ? new WasmNetClient() : null;
 // Maps by name; the sim's compiled-in list gives the index. Offline, ?map=<name> picks one.

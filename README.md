@@ -23,10 +23,10 @@ WASD move · Shift boost · Space hover · Q/E dodge · LMB fire · V chase/cock
 npm run server
 ```
 
-With `npm run dev` running, open tabs at `http://localhost:5173/?server=ws://localhost:9001/ws`. You get 4v4 team deathmatch, with bots filling empty slots. Server env vars:
+With `npm run dev` running, open tabs at `http://localhost:5173/?server=ws://localhost:9001/ws` to join quick play: 4v4 team deathmatch, with bots filling empty slots. The server runs any number of games (rooms) at once. To try the lobby page, run `npx vite build` and open `http://localhost:9001/`, which serves the built client: quick play, the listed games, opening a game (listed or by code only) and joining by code or invite link (`/?room=CODE`). Server env vars:
 - `LAG_MS=40` adds 40 ms each way (about 80 ms round trip).
 - `PORT` changes the port (default 9001).
-- `SCORE_LIMIT` and `MATCH_SECONDS` shorten matches.
+- Quick play's games: `MAP` pins one map (else the rotation), `SCORE_LIMIT` and `MATCH_SECONDS` shorten matches, and `BOT_SKILL` (`easy`, `normal`, `hard`, or 0 to 1) sets how sharp bots are.
 
 The HUD shows K/D, ping and `corr`, which is how far the last server correction moved your mech (0.000 when prediction is exact). Online, only camera sliders are live, because both ends use the compiled-in `tuning.json`.
 
@@ -64,7 +64,8 @@ fly logs
 
 - `tuning.json` — every constant, with slider range and `source` (`capture`, `default property` or `own tuning`). The Rust sim reads it at compile time; the page loads it for the sliders. "Copy tuning.json" in the panel copies the current slider values in the same format, ready to paste back over the file.
 - `sim/` — shared Rust sim (Rapier, `enhanced-determinism`). `lib.rs` steps a mech; `net.rs` is the wire protocol, `game.rs` the authoritative match (lag-compensated hitscan, respawn), `client.rs` prediction, reconciliation and interpolation. All pure Rust with no IO; browser bindings in `wasm.rs` behind the `wasm` feature.
-- `server/` — axum: serves the built client and the `/ws` WebSocket, running `sim::game::Game` at 30 Hz.
+- `server/` — axum: serves the built client, the lobby API (`/api/rooms`, `/api/quick`) and the `/ws` WebSocket. Each room runs its own `sim::game::Game` at 30 Hz and closes once it has sat empty a while.
+- `web/entry.js` picks the page: `web/lobby.js` (the landing page) when there's no game to join, else the game.
 - `web/main.js` — Three.js client: fixed 30 Hz sim steps, interpolated render, HUD, lil-gui panel.
 
 ## Troubleshooting

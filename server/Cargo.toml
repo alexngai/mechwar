@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 axum = { version = "0.8.9", features = ["ws"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
+serde = { version = "1", features = ["derive"] }
 sim = { path = "../sim" }
 tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
 tower-http = { version = "0.7.1", features = ["fs"] }
