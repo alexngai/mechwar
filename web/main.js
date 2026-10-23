@@ -90,6 +90,8 @@ if (net) {
 
 // Index layout of state(); keep in sync with mech_state in sim/src/wasm.rs.
 const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, SPIN: 31, CHARGE: 32, BLOOM: 33, FIRE_WAIT: 34, LOCK: 35, LOCK_T: 36, BEAM: 37, BEAM_END: 38, SHIELD: 41, OFFSET: 42 };
+// The HUD marks our side in blue and the other side in red, whichever team we're on.
+const FRIEND = TEAMS[0], FOE = TEAMS[1];
 // Volley index of thrown grenades; matches projectile::GRENADE in sim/src/projectile.rs.
 const GRENADE_N = 255;
 const BOMBLET_N = 100; // a splitting shell's bomblets carry volley indices from here up (projectile::BOMBLET)
@@ -703,7 +705,7 @@ function frame(now) {
     if (kind === 1 && b === myId) sound.died();
     if (kind === 1) {
       const teamOf = (id) => (id === myId ? myTeam : remotes.get(id)?.team ?? -1);
-      const color = (id) => hex((TEAMS[teamOf(id)] ?? TEAMS[-1]).accent);
+      const color = (id) => hex((teamOf(id) < 0 ? TEAMS[-1] : teamOf(id) === myTeam ? FRIEND : FOE).accent);
       feed.push({ at: now, killer: nameOf(a), victim: nameOf(b), killerColor: color(a), victimColor: color(b), mine: a === myId || b === myId });
       if (feed.length > 5) feed.shift();
     }
@@ -1071,7 +1073,7 @@ function drawGlass(now, myTeam) {
     ability: 1 - curr[S.ABILITY_CD] / Math.max(T('ability_cooldown'), 1e-6), abilityActive: curr[S.ABILITY_T] > 0, abilityName: c.ability.name,
     health: curr[S.HEALTH], healthMax: T('health_max'), fuel: curr[S.FUEL] / T('fuel_max'), className: c.name, hurt,
     boostMin: T('boost_min_fuel') / T('fuel_max'), boosting: !!curr[S.BOOSTING], hovering: !!curr[S.HOVERING],
-    friendColor: hex((TEAMS[myTeam] ?? TEAMS[-1]).accent), enemyColor: hex((TEAMS[1 - myTeam] ?? TEAMS[1]).accent),
+    friendColor: hex(FRIEND.accent), enemyColor: hex(FOE.accent),
     repair: repairPhase(curr[S.REPAIR_T]), standing: curr[S.STAND] > 0,
     items: [
       { key: 'G', name: 'Tumbler', charges: curr[S.GRENADES], max: T('grenade_charges'), recharge: 1 - curr[S.GRENADE_WAIT] / Math.max(T('grenade_recharge'), 1e-6) },
