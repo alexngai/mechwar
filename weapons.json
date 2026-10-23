@@ -115,7 +115,7 @@
   "support": [
     { "id": "emp", "name": "Brownout", "unlock": 0, "desc": "An EMP around you: drains enemies' fuel and jams their boost" },
     { "id": "orb", "name": "Salve", "unlock": 2, "desc": "Drops a repair orb at your feet, like a wreck's, that only your side can heal from" },
-    { "id": "dome", "name": "Shield dome", "unlock": 2, "desc": "A half-sphere 7 m across around you for 6 s: the other side's shots stop at it, yours go out, and mechs walk through" },
+    { "id": "dome", "name": "Shield dome", "unlock": 2, "desc": "A half-sphere 7 m across around you for 6 s: shots from outside stop at it, whoever fires them, shots from inside go out, and mechs walk through" },
     { "id": "barrier", "name": "Barrier", "unlock": 2, "desc": "Raises a wall 8 m wide and 4 m tall, 4 m ahead across your aim, for 8 s: nothing gets through, either way" }
   ]
 }

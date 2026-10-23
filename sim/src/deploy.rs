@@ -4,8 +4,9 @@
 //! (game.rs), and clears them when they expire or, a turret, are shot down. A mech has at most
 //! one of each kind out.
 //!
-//! A dome stops the other side's shots crossing into it (`stops`): hitscan, projectiles and
-//! splash alike. Its own side shoots out freely, and mechs walk through. A barrier is a wall in
+//! A dome stops every shot crossing into it from outside, whichever side fired it (`stops`):
+//! hitscan, projectiles, splash and beams alike. Anyone inside shoots out freely, and mechs walk
+//! through. A barrier is a wall in
 //! the arena itself (`Arena::set_barriers`), blocking movement and shots for everyone, so clients
 //! add it to their own arenas from snapshots and predict against it like any wall. A turret is a
 //! tripod gun that trains on the nearest enemy it can see (`train`) and fires at it; mechs walk
@@ -148,12 +149,12 @@ pub fn add(list: &mut Vec<Deployable>, d: Deployable) {
     list.push(d);
 }
 
-/// How far along `ray` (a unit direction), within `max`, a dome of another side than `team`
-/// stops a shot coming at it from outside. A shot from inside one passes.
-pub fn stops(list: &[Deployable], t: &Tuning, team: u8, ray: &Ray, max: f32) -> Option<f32> {
+/// How far along `ray` (a unit direction), within `max`, a dome stops a shot coming at it from
+/// outside, whoever fired it. A shot from inside one passes.
+pub fn stops(list: &[Deployable], t: &Tuning, ray: &Ray, max: f32) -> Option<f32> {
     let r = t.dome_radius;
     list.iter()
-        .filter(|d| d.kind == Kind::Dome && d.team != team)
+        .filter(|d| d.kind == Kind::Dome)
         .filter_map(|d| {
             let to = ray.origin - d.pos;
             if to.length_squared() <= r * r {
@@ -200,23 +201,22 @@ mod tests {
     use crate::{Map, spawn_mech};
 
     #[test]
-    fn domes_stop_the_other_sides_shots_from_outside() {
+    fn domes_stop_shots_from_outside_only() {
         let t = Tuning::default();
         let dome = Deployable { kind: Kind::Dome, team: 0, owner: 0, pos: Vector::ZERO, yaw: 0.0, pitch: 0.0, hull: f32::INFINITY, placed: 0, expires: 100, ready: 0, burst: 0 };
         let list = [dome];
         let at = |from: Vector| {
             let to = Vector::new(0.0, 1.0, 0.0) - from;
-            stops(&list, &t, 1, &Ray::new(from, to.normalize()), to.length())
+            stops(&list, &t, &Ray::new(from, to.normalize()), to.length())
         };
-        // From outside, the other side's shot stops at the surface; its own side's doesn't.
+        // From outside, a shot stops at the surface (its side's own too: domes don't ask).
         let outside = Vector::new(20.0, 1.0, 0.0);
         let surface = (t.dome_radius * t.dome_radius - 1.0).sqrt();
         assert!((at(outside).unwrap() - (20.0 - surface)).abs() < 0.01);
-        assert_eq!(stops(&list, &t, 0, &Ray::new(outside, Vector::NEG_X), 30.0), None, "stopped its own side");
         // From inside, out; and over the top or under the ground, nothing.
-        assert_eq!(stops(&list, &t, 1, &Ray::new(Vector::new(1.0, 1.0, 0.0), Vector::X), 30.0), None);
-        assert_eq!(stops(&list, &t, 1, &Ray::new(Vector::new(20.0, t.dome_radius + 1.0, 0.0), Vector::NEG_X), 40.0), None);
-        assert_eq!(stops(&list, &t, 1, &Ray::new(Vector::new(20.0, -1.0, 0.0), Vector::NEG_X), 40.0), None);
+        assert_eq!(stops(&list, &t, &Ray::new(Vector::new(1.0, 1.0, 0.0), Vector::X), 30.0), None);
+        assert_eq!(stops(&list, &t, &Ray::new(Vector::new(20.0, t.dome_radius + 1.0, 0.0), Vector::NEG_X), 40.0), None);
+        assert_eq!(stops(&list, &t, &Ray::new(Vector::new(20.0, -1.0, 0.0), Vector::NEG_X), 40.0), None);
     }
 
     #[test]

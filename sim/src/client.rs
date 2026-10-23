@@ -163,7 +163,7 @@ impl NetClient {
                 let (arena, team) = (&self.arena, self.team);
                 self.shots.extend(weapon::pellets(t, m, self.seq).iter().map(|r| {
                     let wall = arena.cast_ray(r, t.weapon_range).unwrap_or(t.weapon_range);
-                    let stop = deploy::stops(domes, t, team, r, wall).unwrap_or(wall);
+                    let stop = deploy::stops(domes, t, r, wall).unwrap_or(wall);
                     r.point_at(deploy::first_turret(domes, t, team, r, stop).map_or(stop, |(_, toi)| toi))
                 }));
             }
@@ -216,7 +216,7 @@ impl NetClient {
                 projectile::home(&t, p, m.pos + Vector::Y * (arsenal.of(m).mech_height * 0.5));
             }
             let hit = projectile::fly(arena, &t, p, |ray, max| {
-                let dome = deploy::stops(domes, &t, team, ray, max);
+                let dome = deploy::stops(domes, &t, ray, max);
                 let turret = deploy::first_turret(domes, &t, team, ray, dome.unwrap_or(max)).map(|(_, toi)| toi);
                 projectile::first_mech(ray, turret.or(dome).unwrap_or(max), enemies()).or(turret).or(dome)
             });
