@@ -28,12 +28,13 @@ const DASH = 0.93; // the dash's back edge sits this fraction of the view's half
 // Instruments, w x h in meters, centered at SCREEN_AT on the console: vitals (hull and fuel) in the
 // middle, the round radar scope lower left, systems right, and out on the right wing a round speed
 // gauge (with the altitude in digits).
-const SCREENS = { vitals: [0.48, 0.2], radar: [0.26, 0.26], systems: [0.3, 0.17], speed: [0.14, 0.14] };
-const SCREEN_AT = { vitals: [0, 0.15], radar: [-0.5, 0.165], systems: [0.49, 0.13], speed: [0.79, 0.125] };
+const SCREENS = { vitals: [0.48, 0.2], radar: [0.28, 0.28], systems: [0.3, 0.17], speed: [0.14, 0.14] };
+const SCREEN_AT = { vitals: [0, 0.15], radar: [-0.5, 0.157], systems: [0.49, 0.13], speed: [0.79, 0.125] };
 const ROUND = new Set(['radar', 'speed']); // set in a scope's round housing
 const SPEED_MAX = 120; // km/h at the speed gauge's full sweep
 const SEAM = 0.295; // panel seams between the middle and the sides
 const RIM = 0.035, RIM_DEPTH = 0.07; // bezel around each screen: bar width, how far it stands out
+const RADAR_RIM = 0.012; // the radar scope's slimmer ring, so the scope can fill the wing
 const LOCAL = 3; // world lights (lamps, flashes) the cockpit takes at once
 // Each class's canopy: frame paint, top bar depth, rib and brow thickness, how far the brow dips
 // at the middle, and whether it has hydraulic rams, a second glazing rib or armored rib sleeves.
@@ -125,17 +126,17 @@ function bezel(s) {
   return g;
 }
 
-/** The radar scope: a round screen set into the console's face, in a deep, bolted bezel. */
-function scope(s) {
+/** A round scope: a round screen set into the console's face, in a deep, bolted bezel `rim` wide. */
+function scope(s, rim = RIM) {
   const g = new THREE.Group(), r = s.w / 2, front = RIM_DEPTH - 0.01;
   g.add(new THREE.Mesh(new THREE.CircleGeometry(r, 48), s.mat).translateZ(0.006));
-  const wall = new THREE.Mesh(new THREE.CylinderGeometry(r + RIM, r + RIM, front, 40, 1, true), frameMat);
+  const wall = new THREE.Mesh(new THREE.CylinderGeometry(r + rim, r + rim, front, 40, 1, true), frameMat);
   wall.rotation.x = Math.PI / 2;
   g.add(wall.translateY(front / 2));
-  g.add(new THREE.Mesh(new THREE.RingGeometry(r, r + RIM, 40), frameMat).translateZ(front));
+  g.add(new THREE.Mesh(new THREE.RingGeometry(r, r + rim, 40), frameMat).translateZ(front));
   for (let k = 0; k < 8; k++) {
     const a = ((k + 0.5) / 8) * TAU;
-    g.add(bolt(Math.cos(a) * (r + RIM / 2), Math.sin(a) * (r + RIM / 2), front + 0.004));
+    g.add(bolt(Math.cos(a) * (r + rim / 2), Math.sin(a) * (r + rim / 2), front + 0.004, Math.min(0.007, rim * 0.35)));
   }
   return g;
 }
@@ -248,7 +249,7 @@ export class Cockpit {
     for (let x = -1.2; x <= 1.2 + 1e-6; x += 0.15) flat.add(bolt(x, 0.015, 0.004));
     for (const [name, s] of Object.entries(this.screens)) {
       const [x, y] = SCREEN_AT[name];
-      flat.add((ROUND.has(name) ? scope(s) : bezel(s)).translateX(x).translateY(y));
+      flat.add((ROUND.has(name) ? scope(s, name === 'radar' ? RADAR_RIM : RIM) : bezel(s)).translateX(x).translateY(y));
       this.glows[name].position.copy(onPanel(x, y, 0.14));
     }
     const [vw, vh] = SCREENS.vitals, vy = SCREEN_AT.vitals[1] + vh / 2 + RIM;
@@ -538,7 +539,7 @@ function radarScreen(s, f) {
   const { g, canvas } = s, W = canvas.width;
   g.fillStyle = '#090d0b';
   g.fillRect(0, 0, W, W);
-  radar(g, W / 2, W / 2, W * 0.42, W / 130, f, f.radarMap);
+  radar(g, W / 2, W / 2, W * 0.47, W / 130, f, f.radarMap);
 }
 
 /** Speed: a needle sweeping 0 to SPEED_MAX km/h, with the altitude in digits under the hub. */
