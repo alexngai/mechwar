@@ -278,10 +278,25 @@ export class Sound {
 
   /**
    * Secondary fire with weapons.json `sound` leaving its launcher; the mortar adds a hollow knock.
-   * A flak volley booms like a gun instead, and a mine is dispensed rather than launched.
+   * A flak volley booms like a gun instead, a rail slug cracks like a sniper's rifle, and a mine is
+   * dispensed rather than launched.
    */
   launch(sound, pos) {
     if (sound === 'flak') return this.shot(sound, pos);
+    if (sound === 'spindle') {
+      // Rail gun: a big, sharp crack that carries and echoes, with a deep boom and rumble under it
+      // and the rails' discharge whining down.
+      const out = this.voice(pos, 0.9, undefined, 0.35);
+      if (!out) return;
+      out.gain.value = pos ? 1.9 : 1.4;
+      this.noise(out, 'white', 'highpass', 5000, 2600, 0.0003, 0.02, 1.0);
+      this.noise(out, 'white', 'highpass', 1800, 800, 0.0005, 0.09, 1.0);
+      this.noise(out, 'white', 'lowpass', 6000, 1400, 0.0005, 0.05, 0.6);
+      this.tone(out, 'sine', 115, 34, 0.002, 0.38, 1.0);
+      this.noise(out, 'brown', 'lowpass', 1100, 90, 0.002, 0.55, 0.8);
+      this.tone(out, 'sawtooth', 1400, 260, 0.001, 0.14, 0.15);
+      return;
+    }
     const out = this.voice(pos, 0.5);
     if (!out) return;
     out.gain.value = pos ? 1 : 0.6;
@@ -302,7 +317,6 @@ export class Sound {
     if (sound === 'mortar') this.tone(out, 'triangle', 190, 120, 0.002, 0.12, 0.45);
     if (sound === 'furnace') this.noise(out, 'brown', 'lowpass', 600, 120, 0.01, 0.5, 0.7);
     if (sound === 'hornet') this.noise(out, 'white', 'bandpass', 1800, 3000, 0.005, 0.25, 0.4, 2);
-    if (sound === 'spindle') this.tone(out, 'sawtooth', 1400, 260, 0.001, 0.14, 0.25);
   }
 
   /** A burst of radius `radius` m at `pos`: a deep boom and rumble (the hull filter softens it). */
