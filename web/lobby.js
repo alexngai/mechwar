@@ -1,7 +1,8 @@
 // The landing page: quick play, the public games, opening a game (public or private) and joining
 // one by code. Rooms live on the server (`/api/...`, see server/src/main.rs); picking one loads
-// the game for it at `/?room=CODE`. The 3D game itself never loads here. It also shows the
-// pilot's progression record (see progress.js), and moves it between browsers as text.
+// the game for it at `/?room=CODE`. The 3D game itself never loads here, only the hangar
+// backdrop behind the page (backdrop.js). It also shows the pilot's progression record (see
+// progress.js), and moves it between browsers as text.
 import weapons from '../weapons.json';
 import { STORE, levelXp, readRecord } from './progress.js';
 
@@ -13,6 +14,8 @@ const go = (code) => { location.href = `/?room=${encodeURIComponent(code)}`; };
 document.body.classList.add('lobby');
 const lobby = $('lobby');
 lobby.hidden = false;
+// The hangar behind it all, once three.js has loaded.
+import('./backdrop.js').then(({ backdrop }) => backdrop());
 lobby.innerHTML = `
   <h1>WEBHAWK</h1>
   <label class="row">CALLSIGN <input id="lobby-callsign" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Pilot"></label>

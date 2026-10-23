@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { Mech } from './mech.js';
 
 /** Stands in for the effects the preview mech would spawn: it never fires, dashes or burns. */
-const NO_FX = new Proxy({}, { get: () => () => {} });
+export const NO_FX = new Proxy({}, { get: () => () => {} });
 const SPIN = 0.3; // rad/s
 const ZERO = new THREE.Vector3();
 
