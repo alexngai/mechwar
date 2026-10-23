@@ -3,7 +3,7 @@
 
 use crate::progress::MatchXp;
 use crate::projectile::Projectile;
-use crate::{Input, Loadout, Mech, MechClass, Vector};
+use crate::{Input, Loadout, Mech, MechClass, Slot, Vector};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -16,9 +16,9 @@ pub enum ClientMsg {
     /// The player's progression record as the server last signed it ("" for none yet), sent on
     /// joining; the server checks the signature, else starts a fresh guest.
     Progress(String),
-    /// Spend unlock points on primary (or secondary) weapon `index` for `class`; the server
-    /// answers with the record (`ServerMsg::Progress`) if it could.
-    Unlock { class: MechClass, primary: bool, index: u8 },
+    /// Spend unlock points on the weapon or item at `index` in `slot`'s list for `class`; the
+    /// server answers with the record (`ServerMsg::Progress`) if it could.
+    Unlock { class: MechClass, slot: Slot, index: u8 },
 }
 
 /// One per client tick. `view_tick` is the fractional server tick the client was rendering
@@ -55,18 +55,30 @@ pub struct Snapshot {
     pub events: Vec<Event>,
     pub state: MatchState,
     pub orbs: Vec<Orb>,
+    pub clouds: Vec<Cloud>,
     /// In the hangar (destroyed, or not launched yet): seconds until it can launch (0: now).
     /// None while out in the arena.
     pub hangar: Option<f32>,
 }
 
 /// A health orb, dropped where a mech was destroyed: it heals every mech near it until it runs
-/// dry or fades.
+/// dry or fades. One dropped as an item (the Salve) heals only its dropper's side.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Orb {
     pub pos: Vector,
     /// Health left to give.
     pub health: f32,
+    /// Tick it fades at.
+    pub fades_at: u32,
+    /// The Salve's: who dropped it and their team.
+    pub dropped: Option<(u8, u8)>,
+}
+
+/// Smoke from a Pall: a sphere sight doesn't pass through, until it fades.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct Cloud {
+    pub pos: Vector,
+    pub radius: f32,
     /// Tick it fades at.
     pub fades_at: u32,
 }

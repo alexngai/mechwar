@@ -14,8 +14,8 @@
 //! Progression has no database: the server signs each pilot's record and their browser keeps it.
 //! A pilot hands theirs over on joining (none or a bad one makes them a fresh guest); the room
 //! counts their match and sends the record back with it added, every few seconds while it's on
-//! and in full at its end. The record also says which weapons the pilot has unlocked for each
-//! mech: the room launches them with those only, and spends their points on more.
+//! and in full at its end. The record also says which weapons and items the pilot has unlocked
+//! for each mech: the room launches them with those only, and spends their points on more.
 
 use std::collections::HashMap;
 use std::future::IntoFuture;
@@ -439,7 +439,8 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
                     let _ = reply.send(id);
                 }
                 Cmd::Msg(id, ClientMsg::Input(msg)) => game.push_input(id, msg),
-                // Only weapons the pilot has unlocked for that mech (its own until their record's in).
+                // Only weapons and items the pilot has unlocked for that mech (its own until their
+                // record's in).
                 Cmd::Msg(id, ClientMsg::Pick(class, loadout)) => {
                     let loadout = pilots.get(&id).map_or(Loadout::of(class), |p| p.base.allowed(class, loadout));
                     game.pick(id, class, loadout);
@@ -462,12 +463,12 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
                 Cmd::Msg(_, ClientMsg::Progress(_)) => {}
                 // Answered with the record, the match so far on it as at a checkpoint (none
                 // between matches: the last one's already on it).
-                Cmd::Msg(id, ClientMsg::Unlock { class, primary, index }) => {
+                Cmd::Msg(id, ClientMsg::Unlock { class, slot, index }) => {
                     if let (Some(pilot), Some((tally, _))) = (pilots.get_mut(&id), game.tally(id))
-                        && pilot.base.unlock(class, primary, index)
+                        && pilot.base.unlock(class, slot, index)
                         && let Some((_, out)) = outboxes.iter().find(|(i, _)| *i == id)
                     {
-                        println!("room {code}: player {id} unlocked {}", sim::arsenal::weapon(primary, index).map_or("?", |w| w.0));
+                        println!("room {code}: player {id} unlocked {}", sim::arsenal::weapon(slot, index).map_or("?", |w| w.0));
                         let record = if game.match_state().ended {
                             pilot.base.clone()
                         } else {
@@ -585,6 +586,7 @@ async fn connection(socket: WebSocket, cmds: mpsc::UnboundedSender<Cmd>, lag: Du
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sim::Slot;
 
     fn room(code: &str, public: bool, humans: usize, seconds_left: u16, ended: bool) -> RoomInfo {
         RoomInfo { code: code.into(), name: String::new(), public, map: String::new(), humans, bots: 0, capacity: MAX_PLAYERS, seconds_left, ended, scores: [0; 2] }
@@ -692,9 +694,9 @@ mod tests {
         assert_eq!((fresh.stats.matches, fresh.xp), (1, 100));
     }
 
-    /// Index of weapon `id` among the primaries (or secondaries).
-    fn weapon(primary: bool, id: &str) -> u8 {
-        (0..).find(|&i| sim::arsenal::weapon(primary, i).expect("no such weapon").0 == id).unwrap()
+    /// Index of weapon or item `id` in `slot`'s list.
+    fn weapon(slot: Slot, id: &str) -> u8 {
+        (0..).find(|&i| sim::arsenal::weapon(slot, i).expect("no such weapon").0 == id).unwrap()
     }
 
     #[tokio::test(start_paused = true)]
@@ -721,18 +723,47 @@ mod tests {
         assert_eq!(next_record(&mut inbox).await.points(), 3);
 
         let (light, own) = (sim::MechClass::A, Loadout::of(sim::MechClass::A));
-        let (rail, heat) = (weapon(false, "spindle"), weapon(true, "kiln"));
+        let (rail, heat) = (weapon(Slot::Secondary, "spindle"), weapon(Slot::Primary, "kiln"));
         // Locked: launches with the light's own weapons instead.
-        send(ClientMsg::Pick(light, Loadout { primary: heat, secondary: rail }));
+        send(ClientMsg::Pick(light, Loadout { primary: heat, secondary: rail, ..own }));
         assert_eq!(loadout_after(&mut inbox).await, own);
 
-        send(ClientMsg::Unlock { class: light, primary: false, index: rail });
+        send(ClientMsg::Unlock { class: light, slot: Slot::Secondary, index: rail });
         let unlocked = next_record(&mut inbox).await;
         assert_eq!((unlocked.unlocks["A"].clone(), unlocked.points()), (vec!["spindle".to_string()], 0));
         // Out of points: the heat gun stays locked, and the next launch carries the rail gun alone.
-        send(ClientMsg::Unlock { class: light, primary: true, index: heat });
-        send(ClientMsg::Pick(light, Loadout { primary: heat, secondary: rail }));
+        send(ClientMsg::Unlock { class: light, slot: Slot::Primary, index: heat });
+        send(ClientMsg::Pick(light, Loadout { primary: heat, secondary: rail, ..own }));
         assert_eq!(loadout_after(&mut inbox).await, Loadout { secondary: rail, ..own });
+        room.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rooms_launch_only_unlocked_items() {
+        let key = b"the server's key";
+        let mut record = Record::guest(7, "Ace");
+        record.level = 2; // 3 points: the Salve (2), then not the Limpet (2)
+        let (room, send, mut inbox) = join_room(key, 600.0, &Signer::new(key).sign(&record)).await;
+        let loadout_after = async |inbox: &mut mpsc::UnboundedReceiver<(Instant, Vec<u8>)>| {
+            let mut last = None;
+            for _ in 0..60 {
+                if let Some(ServerMsg::Snapshot(s)) = net::decode(&inbox.recv().await.unwrap().1) {
+                    last = Some(s.me.loadout);
+                }
+            }
+            last.unwrap()
+        };
+        let (heavy, own) = (sim::MechClass::C, Loadout::of(sim::MechClass::C));
+        let (limpet, orb) = (weapon(Slot::Offensive, "limpet"), weapon(Slot::Support, "orb"));
+        let wanted = Loadout { offensive: limpet, support: orb, ..own };
+        // Locked: launches with the Tumbler and the Brownout instead.
+        send(ClientMsg::Pick(heavy, wanted));
+        assert_eq!(loadout_after(&mut inbox).await, own);
+
+        send(ClientMsg::Unlock { class: heavy, slot: Slot::Support, index: orb });
+        send(ClientMsg::Unlock { class: heavy, slot: Slot::Offensive, index: limpet });
+        send(ClientMsg::Pick(heavy, wanted));
+        assert_eq!(loadout_after(&mut inbox).await, Loadout { support: orb, ..own }, "carried an item it couldn't afford");
         room.abort();
     }
 }

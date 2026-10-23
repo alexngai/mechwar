@@ -10,12 +10,12 @@ use rapier3d::prelude::{Pose, Ray};
 use crate::arsenal;
 use crate::bot::{self, Bot, Nav};
 use crate::collide;
-use crate::item;
-use crate::net::{Event, InputMsg, MatchState, MechView, Orb, PlayerNet, Snapshot};
+use crate::item::{self, Item};
+use crate::net::{Cloud, Event, InputMsg, MatchState, MechView, Orb, PlayerNet, Snapshot};
 use crate::progress::{self, Tally};
 use crate::projectile::{self, Projectile};
 use crate::weapon;
-use crate::{Arena, Arsenal, DT, Loadout, Map, Mech, MechClass, TICK_HZ, Tuning, Vector, hit_shape, spawn_mech, step_mech};
+use crate::{Arena, Arsenal, DT, Loadout, Map, Mech, MechClass, Slot, TICK_HZ, Tuning, Vector, hit_shape, spawn_mech, step_mech};
 
 pub const TEAM_SIZE: usize = 4;
 pub const MAX_PLAYERS: usize = 2 * TEAM_SIZE;
@@ -39,7 +39,7 @@ const RENAME_SECONDS: f32 = 2.0;
 /// Bots' callsigns, by player id.
 /// A destroyed mech drops a health orb holding ORB_HEALTH, floating ORB_HEIGHT over the ground
 /// where it fell. It heals every mech whose chest is within ORB_RADIUS at ORB_RATE (either team)
-/// until it runs dry, or fades after ORB_SECONDS.
+/// until it runs dry, or fades after ORB_SECONDS. A Salve drops the same orb for its side alone.
 pub const ORB_HEALTH: f32 = 25.0;
 pub const ORB_RADIUS: f32 = 6.0;
 const ORB_RATE: f32 = 10.0;
@@ -94,9 +94,8 @@ struct Player {
 /// What dealt damage, for counting kills by weapon.
 #[derive(Clone, Copy, Debug)]
 pub enum Cause {
-    /// A primary (or secondary) weapon, by index into weapons.json's list.
-    Weapon { primary: bool, index: u8 },
-    Grenade,
+    /// A weapon (or a thrown item), by index into its slot's weapons.json list.
+    Weapon { slot: Slot, index: u8 },
     Unknown,
 }
 
@@ -144,6 +143,7 @@ pub struct Game {
     players: Vec<Player>,
     projectiles: Vec<Flying>,
     orbs: Vec<Orb>,
+    clouds: Vec<Cloud>,
     /// This tick's events; cleared at the start of each step.
     events: Vec<Event>,
     scores: [u16; 2],
@@ -174,6 +174,7 @@ impl Game {
             players: Vec::new(),
             projectiles: Vec::new(),
             orbs: Vec::new(),
+            clouds: Vec::new(),
             events: Vec::new(),
             scores: [0; 2],
             phase: Phase::Playing { started_at: 0 },
@@ -400,6 +401,7 @@ impl Game {
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
             bot.engaged.clone_from(&engaged[team]);
+            bot.smoke.clone_from(&self.clouds);
             let focus = bot.perceive(&self.arena, t, &p.mech, &enemies, self.tick);
             radio[team].extend(bot.sightings().map(|(enemy, at)| (id, enemy, at)));
             seen.push((focus, enemies));
@@ -439,7 +441,7 @@ impl Game {
             }
             bot.lead = lead;
             bot.orbs.clear();
-            bot.orbs.extend(self.orbs.iter().map(|o| o.pos));
+            bot.orbs.extend(self.orbs.iter().filter(|o| o.dropped.is_none_or(|(_, side)| usize::from(side) == team)).map(|o| o.pos));
             let (focus, enemies) = &seen[i];
             let target = focus.and_then(|id| enemies.iter().find(|e| e.0 == id)).map(|e| e.1);
             let mut input = bot.think_with(&self.arena, self.nav, t, &p.mech, target.as_ref(), heal.as_ref(), self.tick);
@@ -483,7 +485,10 @@ impl Game {
                     shells.extend(weapon::volley(t, &p.mech, p.id, msg.seq));
                 }
                 if p.mech.threw {
-                    shells.push(projectile::grenade(t, &p.mech, p.id, msg.seq));
+                    shells.push(projectile::thrown(t, &p.mech, p.id, msg.seq));
+                }
+                if p.mech.sprung {
+                    projectile::set_off(p.id, self.projectiles.iter_mut().map(|f| &mut f.p));
                 }
                 for shell in shells {
                     self.events.push(Event::Launch(shell));
@@ -493,7 +498,10 @@ impl Game {
                     self.resolve_shot(i, msg.seq, msg.view_tick);
                 }
                 if self.players[i].mech.pulsed {
-                    self.pulse(i);
+                    match Item::of(self.players[i].mech.loadout, false) {
+                        Item::Orb => self.drop_orb(i),
+                        _ => self.pulse(i),
+                    }
                 }
                 if self.players[i].mech.beaming {
                     self.beam(i);
@@ -548,20 +556,33 @@ impl Game {
         for (p, team, at) in bursts {
             self.burst(p, team, at);
         }
+        // A limpet gone (set off, or burst on a mech or by its fuse) frees G to throw another.
+        for q in &mut self.players {
+            q.mech.limpet &= self.projectiles.iter().any(|f| f.p.owner == q.id && projectile::item(&f.p) == Some(Item::Limpet));
+        }
 
-        // Orbs heal everyone alive around them, a tick's worth each, until they run dry or fade.
+        // Orbs heal everyone alive around them (a Salve's, its side only), a tick's worth each,
+        // until they run dry or fade. A Salve's healing of teammates counts for its dropper.
+        let mut mended = Vec::new();
         for orb in &mut self.orbs {
-            for p in self.players.iter_mut().filter(|p| p.mech.health > 0.0) {
+            for p in self.players.iter_mut().filter(|p| p.mech.health > 0.0 && orb.dropped.is_none_or(|(_, team)| team == p.team)) {
                 let t = self.arsenal.of(&p.mech);
                 if (p.mech.pos + Vector::Y * (t.mech_height * 0.5)).distance(orb.pos) <= ORB_RADIUS {
                     let heal = (ORB_RATE * DT).min(orb.health).min(t.health_max - p.mech.health);
                     p.mech.health += heal;
                     orb.health -= heal;
+                    mended.extend(orb.dropped.filter(|&(by, _)| by != p.id).map(|(by, _)| (by, heal)));
                 }
+            }
+        }
+        for (by, heal) in mended {
+            if let Some(p) = self.players.iter_mut().find(|p| p.id == by) {
+                p.tally.healed += heal;
             }
         }
         let tick = self.tick;
         self.orbs.retain(|o| o.health > 1e-3 && tick < o.fades_at);
+        self.clouds.retain(|c| tick < c.fades_at);
 
         for p in &mut self.players {
             p.history.push_back((self.tick, p.mech.pos, p.mech.health > 0.0));
@@ -576,6 +597,7 @@ impl Game {
         self.scores = [0; 2];
         self.projectiles.clear();
         self.orbs.clear();
+        self.clouds.clear();
         self.phase = Phase::Playing { started_at: self.tick };
         for p in &mut self.players {
             (p.class, p.loadout) = (p.next_class, p.next_loadout);
@@ -700,15 +722,19 @@ impl Game {
             self.events.push(Event::Shot { shooter: shooter_id, end: ray.point_at(best), hit: hit.map(|j| self.players[j].id) });
             hits.extend(hit.map(|j| (j, t.shot_damage * weapon::power(t, m.shot_charge) * weapon::falloff(t, best))));
         }
-        let cause = Cause::Weapon { primary: true, index: m.loadout.primary };
+        let cause = Cause::Weapon { slot: Slot::Primary, index: m.loadout.primary };
         for (j, damage) in hits {
             self.apply_damage_by(Some(shooter), j, damage, cause);
         }
     }
 
-    /// Splash from projectile `p` (fired by `team`) bursting at `at`, and its Blast event.
+    /// Splash from projectile `p` (fired by `team`) bursting at `at` (or smoke, from a Pall), and
+    /// its Blast event.
     fn burst(&mut self, p: Projectile, team: u8, at: Vector) {
         let t = projectile::tuning_for(self.arsenal.get(p.class, p.loadout), &p);
+        if projectile::item(&p) == Some(Item::Smoke) {
+            self.clouds.push(Cloud { pos: at, radius: t.smoke_radius, fades_at: self.tick + secs(t.smoke_seconds) });
+        }
         let hurt: Vec<(usize, f32)> = self
             .players
             .iter()
@@ -718,11 +744,8 @@ impl Game {
             .filter(|&(_, damage)| damage > 0.0)
             .collect();
         let attacker = self.players.iter().position(|q| q.id == p.owner);
-        let cause = if p.n == projectile::GRENADE {
-            Cause::Grenade
-        } else {
-            Cause::Weapon { primary: p.primary, index: if p.primary { p.loadout.primary } else { p.loadout.secondary } }
-        };
+        let slot = if projectile::item(&p).is_some() { Slot::Offensive } else { Slot::weapon(p.primary) };
+        let cause = Cause::Weapon { slot, index: p.loadout.get(slot) };
         let mut hits = 0;
         for (j, damage) in hurt {
             if matches!(self.phase, Phase::Playing { .. }) {
@@ -758,6 +781,19 @@ impl Game {
         self.events.push(Event::Pulse { owner, pos, hits });
     }
 
+    /// Player `user`'s Salve: a repair orb at its feet, for its side.
+    fn drop_orb(&mut self, user: usize) {
+        let u = &self.players[user];
+        let orb = Orb { pos: self.orb_spot(u.mech.pos), health: ORB_HEALTH, fades_at: self.tick + secs(ORB_SECONDS), dropped: Some((u.id, u.team)) };
+        self.orbs.push(orb);
+    }
+
+    /// Where an orb for a mech at `feet` floats: over the ground below, if it's in the air.
+    fn orb_spot(&self, feet: Vector) -> Vector {
+        let ground = self.arena.cast_ray(&Ray::new(feet + Vector::Y * 0.5, Vector::NEG_Y), 60.0).map_or(feet, |d| feet + Vector::Y * (0.5 - d));
+        ground + Vector::Y * ORB_HEIGHT
+    }
+
     /// Player `user`'s held beam this tick: mends the teammate it touches, burns the enemy.
     /// ponytail: targets aren't rewound like shots; rewind with `history` if beams slip at high ping.
     fn beam(&mut self, user: usize) {
@@ -777,7 +813,7 @@ impl Game {
             self.players[user].tally.healed += healed;
         } else {
             let index = self.players[user].mech.loadout.secondary;
-            self.apply_damage_by(Some(user), j, burn, Cause::Weapon { primary: false, index });
+            self.apply_damage_by(Some(user), j, burn, Cause::Weapon { slot: Slot::Secondary, index });
         }
     }
 
@@ -841,15 +877,12 @@ impl Game {
         }
         if let Some(a) = attacker {
             let weapon = match cause {
-                Cause::Weapon { primary, index } => arsenal::weapon(primary, index).map(|(id, _)| id.to_string()),
-                Cause::Grenade => Some("grenade".to_string()),
+                Cause::Weapon { slot, index } => arsenal::weapon(slot, index).map(|(id, _)| id.to_string()),
                 Cause::Unknown => None,
             };
             self.players[a].tally.kill(weapon.as_deref(), bot);
         }
-        // Over the ground below, if it went down in the air.
-        let ground = self.arena.cast_ray(&Ray::new(fell + Vector::Y * 0.5, Vector::NEG_Y), 60.0).map_or(fell, |d| fell + Vector::Y * (0.5 - d));
-        self.orbs.push(Orb { pos: ground + Vector::Y * ORB_HEIGHT, health: ORB_HEALTH, fades_at: self.tick + secs(ORB_SECONDS) });
+        self.orbs.push(Orb { pos: self.orb_spot(fell), health: ORB_HEALTH, fades_at: self.tick + secs(ORB_SECONDS), dropped: None });
         let Some(a) = attacker else { return };
         let (killer, team) = (self.players[a].id, self.players[a].team);
         self.players[a].kills += 1;
@@ -906,6 +939,7 @@ impl Game {
                 .collect(),
             events: self.events.clone(),
             orbs: self.orbs.clone(),
+            clouds: self.clouds.clone(),
             hangar: me.and_then(|p| p.respawn_at).map(|at| at.saturating_sub(self.tick) as f32 * DT),
             state: self.match_state(),
         }
@@ -926,7 +960,9 @@ impl Game {
 /// A fresh mech of `class` carrying `loadout` at `pos`.
 fn spawn(arsenal: &Arsenal, class: MechClass, loadout: Loadout, pos: Vector) -> Mech {
     let t = arsenal.get(class, loadout);
-    Mech { class, loadout, shield: t.spawn_shield, ..spawn_mech(t, pos) }
+    let mut m = Mech { class, loadout, shield: t.spawn_shield, ..spawn_mech(t, pos) };
+    item::fill(t, &mut m);
+    m
 }
 
 fn secs(s: f32) -> u32 {
@@ -1025,8 +1061,8 @@ mod tests {
         game.players[v].mech.health = 100.0;
         game.apply_damage(Some(at(&game, helper)), v, 40.0);
         // The killer's overkill doesn't dilute the helper's 40%.
-        game.apply_damage_by(Some(at(&game, killer)), v, 1e3, Cause::Weapon { primary: true, index: 0 });
-        let weapon = arsenal::weapon(true, 0).unwrap().0.to_string();
+        game.apply_damage_by(Some(at(&game, killer)), v, 1e3, Cause::Weapon { slot: Slot::Primary, index: 0 });
+        let weapon = arsenal::weapon(Slot::Primary, 0).unwrap().0.to_string();
         let tally = |id| game.tally(id).unwrap().0.clone();
         let (k, h, d) = (tally(killer), tally(helper), tally(victim));
         assert_eq!((k.stats.kills, k.stats.weapon_kills.get(&weapon), k.stats.assists), (1, Some(&1), 0));
@@ -1104,7 +1140,7 @@ mod tests {
             game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = Vector::new(x, 0.1, z);
         }
         unshield(&mut game);
-        let mender = (0u8..).map(|s| Loadout { primary: 0, secondary: s }).find(|&l| game.arsenal.get(MechClass::B, l).alt_beam > 0.0).unwrap();
+        let mender = (0u8..).map(|s| Loadout { primary: 0, secondary: s, ..Loadout::default() }).find(|&l| game.arsenal.get(MechClass::B, l).alt_beam > 0.0).unwrap();
         game.pick(user, MechClass::B, mender);
         game.players.iter_mut().find(|p| p.id == user).unwrap().mech.loadout = mender;
         let t = game.arsenal.get(MechClass::B, mender).clone();
@@ -1213,13 +1249,45 @@ mod tests {
         let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
         game.bots = false;
         game.join().unwrap();
-        game.orbs.push(Orb { pos: Vector::new(30.0, ORB_HEIGHT, 30.0), health: ORB_HEALTH, fades_at: game.tick + secs(ORB_SECONDS) });
+        game.orbs.push(Orb { pos: Vector::new(30.0, ORB_HEIGHT, 30.0), health: ORB_HEALTH, fades_at: game.tick + secs(ORB_SECONDS), dropped: None });
         for _ in 0..secs(ORB_SECONDS) - 1 {
             game.step();
         }
         assert_eq!(game.orbs.len(), 1, "faded early");
         game.step();
         assert!(game.orbs.is_empty(), "never faded");
+    }
+
+    #[test]
+    fn salve_orbs_heal_only_their_side() {
+        let t = Tuning::default();
+        let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+        game.bots = false;
+        // Joins alternate teams: the user, an enemy and a teammate, side by side.
+        let [user, enemy, mate] = [0, 1, 2];
+        for x in [0.0, 3.0, -3.0] {
+            let id = game.join().unwrap();
+            game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = Vector::new(x, 0.1, 0.0);
+        }
+        let salve = Loadout { support: arsenal::index(Slot::Support, "orb"), ..Loadout::of(MechClass::B) };
+        game.pick(user, MechClass::B, salve);
+        unshield(&mut game);
+        for p in &mut game.players {
+            p.mech.health = 50.0;
+        }
+
+        send(&mut game, user, Input { emp: true, ..Input::default() });
+        game.step();
+        assert!(!game.events.iter().any(|e| matches!(e, Event::Pulse { .. })), "the Salve went off as an EMP");
+        assert_eq!(game.orbs.iter().map(|o| o.dropped).collect::<Vec<_>>(), [Some((user, 0))]);
+        for _ in 0..secs(1.0) {
+            game.step();
+        }
+        let hp = |id| mech(&game, id).health;
+        assert!(hp(user) > 50.0 && hp(mate) > 50.0, "didn't heal its side: {} and {}", hp(user), hp(mate));
+        assert_eq!(hp(enemy), 50.0, "healed the other side");
+        // Mending the teammate (not itself) counts for the user.
+        assert!((game.tally(user).unwrap().0.healed - (hp(mate) - 50.0)).abs() < 1e-3);
     }
 
     #[test]

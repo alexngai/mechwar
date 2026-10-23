@@ -104,5 +104,14 @@
         "alt_bounce": 0, "alt_stick": 1, "alt_trigger": 3.5, "alt_max": 10, "alt_fuse": 20, "alt_damage": 22, "alt_radius": 3.5
       }
     }
+  ],
+  "offensive": [
+    { "id": "grenade", "name": "Tumbler", "unlock": 0, "desc": "A frag grenade, lobbed: it bounces about, then bursts" },
+    { "id": "limpet", "name": "Limpet", "unlock": 2, "desc": "A remote mine: thrown, it sticks where it lands, and G again sets it off; one down at a time" },
+    { "id": "smoke", "name": "Pall", "unlock": 1, "desc": "A smoke grenade: bursts into a cloud 16 m wide that hides whoever's in or behind it for 10 s" }
+  ],
+  "support": [
+    { "id": "emp", "name": "Brownout", "unlock": 0, "desc": "An EMP around you: drains enemies' fuel and jams their boost" },
+    { "id": "orb", "name": "Salve", "unlock": 2, "desc": "Drops a repair orb at your feet, like a wreck's, that only your side can heal from" }
   ]
 }

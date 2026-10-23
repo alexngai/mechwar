@@ -253,7 +253,7 @@ const STATIC = [[0.45, 0.75, 1], [0.1, 0.25, 1]];
 export class Effects {
   constructor(scene) {
     this.glow = new Pool(scene, 1500, THREE.AdditiveBlending);
-    this.soft = new Pool(scene, 800, THREE.NormalBlending);
+    this.soft = new Pool(scene, 1200, THREE.NormalBlending); // room for a few smoke clouds
     // Sparks and cinders: tiny, many, and never bigger than a few pixels however close.
     this.embers = new Pool(scene, 800, THREE.AdditiveBlending, 0.012);
     this.beams = new Beams(scene);
@@ -461,6 +461,21 @@ export class Effects {
     for (let i = count(14, dt); i > 0; i--) {
       this.soft.spawn(p, scatter(UP, rand(1.5, 3), 0.6), {
         life: rand(1.2, 2.2), size: [0.8, 3.5], color: [[shade, shade, shade], [shade * 0.8, shade * 0.8, shade * 0.8]], alpha: 0.5, drag: 0.8,
+      });
+    }
+  }
+
+  /**
+   * A smoke grenade's cloud of `radius` around `p` (on the ground where it burst), `left` seconds
+   * from clearing: big grey puffs filling it, which stop a couple of seconds early so it thins out
+   * as it ends.
+   */
+  cloud(p, radius, left, dt) {
+    if (left < 2) return;
+    for (let i = count(8 * radius, dt); i > 0; i--) {
+      spot.set(rand(-1, 1), rand(-0.2, 1), rand(-1, 1)).normalize().multiplyScalar(0.8 * radius * Math.sqrt(Math.random())).add(p);
+      this.soft.spawn(spot, scatter(UP, 0.4, 1), {
+        life: rand(2.2, 3), size: [0.8 * radius, 1.1 * radius], color: [[0.62, 0.63, 0.64], [0.5, 0.51, 0.52]], alpha: 1, drag: 0.5,
       });
     }
   }

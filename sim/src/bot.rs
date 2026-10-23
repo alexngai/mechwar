@@ -8,8 +8,9 @@ use std::sync::OnceLock;
 use libm::{asinf, atan2f, hypotf};
 use rapier3d::prelude::{Ray, Rotation};
 
-use crate::item;
+use crate::item::{self, Item};
 use crate::map::{MAPS, Map};
+use crate::net::Cloud;
 use crate::{Arena, Arsenal, DT, Input, Loadout, Mech, MechClass, TICK_HZ, Tuning, Vector, spawn_mech, step_mech};
 
 /// A waypoint links to another this close when a mech can walk there.
@@ -368,6 +369,8 @@ pub struct Bot {
     /// Falling back to cover or an orb, and the health orbs about (they glow: always known).
     retreat: Option<Retreat>,
     pub orbs: Vec<Vector>,
+    /// Smoke about, set by the server each tick: no seeing through it.
+    pub smoke: Vec<Cloud>,
     /// Teamwork, set by the server each tick: the teammate to group on (none for the lead
     /// itself), and the enemies teammates are fighting.
     pub lead: Option<Vector>,
@@ -402,6 +405,7 @@ impl Bot {
             patrol_until: 0,
             retreat: None,
             orbs: Vec::new(),
+            smoke: Vec::new(),
             lead: None,
             engaged: Vec::new(),
             skill: 0.5,
@@ -462,7 +466,7 @@ impl Bot {
 
     /// Aims a grenade's arc at `spot` and throws once on it.
     fn lob(&mut self, t: &Tuning, me: &Mech, spot: Vector, tick: u32) -> Input {
-        let g = t.grenade();
+        let g = t.thrown(Item::Grenade);
         let eye = me.pos + Vector::Y * t.eye_height;
         let (yaw, _) = look_at(eye, spot);
         let r = (g.alt_gravity * flat(spot - eye).length() / (g.alt_speed * g.alt_speed)).min(1.0);
@@ -529,7 +533,7 @@ impl Bot {
         for &(id, ref m, hull) in enemies {
             let known = self.contacts.iter().position(|c| c.id == id);
             let recently = known.and_then(|k| self.contacts[k].seen_at).is_some_and(|at| tick.saturating_sub(at) < secs(TRACK));
-            let seen = in_view(arena, t, me, m, recently);
+            let seen = in_view(arena, t, me, m, recently) && !item::hidden(&self.smoke, me.pos + Vector::Y * t.eye_height, m.pos + Vector::Y * (t.mech_height * 0.5));
             let heard = m.pos.distance(me.pos) < noise(m);
             if let Some(k) = known {
                 self.contacts[k].seen = seen;
@@ -605,12 +609,12 @@ impl Bot {
     }
 
     /// A build for this life, as a player would pick in the hangar: any primary and secondary,
-    /// rolled again until the guardrails (`sensible`) pass.
+    /// rolled again until the guardrails (`sensible`) pass, and the starting items.
     pub fn pick_loadout(&mut self, arsenal: &Arsenal, class: MechClass) -> Loadout {
         let (primaries, secondaries) = arsenal.counts();
         loop {
             let roll = |n: usize, r: f32| ((r * n as f32) as usize).min(n - 1) as u8;
-            let loadout = Loadout { primary: roll(primaries, self.rand()), secondary: roll(secondaries, self.rand()) };
+            let loadout = Loadout { primary: roll(primaries, self.rand()), secondary: roll(secondaries, self.rand()), ..Loadout::of(class) };
             if sensible(arsenal.get(class, loadout)) {
                 return loadout;
             }
@@ -698,7 +702,7 @@ impl Bot {
                 };
             let alt_cool = use_ == AltUse::HeatFed || (!me.overheated && me.heat + t.alt_heat < t.heat_max);
             // Otherwise a grenade takes the aim the same way, every few seconds while charges last.
-            let grenade = t.grenade();
+            let grenade = t.thrown(Item::Grenade);
             let throw = !alt && me.grenades > 0 && tick >= self.grenade_at && dist < GRENADE_RANGE && dist > t.grenade_radius + 2.0;
             let shell = if alt && use_ != AltUse::Beam { Some(t) } else if throw { Some(&grenade) } else { None };
             // Shells are led by their flight time, and so are projectile primaries.
@@ -1020,7 +1024,7 @@ mod tests {
                 step_mech(&arena, &t, &mut me, &input);
                 pulsed |= me.pulsed;
                 if me.threw {
-                    grenade.get_or_insert(projectile::grenade(&t, &me, 0, tick));
+                    grenade.get_or_insert(projectile::thrown(&t, &me, 0, tick));
                 }
             }
             (grenade, pulsed, target)
@@ -1029,7 +1033,7 @@ mod tests {
         let (grenade, pulsed, target) = engage(20.0);
         assert!(!pulsed, "pulsed a target 20 m away");
         let mut g = grenade.expect("no grenade at 20 m");
-        let gt = t.grenade();
+        let gt = t.thrown(Item::Grenade);
         let at = (0..secs(5.0))
             .find_map(|_| projectile::fly(&arena, &gt, &mut g, |ray, max| projectile::first_mech(ray, max, [(&t, &target)])))
             .expect("grenade never burst");
@@ -1090,6 +1094,21 @@ mod tests {
         assert_eq!(pick(1.0, false), Some(2), "not the nearest");
         assert_eq!(pick(0.4, false), Some(1), "not the badly wounded one");
         assert_eq!(pick(1.0, true), Some(1), "not the one that just hit it");
+    }
+
+    #[test]
+    fn bots_cant_see_through_smoke() {
+        let (arena, _, t) = blockout();
+        let me = spawn_mech(&t, Vector::new(0.0, 0.1, 40.0));
+        let enemy = spawn_mech(&t, Vector::new(0.0, 0.1, 22.0));
+        let mut bot = Bot::new(1);
+        assert_eq!(bot.perceive(&arena, &t, &me, &[(1, enemy, 1.0)], 1), Some(1), "not in view to start with");
+        // A cloud between them hides it; one off to the side doesn't.
+        for (x, hides) in [(0.0, true), (14.0, false)] {
+            let mut bot = Bot::new(1);
+            bot.smoke = vec![Cloud { pos: Vector::new(x, 2.0, 31.0), radius: t.smoke_radius, fades_at: 100 }];
+            assert_eq!(bot.perceive(&arena, &t, &me, &[(1, enemy, 1.0)], 1).is_none(), hides, "smoke {x} m off");
+        }
     }
 
     #[test]
@@ -1245,7 +1264,7 @@ mod tests {
     }
 
     fn build(arsenal: &Arsenal, primary: u8, secondary: u8) -> &Tuning {
-        arsenal.get(MechClass::B, Loadout { primary, secondary })
+        arsenal.get(MechClass::B, Loadout { primary, secondary, ..Loadout::default() })
     }
 
     #[test]
@@ -1281,7 +1300,7 @@ mod tests {
     /// The first build with `secondary` the guardrails allow.
     fn with_secondary(arsenal: &Arsenal, secondary: u8) -> Loadout {
         let primaries = arsenal.counts().0 as u8;
-        (0..primaries).map(|primary| Loadout { primary, secondary }).find(|&l| sensible(arsenal.get(MechClass::B, l))).expect("some primary fits")
+        (0..primaries).map(|primary| Loadout { primary, secondary, ..Loadout::default() }).find(|&l| sensible(arsenal.get(MechClass::B, l))).expect("some primary fits")
     }
 
     #[test]
@@ -1334,7 +1353,7 @@ mod tests {
         // Each faces a target 45 m off for 8 s; where it ends up.
         let settle = |primary: u8| {
             let t = build(&arsenal, primary, 0);
-            let mut me = Mech { loadout: Loadout { primary, secondary: 0 }, ..spawn_mech(t, Vector::new(0.0, 0.1, 40.0)) };
+            let mut me = Mech { loadout: Loadout { primary, secondary: 0, ..Loadout::default() }, ..spawn_mech(t, Vector::new(0.0, 0.1, 40.0)) };
             let target = spawn_mech(t, Vector::new(0.0, 0.1, -5.0));
             let mut bot = Bot::new(3);
             for tick in 0..secs(8.0) {

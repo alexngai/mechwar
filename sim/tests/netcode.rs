@@ -7,7 +7,7 @@ use std::ops::Range;
 use sim::client::NetClient;
 use sim::game::Game;
 use sim::net::{self, ClientMsg, Event, InputMsg, PlayerNet, ServerMsg};
-use sim::{DT, Input, Loadout, Map, MechClass, TICK_HZ, Tuning, Vector};
+use sim::{DT, Input, Loadout, Map, MechClass, Slot, TICK_HZ, Tuning, Vector};
 
 /// The original blockout arena: the duels below rely on its open line between the slot-0 spawns.
 fn blockout() -> usize {
@@ -803,13 +803,13 @@ fn bots_use_secondaries() {
 
 /// Primary `id`'s index in weapons.json.
 fn primary(id: &str) -> u8 {
-    (0..).find(|&i| sim::arsenal::weapon(true, i).expect("no such primary").0 == id).unwrap()
+    (0..).find(|&i| sim::arsenal::weapon(Slot::Primary, i).expect("no such primary").0 == id).unwrap()
 }
 
 /// The weapons tuning.json describes: the rifle and the rocket.
 fn base_weapons() -> Loadout {
-    let rocket = (0..).find(|&i| sim::arsenal::weapon(false, i).expect("no rocket").0 == "rocket").unwrap();
-    Loadout { primary: primary("pike"), secondary: rocket }
+    let rocket = (0..).find(|&i| sim::arsenal::weapon(Slot::Secondary, i).expect("no rocket").0 == "rocket").unwrap();
+    Loadout { primary: primary("pike"), secondary: rocket, ..Loadout::default() }
 }
 
 #[test]
@@ -951,6 +951,37 @@ fn predicted_grenade_matches_server() {
     assert_eq!(pulses, [(id, 0)], "the EMP reached no one");
     assert!(max_correction < 1e-5, "items threw prediction off by {max_correction} m");
     assert_eq!((h.clients[0].1.mech.grenades, h.clients[0].1.mech.emps), (t.grenade_charges as u8 - 1, t.emp_charges as u8 - 1));
+}
+
+#[test]
+fn predicted_limpet_matches_server() {
+    use sim::projectile::LIMPET;
+    let mut h = Harness::new();
+    let (id, watcher) = (h.clients[0].0, 1);
+    let limpet = (0..).find(|&i| sim::arsenal::weapon(Slot::Offensive, i).expect("no limpet").0 == "limpet").unwrap();
+    h.game.pick(id, MechClass::B, Loadout { offensive: limpet, ..base_weapons() });
+    // Thrown at the floor ahead, then set off once it has stuck; the enemy is far beyond.
+    let aim = Input { pitch: -0.3, ..Input::default() };
+    let (mut server, mut local, mut seen) = (Vec::new(), Vec::new(), Vec::new());
+    let mut max_correction = 0f32;
+    for tick in 0..(4.0 * TICK_HZ) as u32 {
+        h.step([Input { grenade: tick == 5 || tick == 60, ..aim }, Input::default()]);
+        for e in h.game.snapshot(id).events {
+            if let Event::Blast { n: LIMPET, pos, .. } = e {
+                server.push(pos);
+            }
+        }
+        local.extend(h.clients[0].1.blasts.drain(..).map(|b| b.2));
+        let now = h.now();
+        h.clients[watcher].1.projectiles(now);
+        seen.extend(h.clients[watcher].1.blasts.drain(..).map(|b| b.2));
+        max_correction = max_correction.max(h.clients[0].1.correction);
+    }
+    assert_eq!(server.len(), 1, "server blasts: {server:?}");
+    assert_eq!(local, server, "the predicted burst should land where the server's did");
+    assert_eq!(seen, server, "the other client's replay should burst there too");
+    assert!(!h.clients[0].1.mech.limpet && h.clients[0].1.projectiles.is_empty());
+    assert!(max_correction < 1e-5, "the limpet threw prediction off by {max_correction} m");
 }
 
 #[test]

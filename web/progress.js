@@ -25,15 +25,15 @@ export function levelAt(xp) {
   return n;
 }
 
-// Unlocks, as Record in sim/src/progress.rs has them: each mech carries its own two weapons
-// (classes.json's `weapons`), and each level past the first earns points that unlock the rest
-// for one mech at a time, at weapons.json's `unlock` price.
+// Unlocks, as Record in sim/src/progress.rs has them: each mech carries its own two weapons and
+// two items (classes.json's `weapons`), and each level past the first earns points that unlock
+// the rest for one mech at a time, at weapons.json's `unlock` price.
 export const POINTS_PER_LEVEL = 3;
-const priceOf = (id) => [...weapons.primaries, ...weapons.secondaries].find((w) => w.id === id)?.unlock ?? 0;
+const priceOf = (id) => Object.values(weapons).flat().find((w) => w.id === id)?.unlock ?? 0;
 
 /** Unlock points `record` has left. */
 export const pointsLeft = (record) =>
   Math.max(0, POINTS_PER_LEVEL * (record.level - 1) - Object.values(record.unlocks ?? {}).flat().reduce((sum, id) => sum + priceOf(id), 0));
 
-/** Whether mech `key` (`A`, `B`, `C`) may carry weapon `id` under `record` (null: its own only). */
+/** Whether mech `key` (`A`, `B`, `C`) may carry weapon or item `id` under `record` (null: its own only). */
 export const owns = (record, key, id) => Object.values(classes[key].weapons).includes(id) || (record?.unlocks?.[key] ?? []).includes(id);

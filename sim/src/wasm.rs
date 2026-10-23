@@ -1,9 +1,9 @@
 //! Browser bindings. Plain f32 arrays keep the JS boundary cheap at 30 Hz.
 
 use crate::client::{Drawn, NetClient};
-use crate::net::Event;
+use crate::net::{Cloud, Event};
 use crate::arsenal::{classes_json, weapons_json};
-use crate::{Arena, Arsenal, DT, Input, Loadout, Mech, MechClass, Sim, Tuning, Vector, map};
+use crate::{Arena, Arsenal, DT, Input, Loadout, Mech, MechClass, Sim, Slot, Tuning, Vector, map};
 use rapier3d::prelude::Ray;
 use wasm_bindgen::prelude::*;
 
@@ -25,8 +25,13 @@ fn mech_state(m: &Mech) -> Vec<f32> {
         m.bloom, m.fire_wait,
         f32::from(m.lock), m.lock_time,
         b(m.beaming), m.beam_end.x, m.beam_end.y, m.beam_end.z,
-        b(m.shield > 0.0),
+        b(m.shield > 0.0), b(m.limpet),
     ]
+}
+
+/// Five floats per smoke cloud: xyz, radius and seconds left, as of tick `now`.
+fn cloud_floats<'a>(clouds: impl IntoIterator<Item = &'a Cloud>, now: u32) -> Vec<f32> {
+    clouds.into_iter().flat_map(|c| [c.pos.x, c.pos.y, c.pos.z, c.radius, c.fades_at.saturating_sub(now) as f32 * DT]).collect()
 }
 
 /// Sixteen floats per projectile: owner, seq, n, class, xyz, velocity xyz, age, predicted (0/1),
@@ -104,11 +109,11 @@ impl WasmSim {
         Ok(())
     }
 
-    /// Class 0 = A, 1 = B, 2 = C, carrying weapons.json's `primary` and `secondary`. Takes
-    /// effect at once; call `reset` to respawn in it.
-    pub fn set_class(&mut self, class: u8, primary: u8, secondary: u8) {
+    /// Class 0 = A, 1 = B, 2 = C, carrying weapons.json's `primary` and `secondary`, and its
+    /// `offensive` and `support` items. Takes effect at once; call `reset` to respawn in it.
+    pub fn set_class(&mut self, class: u8, primary: u8, secondary: u8, offensive: u8, support: u8) {
         self.sim.class = MechClass::from_index(class).unwrap_or_default();
-        self.sim.loadout = Loadout { primary, secondary };
+        self.sim.loadout = Loadout { primary, secondary, offensive, support };
         self.retune();
         (self.sim.mech.class, self.sim.mech.loadout) = (self.sim.class, self.sim.loadout);
     }
@@ -142,6 +147,11 @@ impl WasmSim {
     /// Where this tick's hitscan pellets stopped against the arena; see `shot_floats`.
     pub fn take_shots(&mut self) -> Vec<f32> {
         shot_floats(std::mem::take(&mut self.sim.shots))
+    }
+
+    /// Smoke hanging about; see `cloud_floats`.
+    pub fn clouds(&self) -> Vec<f32> {
+        cloud_floats(&self.sim.clouds, self.sim.ticks())
     }
 
     pub fn state(&self) -> Vec<f32> {
@@ -215,10 +225,10 @@ impl WasmNetClient {
         self.0.levels.get(&id).copied().unwrap_or(0)
     }
 
-    /// Bytes spending unlock points on weapon `index` of the primaries (or secondaries) for class
-    /// 0 = A, 1 = B, 2 = C.
-    pub fn unlock(&self, class: u8, primary: bool, index: u8) -> Vec<u8> {
-        self.0.unlock_msg(MechClass::from_index(class).unwrap_or_default(), primary, index)
+    /// Bytes spending unlock points on entry `index` of slot 0 = primaries, 1 = secondaries,
+    /// 2 = offensive items, 3 = support items, for class 0 = A, 1 = B, 2 = C.
+    pub fn unlock(&self, class: u8, slot: u8, index: u8) -> Vec<u8> {
+        self.0.unlock_msg(MechClass::from_index(class).unwrap_or_default(), Slot::from_index(slot).unwrap_or(Slot::Primary), index)
     }
 
     /// Bytes handing the server our signed progression record ("" for none yet).
@@ -241,9 +251,16 @@ impl WasmNetClient {
             .collect()
     }
 
-    /// Four floats per health orb: xyz and the health it has left.
+    /// Five floats per health orb: xyz, the health it has left, and the team it heals (a
+    /// Salve's) or -1 for anyone (a wreck's).
     pub fn orbs(&self) -> Vec<f32> {
-        self.0.orbs().iter().flat_map(|o| [o.pos.x, o.pos.y, o.pos.z, o.health]).collect()
+        self.0.orbs().iter().flat_map(|o| [o.pos.x, o.pos.y, o.pos.z, o.health, o.dropped.map_or(-1.0, |(_, team)| f32::from(team))]).collect()
+    }
+
+    /// Smoke hanging about; see `cloud_floats`.
+    pub fn clouds(&self) -> Vec<f32> {
+        let (clouds, tick) = self.0.clouds();
+        cloud_floats(clouds, tick)
     }
 
     /// Index of the server's map, or -1 before the Welcome.
@@ -252,9 +269,9 @@ impl WasmNetClient {
     }
 
     /// Bytes asking for class 0 = A, 1 = B, 2 = C carrying weapons.json's `primary` and
-    /// `secondary` at the next spawn.
-    pub fn pick(&self, class: u8, primary: u8, secondary: u8) -> Vec<u8> {
-        self.0.pick(MechClass::from_index(class).unwrap_or_default(), Loadout { primary, secondary })
+    /// `secondary`, and its `offensive` and `support` items, at the next spawn.
+    pub fn pick(&self, class: u8, primary: u8, secondary: u8, offensive: u8, support: u8) -> Vec<u8> {
+        self.0.pick(MechClass::from_index(class).unwrap_or_default(), Loadout { primary, secondary, offensive, support })
     }
 
     /// `mech_state` plus the render offset (3 floats) that smooths corrections.
@@ -314,7 +331,7 @@ impl WasmNetClient {
     /// id (-1 until welcomed), kills, deaths, ping ms, last correction m, full (0/1), team,
     /// team 0 score, team 1 score, seconds left, ended (0/1), winner (-1 for none or a draw), class,
     /// next match's map, primary, secondary, seconds until we can launch from the hangar (-1 when
-    /// out in the arena).
+    /// out in the arena), offensive item, support item.
     pub fn hud(&self) -> Vec<f32> {
         let (c, s) = (&self.0, &self.0.state);
         vec![
@@ -335,6 +352,8 @@ impl WasmNetClient {
             f32::from(c.loadout.primary),
             f32::from(c.loadout.secondary),
             c.hangar.unwrap_or(-1.0),
+            f32::from(c.loadout.offensive),
+            f32::from(c.loadout.support),
         ]
     }
 }

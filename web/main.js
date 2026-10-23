@@ -21,7 +21,7 @@ import riftline from '../maps/riftline.json';
 import sump from '../maps/sump.json';
 import sinkhole from '../maps/sinkhole.json';
 import blockout from '../maps/blockout.json';
-import { CROUCH, Mech, TEAMS, armament, ownLoadout, showRound, stoke, windUp } from './mech.js';
+import { CROUCH, LISTS, Mech, TEAMS, armament, ownLoadout, showRound, stoke, windUp } from './mech.js';
 import { Debug } from './debug.js';
 import { Cockpit } from './cockpit.js';
 import { Sound } from './audio.js';
@@ -61,19 +61,24 @@ const mapIndex = (name) => {
 };
 const sim = net ? null : new WasmSim(JSON.stringify(tuning), mapIndex(params.get('map') ?? 'foundry'));
 const game = net ?? sim;
-// Each class's loadout as last picked on its card (saved locally by weapon id), else its own weapons.
+// Each class's loadout as last picked on its card (saved locally by weapon and item id), else its own.
 const picks = CLASS_KEYS.map((key) => {
   const own = ownLoadout(key);
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(`mechwar.loadout.${key}`)); } catch { /* private mode, or not JSON */ }
-  const at = (list, id, fallback) => {
-    const k = weapons[list].findIndex((w) => w.id === id);
-    return k < 0 ? fallback : k;
+  const at = (slot) => {
+    const k = weapons[LISTS[slot]].findIndex((w) => w.id === saved?.[slot]);
+    return k < 0 ? own[slot] : k;
   };
-  return { primary: at('primaries', saved?.primary, own.primary), secondary: at('secondaries', saved?.secondary, own.secondary) };
+  return Object.fromEntries(Object.keys(LISTS).map((slot) => [slot, at(slot)]));
 });
 /** The loadout picking class `i` spawns with. */
 const loadoutFor = (i) => picks[i];
+/** Bytes asking the server for class `i` carrying its picked loadout. */
+const pickMsg = (i) => {
+  const l = loadoutFor(i);
+  return net.pick(i, l.primary, l.secondary, l.offensive, l.support);
+};
 /** How far the carried secondary's scope zooms (1 for none). */
 const zoomOf = () => armament(loadout).secondary.zoom ?? 1;
 let ws = null, connection = server ? 'connecting' : '', picked = null;
@@ -86,18 +91,20 @@ if (net) {
     // Our progression record, or "" for the server to start a guest one; before any pick, as the
     // server launches only the weapons it unlocks.
     ws.send(net.send_progress(stored(STORE) ?? ''));
-    if (picked !== null) ws.send(net.pick(picked, loadoutFor(picked).primary, loadoutFor(picked).secondary));
+    if (picked !== null) ws.send(pickMsg(picked));
   };
   ws.onmessage = (e) => net.receive(new Uint8Array(e.data), performance.now());
   ws.onclose = () => { connection = 'disconnected'; };
 }
 
 // Index layout of state(); keep in sync with mech_state in sim/src/wasm.rs.
-const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, SPIN: 31, CHARGE: 32, BLOOM: 33, FIRE_WAIT: 34, LOCK: 35, LOCK_T: 36, BEAM: 37, BEAM_END: 38, SHIELD: 41, OFFSET: 42 };
+const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, SPIN: 31, CHARGE: 32, BLOOM: 33, FIRE_WAIT: 34, LOCK: 35, LOCK_T: 36, BEAM: 37, BEAM_END: 38, SHIELD: 41, LIMPET: 42, OFFSET: 43 };
 // The HUD marks our side in blue and the other side in red, whichever team we're on.
 const FRIEND = TEAMS[0], FOE = TEAMS[1];
-// Volley index of thrown grenades; matches projectile::GRENADE in sim/src/projectile.rs.
-const GRENADE_N = 255;
+// Volley indices of thrown items, from ITEM_N up; match projectile::GRENADE, LIMPET and SMOKE in
+// sim/src/projectile.rs. THROWN gives each one's weapons.json id.
+const GRENADE_N = 255, LIMPET_N = 254, ITEM_N = 253;
+const THROWN = { 255: 'grenade', 254: 'limpet', 253: 'smoke' };
 const BOMBLET_N = 100; // a splitting shell's bomblets carry volley indices from here up (projectile::BOMBLET)
 // A shell whose velocity jumps more than this (m/s) between frames has bounced: gravity alone moves
 // it under 1 m/s a frame, and a bounce at least halves its speed, glancing off a floor or square off a wall.
@@ -477,7 +484,7 @@ let pilot = readRecord(stored(STORE) ?? '');
 /** Whether class `i` may carry entry `k` of weapons.json's `list`. */
 const ownsWeapon = (i, list, k) => !net || owns(pilot, CLASS_KEYS[i], weapons[list][k].id);
 /** Whether class `i`'s picked loadout is all unlocked. */
-const launchable = (i) => ownsWeapon(i, 'primaries', picks[i].primary) && ownsWeapon(i, 'secondaries', picks[i].secondary);
+const launchable = (i) => Object.entries(LISTS).every(([slot, list]) => ownsWeapon(i, list, picks[i][slot]));
 /** For class `i`'s pick `k` of `list`, if locked: its price, and an UNLOCK button if we can afford it. */
 const unlockRow = (i, list, k) => {
   if (ownsWeapon(i, list, k)) return '';
@@ -514,7 +521,7 @@ const bays = CLASS_KEYS.map((key, i) => {
 });
 function showBay(i) {
   bay = i;
-  const key = CLASS_KEYS[i], c = classes[key], l = picks[i], { primary, secondary } = armament(l);
+  const key = CLASS_KEYS[i], c = classes[key], l = picks[i], { primary, secondary, offensive, support } = armament(l);
   bays.forEach((b, k) => {
     const w = armament(picks[k]);
     b.classList.toggle('on', k === i);
@@ -529,21 +536,22 @@ function showBay(i) {
     <div class="slot"><b>${c.name.toUpperCase()}<span>${c.role}</span></b>HP ${classValue(i, 'health_max')} · ${classValue(i, 'walk_speed')} m/s${points}</div>
     <div class="slot"><b>PRIMARY<span>LMB</span></b><div class="chips">${chips('primary', 'primaries')}</div><div class="bars">${statBars(i, l, 'primary', 'primaries')}</div><p>${primary.desc}</p>${unlockRow(i, 'primaries', l.primary)}</div>
     <div class="slot"><b>SECONDARY<span>RMB · MMB</span></b><div class="chips">${chips('secondary', 'secondaries')}</div><div class="bars">${statBars(i, l, 'secondary', 'secondaries')}</div><p>${secondary.desc}</p>${unlockRow(i, 'secondaries', l.secondary)}</div>
-    <div class="slot"><b>ITEMS<span>G · T</span></b>Tumbler grenade · Brownout EMP</div>
+    <div class="slot"><b>ITEM<span>G</span></b><div class="chips">${chips('offensive', 'offensive')}</div><p>${offensive.desc}</p>${unlockRow(i, 'offensive', l.offensive)}</div>
+    <div class="slot"><b>SUPPORT ITEM<span>T</span></b><div class="chips">${chips('support', 'support')}</div><p>${support.desc}</p>${unlockRow(i, 'support', l.support)}</div>
     <div class="slot"><b>ABILITY<span>F</span></b>${c.ability.name}: ${c.ability.desc}</div>`;
   preview.show(key, l, classValue(i, 'mech_height'));
 }
 $('slots').addEventListener('change', () => {
   const at = (slot) => +$('slots').querySelector(`[name="${slot}"]:checked`).value;
-  picks[bay] = { primary: at('primary'), secondary: at('secondary') };
-  const { primary, secondary } = armament(picks[bay]);
-  try { localStorage.setItem(`mechwar.loadout.${CLASS_KEYS[bay]}`, JSON.stringify({ primary: primary.id, secondary: secondary.id })); } catch { /* private mode */ }
+  picks[bay] = Object.fromEntries(Object.keys(LISTS).map((slot) => [slot, at(slot)]));
+  const ids = Object.fromEntries(Object.entries(armament(picks[bay])).map(([slot, w]) => [slot, w.id]));
+  try { localStorage.setItem(`mechwar.loadout.${CLASS_KEYS[bay]}`, JSON.stringify(ids)); } catch { /* private mode */ }
   showBay(bay);
 });
 $('slots').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-list]');
   if (!b || ws?.readyState !== WebSocket.OPEN) return;
-  ws.send(net.unlock(bay, b.dataset.list === 'primaries', +b.dataset.k));
+  ws.send(net.unlock(bay, Object.values(LISTS).indexOf(b.dataset.list), +b.dataset.k));
   b.disabled = true;
   b.textContent = 'UNLOCKING…';
 });
@@ -560,12 +568,12 @@ function launch(i) {
   const l = loadoutFor(i);
   if (net) {
     launching = true;
-    if (ws.readyState === WebSocket.OPEN) ws.send(net.pick(i, l.primary, l.secondary));
+    if (ws.readyState === WebSocket.OPEN) ws.send(pickMsg(i));
   } else {
     pickerOpen = false;
     classIdx = i;
     loadout = l;
-    sim.set_class(i, l.primary, l.secondary);
+    sim.set_class(i, l.primary, l.secondary, l.offensive, l.support);
     sim.reset();
     prev = curr = sim.state();
   }
@@ -635,16 +643,19 @@ function frame(now) {
     for (let k = 0; k < ends.length; k += 3) shots.push(Object.assign(new THREE.Vector3(ends[k], ends[k + 1], ends[k + 2]), { first: k === 0 }));
     if (curr[S.SHOT]) recoil(armament(loadout).primary, T('fire_rate'));
     if (curr[S.LAUNCHED]) recoil(armament(loadout).secondary, 1 / T('alt_cooldown'));
-    // Own EMPs show as predicted; the server's Pulse for them only marks hits.
-    if (curr[S.PULSED]) sound.emp(null);
-    if (curr[S.PULSED]) fx.pulse(toChest(new THREE.Vector3(curr[S.POS], curr[S.POS + 1], curr[S.POS + 2]), classIdx), T('emp_radius'));
+    // Own EMPs show as predicted; the server's Pulse for them only marks hits. A Salve's orb
+    // comes with the snapshots.
+    if (curr[S.PULSED] && armament(loadout).support.id === 'emp') {
+      sound.emp(null);
+      fx.pulse(toChest(new THREE.Vector3(curr[S.POS], curr[S.POS + 1], curr[S.POS + 2]), classIdx), T('emp_radius'));
+    } else if (curr[S.PULSED]) sound.salve(null);
   }
   const a = acc / DT;
   const lerp = (i) => prev[i] + (curr[i] - prev[i]) * a;
   if (net) ensureArena(net.map());
   const hudState = net ? net.hud() : null;
   const [myId, myTeam] = hudState ? [hudState[0], hudState[6]] : [-1, -1];
-  if (hudState) [classIdx, loadout] = [hudState[12], { primary: hudState[14], secondary: hudState[15] }];
+  if (hudState) [classIdx, loadout] = [hudState[12], { primary: hudState[14], secondary: hudState[15], offensive: hudState[17], support: hudState[18] }];
   if (meKit !== `${classIdx}:${JSON.stringify(loadout)}`) {
     me.dispose();
     me = new Mech(scene, fx, CLASS_KEYS[classIdx], loadout);
@@ -779,7 +790,8 @@ function frame(now) {
     const secondary = primary ? null : weapons.secondaries[weapon];
     const key = `${owner}:${seq}:${n}:${primary}`, ahead = predicted ? a * DT : 0;
     const mech = predicted ? me : remotes.get(owner)?.mech;
-    const bomblet = !primary && n >= BOMBLET_N && n !== GRENADE_N; // born in the air, where its shell split
+    const bomblet = !primary && n >= BOMBLET_N && n < ITEM_N; // born in the air, where its shell split
+    const item = !primary && n >= ITEM_N;
     let shot = launches.get(key);
     if (!shot) {
       let from = null;
@@ -789,17 +801,17 @@ function frame(now) {
       } else if (!bomblet) {
         from = predicted && firstPerson && n === 0 ? cockpit.fire(camera, new THREE.Vector3(), true) : mech?.launcher.getWorldPosition(new THREE.Vector3());
         if (n === 0) mech?.launch(from);
-        if (n === GRENADE_N) sound.grenade(predicted ? null : { x, y, z });
+        if (item) sound.grenade(predicted ? null : { x, y, z });
       }
       launches.set(key, (shot = { from: from ?? new THREE.Vector3(x, y, z) }));
       if (!predicted) lastFired.set(owner, now);
     }
     live.add(key);
-    if (predicted && !primary && n !== GRENADE_N && !bomblet && age >= ARM - DT / 2) burstable = true;
+    if (predicted && !primary && !item && !bomblet && age >= ARM - DT / 2) burstable = true;
     const p = new THREE.Vector3(x + vx * ahead, y + vy * ahead, z + vz * ahead);
     const blend = Math.min((age + ahead) / LAUNCH_BLEND, 1);
     if (blend < 1) p.lerp(shot.from, 1 - blend);
-    const look = bomblet ? 'bomblet' : (primary ? weapons.primaries[weapon] : secondary)?.projectile, vel = new THREE.Vector3(vx, vy, vz);
+    const look = item ? (n === LIMPET_N ? 'mine' : 'grenade') : bomblet ? 'bomblet' : (primary ? weapons.primaries[weapon] : secondary)?.projectile, vel = new THREE.Vector3(vx, vy, vz);
     // A rail slug outruns the eye, gone a frame or two after it leaves: trace its path from the
     // launcher, like a hitscan round's.
     if (look === 'rail') fx.beam(shot.from, new THREE.Vector3(x + vx * ahead, y + vy * ahead, z + vz * ahead));
@@ -807,18 +819,19 @@ function frame(now) {
     // jump (one that stops dead, a mine sticking, doesn't).
     if (!primary && shot.vel) {
       const jump = shot.vel.distanceTo(vel);
-      if (jump > BOUNCE_JUMP && vel.length() > 1) sound.clank(p, jump, n === GRENADE_N);
+      if (jump > BOUNCE_JUMP && vel.length() > 1) sound.clank(p, jump, item);
     }
     shot.vel = vel;
     if (look === 'rocket' || look === 'dart') jets.push({ x: p.x, y: p.y, z: p.z, dart: look === 'dart' });
-    drawn.push({ pos: p, vel, look, charge, age: age + ahead, primary: !!primary, grenade: n === GRENADE_N });
-    if (!primary) debug.shell(key, n === GRENADE_N ? 'Tumbler' : secondary.name, p, age + ahead);
+    drawn.push({ pos: p, vel, look, charge, age: age + ahead, primary: !!primary, grenade: item && n !== LIMPET_N });
+    if (!primary) debug.shell(key, item ? weapons.offensive.find((w) => w.id === THROWN[n])?.name : secondary.name, p, age + ahead);
   }
   for (const key of launches.keys()) if (!live.has(key)) launches.delete(key);
   debug.endShells(live);
   fx.projectiles(drawn, dt);
   sound.exhausts(jets);
-  drawOrbs(now, dt, alive);
+  drawOrbs(now, dt, alive, myTeam);
+  drawSmoke(dt);
 
   // Look is applied at render rate for responsiveness; position is interpolated. In the cockpit
   // the view bobs with the gait and shakes when hit, but stays level (no roll).
@@ -931,7 +944,7 @@ function frame(now) {
     $('launch').hidden = out;
     $('launch').disabled = locked;
     $('launch').textContent = launching ? (wait > 0 ? `LAUNCHING IN ${wait.toFixed(1)} S` : 'LAUNCHING…') : locked ? 'LOCKED' : wait > 0 ? `LAUNCH · READY IN ${wait.toFixed(1)} S` : 'LAUNCH';
-    $('picker-note').textContent = locked ? 'Unlock the locked weapon, or pick another' : out ? 'Changes apply at your next launch · C to close' : 'Enter or Launch when ready';
+    $('picker-note').textContent = locked ? 'Unlock what’s locked, or pick another' : out ? 'Changes apply at your next launch · C to close' : 'Enter or Launch when ready';
     preview.render(dt, myTeam);
   }
   drawGlass(now, myTeam);
@@ -1037,20 +1050,24 @@ function renderBoard(myId, hudState) {
  * Fills and draws the glass HUD: tags for teammates always and for enemies in sight, radar
  * contacts (enemies only while seen or just after firing), the reticle at the aim point.
  */
-// Health orbs (online only: nothing dies offline). Radius and full health match ORB_RADIUS and
-// ORB_HEALTH in sim/src/game.rs.
-const ORB_RADIUS = 6, ORB_HEALTH = 25, ORB_COLOR = 0x6dff9a;
-const orbGeometry = new THREE.IcosahedronGeometry(0.7, 1), orbMaterial = hot(new THREE.MeshBasicMaterial({ color: ORB_COLOR }));
+// Health orbs (online only: nothing dies offline, and the Salve's orb is the server's). Radius and
+// full health match ORB_RADIUS and ORB_HEALTH in sim/src/game.rs. The other side's Salve orbs,
+// which won't heal us, glow red.
+const ORB_RADIUS = 6, ORB_HEALTH = 25, ORB_COLOR = 0x6dff9a, FOE_ORB_COLOR = 0xff5a4a;
+const orbGeometry = new THREE.IcosahedronGeometry(0.7, 1);
+const orbMaterials = { [ORB_COLOR]: hot(new THREE.MeshBasicMaterial({ color: ORB_COLOR })), [FOE_ORB_COLOR]: hot(new THREE.MeshBasicMaterial({ color: FOE_ORB_COLOR })) };
 const orbMeshes = [];
-let orbs = new Float32Array(0); // xyz and health left, per orb
-/** Bobbing green cores that shrink as they give out, and repair motes on every hurt mech in reach. */
-function drawOrbs(now, dt, alive) {
+let orbs = new Float32Array(0); // xyz, health left and the team it heals (-1: anyone), per orb
+/** Whether orb `k` heals team `team`. */
+const orbHeals = (k, team) => orbs[5 * k + 4] < 0 || orbs[5 * k + 4] === team;
+/** Bobbing cores that shrink as they give out, and repair motes on every hurt mech in reach they heal. */
+function drawOrbs(now, dt, alive, myTeam) {
   orbs = net ? net.orbs() : orbs;
-  const n = orbs.length / 4;
+  const n = orbs.length / 5;
   for (let k = 0; k < Math.max(n, orbMeshes.length); k++) {
     let o = orbMeshes[k];
     if (!o && k < n) {
-      o = new THREE.Mesh(orbGeometry, orbMaterial);
+      o = new THREE.Mesh(orbGeometry, orbMaterials[ORB_COLOR]);
       const h = o.add(halo(ORB_COLOR, 3)).children[0];
       h.layers.set(LOW_ONLY); // bloom does this in High
       scene.add(o);
@@ -1058,14 +1075,43 @@ function drawOrbs(now, dt, alive) {
     }
     o.visible = k < n;
     if (!o.visible) continue;
-    const [x, y, z, left] = orbs.subarray(4 * k, 4 * k + 4);
+    const [x, y, z, left] = orbs.subarray(5 * k, 5 * k + 4), color = orbHeals(k, myTeam) ? ORB_COLOR : FOE_ORB_COLOR;
+    o.material = orbMaterials[color];
+    o.children[0].material.color.setHex(color);
     o.position.set(x, y + 0.15 * Math.sin(now / 400 + k), z);
     o.scale.setScalar((0.4 + 0.6 * Math.sqrt(left / ORB_HEALTH)) * (1 + 0.1 * Math.sin(now / 130)));
-    const heals = (p, h, health, max) => health > 0 && health < max && chest.copy(p).setY(p.y + h * 0.5).distanceTo(o.position) <= ORB_RADIUS && fx.repair(chest, dt);
-    if (alive) heals(pos, T('mech_height'), curr[S.HEALTH], T('health_max'));
-    for (const e of remotes.values()) heals(e.pos, classValue(e.cls, 'mech_height'), e.health, classValue(e.cls, 'health_max'));
+    const heals = (p, h, health, max, team) => orbHeals(k, team) && health > 0 && health < max && chest.copy(p).setY(p.y + h * 0.5).distanceTo(o.position) <= ORB_RADIUS && fx.repair(chest, dt);
+    if (alive) heals(pos, T('mech_height'), curr[S.HEALTH], T('health_max'), myTeam);
+    for (const e of remotes.values()) heals(e.pos, classValue(e.cls, 'mech_height'), e.health, classValue(e.cls, 'health_max'), e.team);
   }
 }
+
+// Smoke from Palls: grey puffs filling each cloud while it lasts, a hiss as one bursts, and no
+// enemy tags or radar contacts through it (as item::hidden keeps bots from seeing through it).
+let clouds = new Float32Array(0); // xyz, radius and seconds left, per cloud
+const cloudAt = new THREE.Vector3(), sightLine = new THREE.Line3(), nearest = new THREE.Vector3(), heard = new Set();
+function drawSmoke(dt) {
+  clouds = game.clouds();
+  const live = new Set();
+  for (let i = 0; i < clouds.length; i += 5) {
+    cloudAt.set(clouds[i], clouds[i + 1], clouds[i + 2]);
+    const key = `${clouds[i]},${clouds[i + 2]}`;
+    if (!heard.has(key)) sound.smoke(cloudAt);
+    live.add(key);
+    fx.cloud(cloudAt, clouds[i + 3], clouds[i + 4], dt);
+  }
+  heard.clear();
+  for (const key of live) heard.add(key);
+}
+/** Whether smoke lies across the sight line from `a` to `b`. */
+const smoked = (a, b) => {
+  sightLine.set(a, b);
+  for (let i = 0; i < clouds.length; i += 5) {
+    cloudAt.set(clouds[i], clouds[i + 1], clouds[i + 2]);
+    if (sightLine.closestPointToPoint(cloudAt, true, nearest).distanceTo(cloudAt) < clouds[i + 3]) return true;
+  }
+  return false;
+};
 
 /** Guns that take at least this long (s) between shots, or bursts, show their refire on the glass. */
 const SLOW_REFIRE = 0.25;
@@ -1079,7 +1125,7 @@ function drawGlass(now, myTeam) {
   const W = glass.canvas.width, H = glass.canvas.height;
   const toScreen = (p) => ({ x: ((p.x + 1) / 2) * W, y: ((1 - p.y) / 2) * H });
   const tags = [], contacts = [];
-  for (let i = 0; i < orbs.length; i += 4) contacts.push({ x: orbs[i], z: orbs[i + 2], orb: true });
+  for (let k = 0; k < orbs.length / 5; k++) if (orbHeals(k, myTeam)) contacts.push({ x: orbs[5 * k], z: orbs[5 * k + 2], orb: true });
   let focus = null, focusAngle = THREE.MathUtils.degToRad(4);
   camera.getWorldDirection(look);
   for (const [id, e] of remotes) {
@@ -1090,7 +1136,7 @@ function drawGlass(now, myTeam) {
     let visible = !enemy;
     if (enemy && dist <= T('weapon_range')) {
       to.subVectors(chest, eye).normalize();
-      visible = game.cast_ray(eye.x, eye.y, eye.z, to.x, to.y, to.z, dist) >= dist - 0.5;
+      visible = game.cast_ray(eye.x, eye.y, eye.z, to.x, to.y, to.z, dist) >= dist - 0.5 && !smoked(eye, chest);
     }
     if (!enemy || visible || now - (lastFired.get(id) ?? -Infinity) < 2000) contacts.push({ x: e.pos.x, z: e.pos.z, enemy });
     if (!visible || (!enemy && dist > 150)) continue;
@@ -1135,10 +1181,12 @@ function drawGlass(now, myTeam) {
     boostMin: T('boost_min_fuel') / T('fuel_max'), boosting: !!curr[S.BOOSTING], hovering: !!curr[S.HOVERING],
     friendColor: hex(FRIEND.accent), enemyColor: hex(FOE.accent),
     repair: repairPhase(curr[S.REPAIR_T]), standing: curr[S.STAND] > 0,
-    items: [
-      { key: 'G', name: 'Tumbler', charges: curr[S.GRENADES], max: T('grenade_charges'), recharge: 1 - curr[S.GRENADE_WAIT] / Math.max(T('grenade_recharge'), 1e-6) },
-      { key: 'T', name: 'Brownout', charges: curr[S.EMPS], max: T('emp_charges'), recharge: 1 - curr[S.EMP_WAIT] / Math.max(T('emp_recharge'), 1e-6) },
-    ],
+    // A Limpet down turns G into its detonator.
+    items: [['G', 'offensive', S.GRENADES, S.GRENADE_WAIT], ['T', 'support', S.EMPS, S.EMP_WAIT]].map(([key, slot, charges, wait]) => {
+      const it = armament(loadout)[slot];
+      const armed = slot === 'offensive' && !!curr[S.LIMPET];
+      return { key, name: armed ? 'Detonate' : it.name, armed, charges: curr[charges], max: T(`${it.id}_charges`), recharge: 1 - curr[wait] / Math.max(T(`${it.id}_recharge`), 1e-6) };
+    }),
     jammed: curr[S.JAMMED] > 0,
     feed: feed.filter((k) => now - k.at < 6000),
     contacts, tags, hits, damage: damageFrom, radarMap: glass.radarMap,

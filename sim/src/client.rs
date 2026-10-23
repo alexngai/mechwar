@@ -3,10 +3,11 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use crate::net::{self, ClientMsg, Event, InputMsg, MatchState, Orb, PlayerNet, ServerMsg, Snapshot};
+use crate::item::Item;
+use crate::net::{self, ClientMsg, Cloud, Event, InputMsg, MatchState, Orb, PlayerNet, ServerMsg, Snapshot};
 use crate::progress::MatchXp;
 use crate::projectile::{self, Id, Projectile};
-use crate::{Arena, Arsenal, DT, Input, Loadout, Map, Mech, MechClass, Tuning, Vector, collide, map, step_mech, weapon};
+use crate::{Arena, Arsenal, DT, Input, Loadout, Map, Mech, MechClass, Slot, Tuning, Vector, collide, map, step_mech, weapon};
 
 /// Remote mechs are drawn this many ticks behind the newest snapshot, to ride out jitter.
 pub const INTERP_TICKS: f32 = 3.0;
@@ -15,6 +16,12 @@ const SNAPSHOT_BUFFER: usize = 30;
 const BURSTS_KEPT: usize = 32;
 /// A server Blast this far from where an own projectile burst locally gets its own explosion.
 const BURST_MISMATCH: f32 = 2.0;
+
+/// Whether projectile `id` is a Pall's: it bursts into smoke (which comes with the snapshots),
+/// with no explosion to show.
+fn smoke((_, _, n, primary): Id) -> bool {
+    !primary && n == projectile::SMOKE
+}
 
 /// Someone else's projectile, replayed from its Launch on the render timeline.
 struct Replay {
@@ -73,7 +80,7 @@ pub struct NetClient {
     /// their tick.
     held: Vec<(u32, Id, f32, Vector)>,
     /// Explosions to show (owner, blast radius, where) and splash hits (attacker, victim) since
-    /// the page last took them.
+    /// the page last took them. A Pall's burst shows none: its smoke comes with the snapshots.
     pub blasts: Vec<(u8, f32, Vector)>,
     pub hits: Vec<(u8, u8)>,
     /// Callsigns by player id, from the server's latest Roster.
@@ -156,7 +163,10 @@ impl NetClient {
             }
         }
         if let (true, Some(id)) = (self.mech.threw, self.id) {
-            self.projectiles.push(projectile::grenade(self.arsenal.of(&self.mech), &self.mech, id, self.seq));
+            self.projectiles.push(projectile::thrown(self.arsenal.of(&self.mech), &self.mech, id, self.seq));
+        }
+        if let (true, Some(id)) = (self.mech.sprung, self.id) {
+            projectile::set_off(id, &mut self.projectiles);
         }
         if let (true, Some(id)) = (self.mech.alt_pressed, self.id) {
             projectile::detonate(id, &mut self.projectiles);
@@ -202,7 +212,9 @@ impl NetClient {
             let Some(at) = hit.or_else(|| projectile::triggered(&t, p, enemies()).then_some(p.pos)) else {
                 return true;
             };
-            blasts.push((p.owner, projectile::radius(arsenal.get(p.class, p.loadout), p), at));
+            if !smoke(p.id()) {
+                blasts.push((p.owner, projectile::radius(arsenal.get(p.class, p.loadout), p), at));
+            }
             bomblets.extend(projectile::split(arsenal.get(p.class, p.loadout), p, at));
             burst.push_back((p.id(), at));
             if burst.len() > BURSTS_KEPT {
@@ -211,6 +223,7 @@ impl NetClient {
             false
         });
         self.projectiles.extend(bomblets);
+        self.mech.limpet &= self.projectiles.iter().any(|p| projectile::item(p) == Some(Item::Limpet));
     }
 
     /// Message setting our callsign to `raw`; the server sanitizes it.
@@ -218,9 +231,9 @@ impl NetClient {
         net::encode(&ClientMsg::Name(raw.into()))
     }
 
-    /// Message spending unlock points on primary (or secondary) weapon `index` for `class`.
-    pub fn unlock_msg(&self, class: MechClass, primary: bool, index: u8) -> Vec<u8> {
-        net::encode(&ClientMsg::Unlock { class, primary, index })
+    /// Message spending unlock points on the weapon or item at `index` in `slot`'s list for `class`.
+    pub fn unlock_msg(&self, class: MechClass, slot: Slot, index: u8) -> Vec<u8> {
+        net::encode(&ClientMsg::Unlock { class, slot, index })
     }
 
     /// Message handing the server our signed progression record ("" for none yet).
@@ -236,6 +249,14 @@ impl NetClient {
     /// Health orbs as of the latest snapshot (they don't move, so no interpolation).
     pub fn orbs(&self) -> Vec<Orb> {
         self.snapshots.back().map_or_else(Vec::new, |s| s.orbs.clone())
+    }
+
+    /// Smoke as of the latest snapshot, and that snapshot's tick.
+    /// ponytail: a cloud shows once its snapshot arrives, a little ahead of the replayed throw
+    /// that makes it (and an own one a round trip after the predicted burst); hold clouds to
+    /// render time like Blasts if that shows.
+    pub fn clouds(&self) -> (&[Cloud], u32) {
+        self.snapshots.back().map_or((&[], 0), |s| (&s.clouds, s.tick))
     }
 
     /// Message asking for `class` carrying `loadout` at the next spawn (or now, before the first input).
@@ -307,6 +328,9 @@ impl NetClient {
             for (_, input, _) in self.pending.clone() {
                 self.predict(&input);
             }
+            // The server clears a limpet that burst after its inputs (as `fly_own` does here), so
+            // the replay may have restored one that's gone.
+            self.mech.limpet &= self.projectiles.iter().any(|p| projectile::item(p) == Some(Item::Limpet));
             let jump = predicted - self.mech.pos;
             self.correction = if self.synced { jump.length() } else { 0.0 };
             // Smooth small corrections (bumps); jump straight across teleports like respawns.
@@ -332,13 +356,15 @@ impl NetClient {
                         self.held.push((s.tick, id, radius, pos));
                     } else if let Some(&(_, local)) = self.burst.iter().find(|b| b.0 == id) {
                         // Already exploded where we predicted; only a real miss gets a second one.
-                        if local.distance(pos) > BURST_MISMATCH {
+                        if local.distance(pos) > BURST_MISMATCH && !smoke(id) {
                             self.blasts.push((owner, radius, pos));
                         }
                     } else {
                         // It met a mech we didn't predict: end it where the server says.
                         self.projectiles.retain(|p| p.id() != id);
-                        self.blasts.push((owner, radius, pos));
+                        if !smoke(id) {
+                            self.blasts.push((owner, radius, pos));
+                        }
                     }
                 }
                 Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } => self.events.push(*e),
@@ -368,7 +394,9 @@ impl NetClient {
             if tick as f32 > at {
                 return true;
             }
-            blasts.push((id.0, radius, pos));
+            if !smoke(id) {
+                blasts.push((id.0, radius, pos));
+            }
             replays.retain(|r| r.p.id() != id);
             false
         });

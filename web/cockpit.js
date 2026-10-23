@@ -597,7 +597,7 @@ function systemsScreen(s, f) {
   bar(g, 26, 56, W - 52, 10, f.abilityActive ? 1 : f.ability, ready ? AMBER : DIM);
   f.items.forEach((it, i) => {
     const y = 82 + i * 64;
-    label(y, it.name, it.key, it.charges > 0);
+    label(y, it.name, it.key, it.charges > 0 || it.armed);
     for (let k = 0; k < it.max; k++) {
       g.fillStyle = k < it.charges ? AMBER : FAINT;
       g.fillRect(26 + k * 52, y + 38, 44, 12);

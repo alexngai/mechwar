@@ -471,6 +471,22 @@ export class Sound {
     this.noise(out, 'white', 'bandpass', 900, 600, 0.003, 0.07, 0.2, 2);
   }
 
+  /** A smoke grenade bursting: a long, soft hiss. */
+  smoke(pos) {
+    const out = this.voice(pos, 1.6, undefined, 0.3);
+    if (!out) return;
+    this.noise(out, 'white', 'bandpass', 2400, 700, 0.02, 1.4, 0.45, 0.7);
+    this.noise(out, 'brown', 'lowpass', 500, 200, 0.01, 0.5, 0.4);
+  }
+
+  /** A repair orb dropped: a soft rising chime. */
+  salve(pos) {
+    const out = this.voice(pos, 0.8);
+    if (!out) return;
+    this.tone(out, 'sine', 520, 1040, 0.01, 0.5, 0.25);
+    this.tone(out, 'triangle', 780, 1560, 0.01, 0.35, 0.08, 0.06);
+  }
+
   /** An EMP: a falling zap with crackle. */
   emp(pos) {
     const out = this.voice(pos, 0.7);

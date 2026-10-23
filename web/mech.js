@@ -492,15 +492,21 @@ export function showRound(pod, ready) {
   for (const round of pod.userData.loaded ?? []) round.visible = ready;
 }
 
-/** Class `cls`'s own weapons as a loadout: indices into weapons.json's primaries and secondaries. */
+/** The weapons.json list for each loadout slot. */
+export const LISTS = { primary: 'primaries', secondary: 'secondaries', offensive: 'offensive', support: 'support' };
+
+/**
+ * Class `cls`'s own weapons and items as a loadout: indices into weapons.json's primaries,
+ * secondaries, offensive and support items.
+ */
 export function ownLoadout(cls) {
   const own = (classes[cls] ?? classes.B).weapons;
-  return { primary: weapons.primaries.findIndex((w) => w.id === own.primary), secondary: weapons.secondaries.findIndex((w) => w.id === own.secondary) };
+  return Object.fromEntries(Object.entries(LISTS).map(([slot, list]) => [slot, weapons[list].findIndex((w) => w.id === own[slot])]));
 }
 
 /** The weapons.json entries a loadout names (the first of a slot for an index out of range). */
 export function armament(loadout) {
-  return { primary: weapons.primaries[loadout.primary] ?? weapons.primaries[0], secondary: weapons.secondaries[loadout.secondary] ?? weapons.secondaries[0] };
+  return Object.fromEntries(Object.entries(LISTS).map(([slot, list]) => [slot, weapons[list][loadout[slot]] ?? weapons[list][0]]));
 }
 
 /** Builds weapon `id` in `pod` at class `cls`'s left (`side` -1) or right (+1) arm; returns its muzzle. */

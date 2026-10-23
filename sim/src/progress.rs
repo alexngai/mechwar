@@ -1,7 +1,8 @@
 //! A pilot's progression: the lifetime record the server signs and the browser keeps (see
 //! server/src/main.rs), the tally of one match that's added to it, the XP and level math, and
-//! the weapons it unlocks. Each mech starts with its own two weapons (classes.json's `weapons`);
-//! levels earn points that unlock the rest, mech by mech, at weapons.json's `unlock` prices.
+//! the weapons and items it unlocks. Each mech starts with its own two weapons and two items
+//! (classes.json's `weapons`); levels earn points that unlock the rest, mech by mech, at
+//! weapons.json's `unlock` prices.
 //!
 //! Records carry a format version and a random guest id, so a later server database can take a
 //! verified record as a player's first row as it is.
@@ -10,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Loadout, MechClass, arsenal};
+use crate::{Loadout, MechClass, Slot, arsenal};
 
 /// The record format; bump when a field changes meaning.
 pub const RECORD_VERSION: u8 = 1;
@@ -135,8 +136,8 @@ pub fn level_xp(n: u32) -> u32 {
 }
 
 /// A pilot's lifetime record: who (a random guest id, and their callsign), their XP and the
-/// level it makes, their counts, the weapons they've unlocked (ids by mech: `A`, `B`, `C`), and
-/// when the server last issued it (unix seconds).
+/// level it makes, their counts, the weapons and items they've unlocked (ids by mech: `A`, `B`,
+/// `C`), and when the server last issued it (unix seconds).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Record {
     pub version: u8,
@@ -179,27 +180,25 @@ impl Record {
         (POINTS_PER_LEVEL * self.level.saturating_sub(1)).saturating_sub(spent)
     }
 
-    /// Whether `class` may carry primary (or secondary) weapon `index`: its own, or unlocked for it.
-    pub fn owns(&self, class: MechClass, primary: bool, index: u8) -> bool {
-        let own = Loadout::of(class);
-        index == if primary { own.primary } else { own.secondary }
-            || arsenal::weapon(primary, index).is_some_and(|(id, _)| self.unlocks.get(class.key()).is_some_and(|ids| ids.iter().any(|u| u == id)))
+    /// Whether `class` may carry the weapon or item at `index` in `slot`'s list: its own, or
+    /// unlocked for it.
+    pub fn owns(&self, class: MechClass, slot: Slot, index: u8) -> bool {
+        index == Loadout::of(class).get(slot)
+            || arsenal::weapon(slot, index).is_some_and(|(id, _)| self.unlocks.get(class.key()).is_some_and(|ids| ids.iter().any(|u| u == id)))
     }
 
-    /// `loadout` for `class`, with each weapon this pilot hasn't unlocked for it swapped for its own.
+    /// `loadout` for `class`, with each weapon and item this pilot hasn't unlocked for it swapped
+    /// for its own.
     pub fn allowed(&self, class: MechClass, loadout: Loadout) -> Loadout {
         let own = Loadout::of(class);
-        Loadout {
-            primary: if self.owns(class, true, loadout.primary) { loadout.primary } else { own.primary },
-            secondary: if self.owns(class, false, loadout.secondary) { loadout.secondary } else { own.secondary },
-        }
+        Slot::ALL.into_iter().fold(loadout, |l, slot| if self.owns(class, slot, l.get(slot)) { l } else { l.with(slot, own.get(slot)) })
     }
 
-    /// Spends points unlocking primary (or secondary) weapon `index` for `class`. False, changing
-    /// nothing, if there's no such weapon, it's owned already or the points fall short.
-    pub fn unlock(&mut self, class: MechClass, primary: bool, index: u8) -> bool {
-        let Some((id, price)) = arsenal::weapon(primary, index) else { return false };
-        if self.owns(class, primary, index) || price > self.points() {
+    /// Spends points unlocking the weapon or item at `index` in `slot`'s list for `class`. False,
+    /// changing nothing, if there's no such thing, it's owned already or the points fall short.
+    pub fn unlock(&mut self, class: MechClass, slot: Slot, index: u8) -> bool {
+        let Some((id, price)) = arsenal::weapon(slot, index) else { return false };
+        if self.owns(class, slot, index) || price > self.points() {
             return false;
         }
         self.unlocks.entry(class.key().into()).or_default().push(id.into());
@@ -260,21 +259,49 @@ mod tests {
         let wanted = Loadout::named("kiln", "spindle");
         let rail = wanted.secondary;
         // Each mech owns its own two weapons; nothing else until unlocked.
-        assert!(r.owns(light, true, Loadout::of(light).primary) && r.owns(light, false, Loadout::of(light).secondary));
-        assert!(!r.owns(light, false, rail));
+        assert!(r.owns(light, Slot::Primary, Loadout::of(light).primary) && r.owns(light, Slot::Secondary, Loadout::of(light).secondary));
+        assert!(!r.owns(light, Slot::Secondary, rail));
         assert_eq!(r.points(), 0);
-        assert!(!r.unlock(light, false, rail), "unlocked with no points");
+        assert!(!r.unlock(light, Slot::Secondary, rail), "unlocked with no points");
 
         r.level = 2;
         assert_eq!(r.points(), POINTS_PER_LEVEL);
-        assert!(r.unlock(light, false, rail));
+        assert!(r.unlock(light, Slot::Secondary, rail));
         assert_eq!(r.points(), POINTS_PER_LEVEL - arsenal::price("spindle"));
-        assert!(!r.unlock(light, false, rail), "unlocked twice");
-        assert!(r.owns(light, false, rail) && !r.owns(heavy, false, rail), "an unlock is for one mech");
+        assert!(!r.unlock(light, Slot::Secondary, rail), "unlocked twice");
+        assert!(r.owns(light, Slot::Secondary, rail) && !r.owns(heavy, Slot::Secondary, rail), "an unlock is for one mech");
         // Locked weapons in a loadout fall back to the mech's own.
-        assert_eq!(r.allowed(light, wanted), Loadout { primary: Loadout::of(light).primary, secondary: rail });
+        assert_eq!(r.allowed(light, wanted), Loadout { primary: Loadout::of(light).primary, secondary: rail, ..Loadout::of(light) });
         assert_eq!(r.allowed(heavy, wanted), Loadout::of(heavy));
-        assert!(!r.unlock(heavy, true, 200), "no such weapon");
+        assert!(!r.unlock(heavy, Slot::Primary, 200), "no such weapon");
+    }
+
+    #[test]
+    fn items_unlock_mech_by_mech_with_the_same_points() {
+        let (light, heavy) = (MechClass::A, MechClass::C);
+        let (limpet, smoke, orb) = (arsenal::index(Slot::Offensive, "limpet"), arsenal::index(Slot::Offensive, "smoke"), arsenal::index(Slot::Support, "orb"));
+        let mut r = Record::guest(1, "Ace");
+        // Every mech starts with the Tumbler and the Brownout, and owns no other item.
+        for class in MechClass::ALL {
+            let own = Loadout::of(class);
+            assert_eq!((own.offensive, own.support), (arsenal::index(Slot::Offensive, "grenade"), arsenal::index(Slot::Support, "emp")));
+            assert!(r.owns(class, Slot::Offensive, own.offensive) && r.owns(class, Slot::Support, own.support));
+            assert!(!r.owns(class, Slot::Offensive, limpet) && !r.owns(class, Slot::Offensive, smoke) && !r.owns(class, Slot::Support, orb));
+        }
+        let wanted = Loadout { offensive: limpet, support: orb, ..Loadout::of(light) };
+        assert_eq!(r.allowed(light, wanted), Loadout::of(light), "carried locked items");
+
+        // Weapons and items spend the same points, and the record keeps their ids side by side.
+        r.level = 3;
+        assert!(r.unlock(light, Slot::Secondary, arsenal::index(Slot::Secondary, "spindle")));
+        assert!(r.unlock(light, Slot::Support, orb));
+        assert_eq!(r.points(), 2 * POINTS_PER_LEVEL - arsenal::price("spindle") - arsenal::price("orb"));
+        assert_eq!(r.unlocks["A"], ["spindle", "orb"]);
+        assert!(!r.unlock(light, Slot::Support, orb), "unlocked twice");
+        assert!(r.owns(light, Slot::Support, orb) && !r.owns(heavy, Slot::Support, orb), "an unlock is for one mech");
+        assert_eq!(r.allowed(light, wanted), Loadout { support: orb, ..Loadout::of(light) });
+        assert!(!r.unlock(light, Slot::Offensive, limpet), "unlocked past the points left");
+        assert!(!r.unlock(light, Slot::Support, 200), "no such item");
     }
 
     #[test]

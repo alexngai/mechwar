@@ -19,7 +19,7 @@ pub mod weapon;
 #[cfg(feature = "wasm")]
 mod wasm;
 
-pub use arsenal::{Arsenal, Loadout};
+pub use arsenal::{Arsenal, Loadout, Slot};
 pub use map::{Map, Pad};
 pub use rapier3d::prelude::Vector;
 
@@ -199,6 +199,23 @@ pub struct Tuning {
     pub emp_radius: f32,
     pub emp_drain: f32,
     pub emp_jam: f32,
+    /// Offensive: a remote mine, thrown like the grenade; it sticks, and bursts when set off (or
+    /// after `limpet_fuse`).
+    pub limpet_charges: f32,
+    pub limpet_recharge: f32,
+    pub limpet_fuse: f32,
+    pub limpet_damage: f32,
+    pub limpet_radius: f32,
+    /// Offensive: smoke, thrown like the grenade; it bursts into a cloud of `smoke_radius` for
+    /// `smoke_seconds`.
+    pub smoke_charges: f32,
+    pub smoke_recharge: f32,
+    pub smoke_fuse: f32,
+    pub smoke_radius: f32,
+    pub smoke_seconds: f32,
+    /// Support: a repair orb dropped at the feet, healing the mech's side (see game.rs `ORB_*`).
+    pub orb_charges: f32,
+    pub orb_recharge: f32,
 
     pub bot_turn_rate_deg: f32,
     pub bot_aim_error_deg: f32,
@@ -278,7 +295,8 @@ pub struct Input {
     pub ability: bool,
     /// Held to repair; see `step_mech`.
     pub repair: bool,
-    /// Items, also only on the tick the key went down.
+    /// Items, also only on the tick the key went down: G uses the offensive item (named for the
+    /// Tumbler grenade, the one every mech starts with), T the support item (the Brownout EMP).
     pub grenade: bool,
     pub emp: bool,
     /// The secondary's second control (middle mouse), held: a lock-on launcher locks with it.
@@ -360,16 +378,21 @@ pub struct Mech {
     pub repair_time: f32,
     /// Seconds left standing back up after a repair: still shut down, and still crouched.
     pub stand_up: f32,
-    /// Item charges left, and seconds until the next one comes back (0 when full).
+    /// Item charges left, and seconds until the next one comes back (0 when full): the offensive
+    /// item's (named for the Tumbler grenade, which every mech starts with) and the support
+    /// item's (the Brownout EMP).
     pub grenades: u8,
     pub grenade_wait: f32,
     pub emps: u8,
     pub emp_wait: f32,
     /// Seconds an enemy EMP keeps boost off.
     pub jammed: f32,
-    /// Set on ticks a grenade was thrown, and an EMP went off.
+    /// Set on ticks the offensive item was thrown, and the support item used.
     pub threw: bool,
     pub pulsed: bool,
+    /// A limpet of ours is down (or flying), so G sets it off; set on the tick it did.
+    pub limpet: bool,
+    pub sprung: bool,
     /// Holding a beam secondary on, and where the beam stopped (set by whoever knows the mechs:
     /// `weapon::beam`).
     pub beaming: bool,
@@ -440,9 +463,12 @@ impl Mech {
     }
 }
 
-/// A fresh mech standing at `pos` with full fuel, health and item charges.
+/// A fresh mech standing at `pos` with full fuel, health and item charges (for the starting
+/// items: `item::fill` refills them for others).
 pub fn spawn_mech(t: &Tuning, pos: Vector) -> Mech {
-    Mech { pos, fuel: t.fuel_max, health: t.health_max, grenades: t.grenade_charges as u8, emps: t.emp_charges as u8, ..Mech::default() }
+    let mut m = Mech { pos, fuel: t.fuel_max, health: t.health_max, ..Mech::default() };
+    item::fill(t, &mut m);
+    m
 }
 
 /// Collision shape, centered `mech_height / 2` above the feet.
@@ -478,10 +504,12 @@ pub struct Sim {
     pub class: MechClass,
     pub loadout: Loadout,
     pub mech: Mech,
-    /// Secondary fire and grenades in flight; offline they only meet the arena.
+    /// Secondary fire and thrown items in flight; offline they only meet the arena.
     pub projectiles: Vec<projectile::Projectile>,
     /// Where projectiles burst since the page last took them, with their blast radius.
     pub blasts: Vec<(f32, Vector)>,
+    /// Smoke hanging about (fading at `seq`s, as ticks).
+    pub clouds: Vec<net::Cloud>,
     /// Where hitscan pellets stopped since the page last took them.
     pub shots: Vec<Vector>,
     /// Steps so far: stands in for the input seq that seeds the spread online and tells this
@@ -500,13 +528,14 @@ impl Sim {
     pub fn with_map(tuning: Tuning, map: usize) -> Self {
         let map = Map::load(map);
         let spawn = Vector::from_array(map.spawns[0][0]);
-        let mut sim = Self { tuning, class: MechClass::B, loadout: Loadout::of(MechClass::B), mech: Mech::default(), projectiles: Vec::new(), blasts: Vec::new(), shots: Vec::new(), seq: 0, arena: Arena::new(&map), spawn };
+        let mut sim = Self { tuning, class: MechClass::B, loadout: Loadout::of(MechClass::B), mech: Mech::default(), projectiles: Vec::new(), blasts: Vec::new(), clouds: Vec::new(), shots: Vec::new(), seq: 0, arena: Arena::new(&map), spawn };
         sim.reset();
         sim
     }
 
     pub fn reset(&mut self) {
         self.mech = Mech { class: self.class, loadout: self.loadout, ..spawn_mech(&self.tuning, self.spawn) };
+        item::fill(&self.tuning, &mut self.mech);
     }
 
     pub fn step(&mut self, input: &Input) {
@@ -521,7 +550,10 @@ impl Sim {
             self.projectiles.extend(projectile::volley(t, &self.mech, 0, self.seq));
         }
         if self.mech.threw {
-            self.projectiles.push(projectile::grenade(t, &self.mech, 0, self.seq));
+            self.projectiles.push(projectile::thrown(t, &self.mech, 0, self.seq));
+        }
+        if self.mech.sprung {
+            projectile::set_off(0, &mut self.projectiles);
         }
         if self.mech.beaming {
             self.mech.beam_end = weapon::beam(&self.arena, t, &self.mech, []).0;
@@ -532,10 +564,14 @@ impl Sim {
             let arena = &self.arena;
             self.shots.extend(weapon::pellets(t, &self.mech, self.seq).iter().map(|r| r.point_at(arena.cast_ray(r, t.weapon_range).unwrap_or(t.weapon_range))));
         }
-        let (arena, blasts, mut bomblets) = (&self.arena, &mut self.blasts, Vec::new());
+        let (arena, blasts, clouds, mut bomblets, seq) = (&self.arena, &mut self.blasts, &mut self.clouds, Vec::new(), self.seq);
         self.projectiles.retain_mut(|p| {
             let radius = projectile::radius(t, p);
             match projectile::fly(arena, &projectile::tuning_for(t, p), p, |_, _| None) {
+                Some(at) if projectile::item(p) == Some(item::Item::Smoke) => {
+                    clouds.push(net::Cloud { pos: at, radius: t.smoke_radius, fades_at: seq + (t.smoke_seconds * TICK_HZ).round() as u32 });
+                    false
+                }
                 Some(at) => {
                     blasts.push((radius, at));
                     bomblets.extend(projectile::split(t, p, at));
@@ -545,10 +581,19 @@ impl Sim {
             }
         });
         self.projectiles.extend(bomblets);
+        self.clouds.retain(|c| seq < c.fades_at);
+        if !self.projectiles.iter().any(|p| projectile::item(p) == Some(item::Item::Limpet)) {
+            self.mech.limpet = false;
+        }
     }
 
     pub fn arena(&self) -> &Arena {
         &self.arena
+    }
+
+    /// Steps so far.
+    pub fn ticks(&self) -> u32 {
+        self.seq
     }
 }
 
@@ -565,6 +610,7 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     m.aux_pressed = false;
     m.threw = false;
     m.pulsed = false;
+    m.sprung = false;
     m.beaming = false;
     if m.health <= 0.0 {
         return;

@@ -9,6 +9,7 @@ use rapier3d::parry::query::RayCast;
 use rapier3d::prelude::{Capsule, Pose, Ray, Rotation};
 use serde::{Deserialize, Serialize};
 
+use crate::item::Item;
 use crate::{Arena, DT, Loadout, Mech, MechClass, Tuning, Vector, aim_ray, hit_shape, weapon};
 
 /// Added to mech capsules for contact: projectiles aren't points.
@@ -98,25 +99,44 @@ pub fn volley(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Vec<Projectile> {
         .collect()
 }
 
-/// Grenades carry this volley index, clear of any secondary volley's, so a grenade and a volley
-/// launched on the same input keep distinct ids.
+/// Thrown items carry these volley indices, clear of any secondary volley's, so an item and a
+/// volley launched on the same input keep distinct ids: grenades, limpets and smoke.
 pub const GRENADE: u8 = u8::MAX;
-/// A splitting shell's bomblets carry volley indices from here up (below GRENADE).
+pub const LIMPET: u8 = u8::MAX - 1;
+pub const SMOKE: u8 = u8::MAX - 2;
+/// A splitting shell's bomblets carry volley indices from here up (below the items').
 pub const BOMBLET: u8 = 100;
 /// Seconds a bomblet falls before bursting, if it hasn't hit anything.
 const BOMBLET_FUSE: f32 = 2.0;
 
-/// The grenade `m` threw this tick: a one-shell volley on the grenade's ballistics.
-pub fn grenade(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Projectile {
-    Projectile { n: GRENADE, charge: 0.0, target: 0, ..volley(&t.grenade(), m, owner, seq)[0] }
+/// The thrown item `p` is, if it's one.
+pub fn item(p: &Projectile) -> Option<Item> {
+    match p.n {
+        _ if p.primary => None,
+        GRENADE => Some(Item::Grenade),
+        LIMPET => Some(Item::Limpet),
+        SMOKE => Some(Item::Smoke),
+        _ => None,
+    }
 }
 
-/// The tuning projectile `p` flies and bursts with, given its owner's tuning `t`: grenades swap
-/// their ballistics into the secondary's fields, and a charged shell (a primary's charge, or a
-/// heat-fed secondary's) hits harder and wider.
+/// The offensive item `m` threw this tick: a one-shell volley on the item's ballistics.
+pub fn thrown(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Projectile {
+    let item = Item::of(m.loadout, true);
+    let n = match item {
+        Item::Limpet => LIMPET,
+        Item::Smoke => SMOKE,
+        _ => GRENADE,
+    };
+    Projectile { n, charge: 0.0, target: 0, ..volley(&t.thrown(item), m, owner, seq)[0] }
+}
+
+/// The tuning projectile `p` flies and bursts with, given its owner's tuning `t`: thrown items
+/// swap their ballistics into the secondary's fields, and a charged shell (a primary's charge,
+/// or a heat-fed secondary's) hits harder and wider.
 pub fn tuning_for<'a>(t: &'a Tuning, p: &Projectile) -> Cow<'a, Tuning> {
-    if p.n == GRENADE {
-        return Cow::Owned(t.grenade());
+    if let Some(item) = item(p) {
+        return Cow::Owned(t.thrown(item));
     }
     if p.n >= BOMBLET && !p.primary {
         let mut b = t.clone();
@@ -143,7 +163,7 @@ pub fn radius(t: &Tuning, p: &Projectile) -> f32 {
     ballistics(&tuning_for(t, p), p.primary).radius
 }
 
-/// Whether `p` is a secondary shell (not a grenade or primary fire) its owner can burst yet.
+/// Whether `p` is a secondary shell (not an item or primary fire) its owner can burst yet.
 pub fn armed(p: &Projectile) -> bool {
     !p.primary && p.n < BOMBLET && p.age >= ARM - DT * 0.5
 }
@@ -238,6 +258,13 @@ pub fn triggered<'a>(t: &Tuning, p: &Projectile, mechs: impl IntoIterator<Item =
 /// the end of its next tick of flight, as if its fuse had run out.
 pub fn detonate<'a>(owner: u8, shells: impl IntoIterator<Item = &'a mut Projectile>) {
     for p in shells.into_iter().filter(|p| p.owner == owner && armed(p)) {
+        p.age = f32::INFINITY;
+    }
+}
+
+/// Owner `owner` set off its limpets (`Mech::sprung`): each bursts at the end of its next tick.
+pub fn set_off<'a>(owner: u8, shells: impl IntoIterator<Item = &'a mut Projectile>) {
+    for p in shells.into_iter().filter(|p| p.owner == owner && item(p) == Some(Item::Limpet)) {
         p.age = f32::INFINITY;
     }
 }
