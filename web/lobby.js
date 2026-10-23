@@ -34,9 +34,8 @@ lobby.innerHTML = `
     <label class="row">CALLSIGN <input id="lobby-callsign" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Pilot"></label>
     <button id="quick">QUICK PLAY</button>
     <div id="lobby-note"></div>
-    <a class="more" href="#more">MORE ▾</a>
   </div>
-  <section id="more">
+  <section>
     <h3>PILOT</h3>
     <div id="pilot"></div>
   </section>
