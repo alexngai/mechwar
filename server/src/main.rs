@@ -22,7 +22,7 @@ use std::future::IntoFuture;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::{env, thread};
+use std::env;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
@@ -36,7 +36,6 @@ use futures_util::{SinkExt, StreamExt};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use sim::bot::Nav;
 use sim::game::{Game, MAX_PLAYERS};
 use sim::map::{MAPS, ROTATION};
 use sim::net::{self, ClientMsg, ServerMsg};
@@ -183,10 +182,6 @@ async fn main() {
         eprintln!("warning: no PROGRESS_KEY set, so progression records are signed with the public dev key");
         DEV_KEY.to_vec()
     }));
-    // Bot nav takes seconds per map (more on terrain): build every map's now, side by side, not
-    // when a room first loads it.
-    (0..MAPS.len()).for_each(|m| _ = thread::spawn(move || Nav::for_map(m)));
-
     let app = App { rooms: Rooms::default(), lag, quick: Arc::new(quick), seed: Arc::new(AtomicU64::new(seed)), signer };
     let client = ServeDir::new(&static_dir).fallback(ServeFile::new(format!("{static_dir}/index.html")));
     let router = Router::new()
