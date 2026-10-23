@@ -137,8 +137,8 @@ pub struct Tuning {
     pub alt_damage: f32,
     pub alt_radius: f32,
     /// A heat-fed launcher spends this share of the mech's heat on each shell (and fires even
-    /// overheated); the heat spent, as a share of `heat_max`, is the shell's charge, which scales
-    /// its damage and radius up to `alt_charge_damage` and `alt_charge_radius` times.
+    /// overheated); how hot the mech ran, as a share of `heat_max`, is the shell's charge, which
+    /// scales its damage and radius up to `alt_charge_damage` and `alt_charge_radius` times.
     pub alt_heat_fed: f32,
     pub alt_charge_damage: f32,
     pub alt_charge_radius: f32,
@@ -826,7 +826,7 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     if m.launched {
         m.alt_wait = t.alt_cooldown;
         let spent = m.heat * t.alt_heat_fed;
-        m.alt_charge = spent / t.heat_max.max(1.0);
+        m.alt_charge = if t.alt_heat_fed > 0.0 { m.heat / t.heat_max.max(1.0) } else { 0.0 };
         m.heat += t.alt_heat - spent;
     }
     if m.beaming {
@@ -994,6 +994,13 @@ mod tests {
         assert!(sim.mech.launched && sim.mech.heat == 0.0 && !sim.mech.overheated, "heat {}, overheated {}", sim.mech.heat, sim.mech.overheated);
         let full = projectile::tuning_for(&t, sim.projectiles.last().expect("launched"));
         assert!((full.alt_damage - 5.0 * t.alt_damage).abs() < 1e-3 && (full.alt_radius - 3.0 * t.alt_radius).abs() < 1e-3);
+        // Spending a third leaves two thirds, and the shell is still as hot as the mech ran.
+        sim.tuning.alt_heat_fed = 1.0 / 3.0;
+        (sim.mech.heat, sim.mech.alt_wait) = (t.heat_max, 0.0);
+        sim.step(&Input { alt_fire: true, ..Input::default() });
+        assert!(sim.mech.launched && (sim.mech.heat - t.heat_max * 2.0 / 3.0).abs() < 1e-3, "heat {}", sim.mech.heat);
+        let hot = projectile::tuning_for(&sim.tuning, sim.projectiles.last().expect("launched"));
+        assert!((hot.alt_damage - 5.0 * t.alt_damage).abs() < 1e-3, "damage {}", hot.alt_damage);
     }
 
     #[test]
