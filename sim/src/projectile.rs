@@ -104,7 +104,9 @@ pub fn volley(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Vec<Projectile> {
 pub const GRENADE: u8 = u8::MAX;
 pub const LIMPET: u8 = u8::MAX - 1;
 pub const SMOKE: u8 = u8::MAX - 2;
-/// A splitting shell's bomblets carry volley indices from here up (below the items').
+/// A rocket turret's rockets (`deploy.rs`) carry this volley index, below the items'.
+pub const TURRET: u8 = u8::MAX - 3;
+/// A splitting shell's bomblets carry volley indices from here up (below the turret's).
 pub const BOMBLET: u8 = 100;
 /// Seconds a bomblet falls before bursting, if it hasn't hit anything.
 const BOMBLET_FUSE: f32 = 2.0;
@@ -137,6 +139,9 @@ pub fn thrown(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Projectile {
 pub fn tuning_for<'a>(t: &'a Tuning, p: &Projectile) -> Cow<'a, Tuning> {
     if let Some(item) = item(p) {
         return Cow::Owned(t.thrown(item));
+    }
+    if p.n == TURRET && !p.primary {
+        return Cow::Borrowed(t);
     }
     if p.n >= BOMBLET && !p.primary {
         let mut b = t.clone();

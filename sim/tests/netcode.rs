@@ -1010,6 +1010,36 @@ fn barriers_predict_as_the_server_has_them() {
 }
 
 #[test]
+fn owners_see_their_turrets_rockets() {
+    use sim::projectile::TURRET;
+    let mut h = Harness::new();
+    let (a, b) = (h.clients[0].0, h.clients[1].0);
+    let turret = (0..).find(|&i| sim::arsenal::weapon(Slot::Offensive, i).expect("no rocket turret").0 == "rocket_turret").unwrap();
+    h.game.pick(a, MechClass::B, Loadout { offensive: turret, ..base_weapons() });
+    // Walk at each other until 45 m apart, then A sets the turret down and both stand.
+    let (mut placed, mut seen, mut burst) = (false, false, false);
+    for _ in 0..(10.0 * TICK_HZ) as u32 {
+        let s = h.game.snapshot(a);
+        let gap = xz_gap(s.players[0].view.pos, s.players[1].view.pos);
+        let walk = !placed && gap > 45.0;
+        let ia = Input { move_z: if walk { 1.0 } else { 0.0 }, grenade: !walk && !placed, ..Input::default() };
+        placed |= ia.grenade;
+        h.step([ia, Input { move_z: if walk { 1.0 } else { 0.0 }, yaw: std::f32::consts::PI, ..Input::default() }]);
+        let now = h.now();
+        let own = &mut h.clients[0].1;
+        seen |= own.projectiles(now).iter().any(|d| d.p.n == TURRET && d.p.owner == a && !d.predicted);
+        burst |= !own.blasts.is_empty();
+        own.blasts.clear();
+        if seen && burst {
+            break;
+        }
+    }
+    assert!(placed && seen, "A never saw its turret's rockets");
+    assert!(burst, "nor one burst");
+    assert!(h.game.snapshot(b).me.health < unshielded().health_max, "no rocket hit B");
+}
+
+#[test]
 fn emp_jams_the_other_client() {
     let t = unshielded();
     let mut h = Harness::new();

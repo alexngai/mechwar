@@ -1,22 +1,39 @@
-//! Deployables: what a mech puts down to stay a while, from its support slot: the shield dome
-//! and the barrier. The server owns them: it places them when the item's used (`place`), carries
-//! them in snapshots, and clears them when they expire. A mech has at most one of each kind out.
+//! Deployables: what a mech puts down to stay a while. From its support slot, the shield dome
+//! and the barrier; from its offensive slot, the MG and rocket turrets. The server owns them: it
+//! places them when the item's used (`place`), carries them in snapshots, mans the turrets
+//! (game.rs), and clears them when they expire or, a turret, are shot down. A mech has at most
+//! one of each kind out.
 //!
 //! A dome stops the other side's shots crossing into it (`stops`): hitscan, projectiles and
 //! splash alike. Its own side shoots out freely, and mechs walk through. A barrier is a wall in
 //! the arena itself (`Arena::set_barriers`), blocking movement and shots for everyone, so clients
-//! add it to their own arenas from snapshots and predict against it like any wall.
+//! add it to their own arenas from snapshots and predict against it like any wall. A turret is a
+//! tripod gun that trains on the nearest enemy it can see (`train`) and fires at it; mechs walk
+//! through it, and the other side's shots hit it (`first_turret`).
 
-use rapier3d::prelude::{Collider, ColliderBuilder, ColliderHandle, Ray, Rotation};
+use rapier3d::parry::query::RayCast;
+use rapier3d::prelude::{Capsule, Collider, ColliderBuilder, ColliderHandle, Pose, Ray, Rotation};
 use serde::{Deserialize, Serialize};
 
-use crate::{Arena, Mech, TICK_HZ, Tuning, Vector, hit_shape};
+use crate::bot::{look_at, wrap};
+use crate::{Arena, DT, Mech, TICK_HZ, Tuning, Vector, hit_shape};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
     Dome,
     Barrier,
+    MgTurret,
+    RocketTurret,
 }
+
+impl Kind {
+    pub fn turret(self) -> bool {
+        matches!(self, Kind::MgTurret | Kind::RocketTurret)
+    }
+}
+
+/// A turret's gun is on target once trained within this of its aim, in yaw and pitch (radians).
+const ON_TARGET: f32 = 0.05;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Deployable {
@@ -25,11 +42,18 @@ pub struct Deployable {
     pub owner: u8,
     /// Its base on the ground: a dome's center, a barrier's bottom middle.
     pub pos: Vector,
-    /// A barrier faces along this yaw (as a mech's aim does), standing across it.
+    /// A barrier faces along this yaw (as a mech's aim does), standing across it; a turret's gun
+    /// points along it and `pitch`.
     pub yaw: f32,
+    pub pitch: f32,
+    /// What's left to shoot off it: a turret's hull, infinite for the rest.
+    pub hull: f32,
     /// Ticks it went down at, and goes at.
     pub placed: u32,
     pub expires: u32,
+    /// A turret fires again from this tick, with this many rounds of its burst left.
+    pub ready: u32,
+    pub burst: u8,
 }
 
 impl Deployable {
@@ -54,19 +78,68 @@ impl Deployable {
 }
 
 /// What mech `m` (player `owner`, on `team`) puts down using `kind` on tick `tick`: a dome around
-/// its feet, or a barrier `barrier_distance` ahead across its aim, each on the ground below. None
-/// when a barrier would stand in one of `mechs`.
+/// its feet, a barrier `barrier_distance` ahead across its aim, or a turret `turret_distance`
+/// ahead facing it (each short of a wall in the way), on the ground below. None when a barrier
+/// would stand in one of `mechs` (pass spawn points as mechs too, so none boxes a spawn in).
 #[allow(clippy::too_many_arguments)]
 pub fn place<'a>(arena: &Arena, t: &Tuning, m: &Mech, kind: Kind, team: u8, owner: u8, tick: u32, mut mechs: impl Iterator<Item = (&'a Tuning, &'a Mech)>) -> Option<Deployable> {
-    let (at, seconds) = match kind {
-        Kind::Dome => (m.pos, t.dome_seconds),
-        Kind::Barrier => (m.pos + Rotation::from_rotation_y(m.yaw) * Vector::NEG_Z * t.barrier_distance, t.barrier_seconds),
+    // Ahead along the aim, but this side of any wall in the way (checked a metre up, so steps and
+    // ramps don't count), less `clear`: nothing goes down through a wall or inside a block.
+    let ahead = |d: f32, clear: f32| {
+        let dir = Rotation::from_rotation_y(m.yaw) * Vector::NEG_Z;
+        let wall = arena.cast_ray(&Ray::new(m.pos + Vector::Y, dir), d + clear).map_or(d, |w| (w - clear).clamp(0.0, d));
+        m.pos + dir * wall
+    };
+    let (at, seconds, hull) = match kind {
+        Kind::Dome => (m.pos, t.dome_seconds, f32::INFINITY),
+        Kind::Barrier => (ahead(t.barrier_distance, t.barrier_thickness * 0.5 + 0.1), t.barrier_seconds, f32::INFINITY),
+        Kind::MgTurret | Kind::RocketTurret => (ahead(t.turret_distance, t.turret_radius + 0.1), t.turret_seconds, t.turret_hull),
     };
     // The ground below, from a little over the mech's feet (so a barrier on a slope or step finds it).
     let from = Vector::new(at.x, m.pos.y + 2.0, at.z);
     let pos = arena.cast_ray(&Ray::new(from, Vector::NEG_Y), 60.0).map_or(at, |d| from + Vector::NEG_Y * d);
-    let d = Deployable { kind, team, owner, pos, yaw: m.yaw, placed: tick, expires: tick + (seconds * TICK_HZ).round() as u32 };
+    let ticks = |s: f32| (s * TICK_HZ).round() as u32;
+    let d = Deployable { kind, team, owner, pos, yaw: m.yaw, pitch: 0.0, hull, placed: tick, expires: tick + ticks(seconds), ready: tick + ticks(t.turret_warmup), burst: 0 };
     (kind != Kind::Barrier || !mechs.any(|(tm, q)| d.blocks(t, tm, q))).then_some(d)
+}
+
+/// Where turret `d`'s gun is.
+pub fn gun(t: &Tuning, d: &Deployable) -> Vector {
+    d.pos + Vector::Y * t.turret_height
+}
+
+/// Turret `d`'s body, for shots to hit: a capsule up to its gun, and its center.
+fn body(t: &Tuning, d: &Deployable) -> (Capsule, Vector) {
+    let r = t.turret_radius.min(t.turret_height * 0.5);
+    (Capsule::new_y(t.turret_height * 0.5 - r, r), d.pos + Vector::Y * (t.turret_height * 0.5))
+}
+
+/// Turret `d` as a stand-in mech, with the tuning that sizes it as one (for splash).
+pub fn as_mech(t: &Tuning, d: &Deployable) -> (Tuning, Mech) {
+    (Tuning { mech_height: t.turret_height, mech_radius: t.turret_radius, ..t.clone() }, Mech { pos: d.pos, ..Mech::default() })
+}
+
+/// The nearest turret of another side than `team` (and not shot down already) along `ray` within
+/// `max`: its index in `list`, and how far.
+pub fn first_turret(list: &[Deployable], t: &Tuning, team: u8, ray: &Ray, max: f32) -> Option<(usize, f32)> {
+    list.iter()
+        .enumerate()
+        .filter(|(_, d)| d.kind.turret() && d.team != team && d.hull > 0.0)
+        .filter_map(|(k, d)| {
+            let (shape, center) = body(t, d);
+            shape.cast_ray(&Pose::from_translation(center), ray, max, true).map(|toi| (k, toi))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+}
+
+/// Trains turret `d`'s gun on `goal`, turning at most this tick's `turret_turn_deg` (as a bot
+/// turns); whether it's on target.
+pub fn train(t: &Tuning, d: &mut Deployable, goal: Vector) -> bool {
+    let (yaw, pitch) = look_at(gun(t, d), goal);
+    let max = t.turret_turn_deg.to_radians() * DT;
+    d.yaw += wrap(yaw - d.yaw).clamp(-max, max);
+    d.pitch += (pitch - d.pitch).clamp(-max, max);
+    wrap(yaw - d.yaw).abs() < ON_TARGET && (pitch - d.pitch).abs() < ON_TARGET
 }
 
 /// `list` with `d` added, in place of any of its owner's of the same kind.
@@ -98,21 +171,20 @@ pub fn stops(list: &[Deployable], t: &Tuning, team: u8, ray: &Ray, max: f32) -> 
 impl Arena {
     /// Makes the barriers in `list` walls of the arena, and clears those that have gone.
     pub fn set_barriers(&mut self, t: &Tuning, list: &[Deployable]) {
-        let key = |d: &Deployable| (d.owner, d.placed);
         let walls: Vec<&Deployable> = list.iter().filter(|d| d.kind == Kind::Barrier).collect();
         let (world, before) = (&mut self.world, self.barriers.len());
-        self.barriers.retain(|&(k, handle)| {
-            let keep = walls.iter().any(|d| key(d) == k);
+        self.barriers.retain(|(had, handle)| {
+            let keep = walls.iter().any(|d| *d == had);
             if !keep {
-                world.remove_collider(handle);
+                world.remove_collider(*handle);
             }
             keep
         });
         let mut changed = self.barriers.len() != before;
         for d in walls {
-            if !self.barriers.iter().any(|&(k, _)| k == key(d)) {
+            if !self.barriers.iter().any(|(had, _)| had == d) {
                 let handle: ColliderHandle = self.world.insert_collider(d.wall(t), None);
-                self.barriers.push((key(d), handle));
+                self.barriers.push((*d, handle));
                 changed = true;
             }
         }
@@ -130,7 +202,7 @@ mod tests {
     #[test]
     fn domes_stop_the_other_sides_shots_from_outside() {
         let t = Tuning::default();
-        let dome = Deployable { kind: Kind::Dome, team: 0, owner: 0, pos: Vector::ZERO, yaw: 0.0, placed: 0, expires: 100 };
+        let dome = Deployable { kind: Kind::Dome, team: 0, owner: 0, pos: Vector::ZERO, yaw: 0.0, pitch: 0.0, hull: f32::INFINITY, placed: 0, expires: 100, ready: 0, burst: 0 };
         let list = [dome];
         let at = |from: Vector| {
             let to = Vector::new(0.0, 1.0, 0.0) - from;
@@ -173,6 +245,12 @@ mod tests {
             sim.step(&crate::Input { move_z: 1.0, ..crate::Input::default() });
         }
         assert!(sim.mech.pos.z > start - t.barrier_distance + t.barrier_thickness * 0.5, "walked through, to z {} from {start}", sim.mech.pos.z);
+        // Short of a wall in the way: facing the east wall (inner face x = 50) from 3 m off.
+        let near = Mech { yaw: -std::f32::consts::FRAC_PI_2, ..spawn_mech(&t, Vector::new(47.0, 0.0, 0.0)) };
+        for kind in [Kind::Barrier, Kind::MgTurret] {
+            let d = place(&arena, &t, &near, kind, 0, 0, 1, std::iter::empty()).unwrap();
+            assert!(d.pos.x < 50.0 - t.barrier_thickness * 0.5 && d.pos.y < 0.5, "{kind:?} went down at {}", d.pos);
+        }
         // None where it'd stand in a mech.
         let there = spawn_mech(&t, wall.pos);
         assert_eq!(place(&arena, &t, &m, Kind::Barrier, 0, 0, 1, [(&t, &there)].into_iter()), None);

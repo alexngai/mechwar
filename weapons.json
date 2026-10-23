@@ -108,7 +108,9 @@
   "offensive": [
     { "id": "grenade", "name": "Tumbler", "unlock": 0, "desc": "A frag grenade, lobbed: it bounces about, then bursts" },
     { "id": "limpet", "name": "Limpet", "unlock": 2, "desc": "A remote mine: thrown, it sticks where it lands, and G again sets it off; one down at a time" },
-    { "id": "smoke", "name": "Pall", "unlock": 1, "desc": "A smoke grenade: bursts into a cloud 16 m wide that hides whoever's in or behind it for 10 s" }
+    { "id": "smoke", "name": "Pall", "unlock": 1, "desc": "A smoke grenade: bursts into a cloud 16 m wide that hides whoever's in or behind it for 10 s" },
+    { "id": "mg_turret", "name": "MG turret", "unlock": 2, "desc": "A tripod gun set down ahead for 20 s: it fires short bursts at the nearest enemy it sees within 40 m, until its 150 hull is shot off" },
+    { "id": "rocket_turret", "name": "Rocket turret", "unlock": 3, "desc": "A tripod launcher set down ahead for 20 s: a rocket every 2 s at the nearest enemy it sees within 60 m, until its 150 hull is shot off" }
   ],
   "support": [
     { "id": "emp", "name": "Brownout", "unlock": 0, "desc": "An EMP around you: drains enemies' fuel and jams their boost" },

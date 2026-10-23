@@ -5,7 +5,7 @@
 //!
 //! Offensive items are thrown, as projectiles (`projectile::thrown`): the Tumbler grenade, the
 //! Limpet (a remote mine: sticks where it lands, and G again sets it off) and the Pall (smoke: a
-//! cloud that hides what's in or behind it, `hidden`). Support items act around the mech, and
+//! cloud that hides what's in or behind it, `hidden`); or set down: the turrets (`deploy.rs`). Support items act around the mech, and
 //! their effects are the server's: the Brownout EMP (`emp_reaches`, `jam`), the Salve, a repair
 //! orb dropped for the mech's side, and the deployables (`deploy.rs`): the shield dome and the
 //! barrier.
@@ -27,6 +27,8 @@ pub enum Item {
     Orb,
     Dome,
     Barrier,
+    MgTurret,
+    RocketTurret,
 }
 
 impl Item {
@@ -51,7 +53,14 @@ impl Item {
             Item::Orb => (t.orb_charges, t.orb_recharge),
             Item::Dome => (t.dome_charges, t.dome_recharge),
             Item::Barrier => (t.barrier_charges, t.barrier_recharge),
+            Item::MgTurret => (t.mg_turret_charges, t.mg_turret_recharge),
+            Item::RocketTurret => (t.rocket_turret_charges, t.rocket_turret_recharge),
         }
+    }
+
+    /// Whether it's thrown (`projectile::thrown`), rather than set down.
+    pub fn thrown(self) -> bool {
+        matches!(self, Item::Grenade | Item::Limpet | Item::Smoke)
     }
 }
 
@@ -69,6 +78,8 @@ fn lists() -> &'static [Vec<Item>; 2] {
                 "orb" => Item::Orb,
                 "dome" => Item::Dome,
                 "barrier" => Item::Barrier,
+                "mg_turret" => Item::MgTurret,
+                "rocket_turret" => Item::RocketTurret,
                 _ => panic!("weapons.json lists item `{id}`, which does nothing"),
             })
             .collect()

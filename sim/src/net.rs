@@ -155,6 +155,8 @@ pub enum Event {
     Pulse { owner: u8, pos: Vector, hits: u16 },
     /// A held beam this tick, from `owner`'s launcher to `end`, on mech `hit` if any.
     Beam { owner: u8, end: Vector, hit: Option<u8> },
+    /// A round from `owner`'s MG turret, stopping at `end`, on mech `hit` if any.
+    TurretShot { owner: u8, end: Vector, hit: Option<u8> },
 }
 
 pub fn encode<T: Serialize>(msg: &T) -> Vec<u8> {

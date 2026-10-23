@@ -613,8 +613,7 @@ impl Bot {
     }
 
     /// A build for this life, as a player would pick in the hangar: any primary and secondary,
-    /// rolled again until the guardrails (`sensible`) pass, the starting grenade, and a support
-    /// item it knows how to use.
+    /// rolled again until the guardrails (`sensible`) pass, and items it knows how to use.
     pub fn pick_loadout(&mut self, arsenal: &Arsenal, class: MechClass) -> Loadout {
         let (primaries, secondaries) = arsenal.counts();
         loop {
@@ -622,8 +621,9 @@ impl Bot {
             let loadout = Loadout { primary: roll(primaries, self.rand()), secondary: roll(secondaries, self.rand()), ..Loadout::of(class) };
             if sensible(arsenal.get(class, loadout)) {
                 // Off the state without drawing from it, so the rest of a life rolls as before.
+                let offensive = [Item::Grenade, Item::MgTurret, Item::RocketTurret][(self.rng >> 20) as usize % 3];
                 let support = [Item::Emp, Item::Dome, Item::Barrier][(self.rng >> 40) as usize % 3];
-                return Loadout { support: support.index(), ..loadout };
+                return Loadout { offensive: offensive.index(), support: support.index(), ..loadout };
             }
         }
     }
@@ -668,6 +668,7 @@ impl Bot {
             let ducked = self.contacts.iter().find(|c| !c.seen && c.seen_at.is_some_and(|at| tick.saturating_sub(at) < secs(FLUSH_AFTER))).map(|c| c.pos);
             if let Some(spot) = ducked.filter(|s| (t.grenade_radius + 2.0..GRENADE_RANGE).contains(&s.distance(me.pos)))
                 && me.grenades > 0
+                && Item::of(me.loadout, true) == Item::Grenade
                 && tick >= self.grenade_at
             {
                 return self.lob(t, me, spot, tick);
@@ -710,7 +711,14 @@ impl Bot {
             let alt_cool = use_ == AltUse::HeatFed || (!me.overheated && me.heat + t.alt_heat < t.heat_max);
             // Otherwise a grenade takes the aim the same way, every few seconds while charges last.
             let grenade = t.thrown(Item::Grenade);
-            let throw = !alt && me.grenades > 0 && tick >= self.grenade_at && dist < GRENADE_RANGE && dist > t.grenade_radius + 2.0;
+            let throw = !alt
+                && me.grenades > 0
+                && Item::of(me.loadout, true) == Item::Grenade
+                && tick >= self.grenade_at
+                && dist < GRENADE_RANGE
+                && dist > t.grenade_radius + 2.0;
+            // A turret goes down as a fight starts (the first tick it's in view), or to help hold a perch.
+            let turret = me.grenades > 0 && matches!(Item::of(me.loadout, true), Item::MgTurret | Item::RocketTurret) && (self.seen.len() == 1 || self.perched(nav, me));
             let shell = if alt && use_ != AltUse::Beam { Some(t) } else if throw { Some(&grenade) } else { None };
             // Shells are led by their flight time, and so are projectile primaries.
             let primary_lead = if t.shot_speed > 0.0 { dist / t.shot_speed } else { 0.0 };
@@ -754,8 +762,9 @@ impl Bot {
             {
                 self.retreat = Some(r);
                 let mut input = self.hold(arena, nav, t, me, r, Some(target), took_damage, tick);
-                // A barrier raised toward the threat (turning to it for the tick) covers the fall back.
-                if me.emps > 0 && Item::of(me.loadout, false) == Item::Barrier {
+                // A barrier raised toward the threat (turning to it for the tick) covers the fall
+                // back, if the threat's not where the barrier would go up.
+                if me.emps > 0 && Item::of(me.loadout, false) == Item::Barrier && flat(target.pos - me.pos).length() > t.barrier_distance + 3.0 {
                     let d = target.pos - me.pos;
                     (input.yaw, input.move_x, input.move_z, input.emp) = (atan2f(-d.x, -d.z), 0.0, 0.0, true);
                 }
@@ -797,7 +806,7 @@ impl Bot {
                 fire,
                 alt_fire,
                 aux: use_ == AltUse::Lock && alt && me.lock == 0 && !me.aux_held,
-                grenade: throw,
+                grenade: throw || turret,
                 hover: tick < self.hover_until,
                 // An EMP when it would land (taking the target for our size) on one not jammed
                 // already, and it counts: they're on thrusters (it grounds them), or we're hurt (it
@@ -990,12 +999,12 @@ fn flat(v: Vector) -> Vector {
 }
 
 /// Yaw and pitch that point from `from` at `to`, matching `aim_ray`.
-fn look_at(from: Vector, to: Vector) -> (f32, f32) {
+pub(crate) fn look_at(from: Vector, to: Vector) -> (f32, f32) {
     let d = to - from;
     (atan2f(-d.x, -d.z), atan2f(d.y, hypotf(d.x, d.z)))
 }
 
-fn wrap(angle: f32) -> f32 {
+pub(crate) fn wrap(angle: f32) -> f32 {
     (angle + PI).rem_euclid(TAU) - PI
 }
 
@@ -1214,6 +1223,22 @@ mod tests {
         assert!(bot.retreat.is_some() && input.emp, "no barrier falling back");
         let d = enemy.pos - me.pos;
         assert!((input.yaw - atan2f(-d.x, -d.z)).abs() < 1e-4, "raised away from the threat");
+        // Not with the threat right where it would go up (it wouldn't, and the bot would stall).
+        let close = spawn_mech(&t, me.pos + Vector::new(0.0, 0.0, -t.barrier_distance));
+        assert!(!Bot::new(1).think(&arena, nav, &t, &me, Some(&close), 1).emp, "tried to raise a barrier on the threat");
+    }
+
+    #[test]
+    fn bots_set_turrets_down_as_a_fight_starts() {
+        let (arena, nav, t) = blockout();
+        let enemy = spawn_mech(&t, Vector::new(0.0, 0.1, 22.0));
+        for turret in [Item::MgTurret, Item::RocketTurret] {
+            let me = Mech { loadout: Loadout { offensive: turret.index(), ..Loadout::of(MechClass::B) }, ..spawn_mech(&t, Vector::new(0.0, 0.1, 40.0)) };
+            let mut bot = Bot::new(1);
+            bot.role = Role::Hunt;
+            let (first, next) = (bot.think(&arena, nav, &t, &me, Some(&enemy), 1), bot.think(&arena, nav, &t, &me, Some(&enemy), 2));
+            assert!(first.grenade && !next.grenade, "{turret:?}: not down just as the fight started");
+        }
     }
 
     #[test]

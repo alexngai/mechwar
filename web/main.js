@@ -104,6 +104,8 @@ const FRIEND = TEAMS[0], FOE = TEAMS[1];
 // Volley indices of thrown items, from ITEM_N up; match projectile::GRENADE, LIMPET and SMOKE in
 // sim/src/projectile.rs. THROWN gives each one's weapons.json id.
 const GRENADE_N = 255, LIMPET_N = 254, ITEM_N = 253;
+// A rocket turret's rockets' volley index (projectile::TURRET).
+const TURRET_N = 252;
 const THROWN = { 255: 'grenade', 254: 'limpet', 253: 'smoke' };
 const BOMBLET_N = 100; // a splitting shell's bomblets carry volley indices from here up (projectile::BOMBLET)
 // A shell whose velocity jumps more than this (m/s) between frames has bounced: gravity alone moves
@@ -770,6 +772,21 @@ function frame(now) {
       if (a === myId && b) hits.push({ at: now, kill: false });
       for (const [id, e] of remotes) if (b & (1 << id)) e.jammedUntil = now + 1000 * classValue(cls, 'emp_jam');
     }
+    if (kind === 6) {
+      // A round from player a's MG turret, from its gun.
+      const from = turretGuns.get(`${a}:2`);
+      if (from) {
+        const end = new THREE.Vector3(x, y, z);
+        fx.muzzleLight(from);
+        fx.muzzle(from, heading.subVectors(end, from).normalize());
+        fx.beam(from, end);
+        fx.impact(end);
+        sound.shot('vulcan', from);
+      }
+      if (b >= 0 && a === myId) hits.push({ at: now, kill: false });
+      if (b === myId) tookHit(a, now, from);
+      else if (b >= 0) remotes.get(b)?.mech.hit();
+    }
     if (kind === 5 && a !== myId) {
       // A remote's held beam; our own is drawn from our prediction.
       const e = remotes.get(a);
@@ -790,21 +807,26 @@ function frame(now) {
     const secondary = primary ? null : weapons.secondaries[weapon];
     const key = `${owner}:${seq}:${n}:${primary}`, ahead = predicted ? a * DT : 0;
     const mech = predicted ? me : remotes.get(owner)?.mech;
-    const bomblet = !primary && n >= BOMBLET_N && n < ITEM_N; // born in the air, where its shell split
-    const item = !primary && n >= ITEM_N;
+    const bomblet = !primary && n >= BOMBLET_N && n < TURRET_N; // born in the air, where its shell split
+    const item = !primary && n >= ITEM_N, turret = !primary && n === TURRET_N;
     let shot = launches.get(key);
     if (!shot) {
       let from = null;
       if (primary) {
         if (n === 0) gunAt = mech?.muzzle(heading.set(vx, vy, vz).normalize(), predicted && firstPerson ? cockpit.fire(camera, new THREE.Vector3()) : null) ?? null;
         from = gunAt;
+      } else if (turret) {
+        // From the owner's rocket turret, which gives nobody away.
+        from = turretGuns.get(`${owner}:3`)?.clone() ?? null;
+        if (from) fx.burst(from, heading.set(vx, vy, vz).normalize());
+        sound.launch(weapons.secondaries[weapon].sound, from ?? { x, y, z });
       } else if (!bomblet) {
         from = predicted && firstPerson && n === 0 ? cockpit.fire(camera, new THREE.Vector3(), true) : mech?.launcher.getWorldPosition(new THREE.Vector3());
         if (n === 0) mech?.launch(from);
         if (item) sound.grenade(predicted ? null : { x, y, z });
       }
       launches.set(key, (shot = { from: from ?? new THREE.Vector3(x, y, z) }));
-      if (!predicted) lastFired.set(owner, now);
+      if (!predicted && !turret) lastFired.set(owner, now);
     }
     live.add(key);
     if (predicted && !primary && !item && !bomblet && age >= ARM - DT / 2) burstable = true;
@@ -994,13 +1016,13 @@ function frame(now) {
 }
 
 /** We were hit by `attacker`: shake, flash, and a damage arc toward where they stood. */
-function tookHit(attacker, now) {
+/** Hit by player `attacker`, or by something of theirs at `from`. */
+function tookHit(attacker, now, from = remotes.get(attacker)?.pos) {
   me.hit();
   sound.hurt();
   hurt = 1;
   shake = Math.min(shake + 0.5, 1);
-  const from = remotes.get(attacker);
-  if (from) damageFrom.push({ x: from.pos.x, z: from.pos.z, at: now });
+  if (from) damageFrom.push({ x: from.x, z: from.z, at: now });
   if (damageFrom.length > 4) damageFrom.shift();
 }
 
@@ -1104,17 +1126,40 @@ function drawSmoke(dt) {
   heard.clear();
   for (const key of live) heard.add(key);
 }
-// Deployables (sim/src/deploy.rs): shield domes, translucent half-spheres, and barriers, glowing
-// walls, in their side's color, fading over their last second. Each hums up as it goes down.
-const deployMeshes = { 0: [], 1: [] }; // by kind: 0 dome, 1 barrier
-const deployed = new Set();
+// Deployables (sim/src/deploy.rs) in their side's color, fading over their last second: shield
+// domes, translucent half-spheres; barriers, glowing walls; and turrets, tripod guns trained as the
+// server has them. Each hums up as it goes down, and a turret shot down bursts.
+const deployMeshes = { 0: [], 1: [], 2: [], 3: [] }; // by kind: dome, barrier, MG turret, rocket turret
+const deployed = new Map(); // key: [kind, where, seconds left, hull left]
+/** Where each turret's gun is, by `${owner}:${kind}`: rounds and rockets leave from it. */
+const turretGuns = new Map();
+/** A tripod with a head that turns (yaw) holding a gun that tilts (pitch): `head.children[0]`. */
+function turretMesh(kind, material) {
+  const h = classValue(1, 'turret_height'), group = new THREE.Group(), dark = new THREE.MeshStandardMaterial({ color: 0x3a3d40, roughness: 0.7 });
+  for (let k = 0; k < 3; k++) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, h * 1.05, 0.1), dark);
+    leg.position.set(Math.sin((k * Math.PI * 2) / 3) * 0.35, h * 0.47, Math.cos((k * Math.PI * 2) / 3) * 0.35);
+    leg.rotation.set(Math.cos((k * Math.PI * 2) / 3) * -0.35, 0, Math.sin((k * Math.PI * 2) / 3) * 0.35);
+    group.add(leg);
+  }
+  const head = new THREE.Group(), gun = new THREE.Group();
+  head.position.y = h;
+  gun.add(new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.4, 0.7), dark));
+  const barrel = kind === 2 ? new THREE.CylinderGeometry(0.06, 0.06, 1.0, 8).rotateX(Math.PI / 2) : new THREE.BoxGeometry(0.34, 0.34, 1.0);
+  gun.add(new THREE.Mesh(barrel, dark).translateZ(-0.6));
+  gun.add(new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.08, 0.72), material).translateY(0.2)); // side stripe
+  head.add(gun);
+  group.add(head);
+  group.userData.head = head;
+  return group;
+}
 function drawDeployables(now, myTeam) {
-  const list = game.deployables(), used = { 0: 0, 1: 0 }, live = new Set();
-  for (let i = 0; i < list.length; i += 8) {
-    const [kind, team, owner, x, y, z, yaw, left] = list.subarray(i, i + 8);
+  const list = game.deployables(), used = { 0: 0, 1: 0, 2: 0, 3: 0 }, live = new Map();
+  turretGuns.clear();
+  for (let i = 0; i < list.length; i += 10) {
+    const [kind, team, owner, x, y, z, yaw, pitch, left, hull] = list.subarray(i, i + 10);
     const key = `${owner}:${kind}:${x},${z}`;
     if (!deployed.has(key)) sound.deploy({ x, y, z });
-    live.add(key);
     let mesh = deployMeshes[kind][used[kind]++];
     if (!mesh) {
       const color = new THREE.Color(), material = new THREE.MeshBasicMaterial({ color, transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending });
@@ -1123,10 +1168,12 @@ function drawDeployables(now, myTeam) {
         mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 40, 16, 0, Math.PI * 2, 0, Math.PI / 2), material);
         // A coarse lattice over the shell: the quads of a low-poly half-sphere.
         mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.SphereGeometry(r, 16, 5, 0, Math.PI * 2, 0, Math.PI / 2)), new THREE.LineBasicMaterial({ color, transparent: true, depthWrite: false })));
-      } else {
+      } else if (kind === 1) {
         const geo = new THREE.BoxGeometry(classValue(1, 'barrier_width'), classValue(1, 'barrier_height'), classValue(1, 'barrier_thickness'));
         mesh = new THREE.Mesh(geo, material);
         mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color, transparent: true, depthWrite: false })));
+      } else {
+        mesh = turretMesh(kind, new THREE.MeshBasicMaterial({ color }));
       }
       scene.add(mesh);
       deployMeshes[kind].push(mesh);
@@ -1134,15 +1181,32 @@ function drawDeployables(now, myTeam) {
     const accent = (team === myTeam || myTeam < 0 ? FRIEND : FOE).accent, fade = Math.min(left, 1);
     mesh.visible = true;
     mesh.position.set(x, y + (kind === 1 ? classValue(1, 'barrier_height') / 2 : 0), z);
-    mesh.rotation.y = yaw;
-    mesh.material.color.setHex(accent);
-    mesh.material.opacity = (kind === 0 ? 0.16 : 0.3) * fade * (0.9 + 0.1 * Math.sin(now / 90));
-    mesh.children[0].material.color.setHex(accent);
-    mesh.children[0].material.opacity = 0.6 * fade;
+    if (kind >= 2) {
+      const head = mesh.userData.head, gun = head.children[0];
+      head.rotation.y = yaw;
+      gun.rotation.x = pitch;
+      gun.children[2].material.color.setHex(accent);
+      const at = head.getWorldPosition(new THREE.Vector3());
+      turretGuns.set(`${owner}:${kind}`, at.add(heading.set(0, Math.sin(pitch), -Math.cos(pitch)).applyAxisAngle(THREE.Object3D.DEFAULT_UP, yaw).multiplyScalar(1.1)));
+    } else {
+      mesh.rotation.y = yaw;
+      mesh.material.color.setHex(accent);
+      mesh.material.opacity = (kind === 0 ? 0.16 : 0.3) * fade * (0.9 + 0.1 * Math.sin(now / 90));
+      mesh.children[0].material.color.setHex(accent);
+      mesh.children[0].material.opacity = 0.6 * fade;
+    }
+    live.set(key, [kind, mesh.position.clone().setY(y + 1), left, hull]);
   }
-  for (const kind of [0, 1]) for (let k = used[kind]; k < deployMeshes[kind].length; k++) deployMeshes[kind][k].visible = false;
+  // A damaged turret gone before its time was shot down.
+  for (const [key, [kind, at, left, hull]] of deployed) {
+    if (kind >= 2 && left > 0.5 && hull < classValue(1, 'turret_hull') && !live.has(key)) {
+      fx.explosion(at, 0.6);
+      sound.blast(3, at);
+    }
+  }
+  for (const kind of [0, 1, 2, 3]) for (let k = used[kind]; k < deployMeshes[kind].length; k++) deployMeshes[kind][k].visible = false;
   deployed.clear();
-  for (const key of live) deployed.add(key);
+  for (const [key, value] of live) deployed.set(key, value);
 }
 
 /** Whether smoke lies across the sight line from `a` to `b`. */

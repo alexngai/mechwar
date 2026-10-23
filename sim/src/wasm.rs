@@ -30,11 +30,12 @@ fn mech_state(m: &Mech) -> Vec<f32> {
     ]
 }
 
-/// Eight floats per deployable: kind (0 dome, 1 barrier), team, owner, base xyz, facing yaw, and
-/// seconds left as of tick `now`.
+/// Ten floats per deployable: kind (0 dome, 1 barrier, 2 MG turret, 3 rocket turret), team,
+/// owner, base xyz, facing yaw and pitch, seconds left as of tick `now`, and hull left (infinite
+/// for a dome or barrier).
 fn deployable_floats(list: &[Deployable], now: u32) -> Vec<f32> {
     list.iter()
-        .flat_map(|d| [d.kind as u8 as f32, f32::from(d.team), f32::from(d.owner), d.pos.x, d.pos.y, d.pos.z, d.yaw, d.expires.saturating_sub(now) as f32 * DT])
+        .flat_map(|d| [d.kind as u8 as f32, f32::from(d.team), f32::from(d.owner), d.pos.x, d.pos.y, d.pos.z, d.yaw, d.pitch, d.expires.saturating_sub(now) as f32 * DT, d.hull])
         .collect()
 }
 
@@ -323,7 +324,8 @@ impl WasmNetClient {
     /// Shot (kind 0): a = shooter, b = hit id or -1, xyz = where it stopped. Kill (kind 1): a = killer,
     /// b = victim. Blast (kind 2): a = owner, b = blast radius, xyz = where. Splash hit (kind 3): a = attacker,
     /// b = victim. EMP (kind 4): a = owner, b = bitmask of the ids it jammed, xyz = where. Beam (kind 5):
-    /// a = owner, b = id it's on or -1, xyz = where it stops.
+    /// a = owner, b = id it's on or -1, xyz = where it stops. Turret round (kind 6): a = the MG
+    /// turret's owner, b = hit id or -1, xyz = where it stopped.
     pub fn take_events(&mut self) -> Vec<f32> {
         let mut out = Vec::new();
         for e in std::mem::take(&mut self.0.events) {
@@ -334,6 +336,7 @@ impl WasmNetClient {
                 Event::Kill { killer, victim } => out.extend([1.0, f32::from(killer), f32::from(victim), 0.0, 0.0, 0.0]),
                 Event::Pulse { owner, pos, hits } => out.extend([4.0, f32::from(owner), f32::from(hits), pos.x, pos.y, pos.z]),
                 Event::Beam { owner, end, hit } => out.extend([5.0, f32::from(owner), hit.map_or(-1.0, f32::from), end.x, end.y, end.z]),
+                Event::TurretShot { owner, end, hit } => out.extend([6.0, f32::from(owner), hit.map_or(-1.0, f32::from), end.x, end.y, end.z]),
                 // The client turns these into the blasts and hits below.
                 Event::Launch(_) | Event::Blast { .. } => {}
             }

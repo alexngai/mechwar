@@ -116,7 +116,6 @@ impl Slot {
 }
 
 /// Index of the weapon or item with id `id` in `slot`'s list.
-#[cfg(test)]
 pub(crate) fn index(slot: Slot, id: &str) -> u8 {
     slot.list(weapons_json()).iter().position(|w| w["id"] == id).unwrap_or_else(|| panic!("no `{id}` in {slot:?}")) as u8
 }

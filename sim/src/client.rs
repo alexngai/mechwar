@@ -163,11 +163,12 @@ impl NetClient {
                 let (arena, team) = (&self.arena, self.team);
                 self.shots.extend(weapon::pellets(t, m, self.seq).iter().map(|r| {
                     let wall = arena.cast_ray(r, t.weapon_range).unwrap_or(t.weapon_range);
-                    r.point_at(deploy::stops(domes, t, team, r, wall).unwrap_or(wall))
+                    let stop = deploy::stops(domes, t, team, r, wall).unwrap_or(wall);
+                    r.point_at(deploy::first_turret(domes, t, team, r, stop).map_or(stop, |(_, toi)| toi))
                 }));
             }
         }
-        if let (true, Some(id)) = (self.mech.threw, self.id) {
+        if let (true, true, Some(id)) = (self.mech.threw, Item::of(self.mech.loadout, true).thrown(), self.id) {
             self.projectiles.push(projectile::thrown(self.arsenal.of(&self.mech), &self.mech, id, self.seq));
         }
         if let (true, Some(id)) = (self.mech.sprung, self.id) {
@@ -216,7 +217,8 @@ impl NetClient {
             }
             let hit = projectile::fly(arena, &t, p, |ray, max| {
                 let dome = deploy::stops(domes, &t, team, ray, max);
-                projectile::first_mech(ray, dome.unwrap_or(max), enemies()).or(dome)
+                let turret = deploy::first_turret(domes, &t, team, ray, dome.unwrap_or(max)).map(|(_, toi)| toi);
+                projectile::first_mech(ray, turret.or(dome).unwrap_or(max), enemies()).or(turret).or(dome)
             });
             let Some(at) = hit.or_else(|| projectile::triggered(&t, p, enemies()).then_some(p.pos)) else {
                 return true;
@@ -361,14 +363,14 @@ impl NetClient {
 
         for e in &s.events {
             match *e {
-                Event::Launch(p) if Some(p.owner) != self.id => self.replays.push(Replay { launched: s.tick, p, flown: 0, done: false }),
+                Event::Launch(p) if !self.predicts(p.id()) => self.replays.push(Replay { launched: s.tick, p, flown: 0, done: false }),
                 Event::Launch(_) => {}
                 Event::Blast { owner, seq, n, primary, class, loadout, charge, pos, hits } => {
                     let id = (owner, seq, n, primary);
                     let shape = Projectile { owner, seq, n, primary, class, loadout, charge, target: 0, pos, vel: Vector::ZERO, age: 0.0 };
                     let radius = projectile::radius(self.arsenal.get(class, loadout), &shape);
                     self.hits.extend((0..16).filter(|v| hits & 1 << v != 0).map(|v| (owner, v)));
-                    if Some(owner) != self.id {
+                    if !self.predicts(id) {
                         self.held.push((s.tick, id, radius, pos));
                     } else if let Some(&(_, local)) = self.burst.iter().find(|b| b.0 == id) {
                         // Already exploded where we predicted; only a real miss gets a second one.
@@ -383,13 +385,19 @@ impl NetClient {
                         }
                     }
                 }
-                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } => self.events.push(*e),
+                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } | Event::TurretShot { .. } => self.events.push(*e),
             }
         }
         self.snapshots.push_back(s);
         if self.snapshots.len() > SNAPSHOT_BUFFER {
             self.snapshots.pop_front();
         }
+    }
+
+    /// Whether projectile `id` is one of ours we fly ourselves: everything we launch but our
+    /// turrets' rockets, which the server's Launch brings like anyone's.
+    fn predicts(&self, (owner, _, n, primary): Id) -> bool {
+        Some(owner) == self.id && (primary || n != projectile::TURRET)
     }
 
     pub fn arena(&self) -> &Arena {

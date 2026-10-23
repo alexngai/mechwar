@@ -231,6 +231,30 @@ pub struct Tuning {
     pub barrier_thickness: f32,
     pub barrier_distance: f32,
     pub barrier_seconds: f32,
+    /// Offensive: turrets, set down `turret_distance` ahead, lasting `turret_seconds` unless
+    /// their hull's shot off. Each trains on the nearest enemy it sees in range at
+    /// `turret_turn_deg` a second and, after `turret_warmup`, fires: the MG bursts of
+    /// `mg_turret_burst` hitscan rounds, the other a rocket (the Rocket's) every
+    /// `rocket_turret_cooldown`.
+    pub turret_distance: f32,
+    pub turret_height: f32,
+    pub turret_radius: f32,
+    pub turret_hull: f32,
+    pub turret_seconds: f32,
+    pub turret_turn_deg: f32,
+    pub turret_warmup: f32,
+    pub mg_turret_charges: f32,
+    pub mg_turret_recharge: f32,
+    pub mg_turret_range: f32,
+    pub mg_turret_damage: f32,
+    pub mg_turret_rate: f32,
+    pub mg_turret_burst: f32,
+    pub mg_turret_pause: f32,
+    pub mg_turret_spread_deg: f32,
+    pub rocket_turret_charges: f32,
+    pub rocket_turret_recharge: f32,
+    pub rocket_turret_range: f32,
+    pub rocket_turret_cooldown: f32,
 
     pub bot_turn_rate_deg: f32,
     pub bot_aim_error_deg: f32,
@@ -426,8 +450,8 @@ pub struct Arena {
     pub pads: Vec<Pad>,
     /// Half the map's width and depth: no mech gets past these, however high it flies.
     pub half: [f32; 2],
-    /// Barriers standing (`deploy.rs`), by (owner, tick placed).
-    barriers: Vec<((u8, u32), ColliderHandle)>,
+    /// Barriers standing (`deploy.rs`), and their walls.
+    barriers: Vec<(deploy::Deployable, ColliderHandle)>,
 }
 
 /// A jump pad fires for feet this close to its center (and within half a meter of its height).
@@ -568,18 +592,24 @@ impl Sim {
             projectile::cap(t, 0, &mut self.projectiles);
             self.projectiles.extend(projectile::volley(t, &self.mech, 0, self.seq));
         }
-        if self.mech.threw {
+        if self.mech.threw && item::Item::of(self.mech.loadout, true).thrown() {
             self.projectiles.push(projectile::thrown(t, &self.mech, 0, self.seq));
         }
         if self.mech.sprung {
             projectile::set_off(0, &mut self.projectiles);
         }
-        let kind = match item::Item::of(self.mech.loadout, false) {
+        // Deployables go down offline too, though turrets find nothing to shoot.
+        let offensive = match item::Item::of(self.mech.loadout, true) {
+            item::Item::MgTurret => Some(deploy::Kind::MgTurret),
+            item::Item::RocketTurret => Some(deploy::Kind::RocketTurret),
+            _ => None,
+        };
+        let support = match item::Item::of(self.mech.loadout, false) {
             item::Item::Dome => Some(deploy::Kind::Dome),
             item::Item::Barrier => Some(deploy::Kind::Barrier),
             _ => None,
         };
-        if let (true, Some(kind)) = (self.mech.pulsed, kind) {
+        for kind in [offensive.filter(|_| self.mech.threw), support.filter(|_| self.mech.pulsed)].into_iter().flatten() {
             match deploy::place(&self.arena, t, &self.mech, kind, 0, 0, self.seq, std::iter::empty()) {
                 Some(d) => deploy::add(&mut self.deployables, d),
                 None => self.mech.emps += 1,
