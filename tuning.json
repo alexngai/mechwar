@@ -103,6 +103,7 @@
   "alt_lock_cone":     { "value": 8,      "min": 1,     "max": 45,    "step": 0.5,    "unit": "deg",      "group": "secondary", "source": "own tuning" },
   "alt_lock_hold":     { "value": 2,      "min": 0,     "max": 10,    "step": 0.1,    "unit": "s",        "group": "secondary", "source": "own tuning" },
   "alt_turn":          { "value": 0,      "min": 0,     "max": 720,   "step": 5,      "unit": "deg/s",    "group": "secondary", "source": "own tuning" },
+  "alt_home_delay":    { "value": 0,      "min": 0,     "max": 2,     "step": 0.05,   "unit": "s",        "group": "secondary", "source": "own tuning" },
   "alt_split":         { "value": 0,      "min": 0,     "max": 20,    "step": 1,      "unit": "bomblets", "group": "secondary", "source": "own tuning" },
   "alt_split_damage":  { "value": 8,      "min": 0,     "max": 100,   "step": 0.5,    "unit": "hp",       "group": "secondary", "source": "own tuning" },
   "alt_split_radius":  { "value": 2,      "min": 0.1,   "max": 10,    "step": 0.1,    "unit": "m",        "group": "secondary", "source": "own tuning" },

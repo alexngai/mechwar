@@ -159,6 +159,9 @@ pub struct Tuning {
     pub alt_lock_cone: f32,
     pub alt_lock_hold: f32,
     pub alt_turn: f32,
+    /// Homing shells fly straight this many seconds before they start to turn, so a volley fans
+    /// out before it closes in.
+    pub alt_home_delay: f32,
     /// A splitting shell bursting in the air (its fuse, or a press) scatters `alt_split` bomblets
     /// in a ring at `alt_split_speed`, each bursting on contact for `alt_split_damage` over
     /// `alt_split_radius`.

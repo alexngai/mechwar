@@ -206,10 +206,11 @@ pub fn track(arena: &Arena, t: &Tuning, m: &mut Mech, chests: &[(u8, Vector)]) {
     }
 }
 
-/// Turns homing shell `p` (tuned by `t`) toward `goal`, by at most this tick's `alt_turn`.
+/// Turns homing shell `p` (tuned by `t`) toward `goal`, by at most this tick's `alt_turn`, once
+/// it's flown `alt_home_delay`.
 pub fn home(t: &Tuning, p: &mut Projectile, goal: Vector) {
     let (speed, want) = (p.vel.length(), (goal - p.pos).normalize_or_zero());
-    if p.primary || t.alt_turn <= 0.0 || speed < 1e-3 || want == Vector::ZERO {
+    if p.primary || t.alt_turn <= 0.0 || p.age < t.alt_home_delay || speed < 1e-3 || want == Vector::ZERO {
         return;
     }
     let have = p.vel / speed;
@@ -387,6 +388,20 @@ mod tests {
         // Not a level fan: some climb and some dip.
         assert!(v.iter().any(|p| p.vel.y > aim.y * t.alt_speed + 0.1) && v.iter().any(|p| p.vel.y < aim.y * t.alt_speed - 0.1));
         assert_ne!(v[0].vel, volley(&t, &m, 0, 8)[0].vel, "seq doesn't reseed");
+    }
+
+    #[test]
+    fn homing_waits_out_its_delay() {
+        let (t, m) = mech(MechClass::B, [0.0, 0.0, 0.0], 0.0, 0.0);
+        let t = Tuning { alt_turn: 90.0, alt_home_delay: 0.4, ..t };
+        let mut p = volley(&t, &m, 0, 1)[0];
+        let (dir, goal) = (p.vel, p.pos + Vector::X * 30.0);
+        p.age = 0.39;
+        home(&t, &mut p, goal);
+        assert_eq!(p.vel, dir, "turned during the delay");
+        p.age = 0.4;
+        home(&t, &mut p, goal);
+        assert!(p.vel.angle_between(dir) > 0.0, "didn't turn once it was over");
     }
 
     #[test]
