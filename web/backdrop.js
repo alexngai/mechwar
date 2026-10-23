@@ -10,9 +10,12 @@ import { Mech } from './mech.js';
 
 // Class, x, turn toward the middle: the outer two stand clear of the lobby's column on a wide window.
 const BAYS = [['A', -14, 0.35], ['B', 0, 0], ['C', 14, -0.35]];
-const SPOT = { height: 16, angle: 0.36, intensity: 2400, color: 0xfff0d8 };
+// Low enough that the orbit's frame takes in the lamps; the angle keeps the pool a pad wide.
+const SPOT = { height: 11, angle: 0.5, intensity: 1150, color: 0xfff0d8 };
 const ORBIT = { radius: 29, period: 90, height: 6.8 }; // m, s a turn, m
 const SHADE = 0x07090b; // the dark the hangar falls off into
+const CAN = new THREE.MeshStandardMaterial({ color: 0x2b2e32, roughness: 0.5, metalness: 0.6 });
+const LENS = new THREE.MeshBasicMaterial({ color: new THREE.Color(SPOT.color).multiplyScalar(3) }); // past white, so it reads lit
 
 const box = (w, h, d, color, x, y, z) => {
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshStandardMaterial({ color, roughness: 0.85 }));
@@ -74,6 +77,13 @@ export function backdrop() {
     cone.position.copy(spot.target.position).addScaledVector(axis, 0.5);
     cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis.normalize());
     scene.add(cone);
+    // The can the lamp hangs in, on a rod down from the truss: its lens glowing at the lamp, the
+    // body back up the axis.
+    const can = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, 1.2, 24), [CAN, CAN, LENS]);
+    can.quaternion.copy(cone.quaternion);
+    can.position.copy(spot.position).addScaledVector(axis, 0.6);
+    const rod = 16.7 - SPOT.height - 1;
+    scene.add(can, box(0.1, rod, 0.1, 0x2b2e32, x, SPOT.height + 1 + rod / 2, 0.25));
     const mech = new Mech(scene, NO_FX, cls);
     mech.root.traverse((o) => { o.castShadow = o.receiveShadow = true; });
     const height = classes[cls].overrides?.mech_height ?? tuning.mech_height.value;
