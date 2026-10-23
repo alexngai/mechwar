@@ -1,13 +1,29 @@
-// Map-authoring kit shared by the generator scripts (foundry.mjs, verdigris.mjs): boxes, ramps and
-// props, then `write`, which adds the 180-degree twin of everything and writes the JSON.
+// Map-authoring kit shared by the generator scripts (foundry.mjs, verdigris.mjs): terrain, boxes,
+// cylinders, ramps and props, then `write`, which writes the JSON.
 //
-// Author one half (z > 0, plus pieces straddling z = 0 on one side); `write` adds the rest, so
-// both teams get the same map. Wrap pieces that are their own twin in `once`.
+// A twinned map: author one half (z > 0, plus pieces straddling z = 0 on one side) and `write`
+// adds the 180-degree twin of everything, so both teams get the same map. Wrap pieces that are
+// their own twin in `once`. An asymmetric map: author all of it and give `write` both teams' spawns.
 import { writeFileSync } from 'node:fs';
+import { heightAt as groundAt } from './ground.js';
 
 export const solids = [], decor = [], nav = [], pads = [];
 const single = new Set(); // pieces that are their own twin
+let terrain = null;
 export const r3 = (v) => Math.round(v * 1000) / 1000;
+
+/**
+ * Terrain over a `w` x `d` map, which the sim collides with as a heightfield: `height(x, z)` every
+ * `cell` m, to the decimeter. A twinned map's `height` must be its own 180-degree twin.
+ */
+export function ground([w, d], cell, height) {
+  const at = (i, size) => i * cell - size / 2;
+  const heights = Array.from({ length: d / cell + 1 }, (_, r) => Array.from({ length: w / cell + 1 }, (_, c) => Math.round(height(at(c, w), at(r, d)) * 10) / 10));
+  terrain = { size: [w, d], cell, heights };
+}
+
+/** The terrain's height at (x, z), on the triangles the sim collides with. */
+export const heightAt = (x, z) => groundAt(terrain, terrain.size, x, z);
 
 /** Axis-aligned box from its min and max corners. */
 export const box = ([x0, y0, z0], [x1, y1, z1], mat) =>
@@ -91,6 +107,15 @@ export function growth(root, dir, reach, { size = 1, shelf = 0, lit = false, mat
   block(out / 2 - r, out / 2 + r, l, h, 2 * r, 2.4 * r, rand(0, 45), 'tank');
 }
 
+/** A cylinder of radius `r` whose axis runs from point `a` to point `b`: a trunk, a post, a log. */
+export function cylinder(a, b, r, mat = 'bark') {
+  const [dx, dy, dz] = [0, 1, 2].map((i) => b[i] - a[i]);
+  const len = Math.hypot(dx, dy, dz), deg = (rad) => r3((rad * 180) / Math.PI);
+  // The sim turns local Y up the axis: tilt about X leans it toward +Z, then yaw swings it round.
+  const tilt = deg(Math.acos(dy / len)), yaw = Math.hypot(dx, dz) > 1e-6 ? deg(Math.atan2(dx, dz)) : 0;
+  solids.push({ shape: 'cylinder', box: [0, 1, 2].map((i) => r3((a[i] + b[i]) / 2)), half: [r3(r), r3(len / 2), r3(r)], ...(yaw && { yaw }), ...(tilt && { tilt }), mat });
+}
+
 /** A smokestack: two boxes, square and diamond, whose union is a fluted, eight-pointed shaft. */
 export function stack(x, z, r = 3, h = 34) {
   box([x - r, 0, z - r], [x + r, h, z + r], 'stack');
@@ -120,24 +145,30 @@ export const once = (build) => {
 const flip = ([x, y, z]) => [r3(-x) || 0, y, r3(-z) || 0];
 
 /**
- * Adds the 180-degree twin of everything authored, then writes `file` (a URL) with `meta` (name,
- * size, night, palette...) and the north team's `spawns` (the south's are their twins).
+ * Writes `file` (a URL) with `meta` (name, size, night, palette...), the terrain if any, and each
+ * team's `spawns`. Without `south`, first adds the 180-degree twin of everything authored, and the
+ * south team's spawns are the north's twins.
  */
-export function write(file, meta, north) {
-  for (const s of [...solids]) {
-    if (!single.has(s)) solids.push({ ...s, box: flip(s.box), ...(s.yaw !== undefined && { yaw: r3(s.yaw + 180) }) });
+export function write(file, meta, north, south) {
+  if (!south) {
+    for (const s of [...solids]) {
+      if (!single.has(s)) solids.push({ ...s, box: flip(s.box), ...(s.yaw !== undefined && { yaw: r3(s.yaw + 180) }) });
+    }
+    // Every point a prop has (at, from, to) turns with it.
+    for (const d of [...decor]) decor.push(Object.fromEntries(Object.entries(d).map(([k, val]) => [k, Array.isArray(val) ? flip(val) : val])));
+    for (const p of [...nav]) if (!single.has(p)) nav.push(flip(p));
+    for (const p of [...pads]) pads.push({ at: flip(p.at), to: flip(p.to), apex: p.apex });
+    south = north.map(flip);
   }
-  // Every point a prop has (at, from, to) turns with it.
-  for (const d of [...decor]) decor.push(Object.fromEntries(Object.entries(d).map(([k, val]) => [k, Array.isArray(val) ? flip(val) : val])));
-  for (const p of [...nav]) if (!single.has(p)) nav.push(flip(p));
-  for (const p of [...pads]) pads.push({ at: flip(p.at), to: flip(p.to), apex: p.apex });
   // Ramps and turned boxes keep a yaw; the twin's is 180 more. Untilted boxes need no yaw at all.
   for (const s of solids) if (s.yaw === 0 || s.yaw === undefined) delete s.yaw;
+  if (terrain && terrain.size.some((v, i) => v !== meta.size[i])) throw new Error(`${meta.name}: terrain is ${terrain.size}, map is ${meta.size}`);
 
-  const map = { ...meta, solids, decor, pads, spawns: [north, north.map(flip)], nav };
-  // One solid, prop or waypoint per line, so edits diff cleanly.
-  const lines = (key) => `"${key}": [\n    ${map[key].map((v) => JSON.stringify(v)).join(',\n    ')}\n  ]`;
+  const map = { ...meta, solids, decor, pads, spawns: [north, south], nav };
+  // One solid, prop, waypoint or terrain row per line, so edits diff cleanly.
+  const lines = (key, list = map[key]) => `"${key}": [\n    ${list.map((v) => JSON.stringify(v)).join(',\n    ')}\n  ]`;
   const head = Object.entries(meta).map(([k, v]) => `"${k}": ${JSON.stringify(v).replaceAll(',', ', ')}`).join(',\n  ');
-  writeFileSync(file, `{\n  ${head},\n  ${['solids', 'decor', ...(pads.length ? ['pads'] : [])].map(lines).join(',\n  ')},\n  "spawns": ${JSON.stringify(map.spawns)},\n  ${lines('nav')}\n}\n`);
-  console.log(`${meta.name}: ${solids.length} solids, ${decor.length} decor, ${pads.length} pads, ${nav.length} waypoints`);
+  const ground = terrain ? `,\n  "terrain": {"cell": ${terrain.cell}, ${lines('heights', terrain.heights)}}` : '';
+  writeFileSync(file, `{\n  ${head},\n  ${['solids', 'decor', ...(pads.length ? ['pads'] : [])].map((k) => lines(k)).join(',\n  ')},\n  "spawns": ${JSON.stringify(map.spawns)},\n  ${lines('nav')}${ground}\n}\n`);
+  console.log(`${meta.name}: ${solids.length} solids, ${decor.length} decor, ${pads.length} pads, ${nav.length} waypoints${terrain ? `, ${terrain.heights.length}x${terrain.heights[0].length} terrain` : ''}`);
 }

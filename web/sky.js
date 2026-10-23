@@ -1,6 +1,6 @@
 // The world past the arena walls: a gradient sky dome with a soft sun, matching fog, and one merged
-// skyline mesh: desert mesas, a refinery and salt storage domes on the flats, or a city's tower
-// blocks with lit windows. All procedural and purely visual: nothing here collides or casts shadows.
+// skyline mesh: desert mesas, a refinery and salt storage domes on the flats, a city's tower
+// blocks with lit windows, forested hills under giant trees, or a mire of dead trees. All procedural and purely visual: nothing here collides or casts shadows.
 // A map's `palette` overrides any of the day or night look.
 import * as THREE from 'three';
 
@@ -15,6 +15,8 @@ const COLORS = {
   flat: 0xd3ccbb, talus: 0xb5a58e, scree: 0xab9882, cliff: 0x9f8774, cap: 0xbcae96,
   concrete: 0xa49d8f, steel: 0x8a8984, dark: 0x6e6b66, rust: 0x8c6550, tank: 0xc4bcaa, salt: 0xcbc3b0,
   street: 0x2a302d, block: 0x3a423e, blockDark: 0x2c3330,
+  moss: 0x5d6b45, hill: 0x55663f, hillTop: 0x62744a, trunk: 0x4a3d30, crown: 0x4c6e36, crownDark: 0x3c5a2c,
+  mire: 0x4c5440, snag: 0x5c564a, scrub: 0x56603e,
 };
 // Lit windows on a city skyline, unless the palette names its own.
 const WINDOWS = ['#ffd890', '#9dffc0', '#7fe8ff'];
@@ -73,7 +75,7 @@ function skyMaterial(sunDir) {
       horizon: { value: new THREE.Color(SKY.day.horizon) },
       zenith: { value: new THREE.Color(SKY.day.zenith) },
       sunColor: { value: new THREE.Color(SKY.day.sun) },
-      sunDir: { value: sunDir.clone().normalize() },
+      sunDir: { value: sunDir }, // shared: a map can turn the sun, and the dome follows
       stars: { value: 0 },
     },
     vertexShader: /* glsl */ `
@@ -194,6 +196,40 @@ function skylineGeometry(push, kind = 'desert', windowColors = WINDOWS, tint = 0
     return { geometry, windows: build(lit.positions, lit.colors) };
   }
 
+  if (kind === 'forest') {
+    lathe(0, 0, [[400 + push, -0.1], [58 + push, -0.1]], [COLORS.moss], { sides: 32 });
+    // Wooded hills all round, and giant trees standing over them.
+    for (let i = 0; i < 30; i++) {
+      const angle = ((i + rand() * 0.7) / 30) * Math.PI * 2, h = 18 + rand() * 30, r = 40 + rand() * 40;
+      lathe(...at(angle, 170 + rand() * 90), [[r, 0], [r * 0.7, h * 0.5], [r * 0.35, h * 0.9], [0, h]], [COLORS.hill, COLORS.hill, COLORS.hillTop], { sides: 9, wobble: 0.2, yaw: rand() * Math.PI });
+    }
+    for (let i = 0; i < 70; i++) {
+      const [x, z] = at(rand() * Math.PI * 2, 150 + rand() * 120), h = 50 + rand() * 50;
+      lathe(x, z, [[2 + rand() * 3, 0], [1.5, h]], [COLORS.trunk], { sides: 6 });
+      sphere([x, z], 12 + rand() * 14, h, rand() < 0.5 ? COLORS.crown : COLORS.crownDark);
+    }
+    const geometry = build(positions, colors);
+    geometry.computeVertexNormals();
+    return { geometry, windows: null };
+  }
+
+  if (kind === 'swamp') {
+    lathe(0, 0, [[400 + push, -0.1], [58 + push, -0.1]], [COLORS.mire], { sides: 32 });
+    // Low scrubby islands, and dead trees standing out of the water, bare or with a scrap of crown.
+    for (let i = 0; i < 40; i++) {
+      const angle = ((i + rand() * 0.7) / 40) * Math.PI * 2, h = 4 + rand() * 10, r = 25 + rand() * 35;
+      lathe(...at(angle, 160 + rand() * 100), [[r, 0], [r * 0.6, h * 0.6], [0, h]], [COLORS.scrub, COLORS.scrub], { sides: 8, wobble: 0.25, yaw: rand() * Math.PI });
+    }
+    for (let i = 0; i < 90; i++) {
+      const [x, z] = at(rand() * Math.PI * 2, 140 + rand() * 130), h = 20 + rand() * 30, r = 0.8 + rand() * 1.5;
+      lathe(x, z, [[r, 0], [r * 0.4, h]], [COLORS.snag], { sides: 5 });
+      if (rand() < 0.4) sphere([x, z], 4 + rand() * 5, h - 2, COLORS.scrub);
+    }
+    const geometry = build(positions, colors);
+    geometry.computeVertexNormals();
+    return { geometry, windows: null };
+  }
+
   // Salt flat from the arena wall out to the haze, just under the arena floor. Rings run outer to inner so it faces up.
   lathe(0, 0, [[400 + push, -0.1], [58 + push, -0.1]], [COLORS.flat], { sides: 32 });
 
@@ -295,7 +331,7 @@ export function createSky(scene, sunDir) {
     scene.background.set(look.horizon);
     const [haze, , falloff] = palette.haze ?? look.haze;
     density = (palette.haze ?? look.haze)[1];
-    const floor = Math.min(...map.solids.filter((s) => s.mat === 'ground').map((s) => s.box[1] + s.half[1]));
+    const floor = Math.min(...map.solids.filter((s) => s.mat === 'ground').map((s) => s.box[1] + s.half[1]), ...(map.terrain?.heights.flat() ?? []));
     HAZE.set([hazy ? density : 0, falloff, floor, 0.85]);
     color.set(haze).convertLinearToSRGB().toArray(HAZE_COLOR);
     const value = Math.max(0, (Math.hypot(w, d) - LAID_OUT_FOR) / 2), kind = palette.skyline ?? 'desert';

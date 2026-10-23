@@ -1742,7 +1742,7 @@ mod tests {
         // A thin wall 3 m high, the shooter on a pedestal 16 m in front of it, and an enemy right
         // behind it. The rocket is aimed into the wall's face just under its top.
         let t = Tuning::default();
-        let solid = |center, half| crate::map::Solid { center, half, yaw: 0.0, tilt: 0.0 };
+        let solid = |center, half| crate::map::Solid { center, half, yaw: 0.0, tilt: 0.0, shape: Default::default() };
         let map = Map {
             name: "cover".into(),
             solids: vec![solid([0.0, -0.5, 0.0], [50.0, 0.5, 50.0]), solid([0.0, 1.5, 0.0], [4.0, 1.5, 0.25]), solid([0.0, 2.0, 16.0], [2.0, 2.0, 2.0])],
@@ -1750,6 +1750,7 @@ mod tests {
             nav: vec![],
             pads: vec![],
             size: [100.0, 100.0],
+            terrain: None,
         };
         // Returns the blast, where the rocket was a tick before plus that tick's travel, and the
         // enemy's health after.

@@ -468,12 +468,7 @@ pub fn pad_velocity(pad: &Pad, from: Vector, gravity: f32) -> Vector {
 impl Arena {
     pub fn new(map: &Map) -> Self {
         let mut world = PhysicsWorld::default();
-        for b in &map.solids {
-            let [hx, hy, hz] = b.half;
-            let rotation = Rotation::from_rotation_y(b.yaw.to_radians()) * Rotation::from_rotation_x(b.tilt.to_radians());
-            let collider = ColliderBuilder::cuboid(hx, hy, hz)
-                .translation(Vector::from_array(b.center))
-                .rotation(rotation.to_scaled_axis());
+        for collider in map.colliders() {
             world.insert_collider(collider, None);
         }
         // Builds the broad phase so scene queries see the static colliders. No physics step runs.

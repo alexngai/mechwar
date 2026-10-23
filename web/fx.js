@@ -506,6 +506,18 @@ export class Effects {
   }
 
   /**
+   * A map's own motes adrift around `p` (the camera), as its palette's `motes` describes them:
+   * pollen, fireflies, spores. `color` is [start, end]; they drift `drift` m/s, rise `rise` m/s.
+   */
+  motes(p, dt, { color, rate = 60, size = 0.22, drift = 0.5, rise = 0.2, life = 6 }) {
+    for (let i = count(rate, dt); i > 0; i--) {
+      spot.set(p.x + rand(-35, 35), p.y + rand(-6, 14), p.z + rand(-35, 35));
+      v.set(rand(-1, 1) * drift, rise * rand(0.5, 1.5), rand(-1, 1) * drift);
+      this.embers.spawn(spot, v, { life: rand(life * 0.6, life), size: [rand(size * 0.7, size), size * 0.3], color, drag: 0.1 });
+    }
+  }
+
+  /**
    * Dash exhaust at `p` this frame, blowing along `dir`: lingering grey smoke that spreads as it
    * fades, so a dash leaves a trail along its path; `hot` adds jet flame (the first moments).
    */

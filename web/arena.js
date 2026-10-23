@@ -1,9 +1,10 @@
-// The arena's look, built from map data (maps/*.json): solids with kitbashed trim, decor props, a
-// generated ground texture and baked ambient occlusion (plus lamp, furnace and sign light on night
+// The arena's look, built from map data (maps/*.json): solids with kitbashed trim, terrain, decor
+// props, a generated ground texture and baked ambient occlusion (plus lamp, furnace and sign light on night
 // maps), merged into three meshes. A map's `palette` tints it and colors its lamps. Only `solids`
 // collide (the sim reads the same file); everything added here is visual.
 import * as THREE from 'three';
 import { halo, hot } from './fx.js';
+import { heightAt } from '../maps/ground.js';
 
 // Camera layers for quality-specific extras: halos stand in for bloom when it's off; High has light shafts.
 export const LOW_ONLY = 1, HIGH_ONLY = 2;
@@ -11,8 +12,16 @@ export const LOW_ONLY = 1, HIGH_ONLY = 2;
 const COLORS = {
   ground: 0x9a9384, concrete: 0xa8a08e, metal: 0x6f7880, panel: 0x8f969a, salt: 0xe8e4d8, tank: 0xb9ac8e,
   trim: 0x55585b, rail: 0xd3a23a, pipe: 0x7d7262, pole: 0x3a3c3f, rust: 0x8a5634, soot: 0x4f4c49, stack: 0x6e5a4c,
-  tower: 0x6c7470, rock: 0x7f7c8c,
+  tower: 0x6c7470, rock: 0x7f7c8c, bark: 0x5b4a3a, moss: 0x6b7a4f, stone: 0x8f8b7b, hull: 0x7b7e74, deadwood: 0x6e675a,
 };
+// Ground, rock and wood: no trim, ribs or beams on these.
+const NATURAL = new Set(['ground', 'rock', 'stone', 'moss', 'bark', 'deadwood']);
+// Tree crowns and undergrowth, unless the palette's `leaf` names its own.
+const LEAVES = ['#4d7834', '#5d8a3b', '#3e6a2f', '#6c9844'];
+const REEDS = ['#7a7a48', '#6a6e40', '#8a7e50', '#5e6238'];
+// Terrain: flat ground, the rock that shows where it steepens toward the 40-degree climb limit, and
+// the drier ground of patches across the flat, unless the palette's `terrain` names its own.
+const TERRAIN = [COLORS.ground, COLORS.rock, COLORS.ground];
 // Lit windows on `tower` solids, unless the palette names its own; and how many slots are lit.
 const WINDOWS = ['#ffd890', '#9dffc0', '#7fe8ff'];
 const LIT = 0.3;
@@ -26,6 +35,7 @@ const PAD_RADIUS = 2.5; // the sim's
 const AO_STEPS = [0.4, 0.9, 1.6, 2.5, 3.6]; // sample distances along the normal, meters
 const UP = new THREE.Vector3(0, 1, 0), WHITE = new THREE.Color(1, 1, 1);
 const tint = new THREE.Color(1, 1, 1); // the building map's palette tint, for `paint`
+let leaves = LEAVES; // the building map's leaf colors
 const color = new THREE.Color(), v = new THREE.Vector3(), n = new THREE.Vector3(), local = new THREE.Vector3(), sample = new THREE.Vector3(), to = new THREE.Vector3();
 const off = new THREE.Vector3(), sky = new THREE.Vector3(); // a sky-cover ray's ends (`blocks` uses `local` and `sample`)
 const COVER_REACH = 30; // meters: anything this close overhead counts as a roof
@@ -41,6 +51,89 @@ const solidMatrix = (s) =>
 function boxGeometry([hx, hy, hz], cell = 2) {
   const seg = (h) => Math.min(96, Math.max(1, Math.round((2 * h) / cell)));
   return new THREE.BoxGeometry(2 * hx, 2 * hy, 2 * hz, seg(hx), seg(hy), seg(hz));
+}
+
+/** A cylinder geometry (radius `hx`, axis Y, `hy` each way), faceted about every 1.5 m round. */
+const cylinderGeometry = ([hx, hy]) =>
+  new THREE.CylinderGeometry(hx, hx, 2 * hy, Math.min(24, Math.max(8, Math.round((2 * Math.PI * hx) / 1.5))), Math.min(48, Math.max(1, Math.round(hy))));
+
+/**
+ * The terrain as one mesh on the triangles the sim collides with (sim/src/map.rs `Terrain`),
+ * colored from flat to steep, and darker down in hollows.
+ */
+function terrainGeometry({ cell, heights }, [w, d], [flat, steep, dry = flat]) {
+  const rows = heights.length, cols = heights[0].length;
+  const pos = new Float32Array(rows * cols * 3), uv = new Float32Array(rows * cols * 2), index = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const k = r * cols + c, x = c * cell - w / 2, z = r * cell - d / 2;
+      pos.set([x, heights[r][c], z], 3 * k);
+      uv.set([x / TILE, z / TILE], 2 * k);
+      // Split along the (x0, z1)-(x1, z0) diagonal, both triangles facing up.
+      if (r < rows - 1 && c < cols - 1) index.push(k, k + cols, k + 1, k + cols, k + cols + 1, k + 1);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  g.setIndex(index);
+  g.computeVertexNormals();
+  const nor = g.attributes.normal, colors = new Float32Array(rows * cols * 3), a = new THREE.Color(flat), b = new THREE.Color(steep), parched = new THREE.Color(dry);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const k = r * cols + c;
+      // Rock from about 25 degrees, all rock by 40; a hollow 4 m under the ground around it darkens.
+      const rock = THREE.MathUtils.smoothstep(1 - nor.getY(k), 1 - Math.cos(0.44), 1 - Math.cos(0.7));
+      let around = 0, n = 0;
+      for (let i = Math.max(r - 2, 0); i <= Math.min(r + 2, rows - 1); i++) for (let j = Math.max(c - 2, 0); j <= Math.min(c + 2, cols - 1); j++, n++) around += heights[i][j];
+      const shade = jitter(k) * (1 - THREE.MathUtils.clamp((around / n - heights[r][c]) / 4, 0, 1) * 0.35);
+      const x = c * cell, z = r * cell, patch = Math.sin(x * 0.043 + Math.sin(z * 0.031) * 2) * Math.sin(z * 0.052 + Math.sin(x * 0.027) * 2);
+      color.copy(a).lerp(parched, THREE.MathUtils.smoothstep(patch, 0.2, 0.7)).lerp(b, rock).multiply(tint).multiplyScalar(shade).toArray(colors, 3 * k);
+    }
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  return g;
+}
+
+/**
+ * Bushes over the terrain where it's gentle, dry (over `wet`, the water's level) and nothing
+ * stands, `density` times about one per eight 4 m cells: only for show, so mechs wade through them.
+ */
+function undergrowth(map, boxes, parts, density, wet = -Infinity) {
+  const [w, d] = map.size, ground = (x, z) => heightAt(map.terrain, map.size, x, z);
+  let seed = 7;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+  for (let z = -d / 2; z < d / 2; z += 4) {
+    for (let x = -w / 2; x < w / 2; x += 4) {
+      if (rand() > 0.12 * density) continue;
+      const px = x + rand() * 4, pz = z + rand() * 4, y = ground(px, pz), s = 0.8 + rand() * 1.2, hex = leaves[Math.floor(rand() * leaves.length)];
+      if (y < wet + 0.2 || Math.hypot(ground(px + 1, pz) - y, ground(px, pz + 1) - y) > 0.45) continue;
+      sample.set(px, y + s * 0.5, pz);
+      if (boxes.some((b) => b.center.distanceTo(sample) < b.radius + s && boxDistance(sample, b.inv, b.half) < s)) continue;
+      parts.push(paint(new THREE.SphereGeometry(1, 6, 4).scale(s, s * 0.7, s).translate(px, y + s * 0.3, pz), hex, 0.75 + rand() * 0.3));
+    }
+  }
+}
+
+/** Clumps of reeds in the shallows, from 1.2 m under the water's `level` to just over it, `density` times about one per four 4 m cells. */
+function reeds(map, boxes, parts, density, level) {
+  const [w, d] = map.size, ground = (x, z) => heightAt(map.terrain, map.size, x, z);
+  let seed = 11;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+  for (let z = -d / 2; z < d / 2; z += 4) {
+    for (let x = -w / 2; x < w / 2; x += 4) {
+      if (rand() > 0.25 * density) continue;
+      const px = x + rand() * 4, pz = z + rand() * 4, y = ground(px, pz);
+      if (y < level - 1.2 || y > level + 0.4) continue;
+      sample.set(px, level + 1, pz);
+      if (boxes.some((b) => b.center.distanceTo(sample) < b.radius + 2 && boxDistance(sample, b.inv, b.half) < 1.5)) continue;
+      for (let k = 0, n = 3 + Math.floor(rand() * 3); k < n; k++) {
+        const h = level - y + 1.2 + rand() * 1.6, g = new THREE.BoxGeometry(0.14, h, 0.14).translate(0, h / 2, 0);
+        g.rotateX((rand() - 0.5) * 0.4).rotateZ((rand() - 0.5) * 0.4).translate(px + (rand() - 0.5) * 1.6, y, pz + (rand() - 0.5) * 1.6);
+        parts.push(paint(g, REEDS[Math.floor(rand() * REEDS.length)], 0.8 + rand() * 0.3));
+      }
+    }
+  }
 }
 
 /** Small deterministic hash so each solid gets a stable color variation. */
@@ -59,13 +152,14 @@ function paint(geometry, hex, shade = 1, glows = false) {
 
 /** Trim, ribs, beams and bands for one solid, in its local space. */
 function kitbash(s, parts) {
+  if (s.shape === 'cylinder' || NATURAL.has(s.mat)) return;
   const [hx, hy, hz] = s.half;
   const add = (w, h, d, x, y, z, hex = COLORS.trim) => {
     const g = new THREE.BoxGeometry(w, h, d);
     g.translate(x, y, z);
     parts.push(paint(g, hex));
   };
-  const tall = hy > 1.2 && s.mat !== 'salt' && s.mat !== 'ground' && s.mat !== 'rock';
+  const tall = hy > 1.2 && s.mat !== 'salt' && s.mat !== 'ground';
   if (tall) {
     // Cap trim along the top edges.
     add(2 * hx + 0.2, 0.25, 0.2, 0, hy - 0.12, hz);
@@ -137,6 +231,20 @@ function decorParts(d, parts, glow, lamp) {
     glow.lamps.push(new THREE.Vector3(x, y + 3.1, z));
     // Its light shaft, down to the deck it stands on.
     glow.shafts.push(paint(new THREE.CylinderGeometry(0.3, 2.6, 3.1, 16, 1, true).translate(x, y + 1.55, z), lamp.light, 0.25, true));
+  } else if (d.kind === 'sparks') {
+    glow.sparkers.push(new THREE.Vector3(...d.at)); // a broken cable or fitting spitting sparks: only fx
+  } else if (d.kind === 'canopy') {
+    // A crown `r` m round: a core of leaves and squat, faceted clumps around it, shaped by where it is.
+    const [x, y, z] = d.at, n = d.r > 12 ? 7 : 4;
+    const rnd = (k) => {
+      const h = Math.sin((x * 7 + z * 13 + k) * 12.9898) * 43758.5453;
+      return h - Math.floor(h);
+    };
+    for (let k = 0; k < n; k++) {
+      const a = (k / n) * 2 * Math.PI + rnd(k), out = k && d.r * (0.4 + 0.3 * rnd(k + 9)), size = d.r * (k ? 0.45 + 0.25 * rnd(k + 5) : 0.7);
+      const g = new THREE.SphereGeometry(1, 7, 5).scale(size, size * 0.55, size).translate(x + Math.cos(a) * out, y + (rnd(k + 3) - 0.4) * d.r * 0.3, z + Math.sin(a) * out);
+      parts.push(paint(g, leaves[k % leaves.length], 0.9 + 0.2 * rnd(k + 7)));
+    }
   } else if (d.kind === 'sign') {
     // A neon panel set on a wall (`from`/`to` corners), lighting the street from `at`.
     const a = new THREE.Vector3(...d.from), b = new THREE.Vector3(...d.to);
@@ -396,6 +504,7 @@ export function buildArena(scene, map) {
   const started = performance.now();
   const palette = map.palette ?? {};
   tint.set(palette.tint ?? 0xffffff);
+  leaves = palette.leaf ?? LEAVES;
   const lamp = palette.lamp ? { light: palette.lamp, head: new THREE.Color(palette.lamp).lerp(WHITE, 0.4).getHex() } : { light: LAMP.color, head: 0xffd9a0 };
   const boxes = map.solids.map((s) => {
     const matrix = solidMatrix(s);
@@ -403,13 +512,19 @@ export function buildArena(scene, map) {
     return { matrix, inv: matrix.clone().invert(), half: s.half, center: new THREE.Vector3(...s.box), radius: Math.hypot(hx, hy, hz) };
   });
 
+  // Crowns shade what's under them like a roof would, for the baked light: a squat box each.
+  const crowns = (map.decor ?? []).filter((d) => d.kind === 'canopy').map(({ at, r }) => {
+    const matrix = new THREE.Matrix4().makeTranslation(...at), half = [r * 0.8, r * 0.3, r * 0.8];
+    return { matrix, inv: matrix.clone().invert(), half, center: new THREE.Vector3(...at), radius: Math.hypot(...half) };
+  });
   const ground = [], solid = [], glow = [];
   glow.lamps = [];
   glow.furnaces = [];
   glow.signs = [];
   glow.shafts = [];
+  glow.sparkers = [];
   map.solids.forEach((s, i) => {
-    const g = paint(boxGeometry(s.half), COLORS[s.mat] ?? COLORS.concrete, jitter(i));
+    const g = paint((s.shape === 'cylinder' ? cylinderGeometry : boxGeometry)(s.half), COLORS[s.mat] ?? COLORS.concrete, jitter(i));
     g.applyMatrix4(boxes[i].matrix);
     bakeAO(g, boxes, palette.cover);
     if (s.mat === 'ground') {
@@ -429,6 +544,13 @@ export function buildArena(scene, map) {
       for (const p of panes) glow.push(p.applyMatrix4(boxes[i].matrix));
     }
   });
+  if (map.terrain) {
+    const g = terrainGeometry(map.terrain, map.size, palette.terrain ?? TERRAIN);
+    bakeAO(g, [...boxes, ...crowns], palette.cover);
+    solid.push(g);
+    if (palette.undergrowth) undergrowth(map, boxes, solid, palette.undergrowth, palette.water?.level);
+    if (palette.reeds && palette.water) reeds(map, boxes, solid, palette.reeds, palette.water.level);
+  }
   for (const d of map.decor ?? []) decorParts(d, solid, glow, lamp);
   const padGlow = [];
   for (const p of map.pads ?? []) padParts(p, solid, padGlow, glow.signs);
@@ -443,14 +565,23 @@ export function buildArena(scene, map) {
     : [];
   if (map.night) for (const g of [...ground, ...solid]) bakeLights(g, lights, boxes);
 
-  const meshes = [
-    ground.length && new THREE.Mesh(mergeGeometries(ground), lit(new THREE.MeshLambertMaterial({ map: groundTexture(), vertexColors: true }))),
-    new THREE.Mesh(mergeGeometries(solid), lit(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }))),
-    glow.length && new THREE.Mesh(mergeGeometries(glow), hot(new THREE.MeshBasicMaterial({ vertexColors: true }))),
-  ].filter(Boolean);
-  // Sun shadows: the floor only receives; solids and their trim cast and receive.
-  meshes[0].receiveShadow = true;
-  meshes[1].castShadow = meshes[1].receiveShadow = true;
+  const floor = ground.length && new THREE.Mesh(mergeGeometries(ground), lit(new THREE.MeshLambertMaterial({ map: groundTexture(), vertexColors: true })));
+  const solids = new THREE.Mesh(mergeGeometries(solid), lit(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
+  const meshes = [floor, solids, glow.length && new THREE.Mesh(mergeGeometries(glow), hot(new THREE.MeshBasicMaterial({ vertexColors: true })))].filter(Boolean);
+  if (palette.water) {
+    // Standing water: a sheet at its level out past the map's edge, only for show (mechs wade the terrain under it).
+    // Glossy, so the sun glints off it and it reads as water, not more mud.
+    const { level = 0, color: hex = '#3e4d44', opacity = 0.75 } = palette.water;
+    const water = new THREE.Mesh(
+      new THREE.PlaneGeometry(map.size[0] + 400, map.size[1] + 400).rotateX(-Math.PI / 2).translate(0, level, 0),
+      new THREE.MeshPhongMaterial({ color: new THREE.Color(hex).multiply(tint), specular: 0x8a9a8c, shininess: 60, transparent: true, opacity, depthWrite: false }),
+    );
+    water.receiveShadow = true;
+    meshes.push(water);
+  }
+  // Sun shadows: the floor only receives; solids, their trim and the terrain cast and receive.
+  if (floor) floor.receiveShadow = true;
+  solids.castShadow = solids.receiveShadow = true;
   if (padGlow.length) {
     // Jump pads breathe: their glow swells and fades on a sine, once every second and a half or so.
     const pads = new THREE.Mesh(mergeGeometries(padGlow), hot(new THREE.MeshBasicMaterial({ vertexColors: true })));
@@ -485,6 +616,8 @@ export function buildArena(scene, map) {
   // Smoke rises from the top of each stack (its square half; the diamond is the same stack).
   meshes.vents = map.solids.filter((s) => s.mat === 'stack' && !s.yaw).map((s) => new THREE.Vector3(s.box[0], s.box[1] + s.half[1] + 0.5, s.box[2]));
   meshes.furnaces = glow.furnaces;
+  meshes.sparkers = glow.sparkers;
+  meshes.motes = palette.motes;
   meshes.pads = map.pads ?? [];
   meshes.lights = lights; // night lights, for the cockpit
   return meshes;

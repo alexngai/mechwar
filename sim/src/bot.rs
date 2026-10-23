@@ -147,17 +147,27 @@ impl Nav {
 }
 
 /// A mech starting at `from` and steering straight at `to` arrives within distance / walk speed + 2 s.
+/// One that gets no half metre closer in 1.5 s is stuck, which is how most walks fail: it gives up then.
 fn walkable(arena: &Arena, t: &Tuning, from: Vector, to: Vector) -> bool {
     let mut m = spawn_mech(t, from + Vector::Y * 0.1);
     let ticks = ((to.distance(from) / t.walk_speed + 2.0) * TICK_HZ) as usize;
-    (0..ticks).any(|_| {
+    let (mut closest, mut stuck) = (f32::MAX, 0);
+    for _ in 0..ticks {
         let d = to - m.pos;
-        if flat(d).length() < ARRIVE && d.y.abs() < 1.0 {
+        let left = flat(d).length();
+        if left < ARRIVE && d.y.abs() < 1.0 {
             return true;
         }
+        if left < closest - 0.5 {
+            (closest, stuck) = (left, 0);
+        } else if stuck > (1.5 * TICK_HZ) as usize {
+            return false;
+        } else {
+            stuck += 1;
+        }
         step_mech(arena, t, &mut m, &Input { move_z: 1.0, yaw: atan2f(-d.x, -d.z), ..Input::default() });
-        false
-    })
+    }
+    false
 }
 
 /// Waypoint counts as reached within this horizontal distance.

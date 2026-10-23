@@ -183,8 +183,9 @@ async fn main() {
         eprintln!("warning: no PROGRESS_KEY set, so progression records are signed with the public dev key");
         DEV_KEY.to_vec()
     }));
-    // Bot nav takes a moment per map: build every map's now, not when a room first loads it.
-    thread::spawn(|| (0..MAPS.len()).for_each(|m| _ = Nav::for_map(m)));
+    // Bot nav takes seconds per map (more on terrain): build every map's now, side by side, not
+    // when a room first loads it.
+    (0..MAPS.len()).for_each(|m| _ = thread::spawn(move || Nav::for_map(m)));
 
     let app = App { rooms: Rooms::default(), lag, quick: Arc::new(quick), seed: Arc::new(AtomicU64::new(seed)), signer };
     let client = ServeDir::new(&static_dir).fallback(ServeFile::new(format!("{static_dir}/index.html")));

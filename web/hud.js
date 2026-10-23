@@ -31,17 +31,34 @@ export class Hud {
     this.radarMap = null;
   }
 
-  /** Pre-draws the map's solids top-down (brighter for taller) for the radar. */
+  /**
+   * Pre-draws the map top-down for the radar: the terrain (lighter for higher, cliffs too steep
+   * to climb bright as walls) under the solids (brighter for taller).
+   */
   setMap(map) {
     const solids = map.solids.filter((s) => s.box[1] + s.half[1] > 0.3);
     const ext = (s) => Math.hypot(s.half[0], s.half[2]);
-    const minX = Math.min(...solids.map((s) => s.box[0] - ext(s))), maxX = Math.max(...solids.map((s) => s.box[0] + ext(s)));
-    const minZ = Math.min(...solids.map((s) => s.box[2] - ext(s))), maxZ = Math.max(...solids.map((s) => s.box[2] + ext(s)));
+    const t = map.terrain, [w, d] = t ? map.size : [-Infinity, -Infinity];
+    const minX = Math.min(-w / 2, ...solids.map((s) => s.box[0] - ext(s))), maxX = Math.max(w / 2, ...solids.map((s) => s.box[0] + ext(s)));
+    const minZ = Math.min(-d / 2, ...solids.map((s) => s.box[2] - ext(s))), maxZ = Math.max(d / 2, ...solids.map((s) => s.box[2] + ext(s)));
     const scale = 4; // px per m
     const c = document.createElement('canvas');
     c.width = Math.ceil((maxX - minX) * scale);
     c.height = Math.ceil((maxZ - minZ) * scale);
     const g = c.getContext('2d');
+    if (t) {
+      const h = t.heights, all = h.flat(), lo = Math.min(...all), span = Math.max(...all) - lo || 1;
+      const steep = Math.tan((40 * Math.PI) / 180) * t.cell, px = t.cell * scale;
+      for (let r = 0; r < h.length - 1; r++) {
+        for (let k = 0; k < h[r].length - 1; k++) {
+          const a = h[r][k], b = h[r][k + 1], e = h[r + 1][k], f = h[r + 1][k + 1];
+          // Either triangle of the cell (split as sim/src/map.rs `Terrain`) past the climb limit is a wall.
+          const wall = Math.hypot(b - a, e - a) > steep || Math.hypot(f - e, f - b) > steep;
+          g.fillStyle = `rgba(255,196,106,${wall ? 0.55 : 0.02 + (((a + b + e + f) / 4 - lo) / span) * 0.24})`;
+          g.fillRect((k * t.cell - w / 2 - minX) * scale, (r * t.cell - d / 2 - minZ) * scale, px, px);
+        }
+      }
+    }
     for (const s of solids) {
       const top = s.box[1] + s.half[1];
       const tilt = ((s.tilt ?? 0) * Math.PI) / 180;

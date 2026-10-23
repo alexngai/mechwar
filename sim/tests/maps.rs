@@ -1,4 +1,4 @@
-//! Every compiled-in map: spawns are standable, the generated nav graph is connected, the real
+//! Every compiled-in map: spawns are standable, the generated nav graph is connected, the twinned
 //! maps are fair (180-degree symmetric), and bots can navigate Saltworks, climb Foundry and spread
 //! over all of it.
 
@@ -43,9 +43,12 @@ fn nav_graph_connects_every_waypoint() {
     }
 }
 
+/// Asymmetric by design: blockout (a test map), canopy and crashsite.
+const ASYMMETRIC: [&str; 3] = ["blockout", "canopy", "crashsite"];
+
 #[test]
 fn maps_are_rotationally_symmetric() {
-    for (index, (name, _)) in MAPS.iter().enumerate().filter(|(_, (name, _))| *name != "blockout") {
+    for (index, (name, _)) in MAPS.iter().enumerate().filter(|(_, (name, _))| !ASYMMETRIC.contains(name)) {
         rotationally_symmetric(name, &Map::load(index));
     }
 }

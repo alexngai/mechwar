@@ -21,6 +21,8 @@ import riftline from '../maps/riftline.json';
 import sump from '../maps/sump.json';
 import sinkhole from '../maps/sinkhole.json';
 import blockout from '../maps/blockout.json';
+import canopy from '../maps/canopy.json';
+import crashsite from '../maps/crashsite.json';
 import { CROUCH, LISTS, Mech, TEAMS, armament, ownLoadout, showRound, stoke, windUp } from './mech.js';
 import { Debug } from './debug.js';
 import { Cockpit } from './cockpit.js';
@@ -54,7 +56,7 @@ const sameOrigin = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${locatio
 const server = params.get('server') ?? (import.meta.env.PROD && !params.has('offline') ? sameOrigin : null);
 const net = server ? new WasmNetClient() : null;
 // Maps by name; the sim's compiled-in list gives the index. Offline, ?map=<name> picks one.
-const MAPS = { saltworks, blockout, foundry, verdigris, riftline, sump, sinkhole };
+const MAPS = { saltworks, blockout, foundry, verdigris, riftline, sump, sinkhole, canopy, crashsite };
 const mapIndex = (name) => {
   for (let i = 0; map_name(i); i++) if (map_name(i) === name) return i;
   return 0;
@@ -137,8 +139,10 @@ const LIGHTS = {
   night: { sky: 0x6a7aa0, ground: 0x3a2a1e, ambient: 1.8, sun: 0x9fb4e8, direct: 1.6 },
 };
 
-// The sun's shadow map follows the player, covering the fight around them.
-const SUN_DIR = new THREE.Vector3(0.45, 0.8, 0.35).normalize();
+// The sun's shadow map follows the player, covering the fight around them. A map's palette can
+// put the sun (or the moon) elsewhere, `sunDir` pointing at it; the sky, shadows and cockpit follow.
+const SUN_AT = [0.45, 0.8, 0.35];
+const SUN_DIR = new THREE.Vector3(...SUN_AT).normalize();
 const sky = createSky(scene, SUN_DIR); // dome, horizon fog and distant skyline, lit from the same sun
 const SHADOW_HALF = 40;
 const sun = new THREE.DirectionalLight(0xfff0d8, 2.6);
@@ -148,8 +152,14 @@ sun.shadow.camera.updateProjectionMatrix();
 sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.04;
 scene.add(sun, sun.target);
-const sunRight = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), SUN_DIR).normalize();
-const sunUp = new THREE.Vector3().crossVectors(SUN_DIR, sunRight);
+const sunRight = new THREE.Vector3(), sunUp = new THREE.Vector3();
+/** Points the sun along `at` and lines the shadow map's axes up with it. */
+function aimSun(at) {
+  SUN_DIR.set(...at).normalize();
+  sunRight.crossVectors(new THREE.Vector3(0, 1, 0), SUN_DIR).normalize();
+  sunUp.crossVectors(SUN_DIR, sunRight);
+}
+aimSun(SUN_AT);
 /** Centers the shadow map on `p`, snapped to whole shadow texels so edges don't shimmer. */
 function placeSun(p) {
   const texel = (2 * SHADOW_HALF) / sun.shadow.mapSize.x;
@@ -190,7 +200,7 @@ cockpit.setWeapons('B', me, T('eye_height'), T('mech_height') / me.height);
 
 // The arena is built once its map is known: right away offline, after the Welcome online, and
 // again whenever a new match is on another map.
-let arenaMap = -1, arena = Object.assign([], { vents: [], furnaces: [], lights: [] });
+let arenaMap = -1, arena = Object.assign([], { vents: [], furnaces: [], sparkers: [], lights: [] });
 const ensureArena = (index) => {
   if (index < 0 || index === arenaMap) return;
   arenaMap = index;
@@ -202,6 +212,7 @@ const ensureArena = (index) => {
   }
   fx.clear();
   arena = buildArena(scene, map);
+  aimSun(map.palette?.sunDir ?? SUN_AT);
   sky.fit(map);
   glass.setMap(map);
   hemi.color.set(light.sky);
@@ -562,6 +573,9 @@ $('launch').addEventListener('click', () => {
   renderer.domElement.requestPointerLock()?.catch?.(() => {});
 });
 showBay(bay);
+/** Turns the view toward the middle of the map, where a fresh launch is headed. */
+const faceCenter = () => (yaw = Math.atan2(curr[S.POS], curr[S.POS + 2]));
+
 /** Launches bay `i`'s build: online from the hangar once the respawn delay is up (out in the arena it waits), offline at once. */
 function launch(i) {
   if (net && ((picked !== null && curr[S.HEALTH] > 0) || !launchable(i))) return;
@@ -578,6 +592,7 @@ function launch(i) {
     sim.set_class(i, l.primary, l.secondary, l.offensive, l.support);
     sim.reset();
     prev = curr = sim.state();
+    faceCenter();
   }
 }
 
@@ -666,9 +681,12 @@ function frame(now) {
     cockpit.setWeapons(CLASS_KEYS[classIdx], me, T('eye_height'), T('mech_height') / me.height);
     retune();
   }
-  // Launching closes the hangar once the mech is out.
+  // Launching closes the hangar once the mech is out, facing into the map.
   const alive = curr[S.HEALTH] > 0;
-  if (launching && alive) launching = pickerOpen = false;
+  if (launching && alive) {
+    launching = pickerOpen = false;
+    faceCenter();
+  }
 
   // The render offset slides server corrections (bumps) in instead of snapping.
   pos.set(lerp(S.POS) + lerp(S.OFFSET), lerp(S.POS + 1) + lerp(S.OFFSET + 1), lerp(S.POS + 2) + lerp(S.OFFSET + 2));
@@ -954,7 +972,9 @@ function frame(now) {
     fx.sparks(p, dt, 10);
   }
   for (const p of arena.furnaces) fx.sparks(p, dt, 5);
+  for (const p of arena.sparkers) if (Math.random() < dt * 0.6) fx.sparks(p, 0.25, 40); // fitful bursts of ten
   if (arena.vents.length) fx.cinders(camera.position, dt);
+  if (arena.motes) fx.motes(camera.position, dt, arena.motes);
   fx.update(dt, camera, renderer.domElement.height);
   hurt = Math.max(0, hurt - dt * 2.5);
   hud.damage.style.opacity = hurt;
