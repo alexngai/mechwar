@@ -860,6 +860,7 @@ function frame(now) {
   sound.cockpit({
     alive, heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     hull: curr[S.HEALTH] / T('health_max'), repairing: repairPhase(curr[S.REPAIR_T]), jammed: curr[S.JAMMED] > 0, beaming: !!curr[S.BEAM],
+    spin: curr[S.SPIN],
   }, dt);
   // A jump pad fires as a mech leaves it upward: a pulse on the pad and a thump.
   const onPad = (p) => arena.pads?.find((d) => Math.abs(p.y - d.at[1]) < 1 && Math.hypot(p.x - d.at[0], p.z - d.at[2]) < 2.5);

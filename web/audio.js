@@ -601,7 +601,7 @@ export class Sound {
     });
   }
 
-  /** The repair drone's whir; built once on unlock. */
+  /** The repair drone's whir and the Gatling's spool; built once on unlock. */
   cockpitLoops() {
     const { ctx } = this;
     const whir = ctx.createOscillator();
@@ -611,18 +611,37 @@ export class Sound {
     whirGain.gain.value = 0;
     whir.connect(whirGain).connect(this.cockpitBus);
     whir.start();
-    this.cockpitNodes = { whir, whirGain };
+    // The spool: a sawtooth and a sine a shade over an octave up (a slow beat between them),
+    // through a low-pass that opens with the pitch.
+    const spoolFilter = ctx.createBiquadFilter();
+    spoolFilter.type = 'lowpass';
+    const spoolGain = ctx.createGain();
+    spoolGain.gain.value = 0;
+    spoolFilter.connect(spoolGain).connect(this.cockpitBus);
+    const spool = [['sawtooth', 1], ['sine', 2.02]].map(([type, mult]) => {
+      const osc = ctx.createOscillator();
+      osc.type = type;
+      osc.connect(spoolFilter);
+      osc.start();
+      return { osc, mult };
+    });
+    this.cockpitNodes = { whir, whirGain, spool, spoolFilter, spoolGain };
   }
 
   /**
-   * Each frame: { alive, heat (0-1), overheated, hull (0-1), repairing (0-1 phase), jammed, beaming }.
-   * Drives the repair whir (higher and softer for a held beam) and paces warning beeps.
+   * Each frame: { alive, heat (0-1), overheated, hull (0-1), repairing (0-1 phase), jammed, beaming,
+   * spin (0-1) }. Drives the repair whir (higher and softer for a held beam) and the Gatling's
+   * spool, rising from a low hum to a high whine as the barrels spin up, and paces warning beeps.
    */
   cockpit(s, dt) {
     if (!this.running) return;
     const n = this.cockpitNodes, t = this.ctx.currentTime;
     n.whir.frequency.setTargetAtTime(s.repairing >= 1 ? 420 : s.beaming ? 560 : 300, t, 0.2);
     n.whirGain.gain.setTargetAtTime(s.repairing > 0 ? 0.05 : s.beaming ? 0.035 : 0, t, 0.1);
+    const spin = s.alive ? s.spin : 0, f = 140 + 760 * spin;
+    for (const { osc, mult } of n.spool) osc.frequency.setTargetAtTime(f * mult, t, 0.05);
+    n.spoolFilter.frequency.setTargetAtTime(f * 3, t, 0.05);
+    n.spoolGain.gain.setTargetAtTime(0.04 * Math.sqrt(spin), t, 0.05);
     if (!s.alive) return;
     // Warnings: a burst of fast alarm beeps as we overheat (then quiet through the cooldown),
     // soft beeps while running hot, a low-hull pulse, jam crackle.
