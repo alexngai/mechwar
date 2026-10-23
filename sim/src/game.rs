@@ -91,6 +91,9 @@ struct Player {
     level: u8,
     /// Damage taken this life: (attacker id, amount, tick), for crediting assists.
     ledger: Vec<(u8, f32, u32)>,
+    /// Tick the ability's on at the latest: its duration from the tick it was used, and
+    /// ABILITY_SLACK.
+    ability_until: u32,
 }
 
 /// What dealt damage, for counting kills by weapon.
@@ -100,6 +103,11 @@ pub enum Cause {
     Weapon { slot: Slot, index: u8 },
     Unknown,
 }
+
+/// Seconds an ability may stay on past its duration, for input arriving late. A mech only steps
+/// on input, so without this cap one whose client stops sending (a tab in the background) would
+/// keep it on, hidden by Camouflage say, for as long as it's away.
+const ABILITY_SLACK: f32 = 1.0;
 
 /// Damage older than this doesn't count toward an assist (s).
 const ASSIST_WINDOW: f32 = 15.0;
@@ -256,6 +264,7 @@ impl Game {
             tally: Tally::default(),
             level: 0,
             ledger: Vec::new(),
+            ability_until: 0,
             bot,
         });
         self.roster_version += 1;
@@ -476,7 +485,11 @@ impl Game {
                 p.credit -= 1.0;
                 p.ack_seq = msg.seq;
                 let t = self.arsenal.of(&p.mech);
+                let was = p.mech.ability_time;
                 step_mech(&self.arena, t, &mut p.mech, &msg.input);
+                if p.mech.ability_time > was {
+                    p.ability_until = self.tick + secs(p.mech.ability_time + ABILITY_SLACK);
+                }
                 if p.mech.alt_pressed {
                     projectile::detonate(p.id, self.projectiles.iter_mut().map(|f| &mut f.p));
                 }
@@ -525,6 +538,12 @@ impl Game {
                     let t = self.arsenal.of(&self.players[i].mech).clone();
                     projectile::track(&self.arena, &t, &mut self.players[i].mech, &chests);
                 }
+            }
+        }
+
+        for p in &mut self.players {
+            if self.tick > p.ability_until {
+                p.mech.ability_time = 0.0;
             }
         }
 
@@ -1498,6 +1517,22 @@ mod tests {
         }
         let want = [t.shot_damage, t.shot_damage * t.power_damage_mult, t.shot_damage];
         assert!(dealt.iter().zip(want).all(|(d, w)| (d - w).abs() < 1e-3), "dealt {dealt:?}, want {want:?}");
+    }
+
+    #[test]
+    fn camouflage_ends_on_time_without_input() {
+        let (mut game, owner, _) = standoff("emp");
+        game.pick(owner, MechClass::A, Loadout { ability: arsenal::index(Slot::Ability, "cloak"), ..Loadout::of(MechClass::A) });
+        send(&mut game, owner, Input { ability: true, ..Input::default() });
+        game.step();
+        let t = game.arsenal.of(&mech(&game, owner)).clone();
+        // The client goes quiet: its mech stops stepping, but the spell runs out anyway.
+        for _ in 0..secs(t.cloak_duration + ABILITY_SLACK) {
+            game.step();
+        }
+        assert!(ability::on(&mech(&game, owner), Ability::Cloak), "cut short");
+        game.step();
+        assert!(!ability::on(&mech(&game, owner), Ability::Cloak), "stayed hidden with no input");
     }
 
     #[test]

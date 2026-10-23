@@ -731,8 +731,10 @@ function frame(now) {
       // Remotes only say whether they're repairing; time the wind-up from when it started.
       e.repairAt = repairing ? e.repairAt ?? now : null;
       Object.assign(e, { bot: !!bot, ability: !!abilityOn, repairing: !!repairing, boosting: !!boosting, hovering: !!hovering });
-      // Camouflage hides an enemy all but completely; a teammate shows as a ghost.
+      // Camouflage hides an enemy all but completely (`hidden`: no tag, radar contact or effects
+      // around it either); a teammate shows as a ghost.
       e.cloaked = !!abilityOn && e.mech.weapons.ability.id === 'cloak';
+      e.hidden = e.cloaked && team !== myTeam;
       e.mech.setTeam(team);
       e.mech.setUnit(id);
       e.mech.update(dt, {
@@ -740,10 +742,10 @@ function frame(now) {
         grounded: !hovering && Math.abs(e.vel.y) < 1.5, boosting: !!boosting, hovering: !!hovering, health,
         ability: !!abilityOn, damage: 1 - health / classValue(cls, 'health_max'), shielded: !!shielded,
         repair: repairPhase(e.repairAt === null ? 0 : (now - e.repairAt) / 1000 + 1e-3, cls),
-        cloak: e.cloaked ? (team === myTeam ? CLOAK_SEEN : CLOAK_HIDDEN) : 0,
+        cloak: e.hidden ? CLOAK_HIDDEN : e.cloaked ? CLOAK_SEEN : 0,
       });
       if (now - (e.beamAt ?? -Infinity) < BEAM_HOLD) fx.mend(id + 1, e.mech.launcher.getWorldPosition(beamFrom), e.beamTo, dt);
-      if (now < (e.jammedUntil ?? 0)) fx.jam(toChest(spark.copy(e.pos), cls), dt);
+      if (now < (e.jammedUntil ?? 0) && !e.hidden) fx.jam(toChest(spark.copy(e.pos), cls), dt);
       if (health > 0) debug.hitbox(e.pos, classValue(cls, 'mech_radius'), classValue(cls, 'mech_height') * (repairing ? CROUCH : 1));
     }
     for (const [id, e] of remotes) if (!live.has(id)) { e.mech.dispose(); remotes.delete(id); }
@@ -967,7 +969,7 @@ function frame(now) {
   const onPad = (p) => arena.pads?.find((d) => Math.abs(p.y - d.at[1]) < 1 && Math.hypot(p.x - d.at[0], p.z - d.at[2]) < 2.5);
   for (const [key, p] of [['me', { x: curr[S.POS], y: curr[S.POS + 1], z: curr[S.POS + 2] }], ...[...remotes].map(([id, e]) => [id, e.pos])]) {
     const was = padStands.get(key), now = onPad(p);
-    if (was && !now && p.y > was.at[1] + 1) {
+    if (was && !now && p.y > was.at[1] + 1 && !remotes.get(key)?.hidden) {
       fx.pulse(padAt.set(...was.at), 3);
       sound.pad(key === 'me' ? null : padAt);
     }
@@ -1043,8 +1045,8 @@ function frame(now) {
 }
 
 /** We were hit by `attacker`: shake, flash, and a damage arc toward where they stood. */
-/** Hit by player `attacker`, or by something of theirs at `from`. */
-function tookHit(attacker, now, from = remotes.get(attacker)?.pos) {
+/** Hit by player `attacker`, or by something of theirs at `from` (a camouflaged attacker's own spot stays unknown). */
+function tookHit(attacker, now, from = remotes.get(attacker)?.hidden ? null : remotes.get(attacker)?.pos) {
   me.hit();
   sound.hurt();
   hurt = 1;
@@ -1130,7 +1132,7 @@ function drawOrbs(now, dt, alive, myTeam) {
     o.scale.setScalar((0.4 + 0.6 * Math.sqrt(left / ORB_HEALTH)) * (1 + 0.1 * Math.sin(now / 130)));
     const heals = (p, h, health, max, team) => orbHeals(k, team) && health > 0 && health < max && chest.copy(p).setY(p.y + h * 0.5).distanceTo(o.position) <= ORB_RADIUS && fx.repair(chest, dt);
     if (alive) heals(pos, T('mech_height'), curr[S.HEALTH], T('health_max'), myTeam);
-    for (const e of remotes.values()) heals(e.pos, classValue(e.cls, 'mech_height'), e.health, classValue(e.cls, 'health_max'), e.team);
+    for (const e of remotes.values()) if (!e.hidden) heals(e.pos, classValue(e.cls, 'mech_height'), e.health, classValue(e.cls, 'health_max'), e.team);
   }
 }
 
@@ -1265,8 +1267,7 @@ function drawGlass(now, myTeam) {
     chest.copy(e.pos).y += h * 0.5;
     const dist = chest.distanceTo(eye);
     let visible = !enemy;
-    // Camouflage hides an enemy's tag and radar contact.
-    if (enemy && e.cloaked) continue;
+    if (e.hidden) continue;
     if (enemy && dist <= T('weapon_range')) {
       to.subVectors(chest, eye).normalize();
       visible = game.cast_ray(eye.x, eye.y, eye.z, to.x, to.y, to.z, dist) >= dist - 0.5 && !smoked(eye, chest);
