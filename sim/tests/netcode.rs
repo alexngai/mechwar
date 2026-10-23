@@ -985,6 +985,31 @@ fn predicted_limpet_matches_server() {
 }
 
 #[test]
+fn barriers_predict_as_the_server_has_them() {
+    use sim::deploy::Kind;
+    let t = unshielded();
+    let mut h = Harness::new();
+    let (a, watcher) = (h.clients[0].0, 1);
+    let barrier = (0..).find(|&i| sim::arsenal::weapon(Slot::Support, i).expect("no barrier").0 == "barrier").unwrap();
+    h.game.pick(a, MechClass::B, Loadout { support: barrier, ..base_weapons() });
+    // A raises a barrier ahead, then walks into it for a few seconds.
+    let mut max_correction = 0f32;
+    for tick in 0..(4.0 * TICK_HZ) as u32 {
+        let input = if tick == 5 { Input { emp: true, ..Input::default() } } else { Input { move_z: if tick > 5 { 1.0 } else { 0.0 }, ..Input::default() } };
+        h.step([input, Input::default()]);
+        max_correction = max_correction.max(h.clients[0].1.correction);
+    }
+    let wall = h.game.snapshot(a).deployables.iter().find(|d| d.kind == Kind::Barrier).copied().expect("no barrier");
+    let (me, r) = (h.clients[0].1.mech, t.for_class(MechClass::B).mech_radius);
+    assert!(me.pos.z > wall.pos.z + t.barrier_thickness * 0.5 + r - 0.1, "walked into the barrier, to z {}", me.pos.z);
+    assert!(max_correction < 1e-4, "prediction was off by {max_correction} m");
+    // The other client has the wall too.
+    let ray = rapier3d::prelude::Ray::new(Vector::new(0.0, 2.0, wall.pos.z + 10.0), Vector::NEG_Z);
+    let hit = h.clients[watcher].1.arena().cast_ray(&ray, 20.0).expect("no wall");
+    assert!((hit - (10.0 - t.barrier_thickness * 0.5)).abs() < 0.05, "the wall's {hit} m off");
+}
+
+#[test]
 fn emp_jams_the_other_client() {
     let t = unshielded();
     let mut h = Harness::new();

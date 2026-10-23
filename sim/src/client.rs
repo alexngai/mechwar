@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
+use crate::deploy::{self, Deployable};
 use crate::item::Item;
 use crate::net::{self, ClientMsg, Cloud, Event, InputMsg, MatchState, Orb, PlayerNet, ServerMsg, Snapshot};
 use crate::progress::MatchXp;
@@ -158,8 +159,12 @@ impl NetClient {
             if t.shot_speed > 0.0 {
                 self.projectiles.extend(weapon::volley(t, m, id, self.seq));
             } else {
-                let arena = &self.arena;
-                self.shots.extend(weapon::pellets(t, m, self.seq).iter().map(|r| r.point_at(arena.cast_ray(r, t.weapon_range).unwrap_or(t.weapon_range))));
+                let domes = self.snapshots.back().map_or(&[][..], |s| &s.deployables);
+                let (arena, team) = (&self.arena, self.team);
+                self.shots.extend(weapon::pellets(t, m, self.seq).iter().map(|r| {
+                    let wall = arena.cast_ray(r, t.weapon_range).unwrap_or(t.weapon_range);
+                    r.point_at(deploy::stops(domes, t, team, r, wall).unwrap_or(wall))
+                }));
             }
         }
         if let (true, Some(id)) = (self.mech.threw, self.id) {
@@ -198,8 +203,9 @@ impl NetClient {
         }
     }
 
-    /// Flies own projectiles one tick against the arena and enemies where they were last seen.
+    /// Flies own projectiles one tick against the arena, and enemies and their domes as last seen.
     fn fly_own(&mut self) {
+        let domes = self.snapshots.back().map_or(&[][..], |s| &s.deployables);
         let (arsenal, arena, obstacles, team) = (&self.arsenal, &self.arena, &self.obstacles, self.team);
         let (burst, blasts, mut bomblets) = (&mut self.burst, &mut self.blasts, Vec::new());
         self.projectiles.retain_mut(|p| {
@@ -208,7 +214,10 @@ impl NetClient {
             if let Some((_, _, m)) = obstacles.iter().find(|(id, _, _)| p.target == id + 1) {
                 projectile::home(&t, p, m.pos + Vector::Y * (arsenal.of(m).mech_height * 0.5));
             }
-            let hit = projectile::fly(arena, &t, p, |ray, max| projectile::first_mech(ray, max, enemies()));
+            let hit = projectile::fly(arena, &t, p, |ray, max| {
+                let dome = deploy::stops(domes, &t, team, ray, max);
+                projectile::first_mech(ray, dome.unwrap_or(max), enemies()).or(dome)
+            });
             let Some(at) = hit.or_else(|| projectile::triggered(&t, p, enemies()).then_some(p.pos)) else {
                 return true;
             };
@@ -249,6 +258,11 @@ impl NetClient {
     /// Health orbs as of the latest snapshot (they don't move, so no interpolation).
     pub fn orbs(&self) -> Vec<Orb> {
         self.snapshots.back().map_or_else(Vec::new, |s| s.orbs.clone())
+    }
+
+    /// Deployables as of the latest snapshot.
+    pub fn deployables(&self) -> &[Deployable] {
+        self.snapshots.back().map_or(&[], |s| &s.deployables)
     }
 
     /// Smoke as of the latest snapshot, and that snapshot's tick.
@@ -296,8 +310,10 @@ impl NetClient {
     }
 
     fn apply(&mut self, s: Snapshot, now_ms: f64) {
-        // A new match may be on a new map.
+        // A new match may be on a new map. Barriers are walls of it, which the replay below
+        // predicts against as the server will.
         self.load_map(s.state.map);
+        self.arena.set_barriers(self.arsenal.get(MechClass::B, Loadout::default()), &s.deployables);
         // Smooth arrival jitter; snap when far off (first snapshot, or after a stalled tab).
         let sample = f64::from(s.tick) * f64::from(DT) * 1000.0 - now_ms;
         self.clock_offset = Some(match self.clock_offset {

@@ -6,8 +6,9 @@
 //! Offensive items are thrown, as projectiles (`projectile::thrown`): the Tumbler grenade, the
 //! Limpet (a remote mine: sticks where it lands, and G again sets it off) and the Pall (smoke: a
 //! cloud that hides what's in or behind it, `hidden`). Support items act around the mech, and
-//! their effects are the server's: the Brownout EMP (`emp_reaches`, `jam`), and the Salve, a
-//! repair orb dropped for the mech's side.
+//! their effects are the server's: the Brownout EMP (`emp_reaches`, `jam`), the Salve, a repair
+//! orb dropped for the mech's side, and the deployables (`deploy.rs`): the shield dome and the
+//! barrier.
 
 use std::sync::OnceLock;
 
@@ -24,28 +25,20 @@ pub enum Item {
     Smoke,
     Emp,
     Orb,
+    Dome,
+    Barrier,
 }
 
 impl Item {
     /// The offensive (or support) item `loadout` carries.
     pub fn of(loadout: Loadout, offensive: bool) -> Item {
-        static ITEMS: OnceLock<[Vec<Item>; 2]> = OnceLock::new();
-        let lists = ITEMS.get_or_init(|| {
-            [Slot::Offensive, Slot::Support].map(|slot| {
-                let ids = (0..).map_while(|i| crate::arsenal::weapon(slot, i)).map(|(id, _)| id);
-                ids.map(|id| match id {
-                    "grenade" => Item::Grenade,
-                    "limpet" => Item::Limpet,
-                    "smoke" => Item::Smoke,
-                    "emp" => Item::Emp,
-                    "orb" => Item::Orb,
-                    _ => panic!("weapons.json lists item `{id}`, which does nothing"),
-                })
-                .collect()
-            })
-        });
-        let (list, index) = if offensive { (&lists[0], loadout.offensive) } else { (&lists[1], loadout.support) };
+        let (list, index) = if offensive { (&lists()[0], loadout.offensive) } else { (&lists()[1], loadout.support) };
         list[usize::from(index).min(list.len() - 1)]
+    }
+
+    /// Its index in its slot's list.
+    pub fn index(self) -> u8 {
+        lists().iter().find_map(|list| list.iter().position(|&i| i == self)).expect("every item is listed") as u8
     }
 
     /// Its charges, and the seconds each takes to come back.
@@ -56,8 +49,31 @@ impl Item {
             Item::Smoke => (t.smoke_charges, t.smoke_recharge),
             Item::Emp => (t.emp_charges, t.emp_recharge),
             Item::Orb => (t.orb_charges, t.orb_recharge),
+            Item::Dome => (t.dome_charges, t.dome_recharge),
+            Item::Barrier => (t.barrier_charges, t.barrier_recharge),
         }
     }
+}
+
+/// The offensive and support items weapons.json lists, in order.
+fn lists() -> &'static [Vec<Item>; 2] {
+    static ITEMS: OnceLock<[Vec<Item>; 2]> = OnceLock::new();
+    ITEMS.get_or_init(|| {
+        [Slot::Offensive, Slot::Support].map(|slot| {
+            let ids = (0..).map_while(|i| crate::arsenal::weapon(slot, i)).map(|(id, _)| id);
+            ids.map(|id| match id {
+                "grenade" => Item::Grenade,
+                "limpet" => Item::Limpet,
+                "smoke" => Item::Smoke,
+                "emp" => Item::Emp,
+                "orb" => Item::Orb,
+                "dome" => Item::Dome,
+                "barrier" => Item::Barrier,
+                _ => panic!("weapons.json lists item `{id}`, which does nothing"),
+            })
+            .collect()
+        })
+    })
 }
 
 impl Tuning {

@@ -479,6 +479,16 @@ export class Sound {
     this.noise(out, 'brown', 'lowpass', 500, 200, 0.01, 0.5, 0.4);
   }
 
+  /** A dome or barrier going up: a heavy clunk, then a field humming up to strength. */
+  deploy(pos) {
+    const out = this.voice(pos, 1.0, undefined, 0.3);
+    if (!out) return;
+    this.tone(out, 'square', 80, 55, 0.002, 0.12, 0.3);
+    this.noise(out, 'brown', 'lowpass', 500, 180, 0.003, 0.2, 0.5);
+    this.growl(out, 'sawtooth', 60, 240, 700, 0.05, 0.8, 0.12, 0.05);
+    this.tone(out, 'sine', 300, 600, 0.05, 0.7, 0.08, 0.05);
+  }
+
   /** A repair orb dropped: a soft rising chime. */
   salve(pos) {
     const out = this.voice(pos, 0.8);

@@ -220,6 +220,8 @@ const WATCH: f32 = 50.0;
 /// Hull fraction a bot breaks off below, to mend at an orb or in cover, and stops mending at.
 const RETREAT_HULL: f32 = 0.35;
 const MENDED_HULL: f32 = 0.9;
+/// A bot carrying a shield dome puts it up once hit below this share of its hull.
+const DOME_HULL: f32 = 0.6;
 /// Farthest by route a bot goes for cover, and straight off for an orb.
 const COVER_RANGE: f32 = 35.0;
 const ORB_RANGE: f32 = 45.0;
@@ -444,7 +446,8 @@ impl Bot {
 
     /// Falling back: to the spot, then holding it, out of sight of `target` if any. A mending bot
     /// repairs once there and hidden (an orb mends by itself), a Light speed boosts away, and a
-    /// Heavy raises its bulwark when hit on the way; a Medium vents if it can.
+    /// Heavy raises its bulwark when hit on the way; a Medium vents if it can. Hit with a shield
+    /// dome to hand, it puts it up.
     #[allow(clippy::too_many_arguments)]
     fn hold(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, r: Retreat, target: Option<&Mech>, hit: bool, tick: u32) -> Input {
         let spot = Mech { pos: r.spot, ..Mech::default() };
@@ -461,6 +464,7 @@ impl Bot {
             MechClass::B => me.overheated,
             MechClass::C => r.why == Why::Mend && hit,
         };
+        input.emp = hit && me.emps > 0 && Item::of(me.loadout, false) == Item::Dome;
         input
     }
 
@@ -609,14 +613,17 @@ impl Bot {
     }
 
     /// A build for this life, as a player would pick in the hangar: any primary and secondary,
-    /// rolled again until the guardrails (`sensible`) pass, and the starting items.
+    /// rolled again until the guardrails (`sensible`) pass, the starting grenade, and a support
+    /// item it knows how to use.
     pub fn pick_loadout(&mut self, arsenal: &Arsenal, class: MechClass) -> Loadout {
         let (primaries, secondaries) = arsenal.counts();
         loop {
             let roll = |n: usize, r: f32| ((r * n as f32) as usize).min(n - 1) as u8;
             let loadout = Loadout { primary: roll(primaries, self.rand()), secondary: roll(secondaries, self.rand()), ..Loadout::of(class) };
             if sensible(arsenal.get(class, loadout)) {
-                return loadout;
+                // Off the state without drawing from it, so the rest of a life rolls as before.
+                let support = [Item::Emp, Item::Dome, Item::Barrier][(self.rng >> 40) as usize % 3];
+                return Loadout { support: support.index(), ..loadout };
             }
         }
     }
@@ -746,7 +753,13 @@ impl Bot {
                 && let Some(r) = self.shelter(arena, nav, t, me, target.pos + Vector::Y * t.eye_height, why, tick)
             {
                 self.retreat = Some(r);
-                return self.hold(arena, nav, t, me, r, Some(target), took_damage, tick);
+                let mut input = self.hold(arena, nav, t, me, r, Some(target), took_damage, tick);
+                // A barrier raised toward the threat (turning to it for the tick) covers the fall back.
+                if me.emps > 0 && Item::of(me.loadout, false) == Item::Barrier {
+                    let d = target.pos - me.pos;
+                    (input.yaw, input.move_x, input.move_z, input.emp) = (atan2f(-d.x, -d.z), 0.0, 0.0, true);
+                }
+                return input;
             }
             let throw = throw && on_target;
             if throw {
@@ -786,12 +799,19 @@ impl Bot {
                 aux: use_ == AltUse::Lock && alt && me.lock == 0 && !me.aux_held,
                 grenade: throw,
                 hover: tick < self.hover_until,
-                // When it would land (taking the target for our size) on one not jammed already, and
-                // it counts: they're on thrusters (it grounds them), or we're hurt (it slows pursuit).
+                // An EMP when it would land (taking the target for our size) on one not jammed
+                // already, and it counts: they're on thrusters (it grounds them), or we're hurt (it
+                // slows pursuit). A shield dome once hurt and under fire.
                 emp: me.emps > 0
-                    && target.jammed <= 0.0
-                    && (target.boosting || target.hovering || target.dodge_time > 0.0 || me.health < 0.5 * t.health_max)
-                    && item::emp_reaches(arena, t, me, t, target),
+                    && match Item::of(me.loadout, false) {
+                        Item::Emp => {
+                            target.jammed <= 0.0
+                                && (target.boosting || target.hovering || target.dodge_time > 0.0 || me.health < 0.5 * t.health_max)
+                                && item::emp_reaches(arena, t, me, t, target)
+                        }
+                        Item::Dome => took_damage && me.health < DOME_HULL * t.health_max,
+                        _ => false,
+                    },
                 // Lights speed boost to close on a far target; Mediums vent before stalling;
                 // Heavies raise their bulwark once hurt and under fire.
                 ability: match me.class {
@@ -1170,6 +1190,30 @@ mod tests {
         let (mut me, mut bot) = (start(), Bot::new(1));
         let mended = fight(&arena, nav, &t, &mut bot, &mut me, enemy, 8.0, |_, me| me.repair_time > 0.0 && !sees(&arena, &t, &enemy, me));
         assert!(mended, "never repaired out of sight; at {}", me.pos);
+    }
+
+    #[test]
+    fn bots_raise_domes_when_hurt_and_barriers_to_fall_back() {
+        let (arena, nav, t) = blockout();
+        let carrying = |id: &str| Loadout { support: crate::arsenal::index(crate::Slot::Support, id), ..Loadout::of(MechClass::B) };
+        // A dome: not while whole, nor when hurt but not under fire; once hit below DOME_HULL.
+        let enemy = spawn_mech(&t, Vector::new(0.0, 0.1, 22.0));
+        let domes = |health: f32, hit: bool| {
+            let me = Mech { loadout: carrying("dome"), health: health * t.health_max, ..spawn_mech(&t, Vector::new(0.0, 0.1, 40.0)) };
+            let mut bot = Bot::new(1);
+            bot.last_health = if hit { t.health_max } else { me.health };
+            bot.think(&arena, nav, &t, &me, Some(&enemy), 1).emp
+        };
+        assert!(!domes(1.0, false) && !domes(0.5, false), "put a dome up untouched");
+        assert!(domes(0.5, true), "no dome when hurt and under fire");
+        // A barrier: raised toward the threat as it falls back to mend.
+        let me = Mech { loadout: carrying("barrier"), health: 0.25 * t.health_max, ..spawn_mech(&t, Vector::new(-5.0, 0.1, 18.0)) };
+        let enemy = spawn_mech(&t, Vector::new(-15.0, 0.1, -5.0));
+        let mut bot = Bot::new(1);
+        let input = bot.think(&arena, nav, &t, &me, Some(&enemy), 1);
+        assert!(bot.retreat.is_some() && input.emp, "no barrier falling back");
+        let d = enemy.pos - me.pos;
+        assert!((input.yaw - atan2f(-d.x, -d.z)).abs() < 1e-4, "raised away from the threat");
     }
 
     #[test]

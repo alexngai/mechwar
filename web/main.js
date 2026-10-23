@@ -648,7 +648,7 @@ function frame(now) {
     if (curr[S.PULSED] && armament(loadout).support.id === 'emp') {
       sound.emp(null);
       fx.pulse(toChest(new THREE.Vector3(curr[S.POS], curr[S.POS + 1], curr[S.POS + 2]), classIdx), T('emp_radius'));
-    } else if (curr[S.PULSED]) sound.salve(null);
+    } else if (curr[S.PULSED] && armament(loadout).support.id === 'orb') sound.salve(null);
   }
   const a = acc / DT;
   const lerp = (i) => prev[i] + (curr[i] - prev[i]) * a;
@@ -832,6 +832,7 @@ function frame(now) {
   sound.exhausts(jets);
   drawOrbs(now, dt, alive, myTeam);
   drawSmoke(dt);
+  drawDeployables(now, myTeam);
 
   // Look is applied at render rate for responsiveness; position is interpolated. In the cockpit
   // the view bobs with the gait and shakes when hit, but stays level (no roll).
@@ -1103,6 +1104,47 @@ function drawSmoke(dt) {
   heard.clear();
   for (const key of live) heard.add(key);
 }
+// Deployables (sim/src/deploy.rs): shield domes, translucent half-spheres, and barriers, glowing
+// walls, in their side's color, fading over their last second. Each hums up as it goes down.
+const deployMeshes = { 0: [], 1: [] }; // by kind: 0 dome, 1 barrier
+const deployed = new Set();
+function drawDeployables(now, myTeam) {
+  const list = game.deployables(), used = { 0: 0, 1: 0 }, live = new Set();
+  for (let i = 0; i < list.length; i += 8) {
+    const [kind, team, owner, x, y, z, yaw, left] = list.subarray(i, i + 8);
+    const key = `${owner}:${kind}:${x},${z}`;
+    if (!deployed.has(key)) sound.deploy({ x, y, z });
+    live.add(key);
+    let mesh = deployMeshes[kind][used[kind]++];
+    if (!mesh) {
+      const color = new THREE.Color(), material = new THREE.MeshBasicMaterial({ color, transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending });
+      if (kind === 0) {
+        const r = classValue(1, 'dome_radius');
+        mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 40, 16, 0, Math.PI * 2, 0, Math.PI / 2), material);
+        // A coarse lattice over the shell: the quads of a low-poly half-sphere.
+        mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.SphereGeometry(r, 16, 5, 0, Math.PI * 2, 0, Math.PI / 2)), new THREE.LineBasicMaterial({ color, transparent: true, depthWrite: false })));
+      } else {
+        const geo = new THREE.BoxGeometry(classValue(1, 'barrier_width'), classValue(1, 'barrier_height'), classValue(1, 'barrier_thickness'));
+        mesh = new THREE.Mesh(geo, material);
+        mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color, transparent: true, depthWrite: false })));
+      }
+      scene.add(mesh);
+      deployMeshes[kind].push(mesh);
+    }
+    const accent = (team === myTeam || myTeam < 0 ? FRIEND : FOE).accent, fade = Math.min(left, 1);
+    mesh.visible = true;
+    mesh.position.set(x, y + (kind === 1 ? classValue(1, 'barrier_height') / 2 : 0), z);
+    mesh.rotation.y = yaw;
+    mesh.material.color.setHex(accent);
+    mesh.material.opacity = (kind === 0 ? 0.16 : 0.3) * fade * (0.9 + 0.1 * Math.sin(now / 90));
+    mesh.children[0].material.color.setHex(accent);
+    mesh.children[0].material.opacity = 0.6 * fade;
+  }
+  for (const kind of [0, 1]) for (let k = used[kind]; k < deployMeshes[kind].length; k++) deployMeshes[kind][k].visible = false;
+  deployed.clear();
+  for (const key of live) deployed.add(key);
+}
+
 /** Whether smoke lies across the sight line from `a` to `b`. */
 const smoked = (a, b) => {
   sightLine.set(a, b);

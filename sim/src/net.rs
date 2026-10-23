@@ -1,6 +1,7 @@
 //! Wire protocol: postcard in WebSocket binary frames. Both ends link this crate, so the
 //! format can't drift between client and server.
 
+use crate::deploy::Deployable;
 use crate::progress::MatchXp;
 use crate::projectile::Projectile;
 use crate::{Input, Loadout, Mech, MechClass, Slot, Vector};
@@ -56,6 +57,7 @@ pub struct Snapshot {
     pub state: MatchState,
     pub orbs: Vec<Orb>,
     pub clouds: Vec<Cloud>,
+    pub deployables: Vec<Deployable>,
     /// In the hangar (destroyed, or not launched yet): seconds until it can launch (0: now).
     /// None while out in the arena.
     pub hangar: Option<f32>,

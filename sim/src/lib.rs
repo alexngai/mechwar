@@ -9,6 +9,7 @@ pub mod arsenal;
 pub mod bot;
 pub mod client;
 pub mod collide;
+pub mod deploy;
 pub mod game;
 pub mod item;
 pub mod map;
@@ -216,6 +217,20 @@ pub struct Tuning {
     /// Support: a repair orb dropped at the feet, healing the mech's side (see game.rs `ORB_*`).
     pub orb_charges: f32,
     pub orb_recharge: f32,
+    /// Support: a half-sphere shield at the feet that the other side's shots stop at
+    /// (`deploy.rs`), for `dome_seconds`.
+    pub dome_charges: f32,
+    pub dome_recharge: f32,
+    pub dome_radius: f32,
+    pub dome_seconds: f32,
+    /// Support: a wall `barrier_distance` ahead across the aim, for `barrier_seconds`.
+    pub barrier_charges: f32,
+    pub barrier_recharge: f32,
+    pub barrier_width: f32,
+    pub barrier_height: f32,
+    pub barrier_thickness: f32,
+    pub barrier_distance: f32,
+    pub barrier_seconds: f32,
 
     pub bot_turn_rate_deg: f32,
     pub bot_aim_error_deg: f32,
@@ -411,6 +426,8 @@ pub struct Arena {
     pub pads: Vec<Pad>,
     /// Half the map's width and depth: no mech gets past these, however high it flies.
     pub half: [f32; 2],
+    /// Barriers standing (`deploy.rs`), by (owner, tick placed).
+    barriers: Vec<((u8, u32), ColliderHandle)>,
 }
 
 /// A jump pad fires for feet this close to its center (and within half a meter of its height).
@@ -437,7 +454,7 @@ impl Arena {
         }
         // Builds the broad phase so scene queries see the static colliders. No physics step runs.
         world.detect_collisions(&(), &());
-        Self { world, pads: map.pads.clone(), half: map.size.map(|s| s / 2.0) }
+        Self { world, pads: map.pads.clone(), half: map.size.map(|s| s / 2.0), barriers: Vec::new() }
     }
 }
 
@@ -510,6 +527,8 @@ pub struct Sim {
     pub blasts: Vec<(f32, Vector)>,
     /// Smoke hanging about (fading at `seq`s, as ticks).
     pub clouds: Vec<net::Cloud>,
+    /// What's been put down (placed and expiring by `seq`, as ticks).
+    pub deployables: Vec<deploy::Deployable>,
     /// Where hitscan pellets stopped since the page last took them.
     pub shots: Vec<Vector>,
     /// Steps so far: stands in for the input seq that seeds the spread online and tells this
@@ -528,7 +547,7 @@ impl Sim {
     pub fn with_map(tuning: Tuning, map: usize) -> Self {
         let map = Map::load(map);
         let spawn = Vector::from_array(map.spawns[0][0]);
-        let mut sim = Self { tuning, class: MechClass::B, loadout: Loadout::of(MechClass::B), mech: Mech::default(), projectiles: Vec::new(), blasts: Vec::new(), clouds: Vec::new(), shots: Vec::new(), seq: 0, arena: Arena::new(&map), spawn };
+        let mut sim = Self { tuning, class: MechClass::B, loadout: Loadout::of(MechClass::B), mech: Mech::default(), projectiles: Vec::new(), blasts: Vec::new(), clouds: Vec::new(), deployables: Vec::new(), shots: Vec::new(), seq: 0, arena: Arena::new(&map), spawn };
         sim.reset();
         sim
     }
@@ -555,6 +574,20 @@ impl Sim {
         if self.mech.sprung {
             projectile::set_off(0, &mut self.projectiles);
         }
+        let kind = match item::Item::of(self.mech.loadout, false) {
+            item::Item::Dome => Some(deploy::Kind::Dome),
+            item::Item::Barrier => Some(deploy::Kind::Barrier),
+            _ => None,
+        };
+        if let (true, Some(kind)) = (self.mech.pulsed, kind) {
+            match deploy::place(&self.arena, t, &self.mech, kind, 0, 0, self.seq, std::iter::empty()) {
+                Some(d) => deploy::add(&mut self.deployables, d),
+                None => self.mech.emps += 1,
+            }
+        }
+        let seq = self.seq;
+        self.deployables.retain(|d| seq < d.expires);
+        self.arena.set_barriers(t, &self.deployables);
         if self.mech.beaming {
             self.mech.beam_end = weapon::beam(&self.arena, t, &self.mech, []).0;
         }

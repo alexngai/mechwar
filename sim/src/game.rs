@@ -10,12 +10,13 @@ use rapier3d::prelude::{Pose, Ray};
 use crate::arsenal;
 use crate::bot::{self, Bot, Nav};
 use crate::collide;
+use crate::deploy::{self, Deployable, Kind};
 use crate::item::{self, Item};
 use crate::net::{Cloud, Event, InputMsg, MatchState, MechView, Orb, PlayerNet, Snapshot};
 use crate::progress::{self, Tally};
 use crate::projectile::{self, Projectile};
 use crate::weapon;
-use crate::{Arena, Arsenal, DT, Loadout, Map, Mech, MechClass, Slot, TICK_HZ, Tuning, Vector, hit_shape, spawn_mech, step_mech};
+use crate::{Arena, Arsenal, DT, Loadout, Map, Mech, MechClass, Slot, TICK_HZ, Tuning, Vector, aim_ray, hit_shape, spawn_mech, step_mech};
 
 pub const TEAM_SIZE: usize = 4;
 pub const MAX_PLAYERS: usize = 2 * TEAM_SIZE;
@@ -144,6 +145,7 @@ pub struct Game {
     projectiles: Vec<Flying>,
     orbs: Vec<Orb>,
     clouds: Vec<Cloud>,
+    deployables: Vec<Deployable>,
     /// This tick's events; cleared at the start of each step.
     events: Vec<Event>,
     scores: [u16; 2],
@@ -175,6 +177,7 @@ impl Game {
             projectiles: Vec::new(),
             orbs: Vec::new(),
             clouds: Vec::new(),
+            deployables: Vec::new(),
             events: Vec::new(),
             scores: [0; 2],
             phase: Phase::Playing { started_at: 0 },
@@ -500,6 +503,8 @@ impl Game {
                 if self.players[i].mech.pulsed {
                     match Item::of(self.players[i].mech.loadout, false) {
                         Item::Orb => self.drop_orb(i),
+                        Item::Dome => self.deploy(i, Kind::Dome),
+                        Item::Barrier => self.deploy(i, Kind::Barrier),
                         _ => self.pulse(i),
                     }
                 }
@@ -526,12 +531,14 @@ impl Game {
             }
         }
 
-        // Projectiles fly once everyone has moved, against enemies where they stand now.
+        // Projectiles fly once everyone has moved, against enemies where they stand now, and
+        // their shields.
         // ponytail: no rewind, so shooters lead by their ping; fast-forward new projectiles by
         // half the shooter's RTT if hits feel late.
         let mut flying = std::mem::take(&mut self.projectiles);
         let mut bursts = Vec::new();
         let chests = self.chests(|_| true);
+        let sizes = items(&self.arsenal);
         flying.retain_mut(|f| {
             let enemies = || {
                 self.players
@@ -543,7 +550,10 @@ impl Game {
             if let Some(&(_, goal)) = chests.iter().find(|(id, _)| f.p.target == id + 1) {
                 projectile::home(&t, &mut f.p, goal);
             }
-            let burst = projectile::fly(&self.arena, &t, &mut f.p, |ray, max| projectile::first_mech(ray, max, enemies()));
+            let burst = projectile::fly(&self.arena, &t, &mut f.p, |ray, max| {
+                let dome = deploy::stops(&self.deployables, sizes, f.team, ray, max);
+                projectile::first_mech(ray, dome.unwrap_or(max), enemies()).or(dome)
+            });
             match burst.or_else(|| projectile::triggered(&t, &f.p, enemies()).then_some(f.p.pos)) {
                 Some(at) => {
                     bursts.push((f.p, f.team, at));
@@ -583,6 +593,11 @@ impl Game {
         let tick = self.tick;
         self.orbs.retain(|o| o.health > 1e-3 && tick < o.fades_at);
         self.clouds.retain(|c| tick < c.fades_at);
+        let deployed = self.deployables.len();
+        self.deployables.retain(|d| tick < d.expires);
+        if self.deployables.len() != deployed {
+            self.arena.set_barriers(items(&self.arsenal), &self.deployables);
+        }
 
         for p in &mut self.players {
             p.history.push_back((self.tick, p.mech.pos, p.mech.health > 0.0));
@@ -598,6 +613,8 @@ impl Game {
         self.projectiles.clear();
         self.orbs.clear();
         self.clouds.clear();
+        self.deployables.clear();
+        self.arena.set_barriers(items(&self.arsenal), &[]);
         self.phase = Phase::Playing { started_at: self.tick };
         for p in &mut self.players {
             (p.class, p.loadout) = (p.next_class, p.next_loadout);
@@ -709,7 +726,8 @@ impl Game {
             .collect();
         let mut hits = Vec::new();
         for ray in weapon::pellets(t, m, seq) {
-            let mut best = self.arena.cast_ray(&ray, t.weapon_range).unwrap_or(t.weapon_range);
+            let wall = self.arena.cast_ray(&ray, t.weapon_range).unwrap_or(t.weapon_range);
+            let mut best = deploy::stops(&self.deployables, t, team, &ray, wall).unwrap_or(wall);
             let mut hit = None;
             for (j, pose, shape) in &targets {
                 if let Some(toi) = shape.cast_ray(pose, &ray, best, true) {
@@ -735,11 +753,16 @@ impl Game {
         if projectile::item(&p) == Some(Item::Smoke) {
             self.clouds.push(Cloud { pos: at, radius: t.smoke_radius, fades_at: self.tick + secs(t.smoke_seconds) });
         }
+        // A dome shields what's inside from a burst outside it, as a wall would.
+        let shielded = |q: &Player| {
+            let to = q.mech.pos + Vector::Y * (self.arsenal.of(&q.mech).mech_height * 0.5) - at;
+            deploy::stops(&self.deployables, &t, team, &Ray::new(at, to.normalize_or_zero()), to.length()).is_some()
+        };
         let hurt: Vec<(usize, f32)> = self
             .players
             .iter()
             .enumerate()
-            .filter(|(_, q)| q.team != team && q.mech.health > 0.0)
+            .filter(|(_, q)| q.team != team && q.mech.health > 0.0 && !shielded(q))
             .map(|(j, q)| (j, projectile::splash(&self.arena, &t, p.primary, at, self.arsenal.of(&q.mech), &q.mech)))
             .filter(|&(_, damage)| damage > 0.0)
             .collect();
@@ -788,6 +811,20 @@ impl Game {
         self.orbs.push(orb);
     }
 
+    /// Player `user` puts down a deployable of `kind`, in place of any it had out. A barrier
+    /// that would stand in a mech doesn't go up, and the charge comes back.
+    fn deploy(&mut self, user: usize, kind: Kind) {
+        let u = &self.players[user];
+        let mechs = self.players.iter().filter(|q| q.mech.health > 0.0).map(|q| (self.arsenal.of(&q.mech), &q.mech));
+        match deploy::place(&self.arena, self.arsenal.of(&u.mech), &u.mech, kind, u.team, u.id, self.tick, mechs) {
+            Some(d) => {
+                deploy::add(&mut self.deployables, d);
+                self.arena.set_barriers(items(&self.arsenal), &self.deployables);
+            }
+            None => self.players[user].mech.emps += 1,
+        }
+    }
+
     /// Where an orb for a mech at `feet` floats: over the ground below, if it's in the air.
     fn orb_spot(&self, feet: Vector) -> Vector {
         let ground = self.arena.cast_ray(&Ray::new(feet + Vector::Y * 0.5, Vector::NEG_Y), 60.0).map_or(feet, |d| feet + Vector::Y * (0.5 - d));
@@ -800,7 +837,12 @@ impl Game {
         let u = &self.players[user];
         let t = self.arsenal.of(&u.mech);
         let others = self.players.iter().enumerate().filter(|&(j, q)| j != user && q.mech.health > 0.0).map(|(_, q)| (q.id, self.arsenal.of(&q.mech), &q.mech));
-        let (end, hit) = weapon::beam(&self.arena, t, &u.mech, others);
+        let (mut end, mut hit) = weapon::beam(&self.arena, t, &u.mech, others);
+        // Another side's dome stops it short.
+        let eye = aim_ray(t, &u.mech).origin;
+        if let Some(toi) = deploy::stops(&self.deployables, t, u.team, &Ray::new(eye, (end - eye).normalize_or_zero()), end.distance(eye)) {
+            (end, hit) = (eye + (end - eye).normalize_or_zero() * toi, None);
+        }
         let (owner, team, heal, burn) = (u.id, u.team, t.alt_beam_heal * DT, t.alt_damage * DT);
         self.players[user].mech.beam_end = end;
         self.events.push(Event::Beam { owner, end, hit });
@@ -940,6 +982,7 @@ impl Game {
             events: self.events.clone(),
             orbs: self.orbs.clone(),
             clouds: self.clouds.clone(),
+            deployables: self.deployables.clone(),
             hangar: me.and_then(|p| p.respawn_at).map(|at| at.saturating_sub(self.tick) as f32 * DT),
             state: self.match_state(),
         }
@@ -955,6 +998,11 @@ impl Game {
             .map(|q| (q.id, q.mech.pos + Vector::Y * (self.arsenal.of(&q.mech).mech_height * 0.5)))
             .collect()
     }
+}
+
+/// Item values, the same for every mech: what deployables are sized by.
+fn items(arsenal: &Arsenal) -> &Tuning {
+    arsenal.get(MechClass::B, Loadout::default())
 }
 
 /// A fresh mech of `class` carrying `loadout` at `pos`.
@@ -1256,6 +1304,102 @@ mod tests {
         assert_eq!(game.orbs.len(), 1, "faded early");
         game.step();
         assert!(game.orbs.is_empty(), "never faded");
+    }
+
+    /// A game on blockout with no bots and an exact, full-damage gun: the dome's owner (team 0)
+    /// at (0, 40) facing south (-z), and an enemy (team 1) at (0, 22). The owner carries `support`.
+    fn standoff(support: &str) -> (Game, u8, u8) {
+        let t = Tuning { spread_deg: 0.0, bloom_per_shot: 0.0, falloff_start: 1000.0, falloff_end: 1000.0, ..Tuning::default() };
+        let mut game = Game::new(t, Map::index("blockout").unwrap());
+        game.bots = false;
+        let [owner, enemy] = [0, 1];
+        for z in [40.0, 22.0] {
+            let id = game.join().unwrap();
+            game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = Vector::new(0.0, 0.1, z);
+        }
+        game.pick(owner, MechClass::B, Loadout { support: arsenal::index(Slot::Support, support), ..Loadout::of(MechClass::B) });
+        game.pick(enemy, MechClass::B, Loadout::named("pike", "rocket"));
+        unshield(&mut game);
+        (game, owner, enemy)
+    }
+
+    /// Input aiming player `from`'s eye at player `to`'s chest.
+    fn aim_at(game: &Game, from: u8, to: u8) -> Input {
+        let (a, b) = (mech(game, from), mech(game, to));
+        let t = game.arsenal.of(&a);
+        let d = b.pos + Vector::Y * (game.arsenal.of(&b).mech_height * 0.5) - (a.pos + Vector::Y * t.eye_height);
+        Input { yaw: libm::atan2f(-d.x, -d.z), pitch: (d.y / d.length()).asin(), ..Input::default() }
+    }
+
+    #[test]
+    fn domes_stop_the_other_sides_shots_but_let_their_own_out() {
+        let (mut game, owner, enemy) = standoff("dome");
+        send(&mut game, owner, Input { emp: true, ..Input::default() });
+        game.step();
+        assert_eq!(game.deployables.iter().map(|d| (d.kind, d.owner)).collect::<Vec<_>>(), [(Kind::Dome, owner)]);
+        let (dome, max) = (game.deployables[0].pos, game.arsenal.of(&mech(&game, owner)).health_max);
+
+        // The enemy's rifle and rocket stop at the dome, splash and all.
+        for fire in [Input { fire: true, ..aim_at(&game, enemy, owner) }, Input { alt_fire: true, ..aim_at(&game, enemy, owner) }] {
+            for _ in 0..secs(1.5) {
+                send(&mut game, enemy, fire);
+                game.step();
+                for e in &game.events {
+                    if let Event::Shot { end, .. } | Event::Blast { pos: end, .. } = *e {
+                        assert!(end.distance(dome) > items(&game.arsenal).dome_radius - 0.5, "a shot got in to {end}");
+                    }
+                }
+            }
+        }
+        assert_eq!(mech(&game, owner).health, max, "hurt through the dome");
+        // The owner shoots out.
+        for _ in 0..5 {
+            let fire = Input { fire: true, ..aim_at(&game, owner, enemy) };
+            send(&mut game, owner, fire);
+            game.step();
+        }
+        assert!(mech(&game, enemy).health < max, "the owner's shots didn't get out");
+        // Gone once its time's up.
+        for _ in 0..secs(items(&game.arsenal).dome_seconds) {
+            game.step();
+        }
+        assert!(game.deployables.is_empty(), "the dome outlived its time");
+    }
+
+    #[test]
+    fn barriers_block_movement_and_shots_until_they_expire() {
+        let (mut game, owner, enemy) = standoff("barrier");
+        let t = items(&game.arsenal).clone();
+        send(&mut game, owner, Input { emp: true, ..Input::default() });
+        game.step();
+        let wall = game.deployables[0];
+        assert_eq!(wall.kind, Kind::Barrier);
+        assert!((wall.pos.z - (40.0 - t.barrier_distance)).abs() < 0.1, "at {}", wall.pos);
+        // The enemy's shots stop at it.
+        for _ in 0..10 {
+            let fire = Input { fire: true, ..aim_at(&game, enemy, owner) };
+            send(&mut game, enemy, fire);
+            game.step();
+        }
+        let max = game.arsenal.of(&mech(&game, owner)).health_max;
+        assert_eq!(mech(&game, owner).health, max, "shot through the barrier");
+        // The owner walks into it and stops.
+        let r = game.arsenal.of(&mech(&game, owner)).mech_radius;
+        for _ in 0..secs(2.0) {
+            send(&mut game, owner, Input { move_z: 1.0, ..Input::default() });
+            game.step();
+        }
+        let stopped = mech(&game, owner).pos.z;
+        assert!(stopped > wall.pos.z + t.barrier_thickness * 0.5 + r - 0.1, "walked into it, to z {stopped}");
+        // Once it's gone, the way's clear.
+        while !game.deployables.is_empty() {
+            game.step();
+        }
+        for _ in 0..secs(1.0) {
+            send(&mut game, owner, Input { move_z: 1.0, ..Input::default() });
+            game.step();
+        }
+        assert!(mech(&game, owner).pos.z < wall.pos.z - 2.0, "still blocked at z {}", mech(&game, owner).pos.z);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Browser bindings. Plain f32 arrays keep the JS boundary cheap at 30 Hz.
 
 use crate::client::{Drawn, NetClient};
+use crate::deploy::Deployable;
 use crate::net::{Cloud, Event};
 use crate::arsenal::{classes_json, weapons_json};
 use crate::{Arena, Arsenal, DT, Input, Loadout, Mech, MechClass, Sim, Slot, Tuning, Vector, map};
@@ -27,6 +28,14 @@ fn mech_state(m: &Mech) -> Vec<f32> {
         b(m.beaming), m.beam_end.x, m.beam_end.y, m.beam_end.z,
         b(m.shield > 0.0), b(m.limpet),
     ]
+}
+
+/// Eight floats per deployable: kind (0 dome, 1 barrier), team, owner, base xyz, facing yaw, and
+/// seconds left as of tick `now`.
+fn deployable_floats(list: &[Deployable], now: u32) -> Vec<f32> {
+    list.iter()
+        .flat_map(|d| [d.kind as u8 as f32, f32::from(d.team), f32::from(d.owner), d.pos.x, d.pos.y, d.pos.z, d.yaw, d.expires.saturating_sub(now) as f32 * DT])
+        .collect()
 }
 
 /// Five floats per smoke cloud: xyz, radius and seconds left, as of tick `now`.
@@ -154,6 +163,11 @@ impl WasmSim {
         cloud_floats(&self.sim.clouds, self.sim.ticks())
     }
 
+    /// What's been put down; see `deployable_floats`.
+    pub fn deployables(&self) -> Vec<f32> {
+        deployable_floats(&self.sim.deployables, self.sim.ticks())
+    }
+
     pub fn state(&self) -> Vec<f32> {
         let mut state = mech_state(&self.sim.mech);
         state.extend([0.0; 3]); // no render offset offline
@@ -261,6 +275,11 @@ impl WasmNetClient {
     pub fn clouds(&self) -> Vec<f32> {
         let (clouds, tick) = self.0.clouds();
         cloud_floats(clouds, tick)
+    }
+
+    /// What's been put down; see `deployable_floats`.
+    pub fn deployables(&self) -> Vec<f32> {
+        deployable_floats(self.0.deployables(), self.0.clouds().1)
     }
 
     /// Index of the server's map, or -1 before the Welcome.
