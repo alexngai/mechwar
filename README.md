@@ -50,11 +50,11 @@ fly deploy --ha=false
 fly logs
 ```
 
-- The Fly app and this repo keep the game's old name, `webhawk` (Fly can't rename an app); the site answers at mechwar.online once its domain points at the app.
+- The Fly app keeps the game's old name, `webhawk` (Fly can't rename an app); the site answers at mechwar.online once its domain points at the app.
 - Pushes to `main` also deploy automatically (`.github/workflows/deploy.yml`, after the tests pass). That needs a deploy token stored as the `FLY_API_TOKEN` repo secret:
 
   ```bash
-  fly tokens create deploy -a webhawk -x 8760h | gh secret set FLY_API_TOKEN --repo alexngai/webhawk
+  fly tokens create deploy -a webhawk -x 8760h | gh secret set FLY_API_TOKEN --repo alexngai/mechwar
   ```
 
 - Keep exactly one machine: match state lives in memory. `--ha=false` ensures that; `fly scale count 1` fixes it if needed.
