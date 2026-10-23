@@ -56,6 +56,16 @@
     #debug-log { position: fixed; left: 16px; top: 40%; margin: 0; padding: 4px 8px; background: #0009; color: #ffe070; font: 12px/1.4 monospace; pointer-events: none; }
     #debug-log[hidden] { display: none; }
     #damage { position: fixed; inset: 0; box-shadow: inset 0 0 140px 30px #ff2a1a; opacity: 0; pointer-events: none; }
+    #prefs { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+    #menu { position: fixed; inset: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: safe center; gap: 16px; padding: 16px; overflow-y: auto; background: #0a0d10e8; }
+    #menu[hidden] { display: none; }
+    #menu h2 { margin: 0; font-size: 18px; letter-spacing: 4px; }
+    #menu-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
+    #menu-actions > * { padding: 8px 22px; border: 1px solid #7fe0ff; background: none; color: #7fe0ff; font: inherit; font-size: 14px; letter-spacing: 2px; cursor: pointer; text-decoration: none; }
+    #menu-actions > :hover, #menu-actions > :focus-visible { background: #7fe0ff22; outline: none; }
+    #menu-actions > [hidden] { display: none; }
+    #menu-body { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+    #menu #board { position: static; transform: none; }
     #callsign-row { display: flex; gap: 10px; align-items: center; letter-spacing: 2px; opacity: 0.9; }
     #callsign { font: inherit; font-size: 14px; letter-spacing: 1px; padding: 6px 8px; width: 180px; background: #0d1014; color: #ffc46a; border: 1px solid #fff3; }
     #callsign:focus { border-color: #ffc46a; outline: none; }
@@ -141,6 +151,7 @@
   <div id="summary"></div>
   <div id="picker">
     <label id="callsign-row">CALLSIGN <input id="callsign" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Pilot"></label>
+    <div id="prefs">
     <label id="volume-row">VOLUME <input id="volume" type="range" min="0" max="1" step="0.05"></label>
     <div id="graphics-row">GRAPHICS <select id="quality"><option value="high">HIGH</option><option value="low">LOW</option></select>
       <fieldset id="high-fx">
@@ -150,13 +161,19 @@
       </fieldset>
       <label><input type="checkbox" id="haze">HAZE</label>
     </div>
+    </div>
     <h2>HANGAR</h2>
     <div id="room-row" hidden>GAME <b id="room-code"></b><button id="invite">COPY INVITE LINK</button><a href="/">LEAVE TO LOBBY</a></div>
     <div id="bays"></div>
     <div id="bay"><canvas id="preview"></canvas><div id="slots"></div></div>
     <div id="launch-row"><span id="picker-note"></span><button id="launch">LAUNCH</button></div>
   </div>
-  <div id="help">Click to play · WASD move · Shift+W boost · Shift+A/D dash · Shift+S turn about · Space hover · F ability · G item · T support item · LMB fire · RMB secondary (again to burst) · MMB lock / scope · C hangar · I stats · M mute · Tab scores · R hold to repair · K respawn · Esc release mouse</div>
+  <div id="help">Click to play · WASD move · Shift+W boost · Shift+A/D dash · Shift+S turn about · Space hover · F ability · G item · T support item · LMB fire · RMB secondary (again to burst) · MMB lock / scope · C hangar · I stats · M mute · Tab scores · R hold to repair · K respawn · Esc menu</div>
+  <div id="menu" hidden>
+    <h2>MENU</h2>
+    <div id="menu-actions"><button id="resume">RESUME</button><button id="to-hangar">HANGAR</button><a href="/">LEAVE TO LOBBY</a></div>
+    <div id="menu-body"></div>
+  </div>
   <div id="lobby" hidden></div>
   <script type="module" src="/web/entry.js"></script>
 </body>

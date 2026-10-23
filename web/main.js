@@ -277,6 +277,12 @@ renderer.domElement.addEventListener('click', () => renderer.domElement.requestP
 document.addEventListener('pointerlockchange', () => {
   document.body.classList.toggle('locked', locked());
   if (!locked()) firing = altFiring = auxHeld = false;
+  // Esc out in the arena opens the menu; taking the mouse back closes it.
+  if (locked()) setMenu(false);
+  else if (picked !== null && !pickerOpen) {
+    unlockedAt = performance.now();
+    setMenu(true);
+  }
 });
 // Recoil, weapons.json `recoil`: each shot lifts the aim by up to this many degrees, less per shot
 // the faster the weapon fires. The lift rises smoothly (at RECOIL_RISE/s) toward a kick that eases
@@ -331,6 +337,8 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyM') setMuted(!sound.muted);
   if (e.code === 'Tab') { e.preventDefault(); boardOpen = true; }
   if (e.code === 'KeyC' && picked !== null) pickerOpen = !pickerOpen;
+  // Esc with the mouse free toggles the menu (not the Esc that just freed it, where a browser passes that on).
+  if (e.code === 'Escape' && !locked() && performance.now() - unlockedAt > 200) setMenu(!menuOpen);
   const digit = ['Digit1', 'Digit2', 'Digit3'].indexOf(e.code);
   if (digit >= 0 && !$('picker').hidden) showBay(digit);
   if (e.code === 'Enter' && !$('picker').hidden) launch(bay);
@@ -434,6 +442,31 @@ const hud = { net: $('net'), score: $('score'), banner: $('banner'), summary: $(
 // Shown before the first deploy and on death; C reopens it. Online the pick applies on the next
 // spawn (or right away before the first input), so inputs are held until a class is chosen.
 let pickerOpen = true, boardOpen = false, boardAt = 0;
+
+// --- Menu ----------------------------------------------------------------------
+// Esc: resume, the hangar, back to the lobby, with the scoreboard and the hangar's settings
+// borrowed while it's open.
+let menuOpen = false, unlockedAt = 0;
+function setMenu(open) {
+  menuOpen = open;
+  $('menu').hidden = !open;
+  $('to-hangar').hidden = picked === null || pickerOpen;
+  if (open) $('menu-body').append($('board'), $('prefs'));
+  else {
+    $('score').after($('board'));
+    $('callsign-row').after($('prefs'));
+  }
+}
+$('resume').addEventListener('click', () => {
+  setMenu(false);
+  if (!pickerOpen) renderer.domElement.requestPointerLock()?.catch?.(() => {});
+});
+$('to-hangar').addEventListener('click', () => {
+  setMenu(false);
+  pickerOpen = true;
+});
+// A click beside the panel resumes too.
+$('menu').addEventListener('click', (e) => { if (e.target === e.currentTarget) $('resume').click(); });
 
 // --- Callsign ----------------------------------------------------------------
 // Typed on the picker, remembered locally, and sent (after a pause in typing) for the server to
@@ -1000,8 +1033,8 @@ function frame(now) {
     preview.render(dt, myTeam);
   }
   drawGlass(now, myTeam);
-  $('board').hidden = !boardOpen;
-  if (boardOpen && now - boardAt > 250) {
+  $('board').hidden = !boardOpen && !menuOpen;
+  if ((boardOpen || menuOpen) && now - boardAt > 250) {
     boardAt = now;
     renderBoard(myId, hudState);
   }
