@@ -23,13 +23,13 @@ const TAU = Math.PI * 2;
 // The console, in its own flat space (x along its face, y up it from its foot, z toward the pilot):
 // it reaches SPAN either side, stands HUMP tall over the middle screen and WING over the sides, and
 // is then bent around an upright axis BEND ahead of its face and leaned back by TILT.
-const SPAN = 1.3, HUMP = 0.3, WING = 0.275, BEND = 2.5, TILT = 0.55;
+const SPAN = 1.3, HUMP = 0.3, WING = 0.335, BEND = 2.5, TILT = 0.55;
 const DASH = 0.93; // the dash's back edge sits this fraction of the view's half-height below center
 // Instruments, w x h in meters, centered at SCREEN_AT on the console: vitals (hull and fuel) in the
 // middle, the round radar scope lower left, systems right, and out on the right wing a round speed
 // gauge (with the altitude in digits).
-const SCREENS = { vitals: [0.48, 0.2], radar: [0.2, 0.2], systems: [0.3, 0.17], speed: [0.14, 0.14] };
-const SCREEN_AT = { vitals: [0, 0.15], radar: [-0.45, 0.13], systems: [0.49, 0.13], speed: [0.79, 0.125] };
+const SCREENS = { vitals: [0.48, 0.2], radar: [0.26, 0.26], systems: [0.3, 0.17], speed: [0.14, 0.14] };
+const SCREEN_AT = { vitals: [0, 0.15], radar: [-0.5, 0.165], systems: [0.49, 0.13], speed: [0.79, 0.125] };
 const ROUND = new Set(['radar', 'speed']); // set in a scope's round housing
 const SPEED_MAX = 120; // km/h at the speed gauge's full sweep
 const SEAM = 0.295; // panel seams between the middle and the sides
@@ -533,12 +533,12 @@ function vitalsScreen(s, f) {
   }
 }
 
-/** Radar: the glass's radar (hud.js), drawn large for the round scope. */
+/** Radar: the glass's radar (hud.js), drawn large for the round scope, its marks bold enough to read. */
 function radarScreen(s, f) {
   const { g, canvas } = s, W = canvas.width;
   g.fillStyle = '#090d0b';
   g.fillRect(0, 0, W, W);
-  radar(g, W / 2, W / 2, W * 0.42, W / 210, f, f.radarMap);
+  radar(g, W / 2, W / 2, W * 0.42, W / 130, f, f.radarMap);
 }
 
 /** Speed: a needle sweeping 0 to SPEED_MAX km/h, with the altitude in digits under the hub. */

@@ -82,11 +82,11 @@ export class Hud {
       if (!t.enemy) {
         g.fillStyle = g.strokeStyle = f.friendColor;
         g.globalAlpha = 0.85;
-        tri(g, t.x, t.y, 6 * u, 1);
+        tri(g, t.x, t.y, 5 * u, 1);
         g.font = font(12);
         g.textBaseline = 'bottom';
         g.fillText(name, t.x, t.y - 14 * u);
-        bar(g, t.x - 22 * u, t.y - 12 * u, 44 * u, 2.5 * u, t.health, f.friendColor);
+        bar(g, t.x - 22 * u, t.y - 11.5 * u, 44 * u, 1.5 * u, t.health, f.friendColor);
         if (t.status) {
           g.font = font(10);
           g.fillText(t.status, t.x, t.y - 28 * u);
@@ -96,9 +96,9 @@ export class Hud {
       }
       const s = Math.min(Math.max((1400 * u) / t.dist, 14 * u), 70 * u);
       g.strokeStyle = g.fillStyle = f.enemyColor;
-      g.lineWidth = (t.focus ? 2.5 : 1.5) * u;
+      g.lineWidth = (t.focus ? 1.5 : 1) * u;
       brackets(g, t.x, t.y, s, s * 0.35);
-      bar(g, t.x - s, t.y - s - 7 * u, 2 * s, 3 * u, t.health, f.enemyColor);
+      bar(g, t.x - s, t.y - s - 6 * u, 2 * s, 2 * u, t.health, f.enemyColor);
       g.fillStyle = f.enemyColor;
       g.font = font(12);
       g.textBaseline = 'bottom';
@@ -109,7 +109,7 @@ export class Hud {
       if (f.lock?.unit === t.unit) {
         const locked = f.lock.progress >= 1, d = s * (1.3 + 1.6 * (1 - f.lock.progress));
         g.strokeStyle = g.fillStyle = locked ? '#ffffff' : AMBER;
-        g.lineWidth = 2 * u;
+        g.lineWidth = 1.5 * u;
         g.beginPath();
         g.moveTo(t.x, t.y - d);
         g.lineTo(t.x + d, t.y);
