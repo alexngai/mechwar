@@ -1,6 +1,6 @@
 # MECHWAR
 
-A browser mech shooter, at [mechwar.online](https://mechwar.online). Plan: [concept.md](concept.md).
+A browser mech shooter, at [mechwar.online](https://mechwar.online).
 
 ## Run
 
@@ -63,7 +63,7 @@ fly logs
 
 ## Layout
 
-- `tuning.json` — every constant, with slider range and `source` (`capture`, `default property` or `own tuning`). The Rust sim reads it at compile time; the page loads it for the sliders. "Copy tuning.json" in the panel copies the current slider values in the same format, ready to paste back over the file.
+- `tuning.json` — every constant, with its slider range and `source`. The Rust sim reads it at compile time; the page loads it for the sliders. "Copy tuning.json" in the panel copies the current slider values in the same format, ready to paste back over the file.
 - `sim/` — shared Rust sim (Rapier, `enhanced-determinism`). `lib.rs` steps a mech; `net.rs` is the wire protocol, `game.rs` the authoritative match (lag-compensated hitscan, respawn), `client.rs` prediction, reconciliation and interpolation. All pure Rust with no IO; browser bindings in `wasm.rs` behind the `wasm` feature.
 - `server/` — axum: serves the built client, the lobby API (`/api/rooms`, `/api/quick`) and the `/ws` WebSocket. Each room runs its own `sim::game::Game` at 30 Hz and closes once it has sat empty a while.
 - `web/entry.js` picks the page: `web/lobby.js` (the landing page) when there's no game to join, else the game.
@@ -76,3 +76,7 @@ fly logs
 ```bash
 export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk
 ```
+
+## License
+
+[AGPL-3.0](LICENSE). You may run, change and share it; if you host a changed version for others to play, offer them its source too.

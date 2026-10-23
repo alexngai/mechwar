@@ -5,3 +5,4 @@ sim/pkg/
 .omc/
 .sessionlog/
 .claude/worktrees/
+.claude/launch.json
