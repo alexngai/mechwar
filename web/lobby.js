@@ -12,6 +12,8 @@ const esc = (text) => String(text).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(
 const stored = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
 const go = (code) => { location.href = `/?room=${encodeURIComponent(code)}`; };
 
+// The footer's tip jar (a Buy Me a Coffee page); the link shows once this is set.
+const COFFEE = '';
 // A gear: four bars crossed over a disc, with a hole through the middle.
 const GEAR = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><g fill="currentColor"><circle cx="12" cy="12" r="7"/>${
   [0, 45, 90, 135].map((a) => `<rect x="10" y="1.5" width="4" height="21" rx="1" transform="rotate(${a} 12 12)"/>`).join('')
@@ -60,7 +62,10 @@ lobby.innerHTML = `
     <h3>JOIN BY CODE</h3>
     <div class="row"><input id="code" maxlength="4" placeholder="ABCD" autocomplete="off" spellcheck="false"><button id="join">JOIN</button></div>
   </section>
-  <a href="/?offline">Practice offline</a>`;
+  <a href="/?offline">Practice offline</a>
+  <footer>© 2026 Alex Ngai · <a href="https://github.com/alexngai" target="_blank" rel="noopener">GitHub</a>${
+    COFFEE ? ` · <a href="${COFFEE}" target="_blank" rel="noopener">Buy me a coffee</a>` : ''
+  }</footer>`;
 
 const note = (text) => { $('lobby-note').textContent = text; };
 const gone = new URLSearchParams(location.search).get('gone');
