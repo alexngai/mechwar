@@ -97,6 +97,15 @@
     #lobby button:hover, #room-row button:hover { background: #7fe0ff22; }
     #lobby #quick { font-size: 18px; letter-spacing: 4px; padding: 12px 44px; background: rgba(10, 13, 16, 0.6); }
     #lobby #quick:hover { background: #12303a; }
+    #lobby #quick:disabled { cursor: wait; background: rgba(10, 13, 16, 0.6); }
+    #lobby #quick:disabled::before { content: ''; display: inline-block; width: 14px; height: 14px; margin-right: 14px; vertical-align: -2px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #lobby { scroll-behavior: smooth; }
+    #lobby #more { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 12px; letter-spacing: 3px; color: #7fe0ff; text-decoration: none; opacity: 0.75; }
+    #lobby #more:hover { opacity: 1; }
+    #lobby #more svg { animation: nudge 1.6s ease-in-out infinite; }
+    @keyframes nudge { 50% { transform: translateY(4px); } }
+    @media (prefers-reduced-motion: reduce) { #lobby { scroll-behavior: auto; } #lobby #more svg { animation: none; } }
     #lobby table { width: 100%; border-collapse: collapse; }
     #lobby td { padding: 6px 8px; border-top: 1px solid #fff1; }
     #lobby td:last-child { text-align: right; }

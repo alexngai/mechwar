@@ -37,8 +37,9 @@ lobby.innerHTML = `
     <label class="row">CALLSIGN <input id="lobby-callsign" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Pilot"></label>
     <button id="quick">QUICK PLAY</button>
     <div id="lobby-note"></div>
+    <a id="more" href="#below">MORE<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M5 9l7 7 7-7" fill="none" stroke="currentColor" stroke-width="2"/></svg></a>
   </div>
-  <section>
+  <section id="below">
     <h3>PILOT</h3>
     <div id="pilot"></div>
   </section>
@@ -177,8 +178,14 @@ $('games').addEventListener('click', (e) => { const code = e.target.closest('but
 refresh();
 setInterval(refresh, 3000);
 
-$('quick').addEventListener('click', async () => {
-  try { go((await api('/api/quick', {})).code); } catch (e) { note(`Couldn't find a game: ${e.message}`); }
+// Quick play can take a few seconds (the server may be waking up): the button spins until the
+// game's page takes over, and is itself again if Back restores this page.
+const quick = $('quick');
+const searching = (on) => { quick.disabled = on; quick.textContent = on ? 'FINDING A GAME' : 'QUICK PLAY'; };
+addEventListener('pageshow', () => searching(false));
+quick.addEventListener('click', async () => {
+  searching(true);
+  try { go((await api('/api/quick', {})).code); } catch (e) { searching(false); note(`Couldn't find a game: ${e.message}`); }
 });
 $('create').addEventListener('click', async () => {
   const skill = $('new-skill').value;
