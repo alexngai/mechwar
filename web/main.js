@@ -248,6 +248,22 @@ document.addEventListener('pointerlockchange', () => {
   document.body.classList.toggle('locked', locked());
   if (!locked()) firing = altFiring = auxHeld = false;
 });
+// Recoil, weapons.json `recoil`: each shot kicks the aim up (and aside, at random) about this many
+// degrees, less per shot the faster the weapon fires, and the kick eases back at RECOIL_SETTLE/s.
+// The kicked aim is what's sent, so a shot lands where the reticle was thrown.
+const RECOIL = { none: 0, low: 0.6, medium: 1.5, high: 3 };
+const RECOIL_SETTLE = 6;
+let kickYaw = 0, kickPitch = 0;
+/** Kicks the aim for a shot from `weapon` (a weapons.json entry) firing `rate` times a second. */
+function recoil(weapon, rate) {
+  const k = THREE.MathUtils.degToRad(RECOIL[weapon.recoil] ?? 0) / Math.sqrt(Math.max(rate, 1));
+  if (!k) return;
+  const up = k * (0.8 + 0.4 * Math.random()), aside = k * (Math.random() - 0.5);
+  kickPitch += up;
+  kickYaw += aside;
+  pitch += up;
+  yaw += aside;
+}
 addEventListener('mousemove', (e) => {
   if (!locked()) return;
   const limit = THREE.MathUtils.degToRad(T('pitch_limit_deg'));
@@ -552,6 +568,11 @@ function frame(now) {
     yaw += Math.PI * (ease(turnT / TURN_TIME) - before);
     if (turnT >= TURN_TIME) turnT = -1;
   }
+  const settle = 1 - Math.exp(-RECOIL_SETTLE * dt), limit = THREE.MathUtils.degToRad(T('pitch_limit_deg'));
+  pitch = THREE.MathUtils.clamp(pitch - kickPitch * settle, -limit, limit);
+  yaw -= kickYaw * settle;
+  kickPitch -= kickPitch * settle;
+  kickYaw -= kickYaw * settle;
   while (acc >= DT) {
     if (net && picked === null) {
       prev = curr = net.state();
@@ -581,6 +602,8 @@ function frame(now) {
     // Hitscan pellets, where each stopped against the arena; a tick's are one shot, from one barrel.
     const ends = game.take_shots();
     for (let k = 0; k < ends.length; k += 3) shots.push(Object.assign(new THREE.Vector3(ends[k], ends[k + 1], ends[k + 2]), { first: k === 0 }));
+    if (curr[S.SHOT]) recoil(armament(loadout).primary, T('fire_rate'));
+    if (curr[S.LAUNCHED]) recoil(armament(loadout).secondary, 1 / T('alt_cooldown'));
     // Own EMPs show as predicted; the server's Pulse for them only marks hits.
     if (curr[S.PULSED]) sound.emp(null);
     if (curr[S.PULSED]) fx.pulse(toChest(new THREE.Vector3(curr[S.POS], curr[S.POS + 1], curr[S.POS + 2]), classIdx), T('emp_radius'));
