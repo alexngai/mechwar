@@ -30,7 +30,7 @@ lobby.innerHTML = `
     <p class="hint">Your progress lives in this browser. Export it to carry it to another.</p>
   </div>
   <div class="hero">
-    <h1>WEBHAWK</h1>
+    <h1>MECHWAR</h1>
     <label class="row">CALLSIGN <input id="lobby-callsign" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Pilot"></label>
     <button id="quick">QUICK PLAY</button>
     <div id="lobby-note"></div>
@@ -67,8 +67,8 @@ if (gone) note(`Game ${gone} has closed.`);
 
 // Callsign: the same one the game uses (main.js sends it on joining).
 const callsign = $('lobby-callsign');
-callsign.value = stored('webhawk.name') ?? '';
-const saveCallsign = () => { try { localStorage.setItem('webhawk.name', callsign.value.trim()); } catch { /* private mode */ } };
+callsign.value = stored('mechwar.name') ?? '';
+const saveCallsign = () => { try { localStorage.setItem('mechwar.name', callsign.value.trim()); } catch { /* private mode */ } };
 callsign.addEventListener('input', saveCallsign);
 
 // The pilot: level, XP toward the next, and lifetime stats from the stored record.

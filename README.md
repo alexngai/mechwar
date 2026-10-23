@@ -1,6 +1,6 @@
-# webhawk
+# MECHWAR
 
-Movement sandbox and networked 1v1 for a browser mech shooter. Plan: [concept.md](concept.md).
+A browser mech shooter, at [mechwar.online](https://mechwar.online). Plan: [concept.md](concept.md).
 
 ## Run
 
@@ -50,6 +50,7 @@ fly deploy --ha=false
 fly logs
 ```
 
+- The Fly app and this repo keep the game's old name, `webhawk` (Fly can't rename an app); the site answers at mechwar.online once its domain points at the app.
 - Pushes to `main` also deploy automatically (`.github/workflows/deploy.yml`, after the tests pass). That needs a deploy token stored as the `FLY_API_TOKEN` repo secret:
 
   ```bash

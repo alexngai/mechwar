@@ -65,7 +65,7 @@ const game = net ?? sim;
 const picks = CLASS_KEYS.map((key) => {
   const own = ownLoadout(key);
   let saved = null;
-  try { saved = JSON.parse(localStorage.getItem(`webhawk.loadout.${key}`)); } catch { /* private mode, or not JSON */ }
+  try { saved = JSON.parse(localStorage.getItem(`mechwar.loadout.${key}`)); } catch { /* private mode, or not JSON */ }
   const at = (list, id, fallback) => {
     const k = weapons[list].findIndex((w) => w.id === id);
     return k < 0 ? fallback : k;
@@ -109,7 +109,7 @@ const stored = (key) => { try { return localStorage.getItem(key); } catch { retu
 // Graphics are set on the picker and remembered; ?quality=low|high overrides the stored quality.
 // High drops to Low if it can't hold 45 fps.
 const gfx = { quality: 'high', bloom: true, shafts: true, haze: true, aa: true };
-try { Object.assign(gfx, JSON.parse(stored('webhawk.graphics'))); } catch { /* corrupt: defaults */ }
+try { Object.assign(gfx, JSON.parse(stored('mechwar.graphics'))); } catch { /* corrupt: defaults */ }
 let quality = (params.get('quality') ?? gfx.quality) === 'low' ? 'low' : 'high';
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.info.autoReset = false; // the world and cockpit passes both count toward the stats
@@ -399,11 +399,11 @@ const $ = (id) => document.getElementById(id);
 // Debug overlay: blast reach, shell paths with flight time and range, hit capsules (?debug, or
 // the checkbox; remembered).
 const debug = new Debug(scene, $('debug-log'));
-const debugOn = { on: params.has('debug') || stored('webhawk.debug') === '1' };
+const debugOn = { on: params.has('debug') || stored('mechwar.debug') === '1' };
 debug.setOn(debugOn.on);
 gui.add(debugOn, 'on').name('Debug overlay').onChange((on) => {
   debug.setOn(on);
-  try { localStorage.setItem('webhawk.debug', on ? '1' : ''); } catch { /* private mode */ }
+  try { localStorage.setItem('mechwar.debug', on ? '1' : ''); } catch { /* private mode */ }
 });
 retune();
 const hud = { net: $('net'), score: $('score'), banner: $('banner'), summary: $('summary'), damage: $('damage') };
@@ -418,35 +418,35 @@ let pickerOpen = true, boardOpen = false, boardAt = 0;
 // sanitize and share. Others' names come from the server's roster.
 // Volume (picker slider) and mute (M), remembered between visits.
 const volumeInput = $('volume');
-volumeInput.value = stored('webhawk.volume') ?? '0.8';
+volumeInput.value = stored('mechwar.volume') ?? '0.8';
 sound.setVolume(Number(volumeInput.value));
 volumeInput.addEventListener('input', () => {
   sound.setVolume(Number(volumeInput.value));
-  try { localStorage.setItem('webhawk.volume', volumeInput.value); } catch { /* private mode */ }
+  try { localStorage.setItem('mechwar.volume', volumeInput.value); } catch { /* private mode */ }
 });
 function setMuted(muted) {
   sound.setMuted(muted);
   $('muted').hidden = !muted;
-  try { localStorage.setItem('webhawk.muted', muted ? '1' : ''); } catch { /* private mode */ }
+  try { localStorage.setItem('mechwar.muted', muted ? '1' : ''); } catch { /* private mode */ }
 }
-setMuted(stored('webhawk.muted') === '1');
+setMuted(stored('mechwar.muted') === '1');
 // Graphics (picker): applied and remembered on every change.
 for (const id of ['bloom', 'shafts', 'haze', 'aa']) $(id).checked = gfx[id];
 $('graphics-row').addEventListener('change', ({ target }) => {
   if (target.id === 'quality') quality = gfx.quality = target.value;
   else gfx[target.id] = target.checked;
-  try { localStorage.setItem('webhawk.graphics', JSON.stringify(gfx)); } catch { /* private mode */ }
+  try { localStorage.setItem('mechwar.graphics', JSON.stringify(gfx)); } catch { /* private mode */ }
   applyQuality();
 });
 applyQuality();
 const callsignInput = $('callsign');
-callsignInput.value = stored('webhawk.name') ?? '';
+callsignInput.value = stored('mechwar.name') ?? '';
 const callsign = () => callsignInput.value.trim();
 let renameTimer = 0;
 callsignInput.addEventListener('input', () => {
   clearTimeout(renameTimer);
   renameTimer = setTimeout(() => {
-    try { localStorage.setItem('webhawk.name', callsign()); } catch { /* private mode */ }
+    try { localStorage.setItem('mechwar.name', callsign()); } catch { /* private mode */ }
     if (ws?.readyState === WebSocket.OPEN) ws.send(net.set_name(callsign()));
   }, 600);
 });
@@ -519,7 +519,7 @@ $('slots').addEventListener('change', () => {
   const at = (slot) => +$('slots').querySelector(`[name="${slot}"]:checked`).value;
   picks[bay] = { primary: at('primary'), secondary: at('secondary') };
   const { primary, secondary } = armament(picks[bay]);
-  try { localStorage.setItem(`webhawk.loadout.${CLASS_KEYS[bay]}`, JSON.stringify({ primary: primary.id, secondary: secondary.id })); } catch { /* private mode */ }
+  try { localStorage.setItem(`mechwar.loadout.${CLASS_KEYS[bay]}`, JSON.stringify({ primary: primary.id, secondary: secondary.id })); } catch { /* private mode */ }
   showBay(bay);
 });
 $('launch').addEventListener('click', () => {

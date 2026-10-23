@@ -1,6 +1,15 @@
 // The page's entry: the lobby for a production page with nothing to join, else the game. In a
 // room, the hangar shows its code, a link to invite others, and the way back to the lobby; a room
 // that has closed sends the page back to the lobby, saying so.
+// The game was called webhawk: carry its saved settings, loadouts and pilot over to the new names.
+try {
+  for (const key of Object.keys(localStorage).filter((k) => k.startsWith('webhawk.'))) {
+    const renamed = `mechwar.${key.slice('webhawk.'.length)}`;
+    if (localStorage.getItem(renamed) === null) localStorage.setItem(renamed, localStorage.getItem(key));
+    localStorage.removeItem(key);
+  }
+} catch { /* private mode: nothing saved to move */ }
+
 const params = new URLSearchParams(location.search);
 const room = params.get('room')?.toUpperCase();
 const playing = room || ['offline', 'server'].some((p) => params.has(p));

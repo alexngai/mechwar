@@ -60,7 +60,7 @@ const IDLE_PRIVATE: Duration = Duration::from_secs(600);
 const CODE_CHARS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const CODE_LEN: usize = 4;
 /// Signs records when the server has no `PROGRESS_KEY`: fine locally, worthless in production.
-const DEV_KEY: &[u8] = b"webhawk-dev-key-not-a-secret";
+const DEV_KEY: &[u8] = b"mechwar-dev-key-not-a-secret";
 /// While a match is on, a pilot's record goes out this often with their match so far (s), so
 /// leaving early loses at most this much.
 const CHECKPOINT_SECONDS: u32 = 10;

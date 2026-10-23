@@ -1,7 +1,7 @@
 // A pilot's progression record, as the server signs it (see server/src/main.rs): `payload.tag`,
 // the payload base64url JSON. The page keeps it in localStorage, sends it back on joining, and
 // reads it only to show it: the server alone can vouch for it.
-export const STORE = 'webhawk.progress';
+export const STORE = 'mechwar.progress';
 
 /** The record a token holds, or null. */
 export function readRecord(token) {
