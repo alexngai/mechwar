@@ -18,8 +18,9 @@ export class Sound {
     this.volume = 0.8;
     this.muted = false;
     this.listener = { x: 0, y: 0, z: 0 };
-    this.timers = { heat: 0, hull: 0 };
+    this.timers = { heat: 0, hull: 0, missile: 0, seek: 0 };
     this.overheated = false;
+    this.lockMade = false;
   }
 
   /** Starts audio; browsers only allow it from a user gesture, so call this from one. */
@@ -630,8 +631,9 @@ export class Sound {
 
   /**
    * Each frame: { alive, heat (0-1), overheated, hull (0-1), repairing (0-1 phase), jammed, beaming,
-   * spin (0-1) }. Drives the repair whir (higher and softer for a held beam) and the Gatling's
-   * spool, rising from a low hum to a high whine as the barrels spin up, and paces warning beeps.
+   * spin (0-1), incoming (m, or null), lock (0-1) }. Drives the repair whir (higher and softer for a
+   * held beam) and the Gatling's spool, rising from a low hum to a high whine as the barrels spin up,
+   * and paces warning beeps, the missile alarm and the lock tones.
    */
   cockpit(s, dt) {
     if (!this.running) return;
@@ -662,6 +664,33 @@ export class Sound {
       const out = this.voice(null, 0.4, this.ui);
       if (out) this.tone(out, 'sine', 440, 430, 0.01, 0.25, 0.12);
     }
+    // Missiles locked on us (`incoming`, m to the nearest; null for none): a two-tone alarm,
+    // quicker the closer they are.
+    this.timers.missile -= dt;
+    if (s.incoming !== null && this.timers.missile <= 0) {
+      this.timers.missile = Math.min(Math.max(s.incoming / 80, 0.1), 0.45);
+      const out = this.voice(null, 0.2, this.ui);
+      if (out) {
+        this.tone(out, 'square', 1500, 1500, 0.002, 0.05, 0.11);
+        this.tone(out, 'square', 1150, 1150, 0.002, 0.05, 0.11, 0.06);
+      }
+    }
+    // Our own lock (`lock`, 0 to 1 made; 0 for none): quick pips climbing while it locks, then a
+    // bright rising chirp once it's made.
+    this.timers.seek -= dt;
+    if (s.lock > 0 && s.lock < 1 && this.timers.seek <= 0) {
+      this.timers.seek = 0.07;
+      const out = this.voice(null, 0.1, this.ui);
+      if (out) this.tone(out, 'sine', 900 + 600 * s.lock, 900 + 600 * s.lock, 0.002, 0.03, 0.09);
+    }
+    if (s.lock >= 1 && !this.lockMade) {
+      const out = this.voice(null, 0.3, this.ui);
+      if (out) {
+        this.tone(out, 'sine', 1700, 1700, 0.002, 0.06, 0.12);
+        this.tone(out, 'sine', 2300, 2300, 0.002, 0.12, 0.12, 0.07);
+      }
+    }
+    this.lockMade = s.lock >= 1;
     if (s.jammed && Math.random() < dt * 8) {
       const out = this.voice(null, 0.1, this.cockpitBus);
       if (out) this.noise(out, 'white', 'highpass', 3000, 2500, 0.001, 0.04, 0.15);

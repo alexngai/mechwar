@@ -15,6 +15,7 @@ impl Tuning {
             alt_spread_deg: 0.0,
             alt_cone: 0.0,
             alt_speed: self.grenade_speed,
+            alt_speed_jitter: 0.0,
             alt_loft_deg: self.grenade_loft_deg,
             alt_gravity: self.grenade_gravity,
             alt_bounce: self.grenade_bounce,

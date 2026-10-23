@@ -29,9 +29,9 @@ fn mech_state(m: &Mech) -> Vec<f32> {
     ]
 }
 
-/// Fifteen floats per projectile: owner, seq, n, class, xyz, velocity xyz, age, predicted (0/1),
-/// primary fire (0/1), the weapon (an index into weapons.json's primaries or secondaries) and
-/// its charge (0-1).
+/// Sixteen floats per projectile: owner, seq, n, class, xyz, velocity xyz, age, predicted (0/1),
+/// primary fire (0/1), the weapon (an index into weapons.json's primaries or secondaries), its
+/// charge (0-1), and the player a homing shell is locked on (their id + 1; 0 for none).
 fn projectile_floats(drawn: impl IntoIterator<Item = Drawn>) -> Vec<f32> {
     drawn
         .into_iter()
@@ -41,7 +41,7 @@ fn projectile_floats(drawn: impl IntoIterator<Item = Drawn>) -> Vec<f32> {
                 p.pos.x, p.pos.y, p.pos.z, p.vel.x, p.vel.y, p.vel.z, p.age, if predicted { 1.0 } else { 0.0 },
                 if p.primary { 1.0 } else { 0.0 },
                 f32::from(if p.primary { p.loadout.primary } else { p.loadout.secondary }),
-                p.charge,
+                p.charge, f32::from(p.target),
             ]
         })
         .collect()

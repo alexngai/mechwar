@@ -73,6 +73,13 @@ pub fn falloff(t: &Tuning, dist: f32) -> f32 {
     1.0 - (1.0 - t.falloff_floor) * x
 }
 
+/// Shell `n` of shot `seq`'s share of a speed jitter, uniform in [-1, 1), seeded apart from its
+/// spread (`in_cone`).
+pub fn jitter(seq: u32, n: u32) -> f32 {
+    let mut rng = (u64::from(seq) << 32 | u64::from(n)) ^ 0x5EED_5EED_5EED_5EED;
+    unit(&mut rng) * 2.0 - 1.0
+}
+
 /// splitmix64 step, uniform in [0, 1).
 fn unit(state: &mut u64) -> f32 {
     *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);

@@ -77,7 +77,8 @@ fn ballistics(t: &Tuning, primary: bool) -> Ballistics {
 
 /// The volley `m` launched this tick: from its eye along its aim, pitched up by `alt_loft_deg`,
 /// as a level fan of `alt_count` spaced `alt_spread_deg` apart, or with `alt_cone` 1 a cone
-/// `alt_spread_deg` wide that each shell lands in at random (seeded, like a primary's pellets).
+/// `alt_spread_deg` wide that each shell lands in at random (seeded, like a primary's pellets);
+/// each flies at `alt_speed`, give or take `alt_speed_jitter` of it (seeded too).
 pub fn volley(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Vec<Projectile> {
     let eye = aim_ray(t, m).origin;
     let count = t.alt_count.max(1.0) as u8;
@@ -91,7 +92,8 @@ pub fn volley(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Vec<Projectile> {
                 Rotation::from_rotation_y(m.yaw + fan) * Rotation::from_rotation_x(pitch) * Vector::NEG_Z
             };
             let target = if t.alt_lock_time > 0.0 && m.lock_time >= t.alt_lock_time { m.lock } else { 0 };
-            Projectile { owner, seq, n, primary: false, class: m.class, loadout: m.loadout, charge: m.alt_charge, target, pos: eye, vel: dir * t.alt_speed, age: 0.0 }
+            let speed = t.alt_speed * (1.0 + t.alt_speed_jitter * weapon::jitter(seq, u32::from(n)));
+            Projectile { owner, seq, n, primary: false, class: m.class, loadout: m.loadout, charge: m.alt_charge, target, pos: eye, vel: dir * speed, age: 0.0 }
         })
         .collect()
 }
@@ -385,6 +387,17 @@ mod tests {
         // Not a level fan: some climb and some dip.
         assert!(v.iter().any(|p| p.vel.y > aim.y * t.alt_speed + 0.1) && v.iter().any(|p| p.vel.y < aim.y * t.alt_speed - 0.1));
         assert_ne!(v[0].vel, volley(&t, &m, 0, 8)[0].vel, "seq doesn't reseed");
+    }
+
+    #[test]
+    fn speeds_vary_within_the_jitter() {
+        let (t, m) = mech(MechClass::B, [0.0, 0.0, 0.0], 0.0, 0.0);
+        let t = Tuning { alt_count: 8.0, alt_speed_jitter: 0.2, ..t };
+        let speeds: Vec<f32> = volley(&t, &m, 0, 3).iter().map(|p| p.vel.length()).collect();
+        assert!(speeds.iter().all(|s| (s / t.alt_speed - 1.0).abs() <= 0.2 + 1e-4), "{speeds:?}");
+        let spread = speeds.iter().fold(0f32, |a, s| a.max(*s)) - speeds.iter().fold(f32::MAX, |a, s| a.min(*s));
+        assert!(spread > 0.1 * t.alt_speed, "speeds barely vary: {speeds:?}");
+        assert_eq!(volley(&t, &m, 0, 3)[5].vel, volley(&t, &m, 0, 3)[5].vel);
     }
 
     #[test]

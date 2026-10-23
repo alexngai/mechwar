@@ -130,6 +130,8 @@ pub struct Tuning {
     pub alt_spread_deg: f32,
     pub alt_cone: f32,
     pub alt_speed: f32,
+    /// Each shell's speed varies by up to this share either way, seeded per shell.
+    pub alt_speed_jitter: f32,
     pub alt_loft_deg: f32,
     pub alt_gravity: f32,
     pub alt_bounce: f32,

@@ -182,6 +182,16 @@ export class Hud {
       g.font = font(16, 'bold');
       g.fillText('BOOST JAMMED', cx, bottom + 34 * u);
     }
+    // Missiles locked on us: a flashing warning over the frame, with how far off the nearest is.
+    if (f.incoming !== null && Math.floor(f.now / 150) % 2 === 0) {
+      const top = cy - R * Math.sin(span);
+      g.textAlign = 'center';
+      g.fillStyle = WARN;
+      g.font = font(20, 'bold');
+      g.fillText('MISSILE INCOMING', cx, top - 40 * u);
+      g.font = font(13, 'bold');
+      g.fillText(`${Math.round(f.incoming)} m`, cx, top - 20 * u);
+    }
     // A fresh launch is shielded until we act: say so under the frame.
     if (f.shielded) {
       g.textAlign = 'center';

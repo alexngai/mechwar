@@ -228,6 +228,7 @@ const launches = new Map(), blastAt = new THREE.Vector3();
 const LAUNCH_BLEND = 0.15; // s
 let hurt = 0, shake = 0, boostKick = 0, zoomKick = 0, message = '', messageUntil = 0;
 let burstable = false; // an own shell is armed in flight
+let incoming = null; // m to the nearest missile locked on us, or null
 const BOOST_FOV = 6; // degrees
 // HUD feedback: own hits and kills, where hits on us came from, and when each player last fired.
 const hits = [], damageFrom = [], lastFired = new Map();
@@ -735,8 +736,10 @@ function frame(now) {
   const pr = game.projectiles(now), drawn = [], live = new Set(), jets = [];
   let gunAt = null;
   burstable = false;
-  for (let i = 0; i < pr.length; i += 15) {
-    const [owner, seq, n, , x, y, z, vx, vy, vz, age, predicted, primary, weapon, charge] = pr.subarray(i, i + 15);
+  incoming = null;
+  for (let i = 0; i < pr.length; i += 16) {
+    const [owner, seq, n, , x, y, z, vx, vy, vz, age, predicted, primary, weapon, charge, target] = pr.subarray(i, i + 16);
+    if (alive && myId >= 0 && target - 1 === myId) incoming = Math.min(incoming ?? Infinity, Math.hypot(x - pos.x, y - pos.y, z - pos.z));
     const secondary = primary ? null : weapons.secondaries[weapon];
     const key = `${owner}:${seq}:${n}:${primary}`, ahead = predicted ? a * DT : 0;
     const mech = predicted ? me : remotes.get(owner)?.mech;
@@ -860,7 +863,8 @@ function frame(now) {
   sound.cockpit({
     alive, heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     hull: curr[S.HEALTH] / T('health_max'), repairing: repairPhase(curr[S.REPAIR_T]), jammed: curr[S.JAMMED] > 0, beaming: !!curr[S.BEAM],
-    spin: curr[S.SPIN],
+    spin: curr[S.SPIN], incoming,
+    lock: curr[S.LOCK] > 0 ? Math.min(curr[S.LOCK_T] / Math.max(T('alt_lock_time'), 1e-6), 1) : 0,
   }, dt);
   // A jump pad fires as a mech leaves it upward: a pulse on the pad and a thump.
   const onPad = (p) => arena.pads?.find((d) => Math.abs(p.y - d.at[1]) < 1 && Math.hypot(p.x - d.at[0], p.z - d.at[2]) < 2.5);
@@ -1052,6 +1056,7 @@ function drawGlass(now, myTeam) {
     alt: 1 - curr[S.ALT_WAIT] / Math.max(T('alt_cooldown'), 1e-6), altReady: curr[S.ALT_WAIT] <= 0,
     altBurst: burstable,
     shielded: !!curr[S.SHIELD],
+    incoming,
     lock: curr[S.LOCK] > 0 ? {
       unit: curr[S.LOCK] - 1, progress: Math.min(curr[S.LOCK_T] / Math.max(T('alt_lock_time'), 1e-6), 1),
       left: T('alt_lock_time') + T('alt_lock_hold') - curr[S.LOCK_T], // s the lock holds once made
