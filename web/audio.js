@@ -284,17 +284,19 @@ export class Sound {
   launch(sound, pos) {
     if (sound === 'flak') return this.shot(sound, pos);
     if (sound === 'spindle') {
-      // Rail gun: a big, sharp crack that carries and echoes, with a deep boom and rumble under it
-      // and the rails' discharge whining down.
+      // Rail gun: a thunderclap close by, a high, sharp crack that tears for a moment (two quick
+      // aftercracks) and echoes, over a boom and a rolling rumble, the rails' discharge whining down.
       const out = this.voice(pos, 0.9, undefined, 0.35);
       if (!out) return;
       out.gain.value = pos ? 1.9 : 1.4;
-      this.noise(out, 'white', 'highpass', 5000, 2600, 0.0003, 0.02, 1.0);
-      this.noise(out, 'white', 'highpass', 1800, 800, 0.0005, 0.09, 1.0);
-      this.noise(out, 'white', 'lowpass', 6000, 1400, 0.0005, 0.05, 0.6);
-      this.tone(out, 'sine', 115, 34, 0.002, 0.38, 1.0);
-      this.noise(out, 'brown', 'lowpass', 1100, 90, 0.002, 0.55, 0.8);
-      this.tone(out, 'sawtooth', 1400, 260, 0.001, 0.14, 0.15);
+      this.noise(out, 'white', 'highpass', 6500, 3500, 0.0003, 0.02, 1.0);
+      this.noise(out, 'white', 'highpass', 2600, 1200, 0.0005, 0.08, 1.0);
+      this.noise(out, 'white', 'lowpass', 8000, 2200, 0.0005, 0.05, 0.6);
+      this.noise(out, 'white', 'highpass', 3800, 2400, 0.0003, 0.015, 0.55, 1, 0.018);
+      this.noise(out, 'white', 'highpass', 3200, 2000, 0.0003, 0.02, 0.4, 1, 0.042);
+      this.tone(out, 'sine', 170, 55, 0.002, 0.3, 0.85);
+      this.noise(out, 'brown', 'lowpass', 1400, 120, 0.002, 0.55, 0.75);
+      this.tone(out, 'sawtooth', 1600, 320, 0.001, 0.14, 0.15);
       return;
     }
     const out = this.voice(pos, 0.5);
