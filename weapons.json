@@ -100,7 +100,7 @@
     {
       "id": "warren", "name": "Mine layer", "desc": "A sticky mine a second that bursts when an enemy comes within 3.5 m; ten down at most, and middle-click sets them all off", "sound": "mines", "recoil": "low", "projectile": "mine",
       "stats": {
-        "alt_cooldown": 1, "alt_heat": 6, "alt_count": 1, "alt_spread_deg": 0, "alt_speed": 80, "alt_loft_deg": 10, "alt_gravity": 18,
+        "alt_cooldown": 1, "alt_heat": 6, "alt_count": 1, "alt_spread_deg": 0, "alt_speed": 50, "alt_loft_deg": 10, "alt_gravity": 18,
         "alt_bounce": 0, "alt_stick": 1, "alt_trigger": 3.5, "alt_max": 10, "alt_fuse": 20, "alt_damage": 22, "alt_radius": 3.5
       }
     }
