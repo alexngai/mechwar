@@ -921,9 +921,14 @@ mod tests {
     }
 
     fn class_sim(class: MechClass) -> (Sim, Tuning) {
-        let t = Tuning::default().for_class(class);
+        armed_sim(class, Loadout::of(class))
+    }
+
+    /// `class_sim` carrying `loadout`.
+    fn armed_sim(class: MechClass, loadout: Loadout) -> (Sim, Tuning) {
+        let t = Arsenal::new(&Tuning::default()).get(class, loadout).clone();
         let mut sim = Sim::with_map(t.clone(), map::Map::index("blockout").unwrap());
-        sim.class = class;
+        (sim.class, sim.loadout) = (class, loadout);
         sim.reset();
         // A long clear run down the middle of the arena.
         sim.mech.pos = Vector::new(0.0, 0.1, 45.0);
@@ -1171,7 +1176,7 @@ mod tests {
 
     #[test]
     fn secondary_shares_heat() {
-        let (mut sim, t) = class_sim(MechClass::B);
+        let (mut sim, t) = armed_sim(MechClass::B, Loadout::named("pike", "rocket"));
         let alt = Input { alt_fire: true, ..Input::default() };
         sim.step(&alt);
         assert!(sim.mech.launched);
@@ -1189,7 +1194,7 @@ mod tests {
 
     #[test]
     fn no_burst_before_arming() {
-        let (mut sim, _) = class_sim(MechClass::B);
+        let (mut sim, _) = armed_sim(MechClass::B, Loadout::named("pike", "rocket"));
         let alt = Input { alt_fire: true, ..Input::default() };
         // Fire, let go, and press again two ticks in: too early, so the rocket flies on.
         sim.step(&alt);
@@ -1206,7 +1211,7 @@ mod tests {
 
     #[test]
     fn held_secondary_doesnt_burst() {
-        let (mut sim, _) = class_sim(MechClass::B);
+        let (mut sim, _) = armed_sim(MechClass::B, Loadout::named("pike", "rocket"));
         let alt = Input { alt_fire: true, ..Input::default() };
         // Held from the launch on, well past arming.
         run(&mut sim, alt, 30);

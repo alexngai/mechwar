@@ -4,7 +4,8 @@
 // backdrop behind the page (backdrop.js). It also shows the pilot's progression record (see
 // progress.js), and moves it between browsers as text.
 import weapons from '../weapons.json';
-import { STORE, levelXp, readRecord } from './progress.js';
+import classes from '../classes.json';
+import { STORE, levelXp, pointsLeft, readRecord } from './progress.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (text) => String(text).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -74,6 +75,7 @@ callsign.addEventListener('input', saveCallsign);
 // The pilot: level, XP toward the next, and lifetime stats from the stored record.
 const weaponNames = Object.fromEntries([...weapons.primaries, ...weapons.secondaries].map((w) => [w.id, w.name]));
 weaponNames.grenade = 'Tumbler';
+const unlockable = weapons.primaries.length + weapons.secondaries.length - 2;
 function showPilot() {
   const r = readRecord(stored(STORE) ?? '');
   if (!r) {
@@ -90,6 +92,7 @@ function showPilot() {
     <div class="bar"><div style="width: ${r.level < 99 ? (100 * (r.xp - from)) / (to - from) : 100}%"></div></div>
     <dl>${stat('MATCHES', `${s.matches} · ${s.wins} won`)}${stat('PILOTS DOWNED', s.kills)}${stat('DEATHS', s.deaths)}
       ${stat('ASSISTS', s.assists)}${stat('BOTS DOWNED', `${s.bot_kills} · ${s.bot_assists} assists`)}${stat('HEALING', s.healing)}
+      ${stat('UNLOCK POINTS', pointsLeft(r))}${stat('WEAPONS UNLOCKED', ['A', 'B', 'C'].map((k) => `${classes[k].name} ${r.unlocks?.[k]?.length ?? 0}/${unlockable}`).join(' · '))}
       ${stat('TOP WEAPONS', weaponsUsed)}</dl>`;
 }
 showPilot();

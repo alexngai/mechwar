@@ -218,6 +218,11 @@ impl NetClient {
         net::encode(&ClientMsg::Name(raw.into()))
     }
 
+    /// Message spending unlock points on primary (or secondary) weapon `index` for `class`.
+    pub fn unlock_msg(&self, class: MechClass, primary: bool, index: u8) -> Vec<u8> {
+        net::encode(&ClientMsg::Unlock { class, primary, index })
+    }
+
     /// Message handing the server our signed progression record ("" for none yet).
     pub fn progress_msg(&self, record: &str) -> Vec<u8> {
         net::encode(&ClientMsg::Progress(record.into()))

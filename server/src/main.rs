@@ -14,7 +14,8 @@
 //! Progression has no database: the server signs each pilot's record and their browser keeps it.
 //! A pilot hands theirs over on joining (none or a bad one makes them a fresh guest); the room
 //! counts their match and sends the record back with it added, every few seconds while it's on
-//! and in full at its end.
+//! and in full at its end. The record also says which weapons the pilot has unlocked for each
+//! mech: the room launches them with those only, and spends their points on more.
 
 use std::collections::HashMap;
 use std::future::IntoFuture;
@@ -40,7 +41,7 @@ use sim::game::{Game, MAX_PLAYERS};
 use sim::map::{MAPS, ROTATION};
 use sim::net::{self, ClientMsg, ServerMsg};
 use sim::progress::{MatchXp, RECORD_VERSION, Record, Tally};
-use sim::{DT, Map, TICK_HZ, Tuning};
+use sim::{DT, Loadout, Map, TICK_HZ, Tuning};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, Instant};
@@ -438,7 +439,11 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
                     let _ = reply.send(id);
                 }
                 Cmd::Msg(id, ClientMsg::Input(msg)) => game.push_input(id, msg),
-                Cmd::Msg(id, ClientMsg::Pick(class, loadout)) => game.pick(id, class, loadout),
+                // Only weapons the pilot has unlocked for that mech (its own until their record's in).
+                Cmd::Msg(id, ClientMsg::Pick(class, loadout)) => {
+                    let loadout = pilots.get(&id).map_or(Loadout::of(class), |p| p.base.allowed(class, loadout));
+                    game.pick(id, class, loadout);
+                }
                 Cmd::Msg(id, ClientMsg::Name(name)) => game.set_name(id, &name),
                 // Once a visit: taking another record mid-match would count the match twice.
                 Cmd::Msg(id, ClientMsg::Progress(token)) if !pilots.contains_key(&id) => {
@@ -455,6 +460,23 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
                     pilots.insert(id, Pilot { base, sent: Tally::default() });
                 }
                 Cmd::Msg(_, ClientMsg::Progress(_)) => {}
+                // Answered with the record, the match so far on it as at a checkpoint (none
+                // between matches: the last one's already on it).
+                Cmd::Msg(id, ClientMsg::Unlock { class, primary, index }) => {
+                    if let (Some(pilot), Some((tally, _))) = (pilots.get_mut(&id), game.tally(id))
+                        && pilot.base.unlock(class, primary, index)
+                        && let Some((_, out)) = outboxes.iter().find(|(i, _)| *i == id)
+                    {
+                        println!("room {code}: player {id} unlocked {}", sim::arsenal::weapon(primary, index).map_or("?", |w| w.0));
+                        let record = if game.match_state().ended {
+                            pilot.base.clone()
+                        } else {
+                            pilot.sent = tally.clone();
+                            pilot.base.with(tally, false, false).0
+                        };
+                        let _ = out.send((Instant::now(), progress_msg(&signer, &game, id, record, None)));
+                    }
+                }
                 Cmd::Leave(id) => {
                     println!("room {code}: player {id} left");
                     game.leave(id);
@@ -625,19 +647,28 @@ mod tests {
         assert_ne!(signer.guest_id(), signer.guest_id());
     }
 
-    /// Joins a fresh room (on a server with `key`) bringing `record`, sees its one-second match
-    /// out, and returns the record it ends with and the XP it brought.
-    async fn visit(key: &[u8], record: &str) -> (Record, MatchXp) {
-        let settings = Settings { name: "Test".into(), public: false, map: None, score_limit: 25, match_seconds: 1.0, bots: false, bot_skill: 0.5 };
+    /// A fresh room on a server with `key`, its match `match_seconds` long, joined by one player
+    /// bringing `record`: the room's task, the way to send it the player's messages (with their
+    /// id), and what it sends them.
+    async fn join_room(key: &[u8], match_seconds: f32, record: &str) -> (tokio::task::JoinHandle<()>, impl Fn(ClientMsg) + use<>, mpsc::UnboundedReceiver<(Instant, Vec<u8>)>) {
+        let settings = Settings { name: "Test".into(), public: false, map: None, score_limit: 25, match_seconds, bots: false, bot_skill: 0.5 };
         let game = new_game(&settings, 1);
         let info = Arc::new(Mutex::new(describe("TEST", &settings, &game)));
         let (cmds, cmd_rx) = mpsc::unbounded_channel();
         let room = tokio::spawn(room_loop(game, cmd_rx, info, IDLE_PUBLIC, settings, Signer::new(key)));
-        let (out, mut inbox) = mpsc::unbounded_channel();
+        let (out, inbox) = mpsc::unbounded_channel();
         let (reply, id) = oneshot::channel();
         cmds.send(Cmd::Join(out, reply)).unwrap();
         let id = id.await.unwrap().unwrap();
-        cmds.send(Cmd::Msg(id, ClientMsg::Progress(record.into()))).unwrap();
+        let send = move |msg| cmds.send(Cmd::Msg(id, msg)).unwrap();
+        send(ClientMsg::Progress(record.into()));
+        (room, send, inbox)
+    }
+
+    /// Joins a fresh room (on a server with `key`) bringing `record`, sees its one-second match
+    /// out, and returns the record it ends with and the XP it brought.
+    async fn visit(key: &[u8], record: &str) -> (Record, MatchXp) {
+        let (room, _send, mut inbox) = join_room(key, 1.0, record).await;
         loop {
             let (_, bytes) = inbox.recv().await.unwrap();
             if let Some(ServerMsg::Progress { record, end: Some(xp) }) = net::decode(&bytes) {
@@ -659,5 +690,49 @@ mod tests {
         let (fresh, _) = visit(b"another key", &Signer::new(key).sign(&second)).await;
         assert_ne!(fresh.id, first.id);
         assert_eq!((fresh.stats.matches, fresh.xp), (1, 100));
+    }
+
+    /// Index of weapon `id` among the primaries (or secondaries).
+    fn weapon(primary: bool, id: &str) -> u8 {
+        (0..).find(|&i| sim::arsenal::weapon(primary, i).expect("no such weapon").0 == id).unwrap()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rooms_spend_points_and_launch_only_unlocked_weapons() {
+        let key = b"the server's key";
+        let mut record = Record::guest(7, "Ace");
+        record.level = 2; // 3 points: the rail gun, and nothing after
+        let (room, send, mut inbox) = join_room(key, 600.0, &Signer::new(key).sign(&record)).await;
+        // The next record the room sends, and the loadout the player's mech carries a little later.
+        let next_record = async |inbox: &mut mpsc::UnboundedReceiver<(Instant, Vec<u8>)>| loop {
+            if let Some(ServerMsg::Progress { record, .. }) = net::decode(&inbox.recv().await.unwrap().1) {
+                return Signer::new(key).verify(&record).unwrap();
+            }
+        };
+        let loadout_after = async |inbox: &mut mpsc::UnboundedReceiver<(Instant, Vec<u8>)>| {
+            let mut last = None;
+            for _ in 0..60 {
+                if let Some(ServerMsg::Snapshot(s)) = net::decode(&inbox.recv().await.unwrap().1) {
+                    last = Some(s.me.loadout);
+                }
+            }
+            last.unwrap()
+        };
+        assert_eq!(next_record(&mut inbox).await.points(), 3);
+
+        let (light, own) = (sim::MechClass::A, Loadout::of(sim::MechClass::A));
+        let (rail, heat) = (weapon(false, "spindle"), weapon(true, "kiln"));
+        // Locked: launches with the light's own weapons instead.
+        send(ClientMsg::Pick(light, Loadout { primary: heat, secondary: rail }));
+        assert_eq!(loadout_after(&mut inbox).await, own);
+
+        send(ClientMsg::Unlock { class: light, primary: false, index: rail });
+        let unlocked = next_record(&mut inbox).await;
+        assert_eq!((unlocked.unlocks["A"].clone(), unlocked.points()), (vec!["spindle".to_string()], 0));
+        // Out of points: the heat gun stays locked, and the next launch carries the rail gun alone.
+        send(ClientMsg::Unlock { class: light, primary: true, index: heat });
+        send(ClientMsg::Pick(light, Loadout { primary: heat, secondary: rail }));
+        assert_eq!(loadout_after(&mut inbox).await, Loadout { secondary: rail, ..own });
+        room.abort();
     }
 }

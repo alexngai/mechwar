@@ -56,7 +56,8 @@ impl Harness {
             .into_iter()
             .map(|class| {
                 let id = game.join().expect("room for two");
-                game.pick_class(id, class);
+                // A Medium carries tuning.json's own weapons, the rifle and rocket; the rest their own.
+                game.pick(id, class, if class == MechClass::B { base_weapons() } else { Loadout::of(class) });
                 let mut c = NetClient::default();
                 c.receive(&net::encode(&ServerMsg::Welcome { id, map: blockout() as u8 }), 0.0);
                 (id, c)
@@ -693,6 +694,7 @@ fn rockets_splash_enemies_only() {
     let mut game = Game::new(t.clone(), blockout());
     game.bots = false;
     let shooter = game.join().unwrap();
+    game.pick(shooter, MechClass::B, base_weapons());
     let enemy = game.join().unwrap();
     let mate = game.join().unwrap();
     assert_eq!(team_of(&game, shooter), team_of(&game, mate));
@@ -801,8 +803,13 @@ fn bots_use_secondaries() {
 
 /// Primary `id`'s index in weapons.json.
 fn primary(id: &str) -> u8 {
-    let weapons: serde_json::Value = serde_json::from_str(include_str!("../../weapons.json")).unwrap();
-    weapons["primaries"].as_array().unwrap().iter().position(|w| w["id"] == id).unwrap() as u8
+    (0..).find(|&i| sim::arsenal::weapon(true, i).expect("no such primary").0 == id).unwrap()
+}
+
+/// The weapons tuning.json describes: the rifle and the rocket.
+fn base_weapons() -> Loadout {
+    let rocket = (0..).find(|&i| sim::arsenal::weapon(false, i).expect("no rocket").0 == "rocket").unwrap();
+    Loadout { primary: primary("pike"), secondary: rocket }
 }
 
 #[test]

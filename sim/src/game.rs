@@ -7,6 +7,7 @@ use std::collections::VecDeque;
 use rapier3d::parry::query::RayCast;
 use rapier3d::prelude::{Pose, Ray};
 
+use crate::arsenal;
 use crate::bot::{self, Bot, Nav};
 use crate::collide;
 use crate::item;
@@ -840,7 +841,7 @@ impl Game {
         }
         if let Some(a) = attacker {
             let weapon = match cause {
-                Cause::Weapon { primary, index } => Some(self.arsenal.weapon_id(primary, index).to_string()),
+                Cause::Weapon { primary, index } => arsenal::weapon(primary, index).map(|(id, _)| id.to_string()),
                 Cause::Grenade => Some("grenade".to_string()),
                 Cause::Unknown => None,
             };
@@ -1025,7 +1026,7 @@ mod tests {
         game.apply_damage(Some(at(&game, helper)), v, 40.0);
         // The killer's overkill doesn't dilute the helper's 40%.
         game.apply_damage_by(Some(at(&game, killer)), v, 1e3, Cause::Weapon { primary: true, index: 0 });
-        let weapon = game.arsenal.weapon_id(true, 0).to_string();
+        let weapon = arsenal::weapon(true, 0).unwrap().0.to_string();
         let tally = |id| game.tally(id).unwrap().0.clone();
         let (k, h, d) = (tally(killer), tally(helper), tally(victim));
         assert_eq!((k.stats.kills, k.stats.weapon_kills.get(&weapon), k.stats.assists), (1, Some(&1), 0));
@@ -1288,6 +1289,7 @@ mod tests {
             game.bots = false;
             game.arena = Arena::new(&map);
             let (shooter, hider) = (game.join().unwrap(), game.join().unwrap());
+            game.pick(shooter, MechClass::B, Loadout::named("pike", "rocket"));
             for (id, pos) in [(shooter, Vector::new(0.0, 4.1, 16.0)), (hider, Vector::new(0.0, 0.1, -1.85))] {
                 game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = pos;
             }
@@ -1335,13 +1337,13 @@ mod tests {
             let m = &mut game.players.iter_mut().find(|p| p.id == id).unwrap().mech;
             m.pos = pos;
             m.alt_wait = 10.0; // so the bot doesn't press to fire
-            m.loadout = Loadout::of(MechClass::B); // the rocket, whatever build the bot rolled
+            m.loadout = Loadout::named("pike", "rocket"); // whatever build the bot rolled
             m.yaw = std::f32::consts::PI; // the bot faces south, at the human
         }
         unshield(&mut game);
         // The bot's rocket, 2 m past the human's chest and flying on.
         let chest = Vector::new(0.0, 0.1 + t.mech_height * 0.5, 0.0);
-        let p = Projectile { owner: bot, seq: 1, n: 0, primary: false, class: MechClass::B, loadout: Loadout::of(MechClass::B), charge: 0.0, target: 0, pos: chest + Vector::Z * 2.0, vel: Vector::Z * t.alt_speed, age: 0.5 };
+        let p = Projectile { owner: bot, seq: 1, n: 0, primary: false, class: MechClass::B, loadout: Loadout::named("pike", "rocket"), charge: 0.0, target: 0, pos: chest + Vector::Z * 2.0, vel: Vector::Z * t.alt_speed, age: 0.5 };
         game.projectiles.push(Flying { p, team: 1 });
         game.step();
         let hits = game.events.iter().find_map(|e| if let Event::Blast { owner, hits, .. } = *e { Some((owner, hits)) } else { None });

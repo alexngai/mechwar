@@ -336,8 +336,13 @@ mod tests {
     }
 
     fn mech(class: MechClass, pos: [f32; 3], yaw: f32, pitch: f32) -> (Tuning, Mech) {
-        let t = Tuning::default().for_class(class);
-        let m = Mech { class, yaw, pitch, ..spawn_mech(&t, Vector::from_array(pos)) };
+        armed(class, Loadout::of(class), pos, yaw, pitch)
+    }
+
+    /// `mech` carrying `loadout`.
+    fn armed(class: MechClass, loadout: Loadout, pos: [f32; 3], yaw: f32, pitch: f32) -> (Tuning, Mech) {
+        let t = crate::Arsenal::new(&Tuning::default()).get(class, loadout).clone();
+        let m = Mech { class, loadout, yaw, pitch, ..spawn_mech(&t, Vector::from_array(pos)) };
         (t, m)
     }
 
@@ -357,7 +362,7 @@ mod tests {
     fn rocket_bursts_at_the_wall() {
         // Facing +X toward the east wall, whose inner face is at x = 50.
         let arena = blockout();
-        let (t, m) = mech(MechClass::B, [40.0, 0.0, 0.0], -FRAC_PI_2, 0.0);
+        let (t, m) = armed(MechClass::B, Loadout::named("pike", "rocket"), [40.0, 0.0, 0.0], -FRAC_PI_2, 0.0);
         let (at, _) = fly_out(&arena, &t, volley(&t, &m, 0, 1)[0]);
         assert!(at.x < 50.0 && at.x > 49.85, "burst at {at}");
     }
@@ -377,8 +382,8 @@ mod tests {
 
     #[test]
     fn scatter_fills_a_cone() {
-        let (t, m) = mech(MechClass::A, [0.0, 0.0, 0.0], 0.3, 0.1);
-        assert!(t.alt_cone > 0.0 && t.alt_count > 3.0, "the Light's own secondary isn't the flak volley");
+        let (t, m) = armed(MechClass::A, Loadout::named("stitcher", "darts"), [0.0, 0.0, 0.0], 0.3, 0.1);
+        assert!(t.alt_cone > 0.0 && t.alt_count > 3.0, "the scatter isn't a cone volley");
         let v = volley(&t, &m, 0, 7);
         assert_eq!(v.len(), t.alt_count as usize);
         let aim = aim_ray(&t, &m).dir;

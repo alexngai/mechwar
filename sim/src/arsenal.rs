@@ -32,6 +32,13 @@ impl Loadout {
             })
         })[class.index()]
     }
+
+    /// The weapons with ids `primary` and `secondary`.
+    #[cfg(test)]
+    pub(crate) fn named(primary: &str, secondary: &str) -> Loadout {
+        let at = |slot: Slot, id: &str| slot.list(weapons_json()).iter().position(|w| w["id"] == id).unwrap_or_else(|| panic!("no weapon `{id}`")) as u8;
+        Loadout { primary: at(Slot::Primary, primary), secondary: at(Slot::Secondary, secondary) }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -65,8 +72,6 @@ impl Slot {
 pub struct Arsenal {
     primaries: usize,
     secondaries: usize,
-    /// weapons.json's ids, by slot (primaries, then secondaries).
-    ids: [Vec<String>; 2],
     /// By class, then primary, then secondary.
     tunings: Vec<Tuning>,
 }
@@ -91,8 +96,7 @@ impl Arsenal {
                 }
             }
         }
-        let ids = [primaries, secondaries].map(|list| list.iter().map(|w| w["id"].as_str().unwrap_or_default().to_string()).collect());
-        Self { primaries: primaries.len(), secondaries: secondaries.len(), ids, tunings }
+        Self { primaries: primaries.len(), secondaries: secondaries.len(), tunings }
     }
 
     pub fn get(&self, class: MechClass, loadout: Loadout) -> &Tuning {
@@ -103,11 +107,6 @@ impl Arsenal {
     /// Mech `m`'s tuning.
     pub fn of(&self, m: &Mech) -> &Tuning {
         self.get(m.class, m.loadout)
-    }
-
-    /// The id of a primary (or secondary) weapon by index; "" past the end.
-    pub fn weapon_id(&self, primary: bool, index: u8) -> &str {
-        self.ids[usize::from(!primary)].get(usize::from(index)).map_or("", String::as_str)
     }
 
     /// How many primaries and secondaries there are to pick from.
@@ -135,6 +134,18 @@ fn merge(values: &Value, overrides: &Value, slot: Option<Slot>) -> Value {
         merged[name] = value.clone();
     }
     merged
+}
+
+/// A primary (or secondary) weapon's id and unlock price (weapons.json's `id` and `unlock`), by
+/// index into its list; None past the end.
+pub fn weapon(primary: bool, index: u8) -> Option<(&'static str, u32)> {
+    let w = (if primary { Slot::Primary } else { Slot::Secondary }).list(weapons_json()).get(usize::from(index))?;
+    Some((w["id"].as_str().unwrap_or_default(), w["unlock"].as_u64().map_or(0, |p| p as u32)))
+}
+
+/// The unlock price of the weapon with id `id` (0 for none).
+pub fn price(id: &str) -> u32 {
+    [Slot::Primary, Slot::Secondary].iter().flat_map(|s| s.list(weapons_json())).find(|w| w["id"] == id).and_then(|w| w["unlock"].as_u64()).map_or(0, |p| p as u32)
 }
 
 pub(crate) fn classes_json() -> &'static Value {
@@ -166,8 +177,8 @@ mod tests {
         let arsenal = Arsenal::new(&base);
         let (wisp, bulwark) = (Loadout::of(MechClass::A), Loadout::of(MechClass::C));
         assert_ne!(wisp, bulwark);
-        // The Medium's own weapons are tuning.json's.
-        let lancer = arsenal.get(MechClass::B, Loadout::of(MechClass::B));
+        // A Medium with the rifle and rocket is tuning.json as it stands.
+        let lancer = arsenal.get(MechClass::B, Loadout::named("pike", "rocket"));
         assert_eq!((lancer.fire_rate, lancer.alt_damage), (base.fire_rate, base.alt_damage));
         // A Light body with the Heavy's weapons: the Light's health, the flak and the grenade launcher.
         let swapped = arsenal.get(MechClass::A, bulwark);

@@ -1,5 +1,7 @@
 //! A pilot's progression: the lifetime record the server signs and the browser keeps (see
-//! server/src/main.rs), the tally of one match that's added to it, and the XP and level math.
+//! server/src/main.rs), the tally of one match that's added to it, the XP and level math, and
+//! the weapons it unlocks. Each mech starts with its own two weapons (classes.json's `weapons`);
+//! levels earn points that unlock the rest, mech by mech, at weapons.json's `unlock` prices.
 //!
 //! Records carry a format version and a random guest id, so a later server database can take a
 //! verified record as a player's first row as it is.
@@ -7,6 +9,8 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+
+use crate::{Loadout, MechClass, arsenal};
 
 /// The record format; bump when a field changes meaning.
 pub const RECORD_VERSION: u8 = 1;
@@ -23,6 +27,8 @@ pub const WIN_XP: u32 = 150;
 pub const ASSIST_SHARE: f32 = 0.15;
 /// Levels top out here.
 pub const MAX_LEVEL: u32 = 99;
+/// Unlock points each level past the first earns.
+pub const POINTS_PER_LEVEL: u32 = 3;
 
 /// Counts kept across matches. Kills and assists on humans and on bots are kept apart; healing
 /// is hit points mended on teammates; weapon kills (humans and bots alike) are by weapon id,
@@ -129,7 +135,8 @@ pub fn level_xp(n: u32) -> u32 {
 }
 
 /// A pilot's lifetime record: who (a random guest id, and their callsign), their XP and the
-/// level it makes, their counts, and when the server last issued it (unix seconds).
+/// level it makes, their counts, the weapons they've unlocked (ids by mech: `A`, `B`, `C`), and
+/// when the server last issued it (unix seconds).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Record {
     pub version: u8,
@@ -139,13 +146,15 @@ pub struct Record {
     pub xp: u32,
     pub level: u32,
     pub stats: Stats,
+    #[serde(default)]
+    pub unlocks: BTreeMap<String, Vec<String>>,
     pub issued: u64,
 }
 
 impl Record {
     /// A fresh guest with random id `id`.
     pub fn guest(id: u64, callsign: &str) -> Record {
-        Record { version: RECORD_VERSION, id: format!("{id:016x}"), callsign: callsign.into(), xp: 0, level: 1, stats: Stats::default(), issued: 0 }
+        Record { version: RECORD_VERSION, id: format!("{id:016x}"), callsign: callsign.into(), xp: 0, level: 1, stats: Stats::default(), unlocks: BTreeMap::new(), issued: 0 }
     }
 
     /// This record with `tally`'s match added (completed or not, won or not): the new record,
@@ -162,6 +171,39 @@ impl Record {
         next.xp = next.xp.saturating_add(gained.total());
         next.level = level(next.xp);
         (next, gained)
+    }
+
+    /// Unlock points earned by level and not yet spent.
+    pub fn points(&self) -> u32 {
+        let spent: u32 = self.unlocks.values().flatten().map(|id| arsenal::price(id)).sum();
+        (POINTS_PER_LEVEL * self.level.saturating_sub(1)).saturating_sub(spent)
+    }
+
+    /// Whether `class` may carry primary (or secondary) weapon `index`: its own, or unlocked for it.
+    pub fn owns(&self, class: MechClass, primary: bool, index: u8) -> bool {
+        let own = Loadout::of(class);
+        index == if primary { own.primary } else { own.secondary }
+            || arsenal::weapon(primary, index).is_some_and(|(id, _)| self.unlocks.get(class.key()).is_some_and(|ids| ids.iter().any(|u| u == id)))
+    }
+
+    /// `loadout` for `class`, with each weapon this pilot hasn't unlocked for it swapped for its own.
+    pub fn allowed(&self, class: MechClass, loadout: Loadout) -> Loadout {
+        let own = Loadout::of(class);
+        Loadout {
+            primary: if self.owns(class, true, loadout.primary) { loadout.primary } else { own.primary },
+            secondary: if self.owns(class, false, loadout.secondary) { loadout.secondary } else { own.secondary },
+        }
+    }
+
+    /// Spends points unlocking primary (or secondary) weapon `index` for `class`. False, changing
+    /// nothing, if there's no such weapon, it's owned already or the points fall short.
+    pub fn unlock(&mut self, class: MechClass, primary: bool, index: u8) -> bool {
+        let Some((id, price)) = arsenal::weapon(primary, index) else { return false };
+        if self.owns(class, primary, index) || price > self.points() {
+            return false;
+        }
+        self.unlocks.entry(class.key().into()).or_default().push(id.into());
+        true
     }
 }
 
@@ -209,5 +251,36 @@ mod tests {
         // Another, won: the counts and XP keep adding up.
         let (after, _) = next.with(&t, true, true);
         assert_eq!((after.stats.kills, after.stats.matches, after.stats.wins, after.stats.weapon_kills["pike"]), (10, 2, 1, 10));
+    }
+
+    #[test]
+    fn levels_earn_points_that_unlock_weapons_mech_by_mech() {
+        let (light, heavy) = (MechClass::A, MechClass::C);
+        let mut r = Record::guest(1, "Ace");
+        let wanted = Loadout::named("kiln", "spindle");
+        let rail = wanted.secondary;
+        // Each mech owns its own two weapons; nothing else until unlocked.
+        assert!(r.owns(light, true, Loadout::of(light).primary) && r.owns(light, false, Loadout::of(light).secondary));
+        assert!(!r.owns(light, false, rail));
+        assert_eq!(r.points(), 0);
+        assert!(!r.unlock(light, false, rail), "unlocked with no points");
+
+        r.level = 2;
+        assert_eq!(r.points(), POINTS_PER_LEVEL);
+        assert!(r.unlock(light, false, rail));
+        assert_eq!(r.points(), POINTS_PER_LEVEL - arsenal::price("spindle"));
+        assert!(!r.unlock(light, false, rail), "unlocked twice");
+        assert!(r.owns(light, false, rail) && !r.owns(heavy, false, rail), "an unlock is for one mech");
+        // Locked weapons in a loadout fall back to the mech's own.
+        assert_eq!(r.allowed(light, wanted), Loadout { primary: Loadout::of(light).primary, secondary: rail });
+        assert_eq!(r.allowed(heavy, wanted), Loadout::of(heavy));
+        assert!(!r.unlock(heavy, true, 200), "no such weapon");
+    }
+
+    #[test]
+    fn records_from_before_unlocks_still_read() {
+        let old = r#"{"version":1,"id":"00000000000000ab","callsign":"Ace","xp":600,"level":2,"stats":{"matches":1},"issued":5}"#;
+        let r: Record = serde_json::from_str(old).unwrap();
+        assert_eq!((r.unlocks.len(), r.points()), (0, POINTS_PER_LEVEL));
     }
 }

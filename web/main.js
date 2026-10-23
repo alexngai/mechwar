@@ -27,7 +27,7 @@ import { Cockpit } from './cockpit.js';
 import { Sound } from './audio.js';
 import { Hud, hex } from './hud.js';
 import { createSky } from './sky.js';
-import { STORE, levelAt, levelXp, readRecord } from './progress.js';
+import { STORE, levelAt, levelXp, owns, pointsLeft, readRecord } from './progress.js';
 
 await init();
 const DT = tick_dt();
@@ -82,10 +82,11 @@ if (net) {
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => {
     connection = '';
-    if (picked !== null) ws.send(net.pick(picked, loadoutFor(picked).primary, loadoutFor(picked).secondary));
     if (callsign()) ws.send(net.set_name(callsign()));
-    // Our progression record, or "" for the server to start a guest one.
+    // Our progression record, or "" for the server to start a guest one; before any pick, as the
+    // server launches only the weapons it unlocks.
     ws.send(net.send_progress(stored(STORE) ?? ''));
+    if (picked !== null) ws.send(net.pick(picked, loadoutFor(picked).primary, loadoutFor(picked).secondary));
   };
   ws.onmessage = (e) => net.receive(new Uint8Array(e.data), performance.now());
   ws.onclose = () => { connection = 'disconnected'; };
@@ -470,6 +471,19 @@ const dps = (v) => {
 // bay's build. Online the mech waits in the hangar until launched, and changes made out in the
 // arena apply at the next launch.
 let bay = 1, launching = false;
+// Our progression record as last stored: online, a mech carries its own weapons and those the
+// record unlocks for it (the server holds to that); offline, everything.
+let pilot = readRecord(stored(STORE) ?? '');
+/** Whether class `i` may carry entry `k` of weapons.json's `list`. */
+const ownsWeapon = (i, list, k) => !net || owns(pilot, CLASS_KEYS[i], weapons[list][k].id);
+/** Whether class `i`'s picked loadout is all unlocked. */
+const launchable = (i) => ownsWeapon(i, 'primaries', picks[i].primary) && ownsWeapon(i, 'secondaries', picks[i].secondary);
+/** For class `i`'s pick `k` of `list`, if locked: its price, and an UNLOCK button if we can afford it. */
+const unlockRow = (i, list, k) => {
+  if (ownsWeapon(i, list, k)) return '';
+  const w = weapons[list][k], left = pilot ? pointsLeft(pilot) : 0;
+  return `<div class="unlock">LOCKED · ${w.unlock} ${w.unlock === 1 ? 'POINT' : 'POINTS'} (${left} to spend)${left >= w.unlock ? `<button data-list="${list}" data-k="${k}">UNLOCK</button>` : ''}</div>`;
+};
 const preview = new Preview($('preview'), Math.max(...CLASS_KEYS.map((_, i) => classValue(i, 'mech_height'))));
 /** Stat bars per slot: label, value from a lookup like `valueOf`'s, unit. */
 const STATS = {
@@ -506,11 +520,15 @@ function showBay(i) {
     b.classList.toggle('on', k === i);
     b.innerHTML = `${k + 1} · ${classes[CLASS_KEYS[k]].name}<small>${w.primary.name} · ${w.secondary.name}</small>`;
   });
-  const chips = (slot, list) => weapons[list].map((w, k) => `<label class="chip"><input type="radio" name="${slot}" value="${k}"${k === l[slot] ? ' checked' : ''}>${w.name}</label>`).join('');
+  const chips = (slot, list) => weapons[list].map((w, k) => {
+    const lock = ownsWeapon(i, list, k) ? '' : `<i>${w.unlock}</i>`;
+    return `<label class="chip${lock && ' locked'}"><input type="radio" name="${slot}" value="${k}"${k === l[slot] ? ' checked' : ''}>${w.name}${lock}</label>`;
+  }).join('');
+  const points = net && pilot ? ` · ${pointsLeft(pilot)} unlock points` : '';
   $('slots').innerHTML = `
-    <div class="slot"><b>${c.name.toUpperCase()}<span>${c.role}</span></b>HP ${classValue(i, 'health_max')} · ${classValue(i, 'walk_speed')} m/s</div>
-    <div class="slot"><b>PRIMARY<span>LMB</span></b><div class="chips">${chips('primary', 'primaries')}</div><div class="bars">${statBars(i, l, 'primary', 'primaries')}</div><p>${primary.desc}</p></div>
-    <div class="slot"><b>SECONDARY<span>RMB · MMB</span></b><div class="chips">${chips('secondary', 'secondaries')}</div><div class="bars">${statBars(i, l, 'secondary', 'secondaries')}</div><p>${secondary.desc}</p></div>
+    <div class="slot"><b>${c.name.toUpperCase()}<span>${c.role}</span></b>HP ${classValue(i, 'health_max')} · ${classValue(i, 'walk_speed')} m/s${points}</div>
+    <div class="slot"><b>PRIMARY<span>LMB</span></b><div class="chips">${chips('primary', 'primaries')}</div><div class="bars">${statBars(i, l, 'primary', 'primaries')}</div><p>${primary.desc}</p>${unlockRow(i, 'primaries', l.primary)}</div>
+    <div class="slot"><b>SECONDARY<span>RMB · MMB</span></b><div class="chips">${chips('secondary', 'secondaries')}</div><div class="bars">${statBars(i, l, 'secondary', 'secondaries')}</div><p>${secondary.desc}</p>${unlockRow(i, 'secondaries', l.secondary)}</div>
     <div class="slot"><b>ITEMS<span>G · T</span></b>Tumbler grenade · Brownout EMP</div>
     <div class="slot"><b>ABILITY<span>F</span></b>${c.ability.name}: ${c.ability.desc}</div>`;
   preview.show(key, l, classValue(i, 'mech_height'));
@@ -522,6 +540,13 @@ $('slots').addEventListener('change', () => {
   try { localStorage.setItem(`mechwar.loadout.${CLASS_KEYS[bay]}`, JSON.stringify({ primary: primary.id, secondary: secondary.id })); } catch { /* private mode */ }
   showBay(bay);
 });
+$('slots').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-list]');
+  if (!b || ws?.readyState !== WebSocket.OPEN) return;
+  ws.send(net.unlock(bay, b.dataset.list === 'primaries', +b.dataset.k));
+  b.disabled = true;
+  b.textContent = 'UNLOCKING…';
+});
 $('launch').addEventListener('click', () => {
   launch(bay);
   renderer.domElement.requestPointerLock()?.catch?.(() => {});
@@ -529,7 +554,7 @@ $('launch').addEventListener('click', () => {
 showBay(bay);
 /** Launches bay `i`'s build: online from the hangar once the respawn delay is up (out in the arena it waits), offline at once. */
 function launch(i) {
-  if (net && picked !== null && curr[S.HEALTH] > 0) return;
+  if (net && ((picked !== null && curr[S.HEALTH] > 0) || !launchable(i))) return;
   scoped = false;
   picked = i;
   const l = loadoutFor(i);
@@ -902,9 +927,11 @@ function frame(now) {
   if (pickerOpen) {
     // Out in the arena, the hangar only edits the next launch.
     const out = net && picked !== null && alive, wait = net ? Math.max(hudState[16], 0) : 0;
+    const locked = !launchable(bay);
     $('launch').hidden = out;
-    $('launch').textContent = launching ? (wait > 0 ? `LAUNCHING IN ${wait.toFixed(1)} S` : 'LAUNCHING…') : wait > 0 ? `LAUNCH · READY IN ${wait.toFixed(1)} S` : 'LAUNCH';
-    $('picker-note').textContent = out ? 'Changes apply at your next launch · C to close' : 'Enter or Launch when ready';
+    $('launch').disabled = locked;
+    $('launch').textContent = launching ? (wait > 0 ? `LAUNCHING IN ${wait.toFixed(1)} S` : 'LAUNCHING…') : locked ? 'LOCKED' : wait > 0 ? `LAUNCH · READY IN ${wait.toFixed(1)} S` : 'LAUNCH';
+    $('picker-note').textContent = locked ? 'Unlock the locked weapon, or pick another' : out ? 'Changes apply at your next launch · C to close' : 'Enter or Launch when ready';
     preview.render(dt, myTeam);
   }
   drawGlass(now, myTeam);
@@ -928,6 +955,10 @@ function frame(now) {
       try { localStorage.setItem(STORE, record); } catch { /* private mode: this visit only */ }
       const after = readRecord(record);
       if (end && after) summary = { end, after };
+      // A level or an unlock changes what the hangar offers.
+      const changed = JSON.stringify([after?.level, after?.unlocks]) !== JSON.stringify([pilot?.level, pilot?.unlocks]);
+      pilot = after ?? pilot;
+      if (changed) showBay(bay);
     }
     if (wasEnded && !ended) summary = null;
     wasEnded = ended;

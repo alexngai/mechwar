@@ -16,6 +16,9 @@ pub enum ClientMsg {
     /// The player's progression record as the server last signed it ("" for none yet), sent on
     /// joining; the server checks the signature, else starts a fresh guest.
     Progress(String),
+    /// Spend unlock points on primary (or secondary) weapon `index` for `class`; the server
+    /// answers with the record (`ServerMsg::Progress`) if it could.
+    Unlock { class: MechClass, primary: bool, index: u8 },
 }
 
 /// One per client tick. `view_tick` is the fractional server tick the client was rendering

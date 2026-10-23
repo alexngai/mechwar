@@ -215,6 +215,12 @@ impl WasmNetClient {
         self.0.levels.get(&id).copied().unwrap_or(0)
     }
 
+    /// Bytes spending unlock points on weapon `index` of the primaries (or secondaries) for class
+    /// 0 = A, 1 = B, 2 = C.
+    pub fn unlock(&self, class: u8, primary: bool, index: u8) -> Vec<u8> {
+        self.0.unlock_msg(MechClass::from_index(class).unwrap_or_default(), primary, index)
+    }
+
     /// Bytes handing the server our signed progression record ("" for none yet).
     pub fn send_progress(&self, record: &str) -> Vec<u8> {
         self.0.progress_msg(record)
