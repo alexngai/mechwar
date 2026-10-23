@@ -115,8 +115,8 @@
   "support": [
     { "id": "emp", "name": "Brownout", "unlock": 0, "desc": "An EMP around you: drains enemies' fuel and jams their boost" },
     { "id": "orb", "name": "Salve", "unlock": 2, "desc": "Drops a repair orb at your feet, like a wreck's, that only your side can heal from" },
-    { "id": "dome", "name": "Shield dome", "unlock": 2, "desc": "A half-sphere 7 m across around you for 6 s: shots from outside stop at it, whoever fires them, shots from inside go out, and mechs walk through" },
-    { "id": "barrier", "name": "Barrier", "unlock": 2, "desc": "Raises a wall 8 m wide and 4 m tall, 4 m ahead across your aim, for 8 s: nothing gets through, either way" }
+    { "id": "dome", "name": "Shield dome", "unlock": 2, "desc": "A half-sphere 21 m across around you for 6 s: shots from outside stop at it, whoever fires them, shots from inside go out, and mechs walk through" },
+    { "id": "barrier", "name": "Barrier", "unlock": 2, "desc": "Raises a wall 16 m wide and 8 m tall, 4 m ahead across your aim, for 8 s: nothing gets through, either way" }
   ],
   "abilities": [
     { "id": "slipstream", "name": "Speed boost", "unlock": 0, "classes": ["A"], "desc": "Refills the fuel tank, then 4 s of boost that burns no fuel and runs 25% faster" },
