@@ -11,22 +11,34 @@ const esc = (text) => String(text).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(
 const stored = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
 const go = (code) => { location.href = `/?room=${encodeURIComponent(code)}`; };
 
+// A gear: four bars crossed over a disc, with a hole through the middle.
+const GEAR = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><g fill="currentColor"><circle cx="12" cy="12" r="7"/>${
+  [0, 45, 90, 135].map((a) => `<rect x="10" y="1.5" width="4" height="21" rx="1" transform="rotate(${a} 12 12)"/>`).join('')
+}</g><circle cx="12" cy="12" r="3.2" fill="#0d1014"/></svg>`;
+
 document.body.classList.add('lobby');
 const lobby = $('lobby');
 lobby.hidden = false;
 // The hangar behind it all, once three.js has loaded.
 import('./backdrop.js').then(({ backdrop }) => backdrop());
 lobby.innerHTML = `
-  <h1>WEBHAWK</h1>
-  <label class="row">CALLSIGN <input id="lobby-callsign" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Pilot"></label>
-  <button id="quick">QUICK PLAY</button>
-  <div id="lobby-note"></div>
-  <section>
-    <h3>PILOT</h3>
-    <div id="pilot"></div>
+  <button id="settings" title="Settings" aria-label="Settings" aria-expanded="false">${GEAR}</button>
+  <div id="settings-panel" hidden>
+    <h3>PILOT RECORD</h3>
     <div class="row"><button id="export">EXPORT</button><button id="import">IMPORT</button></div>
     <div class="row" id="import-row" hidden><input id="import-text" placeholder="Paste an exported pilot record" autocomplete="off" spellcheck="false"><button id="import-go">LOAD</button></div>
     <p class="hint">Your progress lives in this browser. Export it to carry it to another.</p>
+  </div>
+  <div class="hero">
+    <h1>WEBHAWK</h1>
+    <label class="row">CALLSIGN <input id="lobby-callsign" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Pilot"></label>
+    <button id="quick">QUICK PLAY</button>
+    <div id="lobby-note"></div>
+    <a class="more" href="#more">MORE ▾</a>
+  </div>
+  <section id="more">
+    <h3>PILOT</h3>
+    <div id="pilot"></div>
   </section>
   <section>
     <h3>GAMES</h3>
@@ -82,6 +94,15 @@ function showPilot() {
       ${stat('TOP WEAPONS', weaponsUsed)}</dl>`;
 }
 showPilot();
+
+// Settings, behind the gear: moving the pilot record between browsers.
+const settings = $('settings'), panel = $('settings-panel');
+const showSettings = (open) => {
+  panel.hidden = !open;
+  settings.setAttribute('aria-expanded', String(open));
+};
+settings.addEventListener('click', () => showSettings(panel.hidden));
+addEventListener('keydown', (e) => { if (e.key === 'Escape') showSettings(false); });
 
 $('export').addEventListener('click', async () => {
   const token = stored(STORE);
