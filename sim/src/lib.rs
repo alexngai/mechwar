@@ -10,6 +10,7 @@ pub mod arsenal;
 pub mod bot;
 pub mod client;
 pub mod collide;
+pub mod ctf;
 pub mod deploy;
 pub mod game;
 pub mod item;
@@ -469,7 +470,12 @@ pub struct Mech {
     pub shield: f32,
     /// Riding a jump pad's arc: no steering or boost until it lands, or hovers or dodges out.
     pub pad_arc: bool,
+    /// Carrying a flag (set by the server): walks at LADEN_SPEED, and can't boost or dodge.
+    pub laden: bool,
 }
+
+/// A mech carrying a flag walks at this much of its speed.
+pub const LADEN_SPEED: f32 = 0.8;
 
 /// Static arena colliders for scene queries, and the map's jump pads. Shared by the offline sim,
 /// the server and the client.
@@ -749,13 +755,13 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     // Starting needs boost_min_fuel so an empty tank doesn't flicker boost on each regen tick.
     let fuel_ok = slipstream || (m.fuel > 0.0 && (m.boosting || m.fuel >= t.boost_min_fuel));
     // Thrusters push forward: boost needs a forward input (W, or W with a strafe to curve).
-    m.boosting = !brace && !m.pad_arc && m.jammed <= 0.0 && input.boost && input.move_z > 0.1 && fuel_ok;
+    m.boosting = !brace && !m.pad_arc && !m.laden && m.jammed <= 0.0 && input.boost && input.move_z > 0.1 && fuel_ok;
     if m.boosting && !slipstream {
         m.fuel -= t.boost_drain * DT;
         used_fuel = true;
     }
 
-    if input.dodge != 0 && m.dodge_cooldown <= 0.0 && m.fuel >= t.dodge_fuel_cost {
+    if input.dodge != 0 && !m.laden && m.dodge_cooldown <= 0.0 && m.fuel >= t.dodge_fuel_cost {
         // Raise velocity along the dodge direction to dodge_speed; keep the rest.
         let dir = right * f32::from(input.dodge.signum());
         let along = m.vel.dot(dir);
@@ -797,7 +803,7 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
         * if m.boosting {
             t.boost_speed * if slipstream { t.slipstream_boost_mult } else { 1.0 }
         } else {
-            t.walk_speed * if brace { t.brace_speed_mult } else { 1.0 }
+            t.walk_speed * if brace { t.brace_speed_mult } else { 1.0 } * if m.laden { LADEN_SPEED } else { 1.0 }
         };
     let mut accel = if m.dodge_time > 0.0 {
         t.dodge_drag
@@ -1380,6 +1386,17 @@ mod tests {
         assert!(sim.projectiles.is_empty());
         assert_eq!(sim.blasts, [(t.alt_radius, next.pos, 0.0)]);
         assert!(next.pos.y > 3.0, "burst at {} isn't mid-air", next.pos);
+    }
+
+    #[test]
+    fn a_flag_carrier_walks_slower_and_cannot_boost_or_dodge() {
+        let (mut sim, t) = class_sim(MechClass::B);
+        sim.mech.laden = true;
+        run(&mut sim, Input { move_z: 1.0, boost: true, ..Input::default() }, 45);
+        assert!(!sim.mech.boosting && sim.mech.fuel == t.fuel_max, "boosted laden");
+        assert!((speed(&sim) - LADEN_SPEED * t.walk_speed).abs() < 0.05, "speed {}", speed(&sim));
+        run(&mut sim, Input { dodge: 1, ..Input::default() }, 1);
+        assert_eq!(sim.mech.dodge_time, 0.0, "dodged laden");
     }
 
     #[test]

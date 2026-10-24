@@ -471,6 +471,16 @@ export class Sound {
     this.tone(out, 'sine', 523, 523, 0.01, 0.4, 0.16, 0.34);
   }
 
+  /** Our flag taken: a two-tone klaxon, twice. */
+  flagAlarm() {
+    const out = this.voice(null, 1.1, this.ui);
+    if (!out) return;
+    for (let k = 0; k < 2; k++) {
+      this.tone(out, 'square', 392, 392, 0.01, 0.22, 0.1, 0.5 * k);
+      this.tone(out, 'square', 311, 311, 0.01, 0.22, 0.1, 0.5 * k + 0.25);
+    }
+  }
+
   /** Our hold just filled with energy: one soft, plain tone. */
   full() {
     const out = this.voice(null, 0.5, this.ui);

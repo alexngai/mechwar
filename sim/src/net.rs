@@ -65,6 +65,8 @@ pub struct Snapshot {
     pub zones: Vec<ZoneState>,
     /// Siege's stations, banks and drops.
     pub siege: Option<SiegeNet>,
+    /// Capture the Flag's flags, raids and captures.
+    pub ctf: Option<crate::ctf::CtfNet>,
     /// In the hangar (destroyed, or not launched yet): seconds until it can launch (0: now).
     /// None while out in the arena.
     pub hangar: Option<f32>,
@@ -184,6 +186,8 @@ pub enum Event {
     Missile { silo: u8, team: u8 },
     /// `team`'s battleship launched (`up`) or went down.
     Ship { team: u8, up: bool },
+    /// `what` happened to `team`'s flag, by player `by`.
+    Flag { team: u8, what: crate::ctf::Happened, by: Option<u8> },
 }
 
 pub fn encode<T: Serialize>(msg: &T) -> Vec<u8> {
