@@ -662,11 +662,11 @@ mod tests {
         assert_eq!(every.iter().filter(|(m, _)| *m == Mode::TeamDeathmatch).count(), ROTATION.len());
         // Deathmatch only on the smaller maps.
         let dm: Vec<&str> = deck(&settings(Some(Mode::Deathmatch), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
-        assert_eq!(dm, ["saltworks", "verdigris", "sump", "sinkhole"]);
+        assert_eq!(dm, ["saltworks", "verdigris", "sump", "sinkhole", "ziggurat"]);
         let ma: Vec<&str> = deck(&settings(Some(Mode::MissileAssault), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
-        assert_eq!(ma, ["foundry", "verdigris", "riftline", "sinkhole", "canopy", "crashsite"]);
+        assert_eq!(ma, ["foundry", "verdigris", "riftline", "sinkhole", "canopy", "crashsite", "ziggurat", "span"]);
         let siege: Vec<&str> = deck(&settings(Some(Mode::Siege), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
-        assert_eq!(siege, ["foundry", "riftline", "canopy", "crashsite"]);
+        assert_eq!(siege, ["foundry", "riftline", "canopy", "crashsite", "span"]);
         let ctf: Vec<&str> = deck(&settings(Some(Mode::CaptureTheFlag), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
         assert_eq!(ctf, ["foundry", "verdigris", "riftline", "sinkhole", "canopy", "crashsite"]);
         let canopy = Map::index("canopy").unwrap();

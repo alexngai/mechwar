@@ -39,14 +39,10 @@ export const turned = (center, half, yaw, mat, tilt = 0) => solids.push({ box: c
  * yaw turns -Z to face uphill and positive tilt raises the -Z end.
  */
 export function ramp(low, high, width, mat = 'metal', fill = low[1] === 0) {
-  const T = 0.25; // half thickness
   const [dx, dy, dz] = [0, 1, 2].map((i) => high[i] - low[i]);
-  const run = Math.hypot(dx, dz), tilt = Math.atan2(dy, run), yaw = Math.atan2(-dx, -dz);
-  // The surface normal leans downhill; the center sits half a thickness under the surface.
-  const n = [Math.sin(tilt) * Math.sin(yaw), Math.cos(tilt), Math.sin(tilt) * Math.cos(yaw)];
-  const center = [0, 1, 2].map((i) => r3((low[i] + high[i]) / 2 - T * n[i]));
+  const run = Math.hypot(dx, dz), yaw = Math.atan2(-dx, -dz);
   const deg = (r) => r3((r * 180) / Math.PI);
-  solids.push({ box: center, half: [width / 2, T, r3(Math.hypot(run, dy) / 2)], yaw: deg(yaw), tilt: deg(tilt), mat });
+  slope(low, high, width, 0.25, mat);
   // A ramp up from a floor (by default, ground level) is filled under its upper half, so a mech
   // can't walk in beneath the high end and wedge there; what's left under the low half is too low
   // to enter.
@@ -55,6 +51,20 @@ export function ramp(low, high, width, mat = 'metal', fill = low[1] === 0) {
     const [x, z] = at(0.75);
     turned([r3(x), r3(low[1] + dy / 4), r3(z)], [width / 2, r3(dy / 4), r3(run / 4)], deg(yaw), 'concrete');
   }
+}
+
+/**
+ * A slab whose top surface runs from `low` up to `high`, `width` across and `2 * half` thick under
+ * it, in `ramp`'s convention: a ramp, a sloped face, or (thick enough) a solid wedge to the ground.
+ */
+export function slope(low, high, width, half, mat) {
+  const [dx, dy, dz] = [0, 1, 2].map((i) => high[i] - low[i]);
+  const run = Math.hypot(dx, dz), tilt = Math.atan2(dy, run), yaw = Math.atan2(-dx, -dz);
+  // The surface normal leans downhill; the center sits `half` under the surface.
+  const n = [Math.sin(tilt) * Math.sin(yaw), Math.cos(tilt), Math.sin(tilt) * Math.cos(yaw)];
+  const center = [0, 1, 2].map((i) => r3((low[i] + high[i]) / 2 - half * n[i]));
+  const deg = (r) => r3((r * 180) / Math.PI);
+  solids.push({ box: center, half: [width / 2, half, r3(Math.hypot(run, dy) / 2)], yaw: deg(yaw), tilt: deg(tilt), mat });
 }
 
 /** A box from point `a` to point `b`, `w` wide and `t` thick, at any slope: a beam, strut or brace. */
@@ -220,7 +230,8 @@ export function siege(station, aa, sky) {
 export function write(file, meta, north, south) {
   if (!south) {
     for (const s of [...solids]) {
-      if (!single.has(s)) solids.push({ ...s, box: flip(s.box), ...(s.yaw !== undefined && { yaw: r3(s.yaw + 180) }) });
+      // A tilted solid turns with its twin even if it had no yaw (a cylinder leaning toward +Z).
+      if (!single.has(s)) solids.push({ ...s, box: flip(s.box), ...((s.yaw !== undefined || s.tilt) && { yaw: r3((s.yaw ?? 0) + 180) }) });
     }
     // Every point a prop has (at, from, to) turns with it.
     for (const d of [...decor]) decor.push(Object.fromEntries(Object.entries(d).map(([k, val]) => [k, Array.isArray(val) ? flip(val) : val])));
