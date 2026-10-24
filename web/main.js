@@ -1428,7 +1428,10 @@ function drawGlass(now, myTeam) {
     // and a slow primary's refire, 0 to 1 (null for fast guns and spinning ones).
     spread: Math.tan(THREE.MathUtils.degToRad(T('spread_deg') + curr[S.BLOOM])) / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)),
     cycle: T('spin_up') > 0 || refireTime() < SLOW_REFIRE ? null : 1 - Math.max(curr[S.FIRE_WAIT], 0) / refireTime(),
-    ability: 1 - curr[S.ABILITY_CD] / Math.max(T(`${armament(loadout).ability.id}_cooldown`), 1e-6), abilityActive: curr[S.ABILITY_T] > 0, abilityName: armament(loadout).ability.name,
+    ability: 1 - curr[S.ABILITY_CD] / Math.max(T(`${armament(loadout).ability.id}_cooldown`), 1e-6), abilityActive: curr[S.ABILITY_T] > 0,
+    // For the ability's dial: its icon, the seconds until it's back, and how much of its spell is left.
+    abilityId: armament(loadout).ability.id, abilityLeft: curr[S.ABILITY_CD],
+    abilityOn: curr[S.ABILITY_T] > 0 ? curr[S.ABILITY_T] / Math.max(T(`${armament(loadout).ability.id}_duration`), 1e-6) : 0,
     health: curr[S.HEALTH], healthMax: T('health_max'), fuel: curr[S.FUEL] / T('fuel_max'), className: c.name, hurt,
     boostMin: T('boost_min_fuel') / T('fuel_max'), boosting: !!curr[S.BOOSTING], hovering: !!curr[S.HOVERING],
     friendColor: hex(FRIEND.accent), enemyColor: hex(FOE.accent),
@@ -1437,7 +1440,7 @@ function drawGlass(now, myTeam) {
     items: [['G', 'offensive', S.GRENADES, S.GRENADE_WAIT], ['T', 'support', S.EMPS, S.EMP_WAIT]].map(([key, slot, charges, wait]) => {
       const it = armament(loadout)[slot];
       const armed = slot === 'offensive' && !!curr[S.LIMPET];
-      return { key, name: armed ? 'Detonate' : it.name, armed, charges: curr[charges], max: T(`${it.id}_charges`), recharge: 1 - curr[wait] / Math.max(T(`${it.id}_recharge`), 1e-6) };
+      return { key, id: it.id, armed, charges: curr[charges], max: T(`${it.id}_charges`), recharge: 1 - curr[wait] / Math.max(T(`${it.id}_recharge`), 1e-6), wait: curr[wait] };
     }),
     jammed: curr[S.JAMMED] > 0,
     feed: feed.filter((k) => now - k.at < 6000),

@@ -1,7 +1,8 @@
 // First-person cockpit: an original curved canopy frame, the dash's instruments and the class's own
 // weapons, kept in camera space and drawn in a second pass after the world with depth cleared, so
 // none of it clips into walls; the weapons go first, under the cockpit (see `render`). One console wraps around the pilot and carries the mech's state:
-// hull and fuel in the middle, the radar scope lower left, systems right; the glass HUD (hud.js)
+// hull and fuel in the middle, the radar scope lower left with the ability's dial beside it, the
+// items' dials right; the glass HUD (hud.js)
 // keeps what's aimed and reacted with. The pass is lit like the world (sun direction, the map's
 // palette, nearby lamps and flashes), shades under cover, and flashes with the guns.
 import * as THREE from 'three';
@@ -26,15 +27,18 @@ const TAU = Math.PI * 2;
 const SPAN = 1.3, HUMP = 0.3, WING = 0.335, BEND = 2.5, TILT = 0.55;
 const DASH = 0.93; // the dash's back edge sits this fraction of the view's half-height below center
 // Instruments, w x h in meters, centered at SCREEN_AT on the console: vitals (hull and fuel) in the
-// middle, the round radar scope lower left, systems right, and out on the right wing a round speed
-// gauge (with the altitude in digits).
-const SCREENS = { vitals: [0.48, 0.2], radar: [0.28, 0.28], systems: [0.3, 0.17], speed: [0.14, 0.14] };
-const SCREEN_AT = { vitals: [0, 0.15], radar: [-0.5, 0.157], systems: [0.49, 0.13], speed: [0.79, 0.125] };
-const ROUND = new Set(['radar', 'speed']); // set in a scope's round housing
+// middle, the round radar scope lower left, the items' two round dials right (the offensive item's
+// up at 11 o'clock, the support item's at 2), and out on the wings a round dial for the ability
+// (left) and a round speed gauge with the altitude in digits (right).
+const SCREENS = { vitals: [0.48, 0.2], radar: [0.28, 0.28], offensive: [0.125, 0.125], support: [0.125, 0.125], speed: [0.14, 0.14], ability: [0.14, 0.14] };
+const SCREEN_AT = { vitals: [0, 0.15], radar: [-0.5, 0.157], offensive: [0.41, 0.19], support: [0.575, 0.145], speed: [0.79, 0.125], ability: [-0.79, 0.125] };
+const ROUND = new Set(['radar', 'speed', 'ability', 'offensive', 'support']); // set in a scope's round housing
 const SPEED_MAX = 120; // km/h at the speed gauge's full sweep
 const SEAM = 0.295; // panel seams between the middle and the sides
 const RIM = 0.035, RIM_DEPTH = 0.07; // bezel around each screen: bar width, how far it stands out
 const RADAR_RIM = 0.012; // the radar scope's slimmer ring, so the scope can fill the wing
+const DIAL_RIM = 0.018; // the item dials' slimmer rings, so the pair fits where one panel was
+const RIMS = { radar: RADAR_RIM, offensive: DIAL_RIM, support: DIAL_RIM }; // round housings' rings (RIM if not here)
 const LOCAL = 3; // world lights (lamps, flashes) the cockpit takes at once
 // Each class's canopy: frame paint, top bar depth, rib and brow thickness, how far the brow dips
 // at the middle, and whether it has hydraulic rams, a second glazing rib or armored rib sleeves.
@@ -44,7 +48,9 @@ const CANOPY = {
   B: { paint: 0x5a5f66, bar: 0.12, rib: 0.042, brow: 0.026, dip: 0.09, rams: true, glazing: 1, armor: false },
   C: { paint: 0x55534b, bar: 0.16, rib: 0.056, brow: 0.034, dip: 0.05, rams: true, glazing: 1, armor: true },
 };
-const GLOW = { vitals: 0xffc46a, radar: 0xffc46a, systems: 0xffc46a, speed: 0xffc46a }; // light each screen throws on its housing
+// Where the screens' light falls on the metal around them (one glow between the item dials), and its color.
+const GLOW_AT = { vitals: SCREEN_AT.vitals, radar: SCREEN_AT.radar, items: [0.49, 0.165], speed: SCREEN_AT.speed, ability: SCREEN_AT.ability };
+const GLOW = 0xffc46a;
 const FLASH = 1.2, FLASH_LIFE = 0.06; // a shot's light on the cockpit: intensity, seconds
 const INSTRUMENT_HZ = 20; // redraws per second
 const AMBER = '#ffc46a', DIM = 'rgba(255,196,106,0.4)', FAINT = 'rgba(255,196,106,0.14)', WARN = '#ff4a3a', FUEL = '#7fd8ff', REPAIR = '#6dff9a';
@@ -161,7 +167,7 @@ export class Cockpit {
     this.lampMat = new THREE.MeshBasicMaterial({ color: LAMP_OFF });
     this.drawnAt = -Infinity;
     // Each screen's glow on the metal around it, so the dash reads as lit hardware.
-    this.glows = Object.fromEntries(Object.entries(GLOW).map(([name, color]) => [name, new THREE.PointLight(color, 0.08, 0.7, 2)]));
+    this.glows = Object.fromEntries(Object.keys(GLOW_AT).map((name) => [name, new THREE.PointLight(GLOW, 0.08, 0.7, 2)]));
     this.scene.add(...Object.values(this.glows));
     this.flash = new THREE.PointLight(0xffc27a, 0, 1.6, 2);
     this.flashLife = 0;
@@ -217,9 +223,9 @@ export class Cockpit {
       }
     }
     // The dash: a sloped shelf with a bolted rubber front edge, and on it one console that wraps
-    // around the pilot: hull and fuel in the middle under a hood, the radar scope lower left,
-    // systems right, the heat lamp along its rolled rim, seams between, toggle banks at the seams'
-    // feet and conduits clamped along its foot.
+    // around the pilot: hull and fuel in the middle under a hood, the radar scope lower left, the
+    // dials either side, the heat lamp along its rolled rim, seams between, toggle banks at the
+    // seams' feet and conduits clamped along its foot.
     const dash = box(width, 0.5, 0.7, frameMat);
     dash.position.set(0, top - 0.25, z - 0.1);
     dash.rotation.x = 0.25;
@@ -249,9 +255,9 @@ export class Cockpit {
     for (let x = -1.2; x <= 1.2 + 1e-6; x += 0.15) flat.add(bolt(x, 0.015, 0.004));
     for (const [name, s] of Object.entries(this.screens)) {
       const [x, y] = SCREEN_AT[name];
-      flat.add((ROUND.has(name) ? scope(s, name === 'radar' ? RADAR_RIM : RIM) : bezel(s)).translateX(x).translateY(y));
-      this.glows[name].position.copy(onPanel(x, y, 0.14));
+      flat.add((ROUND.has(name) ? scope(s, RIMS[name] ?? RIM) : bezel(s)).translateX(x).translateY(y));
     }
+    for (const [name, [x, y]] of Object.entries(GLOW_AT)) this.glows[name].position.copy(onPanel(x, y, 0.14));
     const [vw, vh] = SCREENS.vitals, vy = SCREEN_AT.vitals[1] + vh / 2 + RIM;
     const hood = box(vw + 2 * RIM + 0.05, 0.012, 0.05, frameMat);
     hood.position.set(0, vy + 0.008, 0.025);
@@ -312,7 +318,8 @@ export class Cockpit {
     this.lampMat.color.setHex(f.overheated ? (blink ? 0xff3a20 : LAMP_OFF) : f.heat > 0.8 ? 0xff7a30 : LAMP_OFF);
     vitalsScreen(this.screens.vitals, f);
     radarScreen(this.screens.radar, f);
-    systemsScreen(this.screens.systems, f);
+    dialScreen(this.screens.ability, abilityDial(f), f.now);
+    f.items.forEach((it, i) => dialScreen(this.screens[i ? 'support' : 'offensive'], itemDial(it), f.now));
     speedScreen(this.screens.speed, f);
     for (const s of Object.values(this.screens)) {
       if (f.jammed) jamStatic(s);
@@ -596,31 +603,173 @@ function speedScreen(s, f) {
   g.fillText(`${Math.round(f.altitude)} M`, c, c + 150);
 }
 
-/** Systems: the ability's charge, each item's charges and recharge, and repair. */
-function systemsScreen(s, f) {
-  const [g, W] = blank(s);
-  const label = (y, name, key, lit, color = AMBER) => {
-    g.fillStyle = lit ? color : DIM;
-    g.font = font(32);
-    g.textAlign = 'left';
-    g.fillText(name.toUpperCase(), 26, y);
-    g.textAlign = 'right';
-    g.fillText(key, W - 26, y);
-  };
-  const ready = f.ability >= 1 || f.abilityActive;
-  label(18, f.abilityName, f.abilityActive ? 'ON' : f.ability >= 1 ? 'F' : '', ready);
-  bar(g, 26, 56, W - 52, 10, f.abilityActive ? 1 : f.ability, ready ? AMBER : DIM);
-  f.items.forEach((it, i) => {
-    const y = 82 + i * 64;
-    label(y, it.name, it.key, it.charges > 0 || it.armed);
-    for (let k = 0; k < it.max; k++) {
-      g.fillStyle = k < it.charges ? AMBER : FAINT;
-      g.fillRect(26 + k * 52, y + 38, 44, 12);
+// Dial icons by weapons.json id, stroked in a unit square about the origin (y down).
+const poly = (g, points, close = false) => {
+  g.beginPath();
+  points.forEach(([x, y], k) => (k ? g.lineTo(x, y) : g.moveTo(x, y)));
+  if (close) g.closePath();
+  g.stroke();
+};
+const ring = (g, x, y, r, from = 0, to = TAU) => {
+  g.beginPath();
+  g.arc(x, y, r, from, to);
+  g.stroke();
+};
+const tripod = (g) => {
+  for (const x of [-0.6, 0, 0.6]) poly(g, [[0, 0.15], [x, 0.8]]);
+};
+const ICONS = {
+  // Speed boost: chevrons pointing ahead.
+  slipstream: (g) => {
+    for (const y of [0, 0.55]) poly(g, [[-0.6, y + 0.1], [0, y - 0.5], [0.6, y + 0.1]]);
+  },
+  // Vent: heat rising off three vents.
+  vent: (g) => {
+    for (const x of [-0.45, 0, 0.45]) {
+      g.beginPath();
+      g.moveTo(x, 0.75);
+      g.quadraticCurveTo(x + 0.3, 0.4, x, 0);
+      g.quadraticCurveTo(x - 0.3, -0.4, x, -0.75);
+      g.stroke();
     }
-    if (it.charges < it.max) bar(g, 26 + it.max * 52 + 12, y + 41, W - 64 - it.max * 52, 6, it.recharge, DIM);
-  });
-  const repairing = f.repair > 0 || f.standing;
-  label(214, 'Repair', f.repair >= 1 ? 'ON' : repairing ? '…' : 'R', true, repairing ? REPAIR : AMBER);
+  },
+  // Bulwark: a shield.
+  brace: (g) => {
+    g.beginPath();
+    g.moveTo(0, -0.8);
+    g.lineTo(0.65, -0.55);
+    g.quadraticCurveTo(0.6, 0.45, 0, 0.85);
+    g.quadraticCurveTo(-0.6, 0.45, -0.65, -0.55);
+    g.closePath();
+    g.stroke();
+  },
+  // Camouflage: an eye, struck through.
+  cloak: (g) => {
+    g.beginPath();
+    g.moveTo(-0.8, 0);
+    g.quadraticCurveTo(0, -0.75, 0.8, 0);
+    g.quadraticCurveTo(0, 0.75, -0.8, 0);
+    g.stroke();
+    ring(g, 0, 0, 0.22);
+    poly(g, [[-0.7, 0.7], [0.7, -0.7]]);
+  },
+  // Power shot: a bolt.
+  power: (g) => poly(g, [[0.2, -0.85], [-0.45, 0.1], [0, 0.1], [-0.2, 0.85], [0.45, -0.15], [0, -0.15]], true),
+  // Barrage: three rounds abreast.
+  barrage: (g) => {
+    for (const x of [-0.5, 0, 0.5]) poly(g, [[x - 0.14, 0.7], [x - 0.14, -0.25], [x, -0.65], [x + 0.14, -0.25], [x + 0.14, 0.7]], true);
+  },
+  // Artillery: a blast.
+  artillery: (g) => poly(g, Array.from({ length: 16 }, (_, k) => [Math.sin((k * TAU) / 16) * (k % 2 ? 0.4 : 0.85), -Math.cos((k * TAU) / 16) * (k % 2 ? 0.4 : 0.85)]), true),
+  // Tumbler: a grenade and its lever.
+  grenade: (g) => {
+    ring(g, 0, 0.2, 0.55);
+    poly(g, [[0, -0.35], [0, -0.65]]);
+    poly(g, [[-0.1, -0.62], [0.5, -0.4]]);
+  },
+  // Limpet: a spiked mine.
+  limpet: (g) => {
+    ring(g, 0, 0, 0.4);
+    for (let k = 0; k < 6; k++) poly(g, [[Math.cos((k * TAU) / 6) * 0.4, Math.sin((k * TAU) / 6) * 0.4], [Math.cos((k * TAU) / 6) * 0.78, Math.sin((k * TAU) / 6) * 0.78]]);
+  },
+  // Pall: a cloud.
+  smoke: (g) => {
+    g.beginPath();
+    g.arc(-0.4, 0.15, 0.35, Math.PI * 0.5, Math.PI * 1.5);
+    g.arc(0.05, -0.15, 0.42, Math.PI, TAU);
+    g.arc(0.45, 0.15, 0.35, Math.PI * 1.5, Math.PI * 0.5);
+    g.closePath();
+    g.stroke();
+  },
+  // MG turret: a gun on a tripod.
+  mg_turret: (g) => {
+    tripod(g);
+    poly(g, [[-0.3, -0.3], [0.25, -0.3], [0.25, 0.15], [-0.3, 0.15]], true);
+    poly(g, [[0.25, -0.08], [0.85, -0.08]]);
+  },
+  // Rocket turret: a launcher on a tripod.
+  rocket_turret: (g) => {
+    tripod(g);
+    poly(g, [[-0.5, -0.45], [0.45, -0.45], [0.8, -0.25], [0.45, -0.05], [-0.5, -0.05]], true);
+  },
+  // Brownout: a pulse spreading.
+  emp: (g) => {
+    ring(g, 0, 0, 0.12);
+    for (const r of [0.42, 0.75]) for (const a of [0, Math.PI]) ring(g, 0, 0, r, a - Math.PI / 4, a + Math.PI / 4);
+  },
+  // Salve: a repair cross in its orb.
+  orb: (g) => {
+    ring(g, 0, 0, 0.72);
+    poly(g, [[-0.35, 0], [0.35, 0]]);
+    poly(g, [[0, -0.35], [0, 0.35]]);
+  },
+  // Shield dome: a dome over the ground.
+  dome: (g) => {
+    ring(g, 0, 0.4, 0.7, Math.PI, TAU);
+    poly(g, [[-0.85, 0.4], [0.85, 0.4]]);
+  },
+  // Barrier: a wall of blocks.
+  barrier: (g) => {
+    poly(g, [[-0.75, -0.45], [0.75, -0.45], [0.75, 0.55], [-0.75, 0.55]], true);
+    poly(g, [[-0.75, 0.05], [0.75, 0.05]]);
+    for (const [x, y] of [[0, -0.45], [-0.375, 0.05], [0.375, 0.05]]) poly(g, [[x, y], [x, y + 0.5]]);
+  },
+};
+
+/** The ability's dial: on (draining) while its spell lasts, else recharging toward ready. */
+const abilityDial = (f) => ({
+  id: f.abilityId, ready: f.ability >= 1, on: f.abilityActive, fill: f.abilityActive ? f.abilityOn : f.ability,
+  wait: f.abilityLeft, charges: 0, max: 0, key: f.abilityActive ? 'ON' : 'F',
+});
+
+/** An item's dial: ready with a charge left, its ring the next charge coming back; a Limpet down is on. */
+const itemDial = (it) => ({
+  id: it.id, ready: it.charges > 0, on: it.armed, fill: it.charges < it.max ? it.recharge : 1,
+  wait: it.wait, charges: it.charges, max: it.max, key: it.armed ? 'DET' : it.key,
+});
+
+/**
+ * A round dial for the ability or an item (`abilityDial`, `itemDial`): its icon, lit when ready
+ * and pulsing while on; a ring that fills as it recharges (full when ready, draining in blue while
+ * on); the seconds left over the dimmed icon while there's nothing to use; the item's charges as
+ * pips; and its key.
+ */
+function dialScreen(s, { id, ready, on, fill, wait, charges, max, key }, now) {
+  const { g, canvas } = s, W = canvas.width, c = W / 2, r = W * 0.43;
+  g.fillStyle = '#090d0b';
+  g.fillRect(0, 0, W, W);
+  const color = on ? FUEL : ready ? AMBER : DIM;
+  g.lineWidth = 28;
+  g.strokeStyle = FAINT;
+  ring(g, c, c, r);
+  g.strokeStyle = color;
+  ring(g, c, c, r, -Math.PI / 2, -Math.PI / 2 + TAU * clamp01(fill));
+  g.save();
+  g.translate(c, c - 30);
+  g.scale(105, 105);
+  g.lineWidth = 0.13;
+  g.lineJoin = g.lineCap = 'round';
+  g.strokeStyle = on || ready ? color : AMBER;
+  g.globalAlpha = on ? 0.7 + 0.3 * Math.sin(now / 110) : ready ? 1 : 0.25;
+  ICONS[id]?.(g);
+  g.restore();
+  g.globalAlpha = 1;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  if (!ready && !on && wait > 0) {
+    g.fillStyle = AMBER;
+    g.font = font(140, 'bold');
+    g.fillText(String(Math.ceil(wait)), c, c - 30);
+  }
+  for (let k = 0; k < max; k++) {
+    g.fillStyle = k < charges ? AMBER : FAINT;
+    g.beginPath();
+    g.arc(c + (k - (max - 1) / 2) * 40, c + 108, 12, 0, TAU);
+    g.fill();
+  }
+  g.fillStyle = color;
+  g.font = font(58, 'bold');
+  g.fillText(key, c, c + 160);
 }
 
 /** Jammed: bands of static across a screen. */
