@@ -6,7 +6,7 @@
 // palette, nearby lamps and flashes), shades under cover, and flashes with the guns.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CLASSES, TEAMS, mountWeapon, showRound, windUp } from './mech.js';
+import { CLASSES, TEAMS, cloak, ghostMaterial, mountWeapon, showRound, windUp } from './mech.js';
 import { radar } from './hud.js';
 
 const frameMat = new THREE.MeshLambertMaterial({ color: 0x5a5f66, flatShading: true });
@@ -347,6 +347,21 @@ export class Cockpit {
     this.scene.add(group);
     this.weapons = { group, guns, launcher, arms: [...guns, launcher] };
     this.next = 0;
+    this.cloaked = false;
+  }
+
+  /**
+   * Camouflage on our own guns: drawn in the ghost material at `opacity` (0 for solid),
+   * shimmering, so the pilot sees they're hidden. The canopy and console stay solid.
+   */
+  cloak(opacity, now) {
+    if (!this.weapons) return;
+    this.ghost ??= ghostMaterial();
+    if (opacity > 0 !== this.cloaked) {
+      this.cloaked = opacity > 0;
+      cloak(this.weapons.group, this.ghost, this.cloaked);
+    }
+    this.ghost.opacity = opacity * (0.75 + 0.25 * Math.sin(now * 0.006));
   }
 
   /**

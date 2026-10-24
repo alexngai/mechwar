@@ -648,6 +648,8 @@ const beamFrom = new THREE.Vector3(), beamTo = new THREE.Vector3();
 const BEAM_HOLD = 120; // ms a remote's beam stays drawn after the server last said it was on
 // How faint camouflage draws a mech: our own or a teammate's, and an enemy's (a shimmer at most).
 const CLOAK_SEEN = 0.25, CLOAK_HIDDEN = 0.06;
+// Our own guns from the cockpit show it more strongly: the pilot's cue that they're hidden.
+const CLOAK_GUNS = 0.5;
 const ray = new THREE.Ray(), sphere = new THREE.Sphere(), crossing = new THREE.Vector3();
 const heading = new THREE.Vector3(), chest = new THREE.Vector3(), to = new THREE.Vector3(), look = new THREE.Vector3(), ndc = new THREE.Vector3(), muzzle = new THREE.Vector3();
 const spark = new THREE.Vector3();
@@ -743,13 +745,15 @@ function frame(now) {
   chase += ((curr[S.REPAIR_T] > 0 || curr[S.STAND] > 0 ? 1 : 0) - chase) * (1 - Math.exp(-5 * dt));
   firstPerson = chase < 0.02 && killcam === null;
   me.root.visible = !firstPerson;
+  // Camouflage shows us as a ghost: our mech in the chase view, our guns from the cockpit.
+  const myCloak = curr[S.ABILITY_T] > 0 && armament(loadout).ability.id === 'cloak' ? CLOAK_SEEN : 0;
   me.update(dt, {
     pos, yaw, pitch, scale: T('mech_height') / me.height,
     vel: vel.set(lerp(S.VEL), lerp(S.VEL + 1), lerp(S.VEL + 2)),
     grounded: !!curr[S.GROUNDED], boosting: !!curr[S.BOOSTING], hovering: !!curr[S.HOVERING],
     health: curr[S.HEALTH], heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     ability: curr[S.ABILITY_T] > 0, damage: 1 - curr[S.HEALTH] / T('health_max'), shielded: !!curr[S.SHIELD],
-    repair: repairPhase(curr[S.REPAIR_T]), cloak: curr[S.ABILITY_T] > 0 && armament(loadout).ability.id === 'cloak' ? CLOAK_SEEN : 0,
+    repair: repairPhase(curr[S.REPAIR_T]), cloak: myCloak,
   });
   if (curr[S.JAMMED] > 0) fx.jam(toChest(spark.copy(pos), classIdx), dt);
 
@@ -985,6 +989,7 @@ function frame(now) {
   const shaded = firstPerson && game.cast_ray(eye.x, eye.y, eye.z, SUN_DIR.x, SUN_DIR.y, SUN_DIR.z, 150) < 150;
   cockpit.update(dt, camera, SUN_DIR, T('fov'), shaded);
   cockpit.windUp(curr[S.SPIN], curr[S.CHARGE], curr[S.ALT_WAIT] <= 0, dt);
+  cockpit.cloak(myCloak && CLOAK_GUNS, now);
   windUp(me.guns[0].pod, curr[S.SPIN], curr[S.CHARGE], dt);
   showRound(me.arms[1], curr[S.ALT_WAIT] <= 0);
   for (const pod of [me.arms[1], cockpit.weapons?.launcher.pod]) if (pod) stoke(pod, curr[S.HEAT] / T('heat_max'));

@@ -129,6 +129,19 @@ const clamp = THREE.MathUtils.clamp;
 const DASH_TRAIL = 0.2; // s of smoke laid behind a dash
 /** Effects that go nowhere: what a camouflaged mech emits. */
 const QUIET = new Proxy({}, { get: () => () => {} });
+
+/** Camouflage: every mesh under `root` (but `skip`) swaps to `ghost` and out of the shadow pass, or back; sprites hide meanwhile. */
+export function cloak(root, ghost, on, skip = null) {
+  root.traverse((o) => {
+    if (o.isSprite) o.visible = !on;
+    if (!o.isMesh || o === skip) return;
+    if (on) [o.userData.coat, o.userData.shadow, o.material, o.castShadow] = [o.material, o.castShadow, ghost, false];
+    else [o.material, o.castShadow] = [o.userData.coat, o.userData.shadow];
+  });
+}
+
+/** The material camouflage draws in, faintly. */
+export const ghostMaterial = () => new THREE.MeshBasicMaterial({ color: 0x9fd8ff, transparent: true, opacity: 0, depthWrite: false });
 const DASH_SPOT = 22; // m/s sideways, and mostly sideways: only a dash does that (a diagonal boost doesn't)
 const REPAIR_GLOW = 0x6dff9a;
 
@@ -569,7 +582,7 @@ export class Mech {
     this.barrels = new THREE.MeshLambertMaterial({ color: 0x2a2c30, flatShading: true });
     this.nozzleMat = new THREE.MeshLambertMaterial({ color: 0x3a2f28, flatShading: true });
     // Camouflage draws every part in this, faintly (see `update`).
-    this.ghostMat = new THREE.MeshBasicMaterial({ color: 0x9fd8ff, transparent: true, opacity: 0, depthWrite: false });
+    this.ghostMat = ghostMaterial();
     this.cloaked = false;
     this.t = 0;
     this.phase = 0;
@@ -863,12 +876,7 @@ export class Mech {
     if (cloaked !== this.cloaked) {
       this.cloaked = cloaked;
       this.fx = cloaked ? QUIET : this.realFx;
-      root.traverse((o) => {
-        if (o.isSprite) o.visible = !cloaked;
-        if (!o.isMesh || o === this.shell) return;
-        if (cloaked) [o.userData.coat, o.userData.shadow, o.material, o.castShadow] = [o.material, o.castShadow, this.ghostMat, false];
-        else [o.material, o.castShadow] = [o.userData.coat, o.userData.shadow];
-      });
+      cloak(root, this.ghostMat, cloaked, this.shell);
     }
     if (cloaked) this.ghostMat.opacity = s.cloak * (0.75 + 0.25 * Math.sin(this.t * 6));
   }
