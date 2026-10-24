@@ -15,6 +15,7 @@ use crate::deploy::{self, Deployable};
 use crate::item::{self, Item};
 use crate::map::{MAPS, Map};
 use crate::net::Cloud;
+use crate::weapon;
 use crate::{Arena, Arsenal, DT, Input, Loadout, Mech, MechClass, Slot, TICK_HZ, Tuning, Vector, spawn_mech, step_mech};
 
 /// A waypoint links to another this close when a mech can walk there.
@@ -838,16 +839,18 @@ impl Bot {
             // A turret goes down as a fight starts (the first tick it's in view), or to help hold a perch.
             let turret = me.grenades > 0 && matches!(Item::of(me.loadout, true), Item::MgTurret | Item::RocketTurret) && (self.seen.len() == 1 || self.perched(nav, me));
             let shell = if alt && use_ != AltUse::Beam { Some(t) } else if throw { Some(&grenade) } else { None };
-            // Shells are led by their flight time, and so are projectile primaries.
-            let primary_lead = if t.shot_speed > 0.0 { dist / t.shot_speed } else { 0.0 };
+            // Shells are led by their flight time, and so are projectile primaries: at the speed
+            // the charge held now (what it lets go with) sends them, raised for their drop.
+            let speed = weapon::speed(t, me.charge);
+            let primary_lead = if t.shot_speed > 0.0 { dist / speed } else { 0.0 };
             let lead = shell.map_or(primary_lead, |s| dist / s.alt_speed);
             let (yaw, mut pitch) = look_at(eye, chest + target.vel * lead);
-            if let Some(s) = shell
-                && s.alt_gravity > 0.0
-            {
-                // Range d on flat ground: sin(2θ) = g d / v².
-                let r = (s.alt_gravity * flat(chest - eye).length() / (s.alt_speed * s.alt_speed)).min(1.0);
-                pitch = 0.5 * asinf(r) - s.alt_loft_deg.to_radians();
+            // Range d on flat ground: sin(2θ) = g d / v².
+            let arc = |g: f32, v: f32| 0.5 * asinf((g * flat(chest - eye).length() / (v * v)).min(1.0));
+            match shell {
+                Some(s) if s.alt_gravity > 0.0 => pitch = arc(s.alt_gravity, s.alt_speed) - s.alt_loft_deg.to_radians(),
+                None if t.shot_speed > 0.0 && t.shot_gravity > 0.0 => pitch += arc(t.shot_gravity, speed),
+                _ => {}
             }
             let (want_yaw, want_pitch) = (yaw + self.wobble.0, pitch + self.wobble.1);
             let new_yaw = me.yaw + wrap(want_yaw - me.yaw).clamp(-max_turn, max_turn);
@@ -1664,5 +1667,50 @@ mod tests {
         };
         let (near, held) = (settle(close), settle(far));
         assert!(near < 25.0 && held > 35.0, "short-range gun ended {near} m off, long-range {held} m");
+    }
+
+    #[test]
+    fn bots_lead_charged_dropping_slugs() {
+        let blockout = Map::index("blockout").unwrap();
+        let (arena, nav) = (Arena::new(&Map::load(blockout)), Nav::for_map(blockout));
+        let loadout = Loadout::named("kiln", "darts");
+        // Perfect aim, so whatever misses is the lead's (and the drop's) fault.
+        let t = Tuning { bot_aim_error_deg: 0.0, bot_reaction_s: 0.0, ..Arsenal::new(&Tuning::default()).get(MechClass::B, loadout).clone() };
+        assert!(t.charge_speed > 1.0 && t.shot_gravity > 0.0, "HEAT no longer speeds up when charged and drops");
+        // A target 60 m off, strafing side to side in the open (short of the big box), turning every 2 s.
+        let mut me = Mech { loadout, grenades: 0, ..spawn_mech(&t, Vector::new(0.0, 0.1, 40.0)) };
+        let mut target = spawn_mech(&t, Vector::new(-18.0, 0.1, -20.0));
+        let mut bot = Bot::new(1);
+        // Volleys burst, and of them hits and how far below the chest they struck in all.
+        let (mut shells, mut volleys, mut hits, mut low) = (Vec::new(), 0, 0, 0.0);
+        for tick in 0..secs(20.0) {
+            // Only the gun: the secondary stays on cooldown, and the heat never builds.
+            (me.alt_wait, me.heat) = (1.0, 0.0);
+            let input = bot.think(&arena, nav, &t, &me, Some(&target), tick);
+            step_mech(&arena, &t, &mut me, &Input { yaw: input.yaw, pitch: input.pitch, fire: input.fire, ..Input::default() });
+            let side = if tick / secs(2.0) % 2 == 0 { 1.0 } else { -1.0 };
+            step_mech(&arena, &t, &mut target, &Input { move_x: side, ..Input::default() });
+            if me.shot {
+                shells.extend(weapon::volley(&t, &me, 0, tick));
+            }
+            shells.retain_mut(|p| {
+                let mut struck = false;
+                let burst = projectile::fly(&arena, &t, p, |ray, max| {
+                    let toi = projectile::first_mech(ray, max, [(&t, &target)]);
+                    struck |= toi.is_some();
+                    toi
+                });
+                if let Some(at) = burst {
+                    volleys += 1;
+                    if struck {
+                        (hits, low) = (hits + 1, low + target.pos.y + t.mech_height * 0.5 - at.y);
+                    }
+                }
+                burst.is_none()
+            });
+        }
+        // The misses: volleys let go just as it turned.
+        assert!(volleys >= 10 && hits * 4 >= volleys * 3, "{hits} of {volleys} volleys hit");
+        assert!(low / (hits as f32) < 0.15, "hits struck {} m below the chest on average", low / hits as f32);
     }
 }
