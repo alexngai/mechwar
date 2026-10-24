@@ -964,10 +964,10 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
         m.heat = t.heat_max;
         m.overheated = true;
     }
-    // Heat sheds a moment after the last shot, trigger held or not, so a slow gun cools between
-    // shots while a fast one, firing inside that moment, doesn't (nor one charging a shot); and
-    // faster the cooler it runs, so short bursts pay.
-    if m.shot || m.launched || m.beaming || m.charge > 0.0 {
+    // Only firing makes heat, and it sheds a moment after the last shot, trigger held or not (a
+    // shot charging too), so a slow gun cools between shots while a fast one, firing inside that
+    // moment, doesn't; and faster the cooler it runs, so short bursts pay.
+    if m.shot || m.launched || m.beaming {
         m.heat_wait = t.heat_decay_delay;
     } else {
         m.heat_wait = (m.heat_wait - DT).max(0.0);
