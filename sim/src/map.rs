@@ -93,6 +93,9 @@ pub struct Objectives {
     pub aa: Option<ZoneSpot>,
     #[serde(default)]
     pub sky: Option<f32>,
+    /// Each team's base guns (team 0's first), in every team mode: where each stands.
+    #[serde(default)]
+    pub sentries: [Vec<[f32; 3]>; 2],
 }
 
 #[derive(Deserialize, Clone, Debug)]

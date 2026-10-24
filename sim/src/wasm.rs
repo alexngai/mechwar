@@ -31,7 +31,7 @@ fn mech_state(m: &Mech) -> Vec<f32> {
     ]
 }
 
-/// Ten floats per deployable: kind (0 dome, 1 barrier, 2 MG turret, 3 rocket turret, 4 battleship), team,
+/// Ten floats per deployable: kind (0 dome, 1 barrier, 2 MG turret, 3 rocket turret, 4 battleship, 5 base gun), team,
 /// owner, base xyz, facing yaw and pitch, seconds left as of tick `now`, and hull left (infinite
 /// for a dome or barrier).
 fn deployable_floats(list: &[Deployable], now: u32) -> Vec<f32> {
@@ -378,7 +378,7 @@ impl WasmNetClient {
     /// winner (-1 for none or a draw; in Deathmatch a player id), class, next match's map, primary,
     /// secondary, seconds until we can launch from the hangar (-1 when out in the arena), offensive
     /// item, support item, ability, mode, next match's mode (modes index `Mode::ALL`), Siege energy
-    /// carried.
+    /// carried, the score limit (team kills; in Deathmatch, solo kills' worth of points).
     pub fn hud(&self) -> Vec<f32> {
         let (c, s) = (&self.0, &self.0.state);
         vec![
@@ -405,6 +405,7 @@ impl WasmNetClient {
             mode_index(s.mode),
             mode_index(s.next_mode),
             c.board().iter().find(|p| Some(p.id) == c.id).map_or(0.0, |p| f32::from(p.eu)),
+            f32::from(s.limit),
         ]
     }
 }

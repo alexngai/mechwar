@@ -4,9 +4,10 @@
 //   capture's progress as a second ring filling in.
 // - Missile Assault: each silo's launch pad (hatch doors, lamps in its holder's color), whose rocket
 //   climbs slowly out of the tube when it fires, turns over and dives onto the enemy base.
-// - Siege: the energy station (green, filling with what it holds), dropped energy, and the
-//   battleships (deployables of kind 4) with the fire between them, the AA gun and the bases, and
-//   their engines' drone.
+// - Siege: the energy station (green, filling with what it holds), dropped energy, each base's drop
+//   zone, the AA gun (a twin-barrelled flak gun that turns on the enemy ship and fires on it while
+//   its side holds the gun), and the battleships (deployables of kind 4) with the fire between them
+//   and the bases, and their engines' drone; and the stage the match is at, as a line of text.
 import * as THREE from 'three';
 import { hot } from './fx.js';
 
@@ -22,16 +23,20 @@ const RISE = 0.28, TUBE = 5, RISE_HEIGHT = 32, APEX = 60;
 const OPEN_MS = 3500, DOOR_MS = 600;
 const UP = new THREE.Vector3(0, 1, 0);
 const BEACON_HEIGHT = 60;
-/** Match sim/src/siege.rs: STATION_CAP, SHIP_HULL, AA_RANGE, DUEL_RANGE, BOMBARD_RANGE. */
-const STATION_CAP = 400, AA_RANGE = 150, DUEL_RANGE = 120, BOMBARD_RANGE = 6;
+/** Match sim/src/siege.rs: STATION_CAP, AA_RANGE, DUEL_RANGE, BOMBARD_RANGE, BASE_RADIUS, LAUNCH_EU, BASE_HULL, SHIP_HULL. */
+const STATION_CAP = 400, AA_RANGE = 150, DUEL_RANGE = 120, BOMBARD_RANGE = 6, BASE_RADIUS = 14, LAUNCH_EU = 500, BASE_HULL = 1000;
 export const SHIP_HULL = 3000;
-/** The deployable kind of a battleship. */
-export const SHIP = 4;
+/** The AA gun fires a burst of AA_BURST rounds AA_GAP ms apart every AA_EVERY ms, while firing; it turns at AA_TURN rad/s. */
+const AA_BURST = 4, AA_GAP = 110, AA_EVERY = 1000, AA_TURN = 1.6;
+/** The deployable kinds of a battleship, and of a team mode's base gun. */
+export const SHIP = 4, SENTRY = 5;
+/** A base gun's muzzles, this high over its foot (deploy::SENTRY_HEIGHT). */
+const SENTRY_HEIGHT = 5.5;
 
 export class Objectives {
   /** `cast(ox, oy, oz, dx, dy, dz, max)`: how far a ray goes into the arena, up to `max`. */
   constructor(scene, fx, sound, cast) {
-    Object.assign(this, { scene, fx, sound, cast, silos: [], aa: [], zones: [], labels: [], stations: [], bases: [], missiles: [], ships: new Map(), drops: [], fire: {}, seen: null });
+    Object.assign(this, { scene, fx, sound, cast, silos: [], aa: [], zones: [], labels: [], stations: [], dropZones: [], bases: [], missiles: [], ships: new Map(), sentries: new Map(), drops: [], fire: {}, seen: null });
     this.dropGeometry = new THREE.OctahedronGeometry(0.6);
     this.dropMaterial = hot(new THREE.MeshBasicMaterial({ color: ENERGY }));
   }
@@ -42,10 +47,10 @@ export class Objectives {
       this.scene.remove(o);
       o.traverse((m) => { if (m.geometry !== this.dropGeometry) m.geometry?.dispose(); if (m.material !== this.dropMaterial) m.material?.dispose(); });
     };
-    for (const z of [...this.silos, ...this.aa, ...this.stations]) gone(z.group);
-    for (const s of this.ships.values()) gone(s.group);
+    for (const z of [...this.silos, ...this.aa, ...this.stations, ...this.dropZones]) gone(z.group);
+    for (const s of [...this.ships.values(), ...this.sentries.values()]) gone(s.group);
     for (const m of [...this.missiles.map((m) => m.mesh), ...this.drops]) this.scene.remove(m);
-    Object.assign(this, { missiles: [], ships: new Map(), drops: [] });
+    Object.assign(this, { missiles: [], ships: new Map(), sentries: new Map(), drops: [] });
     const o = map.objectives ?? {};
     this.bases = (o.bases ?? []).map((b) => new THREE.Vector3(...b));
     const zone = ({ at, radius, band }) => ({ ...marker(this.scene, at, radius, NEUTRAL), radius, band, shown: null, owner: -1 });
@@ -60,6 +65,18 @@ export class Objectives {
       return Object.assign(s, { padAt, launchAt: -Infinity, level: false });
     });
     this.aa = o.aa ? [zone(o.aa)] : [];
+    for (const s of this.aa) {
+      // The gun, its beacon rising from it.
+      s.gun = aaMesh();
+      s.gunAt = new THREE.Vector3(...(o.aa.pad ?? o.aa.at));
+      s.gun.position.copy(s.gunAt).sub(s.at);
+      s.group.add(s.gun);
+      s.beacon.position.copy(s.gun.position).addScaledVector(UP, BEACON_HEIGHT / 2);
+      Object.assign(s, { level: false, burstAt: -Infinity, rounds: 0, yaw: 0, pitch: 0.5 });
+    }
+    // Each base's drop zone: where energy carried home is banked.
+    this.dropZones = this.bases.map((at) => ({ ...marker(this.scene, at.toArray(), BASE_RADIUS, ENERGY), shown: null }));
+    for (const d of this.dropZones) fill(d, BASE_RADIUS, 0);
     this.seen = null;
     this.stations = (o.stations ?? []).map(({ at, radius, band }) => ({ ...marker(this.scene, at, radius, ENERGY), radius, band, shown: null }));
     this.sky = o.sky ?? 50;
@@ -73,6 +90,8 @@ export class Objectives {
     const color = (team) => (team < 0 ? NEUTRAL : team === myTeam ? friend : foe);
     // The mode on says which: Missile Assault's three silos, or Siege's AA gun; none in the rest.
     [this.zones, this.labels] = zones.length === 9 ? [this.silos, ['A', 'B', 'C']] : zones.length === 3 ? [this.aa, ['AA']] : [[], []];
+    this.myTeam = myTeam;
+    this.aaOwner = this.zones === this.aa ? zones[0] : -1;
     for (const s of [...this.silos, ...this.aa]) s.group.visible = this.zones.includes(s);
     // Each objective changing hands, as cues: ours now, ours no more, theirs now. (Not on the first
     // look at a set, which is where things already stood.)
@@ -94,8 +113,98 @@ export class Objectives {
       fill(s, s.radius, Math.abs(progress));
       s.fill.material.color.setHex(color(progress > 0 ? 0 : progress < 0 ? 1 : -1));
       if (s.pad) this.showPad(s, color(owner), now);
+      if (s.gun) s.gun.userData.lamp.material.color.setHex(color(owner));
     });
     return cues;
+  }
+
+  /**
+   * Siege's drop zones, shown while Siege is on (`on`): ours in our color, pulsing while we carry
+   * energy home (`carrying`), theirs in theirs.
+   */
+  showDropZones(on, myTeam, friend, foe, carrying, now) {
+    this.dropZones.forEach((d, team) => {
+      d.group.visible = on;
+      const ours = team === myTeam, color = ours ? friend : foe;
+      d.ring.material.color.setHex(color);
+      d.beacon.material.color.setHex(color);
+      d.ring.material.opacity = ours && carrying ? 0.55 + 0.4 * Math.sin(now / 160) : 0.5;
+      fill(d, BASE_RADIUS, ours && carrying ? 1 : 0);
+      d.fill.material.color.setHex(ENERGY);
+    });
+  }
+
+  /** Whether a mech with its feet at `feet` stands in `team`'s drop zone. */
+  inDropZone(feet, team) {
+    const base = this.bases[team];
+    return !!base && Math.hypot(feet.x - base.x, feet.z - base.z) <= BASE_RADIUS + 1;
+  }
+
+  /** Energy banked at `team`'s drop zone: a green burst there. */
+  banked(team) {
+    const base = this.bases[team];
+    if (base) this.fx.bank(base.clone().addScaledVector(UP, 0.5), BASE_RADIUS);
+  }
+
+  /**
+   * The stage a siege is at for `myTeam`, as a line for the top of the glass: gathering (with the
+   * bank's progress to a launch, and what we carry), or a ship up (ours or theirs, cruising,
+   * bombarding, or both dueling), with what to do about it. `floats` as for `siege`, `hull` the
+   * bases' hull ([team 0, team 1]).
+   */
+  stage(myTeam, floats, hull, carried) {
+    const ours = this.ships.get(myTeam), theirs = this.ships.get(1 - myTeam);
+    const aa = this.aaOwner === myTeam ? 'HOLD' : 'TAKE', ship = (s) => `${Math.max(0, Math.ceil(s.hull))}/${SHIP_HULL}`;
+    const over = (s) => {
+      const base = this.bases[1 - s.team];
+      return !!base && Math.hypot(s.pos.x - base.x, s.pos.z - base.z) <= BOMBARD_RANGE + 1;
+    };
+    if (ours && theirs) return `${aa === 'HOLD' ? 'HOLD' : 'CAPTURE'} THE AA TO DESTROY THE ENEMY SHIP   [OURS ${ship(ours)} · THEIRS ${ship(theirs)}]`;
+    if (theirs && over(theirs)) return `ENEMY SHIP HITTING OUR BASE · SHOOT IT DOWN   [SHIP ${ship(theirs)} · BASE ${hull[myTeam]}/${BASE_HULL}]`;
+    if (theirs) return `ENEMY SHIP INBOUND · ${aa === 'HOLD' ? 'DEFEND' : 'TAKE'} THE AA, SHOOT IT DOWN   [SHIP ${ship(theirs)}]`;
+    if (ours && over(ours)) return `OUR SHIP HAS REACHED THEIR BASE   [THEIR BASE ${hull[1 - myTeam]}/${BASE_HULL}]`;
+    if (ours) return `OUR SHIP IS UP · ESCORT IT, ${aa} THE AA   [SHIP ${ship(ours)}]`;
+    const bank = Math.floor(floats[this.stations.length + myTeam] ?? 0);
+    return carried > 0
+      ? `CARRYING ${carried} EU · RETURN TO THE DROP ZONE   [${bank}/${LAUNCH_EU}]`
+      : `GATHER AT THE ENERGY STATION AND RETURN TO THE DROP ZONE   [${bank}/${LAUNCH_EU}]`;
+  }
+
+  /**
+   * The AA gun: set on its surface, turned on the enemy ship of its holder in reach (the sim's own
+   * test: it's hurting that ship), firing flak bursts at it; otherwise scanning the sky.
+   */
+  manAA(now, dt) {
+    const s = this.aa[0];
+    if (!s?.group.visible) return;
+    if (!s.level) s.level = level(s.gun, s.gunAt, this.cast);
+    const holder = this.aaOwner, target = [...this.ships.values()].find((ship) => holder >= 0 && ship.team !== holder && ship.pos.distanceTo(s.at) <= AA_RANGE);
+    let yaw = s.yaw + 0.25 * dt, pitch = 0.45;
+    if (target) {
+      const to = target.group.position.clone().sub(s.gunAt);
+      [yaw, pitch] = [Math.atan2(-to.x, -to.z), Math.atan2(to.y, Math.hypot(to.x, to.z))];
+    }
+    const turn = (from, to) => from + THREE.MathUtils.clamp(Math.atan2(Math.sin(to - from), Math.cos(to - from)), -AA_TURN * dt, AA_TURN * dt);
+    s.yaw = turn(s.yaw, yaw);
+    s.pitch = turn(s.pitch, pitch);
+    const { head, cradle, tips } = s.gun.userData;
+    head.rotation.y = s.yaw;
+    cradle.rotation.x = s.pitch;
+    if (!target) return;
+    // On target, a burst every AA_EVERY ms: rounds from each barrel in turn, tracers up and flak
+    // bursting round the ship.
+    if (now - s.burstAt >= AA_EVERY) [s.burstAt, s.rounds] = [now, 0];
+    while (s.rounds < AA_BURST && now - s.burstAt >= s.rounds * AA_GAP) {
+      const tip = tips[s.rounds % 2].getWorldPosition(new THREE.Vector3());
+      const at = target.group.position.clone().add(new THREE.Vector3((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 14));
+      this.fx.muzzleLight(tip);
+      this.fx.muzzle(tip, at.clone().sub(tip).normalize());
+      this.fx.beam(tip, at);
+      this.fx.explosion(at, 0.35);
+      this.sound.shot('flak', tip);
+      this.sound.blast(2.5, at);
+      s.rounds++;
+    }
   }
 
   /** Silo `s`'s pad: set level with what it stands on (once it can tell), its lamps in `lamp` (flashing through a launch), its doors open for one. */
@@ -178,9 +287,8 @@ export class Objectives {
       // Their broadsides boom every other volley.
       if (every('duelGuns', 600)) for (const s of [a, b]) this.sound.shipGun(s.group.position);
     }
-    const holder = zones.length ? zones[0] : -1, aa = this.aa[0]?.at;
+    this.manAA(now, dt);
     for (const s of this.ships.values()) {
-      if (aa && holder >= 0 && holder !== s.team && s.pos.distanceTo(aa) <= AA_RANGE && every(`aa${s.team}`, 220)) this.tracer(aa.clone().addScaledVector(UP, 2), s.group.position);
       const base = this.bases[1 - s.team];
       if (base && Math.hypot(s.pos.x - base.x, s.pos.z - base.z) <= BOMBARD_RANGE + 1 && every(`bomb${s.team}`, 700)) {
         this.tracer(s.group.position.clone().addScaledVector(UP, -6), base);
@@ -189,6 +297,38 @@ export class Objectives {
         this.sound.blast(14, base);
       }
     }
+  }
+
+  /**
+   * The team modes' base guns among `list` (WasmNetClient.deployables): each a tower with a gun head
+   * the server turns (yaw, pitch), its lamps and stripe in its side's color. `guns` gets each one's
+   * muzzle, by `${owner}:2` as MG turrets' are.
+   */
+  drawSentries(list, myTeam, friend, foe, dt, guns) {
+    const live = new Set();
+    for (let i = 0; i < list.length; i += 10) {
+      if (list[i] !== SENTRY) continue;
+      const [, team, owner, x, y, z, yaw, pitch] = list.subarray(i, i + 10);
+      let s = this.sentries.get(owner);
+      if (!s) {
+        s = { group: sentryMesh(), yaw, pitch };
+        s.group.position.set(x, y, z);
+        this.scene.add(s.group);
+        this.sentries.set(owner, s);
+      }
+      live.add(owner);
+      // Eased toward the server's aim, so 30 Hz steps don't judder.
+      const ease = 1 - Math.exp(-14 * dt), turn = Math.atan2(Math.sin(yaw - s.yaw), Math.cos(yaw - s.yaw));
+      s.yaw += turn * ease;
+      s.pitch += (pitch - s.pitch) * ease;
+      const { head, cradle, tips, accents } = s.group.userData;
+      head.rotation.y = s.yaw;
+      cradle.rotation.x = s.pitch;
+      s.group.userData.dish.rotation.y += 2.5 * dt;
+      for (const a of accents) a.material.color.setHex(team === myTeam ? friend : foe);
+      guns.set(`${owner}:2`, tips[Math.floor(performance.now() / 50) % 2].getWorldPosition(new THREE.Vector3()));
+    }
+    for (const [owner, s] of this.sentries) if (!live.has(owner)) { this.scene.remove(s.group); this.sentries.delete(owner); }
   }
 
   tracer(from, to) {
@@ -267,12 +407,18 @@ export class Objectives {
 
   /**
    * What the glass marks, in the modes that play them (`zones` and `siege` as for `update` and
-   * `siege`): each zone's label in its holder's color (flashing contested), and each station.
+   * `siege`): each zone's label in its holder's color (flashing contested), each station, and our
+   * drop zone.
    */
   markers(zones, siege) {
     if (!zones.length) return [];
     const marks = this.zones.map((s, i) => ({ label: this.labels[i], at: s.at, owner: zones[3 * i], contested: !!zones[3 * i + 2] }));
-    return siege.length ? marks.concat(this.stations.map((s) => ({ label: 'E', at: s.at, owner: -1, contested: false, color: ENERGY }))) : marks;
+    if (!siege.length) return marks;
+    const drop = this.bases[this.myTeam];
+    return marks.concat(
+      this.stations.map((s) => ({ label: 'E', at: s.at, owner: -1, contested: false, color: ENERGY })),
+      drop ? [{ label: 'DROP', at: drop, owner: this.myTeam, contested: false }] : [],
+    );
   }
 }
 
@@ -345,6 +491,98 @@ function level(pad, at, cast) {
   pad.quaternion.setFromUnitVectors(UP, normal);
   pad.position.y += h - at.y;
   return true;
+}
+
+/**
+ * The AA gun, its base at y 0: a plinth, a head that turns (`userData.head`, yaw) with a cradle that
+ * elevates (`userData.cradle`, pitch, its barrels along -z at 0) holding two long barrels whose
+ * muzzles are `userData.tips`, and a lamp in its holder's color (`userData.lamp`).
+ */
+function aaMesh() {
+  const group = new THREE.Group();
+  const concrete = new THREE.MeshStandardMaterial({ color: 0x5b5f63, roughness: 0.9 });
+  const steel = new THREE.MeshStandardMaterial({ color: 0x3b4046, roughness: 0.5, metalness: 0.5 });
+  const olive = new THREE.MeshStandardMaterial({ color: 0x4f5a3c, roughness: 0.7, metalness: 0.2 });
+  const hazard = new THREE.MeshStandardMaterial({ color: 0xd4a017, roughness: 0.6 });
+  group.add(new THREE.Mesh(new THREE.CylinderGeometry(2.6, 3, 0.8, 8), concrete).translateY(0.4));
+  group.add(new THREE.Mesh(new THREE.CylinderGeometry(2.65, 2.65, 0.14, 8), hazard).translateY(0.82));
+  const head = new THREE.Group();
+  head.position.y = 0.9;
+  group.add(head);
+  head.add(new THREE.Mesh(new THREE.CylinderGeometry(1.7, 2, 1, 12), olive).translateY(0.5));
+  for (const x of [-1.15, 1.15]) head.add(new THREE.Mesh(new THREE.BoxGeometry(0.35, 1.8, 1.6), olive).translateX(x).translateY(1.6));
+  const cradle = new THREE.Group();
+  cradle.position.y = 2.1;
+  head.add(cradle);
+  cradle.add(new THREE.Mesh(new THREE.BoxGeometry(1.9, 1, 1.8), steel));
+  const tips = [-0.45, 0.45].map((x) => {
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.17, 5, 10).rotateX(Math.PI / 2), steel);
+    barrel.position.set(x, 0.1, -3.2);
+    cradle.add(barrel);
+    const brake = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.5, 10).rotateX(Math.PI / 2), steel);
+    brake.position.set(x, 0.1, -5.5);
+    cradle.add(brake);
+    const tip = new THREE.Object3D();
+    tip.position.set(x, 0.1, -5.9);
+    cradle.add(tip);
+    return tip;
+  });
+  const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.3, 0.4), hot(new THREE.MeshBasicMaterial({ color: NEUTRAL })));
+  lamp.position.set(0, 0.65, 0.95);
+  cradle.add(lamp);
+  group.userData = { head, cradle, tips, lamp };
+  return group;
+}
+
+/**
+ * A base gun, its foot at y 0 and its muzzles SENTRY_HEIGHT up: a concrete tower banded in hazard
+ * yellow, a platform, and an armored head that turns (`userData.head`, yaw) over a cradle that
+ * elevates (`userData.cradle`, pitch, the guns along -z at 0) holding a pair of jacketed heavy MGs
+ * (`userData.tips`) under a spinning radar dish (`userData.dish`); lamps and a stripe in its side's
+ * color (`userData.accents`).
+ */
+function sentryMesh() {
+  const group = new THREE.Group();
+  const concrete = new THREE.MeshStandardMaterial({ color: 0x6a6e72, roughness: 0.9 });
+  const armor = new THREE.MeshStandardMaterial({ color: 0x32373d, roughness: 0.45, metalness: 0.55 });
+  const hazard = new THREE.MeshStandardMaterial({ color: 0xd4a017, roughness: 0.6 });
+  const accent = () => hot(new THREE.MeshBasicMaterial({ color: NEUTRAL }));
+  const add = (parent, geometry, material, x, y, z) => {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(x, y, z);
+    parent.add(mesh);
+    return mesh;
+  };
+  add(group, new THREE.BoxGeometry(2.2, 0.5, 2.2), concrete, 0, 0.25, 0);
+  add(group, new THREE.CylinderGeometry(0.7, 0.95, 3.8, 8), concrete, 0, 2.4, 0);
+  for (const y of [1.2, 3.6]) add(group, new THREE.CylinderGeometry(0.88, 0.88, 0.25, 8), hazard, 0, y, 0);
+  add(group, new THREE.CylinderGeometry(1.25, 1.1, 0.35, 12), armor, 0, 4.45, 0);
+  const accents = [];
+  const head = new THREE.Group();
+  head.position.y = 4.6;
+  group.add(head);
+  add(head, new THREE.BoxGeometry(1.7, 1.1, 1.9), armor, 0, 0.55, 0.15);
+  add(head, new THREE.BoxGeometry(1.4, 0.7, 0.6), armor, 0, 0.9, -0.9).rotation.x = -0.5; // sloped front plate
+  accents.push(add(head, new THREE.BoxGeometry(1.72, 0.14, 1.4), accent(), 0, 0.85, 0.3));
+  for (const x of [-0.95, 0.95]) accents.push(add(head, new THREE.BoxGeometry(0.16, 0.16, 0.16), accent(), x, 1.15, 0.9));
+  const dish = new THREE.Group();
+  dish.position.set(0, 1.35, 0.6);
+  head.add(dish);
+  add(dish, new THREE.CylinderGeometry(0.05, 0.05, 0.4, 6), armor, 0, 0.2, 0);
+  add(dish, new THREE.CylinderGeometry(0.45, 0.1, 0.12, 12), armor, 0, 0.45, 0).rotation.x = 1.2;
+  const cradle = new THREE.Group();
+  cradle.position.y = SENTRY_HEIGHT - 4.6;
+  head.add(cradle);
+  const tips = [-0.32, 0.32].map((x) => {
+    add(cradle, new THREE.CylinderGeometry(0.16, 0.16, 1.6, 10).rotateX(Math.PI / 2), armor, x, 0, -1.4); // cooling jacket
+    add(cradle, new THREE.CylinderGeometry(0.07, 0.07, 1.2, 8).rotateX(Math.PI / 2), armor, x, 0, -2.6);
+    const tip = new THREE.Object3D();
+    tip.position.set(x, 0, -3.2);
+    cradle.add(tip);
+    return tip;
+  });
+  group.userData = { head, cradle, tips, dish, accents };
+  return group;
 }
 
 /** A silo's rocket, nose along +y: body, nose cone, four fins, a band in `accent` (its side's color), the nozzle. */

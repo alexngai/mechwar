@@ -13,7 +13,7 @@ import classesText from '../classes.json?raw';
 import weaponsText from '../weapons.json?raw';
 import { buildArena, HIGH_ONLY, LOW_ONLY } from './arena.js';
 import { Effects, HOT, halo, hot } from './fx.js';
-import { Objectives, SHIP, SHIP_HULL } from './objectives.js';
+import { Objectives, SENTRY, SHIP, SHIP_HULL } from './objectives.js';
 import { Preview } from './hangar.js';
 import saltworks from '../maps/saltworks.json';
 import foundry from '../maps/foundry.json';
@@ -108,6 +108,11 @@ const FRIEND = TEAMS[0], FOE = TEAMS[1];
 const DEATHMATCH = 1, MISSILE_ASSAULT = 2, SIEGE = 3; // their indices in the sim's Mode::ALL
 /** Battleships' owner ids start here, past every player's (deploy::ship_owner). */
 const SHIP_OWNERS = 8;
+/** Base guns' owner ids start here, past the ships' (deploy::sentry_owner). */
+const SENTRY_OWNERS = 10;
+/** A solo kill's points in Deathmatch (Game's POINTS_PER_KILL with the killer's bonus); a Siege
+ * launch's EU (siege::LAUNCH_EU). */
+const DM_POINTS_PER_KILL = 125, LAUNCH_EU = 500;
 // Volley indices of thrown items, from ITEM_N up; match projectile::GRENADE, LIMPET and SMOKE in
 // sim/src/projectile.rs. THROWN gives each one's weapons.json id.
 const GRENADE_N = 255, LIMPET_N = 254, ITEM_N = 253;
@@ -445,6 +450,10 @@ gui.add(debugOn, 'on').name('Debug overlay').onChange((on) => {
 });
 retune();
 const hud = { net: $('net'), score: $('score'), banner: $('banner'), summary: $('summary'), damage: $('damage') };
+// The top panel's side colors: ours and theirs, as everywhere on the glass.
+document.documentElement.style.setProperty('--us', hex(FRIEND.accent));
+document.documentElement.style.setProperty('--them', hex(FOE.accent));
+let scoreHtml = '';
 
 // --- Class picker ----------------------------------------------------------
 // Shown before the first deploy and on death; C reopens it. Online the pick applies on the next
@@ -525,7 +534,8 @@ const feed = [];
 // Our latest kill, named over the aim frame for a moment.
 let eliminated = null, callout = null, capture = null, blipAt = 0;
 /** Siege energy we carried as of the last frame; CARRY_MAX matches siege::CARRY_MAX. */
-let heldBefore = 0;
+let heldBefore = 0, bankBefore = 0;
+const ENERGY_COLOR = 0x5dff9a;
 const CARRY_MAX = 100;
 // Destroyed online by someone else: the camera follows them, their loadout showing, until we can
 // launch again (or C opens the hangar sooner). `killcam` is their id, `killYaw` the camera's heading.
@@ -773,7 +783,19 @@ function frame(now) {
   const carried = hudState?.[22] ?? 0, station = alive && sieging ? objectives.stationAt(pos) : -1;
   sound.gathering(station >= 0 && carried < CARRY_MAX && siege[station] > 0.5 ? carried / CARRY_MAX : null);
   if (sieging && carried >= CARRY_MAX && heldBefore < CARRY_MAX) sound.full();
-  heldBefore = carried;
+  // Our drop zone, pulsing while we carry; banking there (the only way a living mech's load goes
+  // to nothing): a sound, a burst and a callout. A teammate's: the bank jumping, softer.
+  objectives.showDropZones(sieging, myTeam, FRIEND.accent, FOE.accent, carried > 0, now);
+  const bank = sieging && myTeam >= 0 ? siege[objectives.stations.length + myTeam] ?? 0 : 0;
+  if (sieging && alive && heldBefore > 0 && carried === 0 && objectives.inDropZone(pos, myTeam)) {
+    sound.deposit(true);
+    objectives.banked(myTeam);
+    callout = { text: `+${heldBefore} EU BANKED`, color: hex(ENERGY_COLOR), at: now };
+  } else if (sieging && bank - bankBefore >= 5 && bankBefore > 0) {
+    sound.deposit(false);
+    objectives.banked(myTeam);
+  }
+  [heldBefore, bankBefore] = [carried, bank];
   // The server's respawn wait times it: our own predicted death can land a tick before or after the kill.
   if (killcam !== null && (pickerOpen || !remotes.has(killcam) || !(hudState?.[16] > 0))) {
     killcam = null;
@@ -911,7 +933,8 @@ function frame(now) {
         fx.beam(from, end);
         fx.impact(end);
         // A battleship's guns (owners past every player's) boom; a turret rattles.
-        if (a >= SHIP_OWNERS) sound.shipGun(from);
+        if (a >= SENTRY_OWNERS) sound.shot('rotary', from);
+        else if (a >= SHIP_OWNERS) sound.shipGun(from);
         else sound.shot('vulcan', from);
       }
       if (b >= 0 && a === myId) hits.push({ at: now, kill: false });
@@ -993,6 +1016,7 @@ function frame(now) {
   drawSmoke(dt);
   drawDeployables(now, myTeam);
   objectives.drawShips(game.deployables(), zones, myTeam, FRIEND.accent, FOE.accent, now, dt, turretGuns);
+  objectives.drawSentries(game.deployables(), myTeam, FRIEND.accent, FOE.accent, dt, turretGuns);
 
   // Look is applied at render rate for responsiveness; position is interpolated. In the cockpit
   // the view bobs with the gait and shakes when hit, but stays level (no roll).
@@ -1149,28 +1173,8 @@ function frame(now) {
     const state = full ? 'server full' : connection || (curr[S.HEALTH] <= 0 ? (picked === null ? 'in the hangar' : 'DESTROYED · launch when ready') : '');
     hud.net.textContent = `K ${kills}  D ${deaths}  ping ${Math.round(ping)} ms  corr ${correction.toFixed(3)} m  ${now < messageUntil ? message : state}`;
     const clock = `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')}`;
-    if (dm) {
-      // Our place (ties share one), and the best of the rest: the leader, or whoever's next.
-      const rows = boardRows(), mine = rows.find((r) => r.id === myId), other = standings(rows.filter((r) => r.id !== myId))[0];
-      const place = 1 + rows.filter((r) => r.points > (mine?.points ?? 0)).length;
-      const them = other ? `   ${place > 1 ? 'LEADER' : other.points === mine?.points ? 'TIED' : '2ND'} ${nameOf(other.id)} ${other.points}` : '';
-      hud.score.textContent = mine ? `${ordinal(place)}/${rows.length} · YOU ${mine.points}${them}   ${ended ? '' : clock}` : clock;
-    } else if (sieging) {
-      // Each side's bank (or its ship's hull, while it's up) by its base's hull, the AA gun
-      // between in its holder's color, and what we carry.
-      const ships = new Map(), list = game.deployables();
-      for (let i = 0; i < list.length; i += 10) if (list[i] === SHIP) ships.set(list[i + 1], list[i + 9]);
-      const side = (t) => (ships.has(t) ? `SHIP ${Math.max(0, Math.ceil(ships.get(t)))}` : `${Math.floor(siege[objectives.stations.length + t] ?? 0)} EU`);
-      const aa = `<b style="color:${hex(zones[0] < 0 || !zones.length ? 0xd8dde6 : zones[0] === team ? FRIEND.accent : FOE.accent)}">AA</b>`;
-      const carried = hudState[22] > 0 ? `   YOU ${hudState[22]} EU` : '';
-      hud.score.innerHTML = `${team === 0 ? '▸ ' : ''}BLUE ${blue} · ${side(0)}   ${aa}   ${side(1)} · ${red} RED${team === 1 ? ' ◂' : ''}${carried}   ${ended ? '' : clock}`;
-    } else if (assault) {
-      // The bases' hull either side of the silos, each silo in its holder's color.
-      const pip = (i) => `<b style="color:${hex(zones[3 * i] < 0 ? 0xd8dde6 : zones[3 * i] === team ? FRIEND.accent : FOE.accent)}">${'ABC'[i]}</b>`;
-      hud.score.innerHTML = `${team === 0 ? '▸ ' : ''}BLUE ${blue}   ${[0, 1, 2].map(pip).join(' ')}   ${red} RED${team === 1 ? ' ◂' : ''}   ${ended ? '' : clock}`;
-    } else {
-      hud.score.textContent = `${team === 0 ? '▸ ' : ''}BLUE ${blue} – ${red} RED${team === 1 ? ' ◂' : ''}   ${ended ? '' : clock}`;
-    }
+    const html = topPanel(hudState, myId, zones, siege, clock);
+    if (html !== scoreHtml) hud.score.innerHTML = scoreHtml = html;
     const next = `${mode_name(nextMode)} on ${MAPS[map_name(nextMap)]?.name ?? ''}`;
     const result = winner < 0 ? 'DRAW' : winner === team ? 'VICTORY' : dm ? `${nameOf(winner)} WINS` : 'DEFEAT';
     hud.banner.textContent = ended ? `${result} · next: ${next} in ${secondsLeft}s` : '';
@@ -1233,6 +1237,52 @@ function summaryHtml({ end, after }) {
   const [from, to] = [levelXp(after.level), levelXp(after.level + 1)];
   const toNext = after.level < 99 ? `<div>${after.xp - from} / ${to - from} XP to level ${after.level + 1}</div>` : '';
   return `<b>+${total} XP</b> · ${up ? 'LEVEL UP: ' : 'LEVEL '}${after.level}<div>${parts.join(' · ')}</div>${toNext}`;
+}
+
+/**
+ * The top panel: the mode, map and clock; the score from our side (ours left in our color, theirs
+ * right in theirs), as each mode keeps it; and a line under it where there's more to say: the
+ * Deathmatch race, the Siege stage, who won.
+ */
+function topPanel(hudState, myId, zones, siege, clock) {
+  const [, , , , , , team, blue, red, secondsLeft, ended, winner] = hudState;
+  const mode = hudState[20], limit = hudState[23], carried = hudState[22];
+  const map = MAPS[map_name(net.map())]?.name ?? '';
+  const top = `<div class="top">${mode_name(mode).toUpperCase()} · ${map.toUpperCase()}<b>${ended ? `NEXT MATCH IN ${secondsLeft}s` : clock}</b></div>`;
+  if (team < 0) return top;
+  const [ours, theirs] = team === 0 ? [blue, red] : [red, blue];
+  const color = (owner) => (owner < 0 ? 'dim' : owner === team ? 'us' : 'them');
+  const bar = (hull) => `<span class="bar"><i style="width:${Math.max(0, Math.min(100, hull / 10))}%"></i></span>`;
+  let main = '', state = '';
+  if (mode === DEATHMATCH) {
+    // Our place (ties share one), and the best of the rest: the leader, or whoever's next.
+    const rows = boardRows(), mine = rows.find((r) => r.id === myId), other = standings(rows.filter((r) => r.id !== myId))[0];
+    const place = 1 + rows.filter((r) => r.points > (mine?.points ?? 0)).length;
+    main = `<span class="us">${ordinal(place)}</span><small>OF ${rows.length}</small><span>${mine?.points ?? 0}</span><small>POINTS</small>`;
+    const name = other && esc(nameOf(other.id));
+    const rival = !other ? '' : place > 1 ? `LEADER ${name} ${other.points}` : other.points === mine?.points ? `TIED WITH ${name}` : `YOU LEAD ${name} BY ${(mine?.points ?? 0) - other.points}`;
+    state = `FIRST TO ${limit * DM_POINTS_PER_KILL} POINTS${rival ? ` · ${rival}` : ''}`;
+  } else if (mode === MISSILE_ASSAULT) {
+    // The bases either side of the silos, each silo's pip in its holder's color.
+    const owners = [0, 1, 2].map((i) => (zones.length ? zones[3 * i] : -1)), contested = [0, 1, 2].filter((i) => zones[3 * i + 2]);
+    const pips = owners.map((o, i) => `<span class="pip ${color(o)}${contested.includes(i) ? ' contested' : ''}">${'ABC'[i]}</span>`).join(' ');
+    main = `<span class="us"><small>OUR BASE</small>${bar(ours)}${ours}</span>${pips}<span class="them">${theirs}${bar(theirs)}<small>ENEMY BASE</small></span>`;
+  } else if (mode === SIEGE) {
+    // Each side's base, then its bank (or its ship, while it's up), the AA gun between.
+    const ships = new Map(), list = game.deployables();
+    for (let i = 0; i < list.length; i += 10) if (list[i] === SHIP) ships.set(list[i + 1], list[i + 9]);
+    const side = (t) => (ships.has(t) ? `SHIP ${Math.max(0, Math.ceil(ships.get(t)))}` : `${Math.floor(siege[objectives.stations.length + t] ?? 0)}/${LAUNCH_EU} EU`);
+    const aa = `<span class="pip ${color(zones.length ? zones[0] : -1)}${zones[2] ? ' contested' : ''}">AA</span>`;
+    main = `<span class="us"><small>OUR BASE</small>${bar(ours)}${ours} <small>${side(team)}</small></span>${aa}<span class="them"><small>${side(1 - team)}</small> ${theirs}${bar(theirs)}<small>ENEMY BASE</small></span>`;
+    state = objectives.stage(team, siege, [blue, red], carried);
+  } else {
+    main = `<span class="us"><small>OUR TEAM</small> ${ours}</span><span class="dim">–</span><span class="them">${theirs} <small>ENEMY</small></span>`;
+  }
+  if (ended) {
+    const won = mode === DEATHMATCH ? winner === myId : winner === team;
+    state = winner < 0 ? 'DRAW' : `<span class="${won ? 'us' : 'them'}">${mode === DEATHMATCH ? (won ? 'YOU WIN' : `${esc(nameOf(winner))} WINS`) : won ? 'OUR TEAM WINS' : 'ENEMY TEAM WINS'}</span>`;
+  }
+  return `${top}<div class="main">${main}</div>${state ? `<div class="state">${state}</div>` : ''}`;
 }
 
 /** The scoreboard's rows from the server: id, team, class, bot, kills, deaths, points. */
@@ -1357,7 +1407,7 @@ function drawDeployables(now, myTeam) {
   turretGuns.clear();
   for (let i = 0; i < list.length; i += 10) {
     const [kind, team, owner, x, y, z, yaw, pitch, left, hull] = list.subarray(i, i + 10);
-    if (kind === SHIP) continue; // objectives.js draws ships
+    if (kind === SHIP || kind === SENTRY) continue; // objectives.js draws ships and base guns
     const key = `${owner}:${kind}:${x},${z}`;
     if (!deployed.has(key)) sound.deploy({ x, y, z });
     let mesh = deployMeshes[kind][used[kind]++];
@@ -1464,7 +1514,7 @@ function drawGlass(now, myTeam) {
   const turrets = game.deployables();
   for (let i = 0; i < turrets.length; i += 10) {
     const [kind, team, owner, x, y, z, , , , hull] = turrets.subarray(i, i + 10);
-    if (kind < 2) continue;
+    if (kind < 2 || kind === SENTRY) continue;
     const enemy = myTeam >= 0 && team !== myTeam; // offline, all ours
     const ship = kind === SHIP;
     chest.set(x, y + (ship ? 0 : classValue(1, 'turret_height') * 0.6), z);

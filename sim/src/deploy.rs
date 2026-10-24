@@ -14,7 +14,8 @@
 //!
 //! A Siege battleship is one too (`Kind::Ship`, owned by no player: see `ship_owner`), so it's
 //! shot, locked onto and fought like a turret, and guns mechs down like an MG turret; `siege.rs`
-//! flies it.
+//! flies it. So are the base guns of the team modes (`Kind::Sentry`, nobody's either: see
+//! `sentry_owner`), manned like MG turrets, but part of the base: not shot, nor locked onto.
 
 use rapier3d::parry::query::RayCast;
 use rapier3d::prelude::{Capsule, Collider, ColliderBuilder, ColliderHandle, Pose, Ray, Rotation};
@@ -30,12 +31,28 @@ pub enum Kind {
     MgTurret,
     RocketTurret,
     Ship,
+    Sentry,
 }
 
 impl Kind {
+    /// Shot at, locked onto and fought like a turret.
     pub fn turret(self) -> bool {
         matches!(self, Kind::MgTurret | Kind::RocketTurret | Kind::Ship)
     }
+
+    /// Manned: trains on enemies and fires (`Game::man_turrets`).
+    pub fn armed(self) -> bool {
+        self.turret() || self == Kind::Sentry
+    }
+}
+
+/// A base gun's muzzle, this high over its foot (on its tower).
+pub const SENTRY_HEIGHT: f32 = 5.5;
+
+/// The owner id of `team`'s base gun number `k`: past every player's and the ships', so it's
+/// nobody's.
+pub fn sentry_owner(team: u8, k: usize) -> u8 {
+    crate::game::MAX_PLAYERS as u8 + 2 + 2 * team + k as u8
 }
 
 /// A ship's hull as shots meet it: a ball about this big around its middle.
@@ -112,7 +129,7 @@ pub fn place<'a>(arena: &Arena, t: &Tuning, m: &Mech, kind: Kind, team: u8, owne
         Kind::Dome => (m.pos, t.dome_seconds, f32::INFINITY),
         Kind::Barrier => (ahead(t.barrier_distance, t.barrier_thickness * 0.5 + 0.1), t.barrier_seconds, f32::INFINITY),
         Kind::MgTurret | Kind::RocketTurret => (ahead(t.turret_distance, t.turret_radius + 0.1), t.turret_seconds, t.turret_hull),
-        Kind::Ship => unreachable!("ships are launched, not put down"),
+        Kind::Ship | Kind::Sentry => unreachable!("ships are launched and base guns built, not put down"),
     };
     // The ground below, from a little over the mech's feet (so a barrier on a slope or step finds it).
     let from = Vector::new(at.x, m.pos.y + 2.0, at.z);
@@ -124,7 +141,11 @@ pub fn place<'a>(arena: &Arena, t: &Tuning, m: &Mech, kind: Kind, team: u8, owne
 
 /// Where turret `d`'s gun is (a ship's, under its hull).
 pub fn gun(t: &Tuning, d: &Deployable) -> Vector {
-    if d.kind == Kind::Ship { d.pos - Vector::Y * (SHIP_RADIUS * 0.6) } else { d.pos + Vector::Y * t.turret_height }
+    match d.kind {
+        Kind::Ship => d.pos - Vector::Y * (SHIP_RADIUS * 0.6),
+        Kind::Sentry => d.pos + Vector::Y * SENTRY_HEIGHT,
+        _ => d.pos + Vector::Y * t.turret_height,
+    }
 }
 
 /// Turret `d`'s id for lock-on and homing (see `TARGET`).
