@@ -4,9 +4,9 @@
 //! (game.rs), and clears them when they expire or, a turret, are shot down. A mech has at most
 //! one of each kind out.
 //!
-//! A dome stops every shot crossing into it from outside, whichever side fired it (`stops`):
-//! hitscan, projectiles, splash and beams alike. Anyone inside shoots out freely, and mechs walk
-//! through. A barrier is a wall in
+//! A dome stops every shot crossing its surface, either way and whichever side fired it
+//! (`stops`): hitscan, projectiles, splash and beams alike. Shots inside it hit, so the way to get
+//! someone under one is to walk in after them; mechs walk through. A barrier is a wall in
 //! the arena itself (`Arena::set_barriers`), blocking movement and shots for everyone, so clients
 //! add it to their own arenas from snapshots and predict against it like any wall. A turret is a
 //! tripod gun that trains on the nearest enemy it can see (`train`) and fires at it; mechs walk
@@ -169,20 +169,19 @@ pub fn add(list: &mut Vec<Deployable>, d: Deployable) {
     list.push(d);
 }
 
-/// How far along `ray` (a unit direction), within `max`, a dome stops a shot coming at it from
-/// outside, whoever fired it. A shot from inside one passes.
+/// How far along `ray` (a unit direction), within `max`, a dome's surface stops a shot: going in
+/// from outside, or out from inside, whoever fired it. A shot that stays inside passes.
 pub fn stops(list: &[Deployable], t: &Tuning, ray: &Ray, max: f32) -> Option<f32> {
     let r = t.dome_radius;
     list.iter()
         .filter(|d| d.kind == Kind::Dome)
         .filter_map(|d| {
             let to = ray.origin - d.pos;
-            if to.length_squared() <= r * r {
-                return None;
-            }
             let b = to.dot(ray.dir);
             let disc = b * b - (to.length_squared() - r * r);
-            let toi = -b - disc.max(0.0).sqrt();
+            // Where the line meets the sphere: from outside, the near side; from inside, the far.
+            let inside = to.length_squared() <= r * r;
+            let toi = -b + if inside { 1.0 } else { -1.0 } * disc.max(0.0).sqrt();
             // Through the dome's upper half (the rest is underground), within reach.
             (disc >= 0.0 && (0.0..=max).contains(&toi) && ray.point_at(toi).y >= d.pos.y).then_some(toi)
         })
@@ -221,7 +220,7 @@ mod tests {
     use crate::{Map, spawn_mech};
 
     #[test]
-    fn domes_stop_shots_from_outside_only() {
+    fn domes_stop_shots_crossing_them_either_way() {
         let t = Tuning::default();
         let dome = Deployable { kind: Kind::Dome, team: 0, owner: 0, pos: Vector::ZERO, yaw: 0.0, pitch: 0.0, hull: f32::INFINITY, placed: 0, expires: 100, ready: 0, burst: 0 };
         let list = [dome];
@@ -233,8 +232,11 @@ mod tests {
         let outside = Vector::new(20.0, 1.0, 0.0);
         let surface = (t.dome_radius * t.dome_radius - 1.0).sqrt();
         assert!((at(outside).unwrap() - (20.0 - surface)).abs() < 0.01);
-        // From inside, out; and over the top or under the ground, nothing.
-        assert_eq!(stops(&list, &t, &Ray::new(Vector::new(1.0, 1.0, 0.0), Vector::X), 30.0), None);
+        // From inside, out: stopped at the far side. Inside to inside: through.
+        let out = stops(&list, &t, &Ray::new(Vector::new(1.0, 1.0, 0.0), Vector::X), 30.0).unwrap();
+        assert!((out - (surface - 1.0)).abs() < 0.01, "stopped {out} m out");
+        assert_eq!(stops(&list, &t, &Ray::new(Vector::new(1.0, 1.0, 0.0), Vector::X), surface - 1.5), None);
+        // Over the top or under the ground, nothing.
         assert_eq!(stops(&list, &t, &Ray::new(Vector::new(20.0, t.dome_radius + 1.0, 0.0), Vector::NEG_X), 40.0), None);
         assert_eq!(stops(&list, &t, &Ray::new(Vector::new(20.0, -1.0, 0.0), Vector::NEG_X), 40.0), None);
     }

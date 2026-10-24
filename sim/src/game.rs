@@ -423,6 +423,7 @@ impl Game {
             let bot = p.bot.as_mut().expect("checked above");
             bot.engaged.clone_from(&engaged[team]);
             bot.smoke.clone_from(&self.clouds);
+            bot.domes.clone_from(&self.deployables);
             let focus = bot.perceive(&self.arena, t, &p.mech, &enemies, self.tick);
             radio[team].extend(bot.sightings().map(|(enemy, at)| (id, enemy, at)));
             seen.push((focus, enemies));
@@ -803,7 +804,7 @@ impl Game {
         if projectile::item(&p) == Some(Item::Smoke) {
             self.clouds.push(Cloud { pos: at, radius: t.smoke_radius, fades_at: self.tick + secs(t.smoke_seconds) });
         }
-        // A dome shields what's inside from a burst outside it, as a wall would.
+        // A dome shields what's on the far side of its surface from a burst, as a wall would.
         let shielded = |q: &Player| {
             let to = q.mech.pos + Vector::Y * (self.arsenal.of(&q.mech).mech_height * 0.5) - at;
             deploy::stops(&self.deployables, &t, &Ray::new(at, to.normalize_or_zero()), to.length()).is_some()
@@ -916,7 +917,7 @@ impl Game {
             let (range, speed) = if d.kind == Kind::MgTurret { (t.mg_turret_range, f32::INFINITY) } else { (t.rocket_turret_range, rt.alt_speed) };
             let gun = deploy::gun(t, &d);
             let (arena, clouds) = (&self.arena, &self.clouds);
-            // Not one inside a dome, which would only soak up the fire.
+            // Not one across a dome's surface, which would only soak up the fire.
             let deployables = &self.deployables;
             let sighted = |chest: Vector| {
                 let (ray, dist) = (Ray::new(gun, (chest - gun).normalize_or_zero()), chest.distance(gun));
@@ -955,7 +956,7 @@ impl Game {
     }
 
     /// One round from MG turret `k`, along its gun in a cone of `mg_turret_spread_deg`: it stops at
-    /// the first wall, dome it comes at from outside, or enemy mech or turret. A kill is its owner's.
+    /// the first wall, dome surface, or enemy mech or turret. A kill is its owner's.
     fn turret_round(&mut self, k: usize) {
         let (d, t) = (self.deployables[k], items(&self.arsenal));
         let ray = Ray::new(deploy::gun(t, &d), weapon::in_cone(d.yaw, d.pitch, t.mg_turret_spread_deg.to_radians(), self.tick, u32::from(d.owner)));
@@ -1009,7 +1010,7 @@ impl Game {
         let t = self.arsenal.of(&u.mech);
         let others = self.players.iter().enumerate().filter(|&(j, q)| j != user && q.mech.health > 0.0).map(|(_, q)| (q.id, self.arsenal.of(&q.mech), &q.mech));
         let (mut end, mut hit) = weapon::beam(&self.arena, t, &u.mech, others);
-        // A dome it comes at from outside stops it short.
+        // A dome's surface stops it short.
         let eye = aim_ray(t, &u.mech).origin;
         if let Some(toi) = deploy::stops(&self.deployables, t, &Ray::new(eye, (end - eye).normalize_or_zero()), end.distance(eye)) {
             (end, hit) = (eye + (end - eye).normalize_or_zero() * toi, None);
@@ -1582,51 +1583,40 @@ mod tests {
     }
 
     #[test]
-    fn domes_stop_every_shot_from_outside_and_let_any_out() {
+    fn domes_stop_every_shot_crossing_them_so_fights_go_inside() {
         let (mut game, owner, enemy) = standoff("dome");
         send(&mut game, owner, Input { emp: true, ..Input::default() });
         game.step();
         assert_eq!(game.deployables.iter().map(|d| (d.kind, d.owner)).collect::<Vec<_>>(), [(Kind::Dome, owner)]);
         let (dome, max) = (game.deployables[0].pos, game.arsenal.of(&mech(&game, owner)).health_max);
-
-        // The enemy's rifle and rocket stop at the dome, splash and all.
-        for fire in [Input { fire: true, ..aim_at(&game, enemy, owner) }, Input { alt_fire: true, ..aim_at(&game, enemy, owner) }] {
-            for _ in 0..secs(1.5) {
-                send(&mut game, enemy, fire);
+        let hp = |game: &Game, id| mech(game, id).health;
+        let fire = |game: &mut Game, from, to, input: Input, secs_: f32| {
+            for _ in 0..secs(secs_) {
+                let aimed = Input { fire: input.fire, alt_fire: input.alt_fire, ..aim_at(game, from, to) };
+                send(game, from, aimed);
                 game.step();
-                for e in &game.events {
-                    if let Event::Shot { end, .. } | Event::Blast { pos: end, .. } = *e {
-                        assert!(end.distance(dome) > items(&game.arsenal).dome_radius - 0.5, "a shot got in to {end}");
-                    }
-                }
             }
-        }
-        assert_eq!(mech(&game, owner).health, max, "hurt through the dome");
-        // The owner shoots out.
-        for _ in 0..5 {
-            let fire = Input { fire: true, ..aim_at(&game, owner, enemy) };
-            send(&mut game, owner, fire);
-            game.step();
-        }
-        assert!(mech(&game, enemy).health < max, "the owner's shots didn't get out");
-        // Whichever side's outside: the owner's teammate can't shoot an enemy that's got in. That
-        // enemy shoots out, though.
+        };
+        let (rifle, rocket) = (Input { fire: true, ..Input::default() }, Input { alt_fire: true, ..Input::default() });
+
+        // In from outside: the enemy's rifle and rocket stop at it, splash and all.
+        fire(&mut game, enemy, owner, rifle, 1.0);
+        fire(&mut game, enemy, owner, rocket, 1.0);
+        assert_eq!(hp(&game, owner), max, "hurt through the dome");
+        // Out from inside: the owner's stop at it too.
+        fire(&mut game, owner, enemy, rifle, 0.5);
+        assert_eq!(hp(&game, enemy), max, "shot out through the dome");
+        // The enemy walks in: inside, both are hit. Its side's own teammate outside can't reach in.
         let mate = game.join().unwrap();
-        game.players.iter_mut().find(|p| p.id == enemy).unwrap().mech.pos = dome + Vector::Y * 0.1;
-        game.players.iter_mut().find(|p| p.id == owner).unwrap().mech.pos = Vector::new(-20.0, 0.1, 45.0);
+        game.players.iter_mut().find(|p| p.id == enemy).unwrap().mech.pos = dome + Vector::new(5.0, 0.1, 0.0);
         game.players.iter_mut().find(|p| p.id == mate).unwrap().mech.pos = Vector::new(0.0, 0.1, 22.0);
         unshield(&mut game);
         game.step(); // so shots don't rewind them to where they were
-        let hurt = mech(&game, enemy).health;
-        for (from, to) in [(mate, enemy), (enemy, mate)] {
-            for _ in 0..secs(0.5) {
-                let fire = Input { fire: true, ..aim_at(&game, from, to) };
-                send(&mut game, from, fire);
-                game.step();
-            }
-        }
-        assert_eq!(mech(&game, enemy).health, hurt, "shot into the dome from outside by the owner's own side");
-        assert!(mech(&game, mate).health < max, "the enemy inside couldn't shoot out");
+        fire(&mut game, mate, enemy, rifle, 0.5);
+        assert_eq!(hp(&game, enemy), max, "shot into the dome from outside by the owner's own side");
+        fire(&mut game, enemy, owner, rifle, 0.5);
+        fire(&mut game, owner, enemy, rifle, 0.5);
+        assert!(hp(&game, owner) < max && hp(&game, enemy) < max, "no hits inside: {} and {}", hp(&game, owner), hp(&game, enemy));
         // Gone once its time's up.
         for _ in 0..secs(items(&game.arsenal).dome_seconds) {
             game.step();

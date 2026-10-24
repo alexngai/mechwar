@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ability::Ability;
 use crate::arsenal;
+use crate::deploy::{self, Deployable};
 use crate::item::{self, Item};
 use crate::map::{MAPS, Map};
 use crate::net::Cloud;
@@ -416,6 +417,9 @@ pub struct Bot {
     pub orbs: Vec<Vector>,
     /// Smoke about, set by the server each tick: no seeing through it.
     pub smoke: Vec<Cloud>,
+    /// Shield domes about, set by the server each tick: no shot crosses one's surface, so an enemy
+    /// across it isn't one to fight from here (it walks in after it instead).
+    pub domes: Vec<Deployable>,
     /// Teamwork, set by the server each tick: the teammate to group on (none for the lead
     /// itself), and the enemies teammates are fighting.
     pub lead: Option<Vector>,
@@ -451,6 +455,7 @@ impl Bot {
             retreat: None,
             orbs: Vec::new(),
             smoke: Vec::new(),
+            domes: Vec::new(),
             lead: None,
             engaged: Vec::new(),
             skill: 0.5,
@@ -581,7 +586,9 @@ impl Bot {
         for &(id, ref m, hull) in enemies {
             let known = self.contacts.iter().position(|c| c.id == id);
             let recently = known.and_then(|k| self.contacts[k].seen_at).is_some_and(|at| tick.saturating_sub(at) < secs(TRACK));
-            let seen = in_view(arena, t, me, m, recently) && !item::hidden(&self.smoke, me.pos + Vector::Y * t.eye_height, m.pos + Vector::Y * (t.mech_height * 0.5));
+            let (eye, chest) = (me.pos + Vector::Y * t.eye_height, m.pos + Vector::Y * (t.mech_height * 0.5));
+            let domed = || deploy::stops(&self.domes, t, &Ray::new(eye, (chest - eye).normalize_or_zero()), chest.distance(eye)).is_some();
+            let seen = in_view(arena, t, me, m, recently) && !item::hidden(&self.smoke, eye, chest) && !domed();
             let heard = m.pos.distance(me.pos) < noise(m);
             if let Some(k) = known {
                 self.contacts[k].seen = seen;
@@ -1215,6 +1222,20 @@ mod tests {
             let mut bot = Bot::new(1);
             bot.smoke = vec![Cloud { pos: Vector::new(x, 2.0, 31.0), radius: t.smoke_radius, fades_at: 100 }];
             assert_eq!(bot.perceive(&arena, &t, &me, &[(1, enemy, 1.0)], 1).is_none(), hides, "smoke {x} m off");
+        }
+    }
+
+    #[test]
+    fn bots_dont_fight_across_a_dome() {
+        let (arena, _, t) = blockout();
+        let me = spawn_mech(&t, Vector::new(0.0, 0.1, 40.0));
+        let enemy = spawn_mech(&t, Vector::new(0.0, 0.1, 22.0));
+        let dome = |at: Vector| Deployable { kind: deploy::Kind::Dome, team: 0, owner: 0, pos: at, yaw: 0.0, pitch: 0.0, hull: f32::INFINITY, placed: 0, expires: 100, ready: 0, burst: 0 };
+        // Under a dome with it, it fights; with the dome's surface between them, it doesn't.
+        for (at, seen) in [(Vector::new(0.0, 0.0, 31.0), true), (Vector::new(0.0, 0.0, 22.0), false), (Vector::new(0.0, 0.0, 40.0), false)] {
+            let mut bot = Bot::new(1);
+            bot.domes = vec![dome(at)];
+            assert_eq!(bot.perceive(&arena, &t, &me, &[(1, enemy, 1.0)], 1).is_some(), seen, "dome at {at}");
         }
     }
 
