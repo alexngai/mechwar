@@ -92,10 +92,18 @@ impl Nav {
     }
 
     /// The closest waypoint in clear view of `p` (else the closest at all), counting height
-    /// triple: one across a wall, or up on the deck overhead, is no place to start walking from.
+    /// triple, and not overhead (above by more than 2 m and steeper than 45°) if any isn't: one
+    /// across a wall, or up on the deck or the rim above, is no place to start walking from.
     pub fn nearest(&self, arena: &Arena, p: Vector) -> usize {
         let cost = |i: usize| ((self.nodes[i] - p) * Vector::new(1.0, 3.0, 1.0)).length();
-        let mut order: Vec<usize> = (0..self.nodes.len()).collect();
+        let overhead = |i: usize| {
+            let d = self.nodes[i] - p;
+            d.y > flat(d).length().max(2.0)
+        };
+        let mut order: Vec<usize> = (0..self.nodes.len()).filter(|&i| !overhead(i)).collect();
+        if order.is_empty() {
+            order = (0..self.nodes.len()).collect();
+        }
         order.sort_by(|&a, &b| cost(a).total_cmp(&cost(b)));
         let clear = |i: usize| {
             let (from, d) = (p + Vector::Y * 1.5, self.nodes[i] - p);
@@ -292,6 +300,12 @@ struct Retreat {
     until: u32,
 }
 
+impl Retreat {
+    fn reached(&self, me: &Mech) -> bool {
+        flat(self.spot - me.pos).length() < ARRIVE && (self.spot.y - me.pos.y).abs() < 2.0
+    }
+}
+
 /// What a bot knows of one enemy: where it was last perceived and when, whether it's in view
 /// now, its hull fraction then, and when it last hit us.
 #[derive(Clone, Copy, Debug)]
@@ -371,7 +385,7 @@ fn sensible(t: &Tuning) -> bool {
 }
 
 /// How a bot goes after its target this life.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Role {
     /// Straight at it.
     Hunt,
@@ -391,9 +405,13 @@ pub struct Bot {
     path: Vec<usize>,
     path_goal: Option<usize>,
     vantage: Option<usize>,
-    /// Closest the bot has come to the next waypoint, and when it last got closer.
-    best: f32,
+    /// Where it last stood `ARRIVE` off from while walking, and when; the last tick it walked; and
+    /// the way it's sidestepping something it got stuck on, until when.
+    anchor: Vector,
     progress_at: u32,
+    routed_at: u32,
+    escape: Vector,
+    escape_until: u32,
     hover_until: u32,
     strafe: f32,
     strafe_until: u32,
@@ -427,6 +445,8 @@ pub struct Bot {
     /// 0 (raw) to 1 (sharp): scales reaction time, aim wander and turn rate off the tuning's
     /// (which are skill 0.5's).
     pub skill: f32,
+    #[cfg(test)]
+    pub(crate) last: Input,
 }
 
 impl Bot {
@@ -438,8 +458,11 @@ impl Bot {
             path: Vec::new(),
             path_goal: None,
             vantage: None,
-            best: f32::MAX,
+            anchor: Vector::ZERO,
             progress_at: 0,
+            routed_at: 0,
+            escape: Vector::ZERO,
+            escape_until: 0,
             hover_until: 0,
             strafe: 1.0,
             strafe_until: 0,
@@ -459,6 +482,8 @@ impl Bot {
             lead: None,
             engaged: Vec::new(),
             skill: 0.5,
+            #[cfg(test)]
+            last: Input::default(),
         };
         bot.respawned();
         bot
@@ -499,14 +524,14 @@ impl Bot {
     #[allow(clippy::too_many_arguments)]
     fn hold(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, r: Retreat, target: Option<&Mech>, hit: bool, tick: u32) -> Input {
         let spot = Mech { pos: r.spot, ..Mech::default() };
-        let here = flat(r.spot - me.pos).length() < ARRIVE && (r.spot.y - me.pos.y).abs() < 2.0;
+        let here = r.reached(me);
         let mut input = self.walk(arena, nav, t, me, &spot, false, tick);
         if here {
             (input.move_x, input.move_z, input.boost) = (0.0, 0.0, false);
         }
-        let seen = target.is_some_and(|m| sees(arena, t, me, m));
-        let at_orb = self.orbs.iter().any(|o| flat(*o - me.pos).length() < AT_ORB);
-        input.repair = r.why == Why::Mend && here && !seen && !at_orb;
+        // Seen as `cover` hides it: its chest from the target's eye.
+        let seen = target.is_some_and(|m| sees(arena, t, m, me));
+        input.repair = r.why == Why::Mend && here && !seen && !self.at_orb(me);
         input.ability = match Ability::of(me.loadout) {
             Ability::Slipstream | Ability::Cloak => r.why == Why::Mend && !here,
             Ability::Vent => me.overheated,
@@ -515,6 +540,10 @@ impl Bot {
         };
         input.emp = hit && me.emps > 0 && Item::of(me.loadout, false) == Item::Dome;
         input
+    }
+
+    fn at_orb(&self, me: &Mech) -> bool {
+        self.orbs.iter().any(|o| flat(*o - me.pos).length() < AT_ORB)
     }
 
     /// Aims a grenade's arc at `spot` and throws once on it.
@@ -708,7 +737,20 @@ impl Bot {
             if done || cornered || tick >= r.until {
                 self.retreat = None;
             } else {
-                return self.hold(arena, nav, t, me, r, target, took_damage, tick);
+                // There, but in the target's view after all (it moved, say): other cover from it
+                // in the time left, or fight.
+                let blown = r.reached(me) && !self.at_orb(me) && target.is_some_and(|m| m.health > 0.0 && sees(arena, t, m, me));
+                self.retreat = if blown {
+                    target
+                        .and_then(|m| self.shelter(arena, nav, t, me, m.pos + Vector::Y * t.eye_height, r.why, tick))
+                        .filter(|s| flat(s.spot - r.spot).length() > ARRIVE)
+                        .map(|s| Retreat { until: r.until, ..s })
+                } else {
+                    Some(r)
+                };
+                if let Some(r) = self.retreat {
+                    return self.hold(arena, nav, t, me, r, target, took_damage, tick);
+                }
             }
         }
         if let Some(mate) = heal.filter(|_| alt_use(t) == AltUse::Beam && !target.is_some_and(|m| m.health > 0.0 && sees(arena, t, me, m))) {
@@ -926,6 +968,9 @@ impl Bot {
     /// sneaks), replanning when the target moves to another waypoint out of the vantage's view;
     /// returns the flat offset to the next waypoint (or the vantage, or the target, past the last).
     fn route(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: &Mech, tick: u32) -> Vector {
+        if tick < self.escape_until {
+            return self.escape;
+        }
         let goal = nav.nearest(arena, target.pos);
         let moved = self.path_goal != Some(goal) && !self.vantage.is_some_and(|v| nav.overlooks(arena, t, v, target));
         // Perched where it can't see the target after all: go straight at it instead.
@@ -948,23 +993,22 @@ impl Bot {
                 vantage.unwrap_or(goal)
             });
             self.vantage = vantage;
-            // Already past the first waypoint toward the second? Skip it rather than walk back.
+            // Already past the first waypoint toward the second? Skip it rather than walk back, if
+            // the second is on this level and the first isn't a jump pad (the way up to it).
             if let [a, b, ..] = self.path[..]
                 && me.pos.distance(nav.node(b)) < nav.node(a).distance(nav.node(b))
+                && (nav.node(b).y - me.pos.y).abs() < 2.0
+                && !arena.pads.iter().any(|p| Vector::from_array(p.at).distance(nav.node(a)) < 0.5)
             {
                 self.path.remove(0);
             }
             self.path_goal = Some(goal);
-            self.best = f32::MAX;
-            self.progress_at = tick;
         }
         while let Some(&n) = self.path.first()
             && flat(nav.node(n) - me.pos).length() < ARRIVE
             && (nav.node(n).y - me.pos.y).abs() < 2.0
         {
             self.path.remove(0);
-            self.best = f32::MAX;
-            self.progress_at = tick;
         }
         // A flanker or sneak in position goes in.
         if self.path.is_empty() && matches!(self.role, Role::Flank(_) | Role::Sneak) && self.vantage.is_some() {
@@ -973,22 +1017,53 @@ impl Bot {
         if self.perched(nav, me) {
             return Vector::ZERO;
         }
-        let toward = flat(self.path.first().copied().or(self.vantage).map_or(target.pos, |n| nav.node(n)) - me.pos);
-        // Stuck on something for 1.5 s: hover over it and skip the waypoint, or plan again from
-        // here if it's on another level (knocked off a deck, say) or the last.
-        if toward.length() < self.best - 0.5 {
-            self.best = toward.length();
-            self.progress_at = tick;
-        } else if tick.saturating_sub(self.progress_at) > secs(1.5) && !me.pad_arc {
+        let next = self.path.first().copied().or(self.vantage).map_or(target.pos, |n| nav.node(n));
+        let toward = flat(next - me.pos);
+        // Walking somewhere (not repairing) but no farther than ARRIVE off in 1.5 s, however often
+        // it replanned: stuck on something (under a ramp, say, or on a corner), or milling about
+        // under a waypoint overhead. Hover over it and sidestep it for a second (to one side, a
+        // little back: out from under a ramp, or round a corner), then skip the waypoint, or plan
+        // again from wherever that leaves it if the waypoint's on another level (knocked off a
+        // deck, say) or the last.
+        let going = (!self.path.is_empty() || toward.length() > ARRIVE || (next.y - me.pos.y).abs() > 2.0) && me.repair_time <= 0.0 && me.stand_up <= 0.0 && !me.pad_arc;
+        if !going || tick > self.routed_at + 1 || flat(me.pos - self.anchor).length() > ARRIVE {
+            (self.anchor, self.progress_at) = (me.pos, tick);
+        } else if tick.saturating_sub(self.progress_at) > secs(1.5) {
             self.hover_until = tick + secs(1.0);
+            let side = if self.rand() < 0.5 { -1.0 } else { 1.0 };
+            let turn = Rotation::from_rotation_y(side * PI * (0.5 + 0.25 * self.rand()));
+            (self.escape, self.escape_until) = ((turn * toward).normalize_or_zero() * 2.0 * ARRIVE, tick + secs(1.0));
             match self.path.first() {
                 Some(&n) if (nav.node(n).y - me.pos.y).abs() < 2.0 => _ = self.path.remove(0),
                 _ => self.path_goal = None,
             }
-            self.best = f32::MAX;
             self.progress_at = tick;
         }
+        self.routed_at = tick;
         toward
+    }
+
+    #[cfg(test)]
+    pub(crate) fn describe(&self, nav: &Nav, me: &Mech) -> String {
+        let node = |i: usize| nav.node(i);
+        format!(
+            "role={:?} path={:?} next={:?} goal={:?} vantage={:?}{} perched={} retreat={:?} patrol={:?} focus={:?} cooling={} contacts={:?} lead={:?} escape_until={} hover_until={}",
+            self.role,
+            self.path,
+            self.path.first().map(|&i| node(i)),
+            self.path_goal,
+            self.vantage,
+            self.vantage.map_or(String::new(), |v| format!("@{}", node(v))),
+            self.perched(nav, me),
+            self.retreat,
+            self.patrol.map(|i| (i, node(i))),
+            self.focus,
+            self.cooling,
+            self.contacts.iter().map(|c| (c.id, c.pos, c.seen, c.told)).collect::<Vec<_>>(),
+            self.lead,
+            self.escape_until,
+            self.hover_until,
+        )
     }
 
     /// Standing on its vantage as a perch, to hold it.
@@ -1119,6 +1194,30 @@ mod tests {
             step_mech(&arena, &t, &mut me, &input);
         }
         panic!("bot never got line of sight; ended at {}", me.pos);
+    }
+
+    #[test]
+    fn bots_get_unstuck() {
+        // Spots bots used to stay in for good, each with a target hidden far off: Sinkhole's pit
+        // floor between its west pad and the rock face (the route skipped the pad and walked at the
+        // rim it throws to), and under Blockout's ramp against the deck, perching up on it (the
+        // closest waypoint is the deck's, and planning again from it led back under). Out means
+        // 20 m off, or up a level.
+        for (map, class, role, from, target) in [
+            ("sinkhole", MechClass::B, Role::Hunt, Vector::new(-24.5, -27.9, 0.0), Vector::new(-58.0, 0.1, 24.0)),
+            ("blockout", MechClass::A, Role::Perch, Vector::new(20.0, 0.1, -11.0), Vector::new(-5.0, 0.1, -36.0)),
+        ] {
+            let index = Map::index(map).unwrap();
+            let (arena, nav, t) = (Arena::new(&Map::load(index)), Nav::for_map(index), Tuning::default().for_class(class));
+            let (mut me, target) = (spawn_mech(&t, from), spawn_mech(&t, target));
+            let mut bot = Bot { role, ..Bot::new(1) };
+            let out = (0..secs(15.0)).any(|tick| {
+                let input = bot.think(&arena, nav, &t, &me, Some(&target), tick);
+                step_mech(&arena, &t, &mut me, &input);
+                me.pos.distance(from) > 20.0 || me.pos.y > from.y + 4.0
+            });
+            assert!(out, "{map}: still at {} after 15 s", me.pos);
+        }
     }
 
     #[test]

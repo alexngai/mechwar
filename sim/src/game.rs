@@ -446,13 +446,14 @@ impl Game {
                         .map(|q| q.mech)
                 })
                 .flatten();
+            // A torch follows the nearest teammate without one (so two torches don't hold on each
+            // other), and the lead follows no one (so the team doesn't hold on itself).
             let dist = |q: &&Player| q.mech.pos.distance(me.mech.pos);
-            let lead = if t.alt_beam > 0.0 {
-                mates().min_by(|a, b| dist(a).total_cmp(&dist(b)))
-            } else {
-                leads[usize::from(me.team)].filter(|&l| l != me.id).and_then(|l| mates().find(|q| q.id == l))
-            }
-            .map(|q| q.mech.pos);
+            let torch = |q: &Player| self.arsenal.of(&q.mech).alt_beam > 0.0;
+            let lead = leads[usize::from(me.team)]
+                .filter(|&l| l != me.id)
+                .and_then(|l| torch(me).then(|| mates().filter(|q| !torch(q)).min_by(|a, b| dist(a).total_cmp(&dist(b)))).flatten().or_else(|| mates().find(|q| q.id == l)))
+                .map(|q| q.mech.pos);
             let team = usize::from(me.team);
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
@@ -467,6 +468,10 @@ impl Game {
             let (focus, enemies) = &seen[i];
             let target = focus.and_then(|id| enemies.iter().find(|e| e.0 == id)).map(|e| e.1);
             let mut input = bot.think_with(&self.arena, self.nav, t, &p.mech, target.as_ref(), heal.as_ref(), self.tick);
+            #[cfg(test)]
+            {
+                bot.last = input;
+            }
             // Burst a shell that has flown past the target with the target inside its blast.
             if let Some(tm) = &target {
                 let tt = self.arsenal.of(tm);
@@ -1212,6 +1217,9 @@ fn rewind(history: &VecDeque<(u32, Vector, bool)>, at: f32) -> Option<Vector> {
 }
 
 #[cfg(test)]
+mod probe;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::net::InputMsg;
@@ -1748,6 +1756,29 @@ mod tests {
         assert!(locked, "never locked onto the turret");
         assert!(homing, "no volley was sent after it");
         assert!(game.deployables.is_empty(), "the volley left it at {:?}", game.deployables.first().map(|d| d.hull));
+    }
+
+    #[test]
+    fn a_torch_carrying_lead_leads() {
+        let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
+        game.bots = false;
+        // In the hangar, so two bots lead themselves: the lead (the lowest id) carrying a torch.
+        let human = game.join().unwrap();
+        game.dock(human);
+        let torch = (0..game.arsenal.counts().1 as u8).find(|&s| game.arsenal.get(MechClass::B, Loadout { secondary: s, ..Loadout::of(MechClass::B) }).alt_beam > 0.0).unwrap();
+        let (lead, mate) = (game.add_player(0, Some(Bot::new(1)), MechClass::B).unwrap(), game.add_player(0, Some(Bot::new(2)), MechClass::B).unwrap());
+        game.pick(lead, MechClass::B, Loadout { secondary: torch, ..Loadout::of(MechClass::B) });
+        game.pick(mate, MechClass::B, Loadout::of(MechClass::B));
+        // With nothing to fight, it patrols and the other follows, rather than each holding on the other.
+        let mut walked = [0.0; 2];
+        for _ in 0..secs(20.0) {
+            let was = [lead, mate].map(|id| mech(&game, id).pos);
+            game.step();
+            for (w, (id, at)) in walked.iter_mut().zip([lead, mate].into_iter().zip(was)) {
+                *w += (mech(&game, id).pos - at).length();
+            }
+        }
+        assert!(walked.iter().all(|&w| w > 60.0), "walked {walked:?} m in 20 s");
     }
 
     #[test]
