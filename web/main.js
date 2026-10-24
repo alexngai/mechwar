@@ -32,6 +32,7 @@ import { Cockpit } from './cockpit.js';
 import { Sound } from './audio.js';
 import { Hud, hex } from './hud.js';
 import { createSky } from './sky.js';
+import { heatShimmer } from './heat.js';
 import { STORE, fits, levelAt, levelXp, owns, pointsLeft, readRecord } from './progress.js';
 
 await init();
@@ -139,7 +140,8 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.info.autoReset = false; // the world and cockpit passes both count toward the stats
 const glass = new Hud(document.getElementById('glass'));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+const EXPOSURE = 1.05; // a map's palette may set its own
+renderer.toneMappingExposure = EXPOSURE;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 document.body.prepend(renderer.domElement);
 const scene = new THREE.Scene();
@@ -197,6 +199,7 @@ composer.addPass(bloom);
 const output = new OutputPass();
 output.needsSwap = false; // so every frame renders into the same target
 composer.addPass(output);
+const shimmer = heatShimmer(output); // a scorching map's heat shimmer, in the output pass
 
 
 const fx = new Effects(scene);
@@ -229,6 +232,8 @@ const ensureArena = (index) => {
   arena = buildArena(scene, map);
   aimSun(map.palette?.sunDir ?? SUN_AT);
   sky.fit(map);
+  shimmer.setMap(map);
+  renderer.toneMappingExposure = map.palette?.exposure ?? EXPOSURE;
   glass.setMap(map);
   objectives.setMap(map);
   hemi.color.set(light.sky);
@@ -251,7 +256,8 @@ function applyQuality() {
   sky.setHaze(gfx.haze);
   // The target's MSAA is most of High's cost: 11-11-10 float (no alpha) halves it against 16-bit
   // RGBA, and on a 2x screen two samples look as smooth as four.
-  composer.reset(new THREE.WebGLRenderTarget(1, 1, { type: THREE.UnsignedInt101111Type, format: THREE.RGBFormat, samples: !gfx.aa ? 0 : renderer.getPixelRatio() > 1 ? 2 : 4 }));
+  // Its depth (resolved from the samples) tells the heat shimmer far from near.
+  composer.reset(new THREE.WebGLRenderTarget(1, 1, { type: THREE.UnsignedInt101111Type, format: THREE.RGBFormat, samples: !gfx.aa ? 0 : renderer.getPixelRatio() > 1 ? 2 : 4, depthTexture: new THREE.DepthTexture(1, 1) }));
   camera.layers.set(0);
   if (high && gfx.shafts) camera.layers.enable(HIGH_ONLY);
   if (!bloomed) camera.layers.enable(LOW_ONLY);
@@ -1218,6 +1224,7 @@ function frame(now) {
 
   if (!firstPerson && alive) debug.hitbox(pos, T('mech_radius'), T('mech_height') * (curr[S.REPAIR_T] > 0 || curr[S.STAND] > 0 ? CROUCH : 1));
   debug.update(dt);
+  shimmer.tick(now / 1000, camera);
   if (quality === 'high') composer.render(dt);
   else renderer.render(scene, camera);
   if (firstPerson) {
