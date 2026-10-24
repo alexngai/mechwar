@@ -533,7 +533,7 @@ console.log(`Pulpit top ${pTop} (ground ${heightAt(...PULPIT).toFixed(1)}, edge 
 // the Knoll's rock table, the ships along the south road.
 const onGround = ([x, z]) => [x, r3(heightAt(x, z)), z];
 bases(onGround(BASES[0]), onGround(BASES[1]));
-siege({ at: onGround(HOLLOW), radius: 12, band: 5 }, { at: [6, 13, -18], radius: 9, band: 3 }, 70);
+siege({ at: onGround(HOLLOW), radius: 12, band: 5 }, { at: [6, 13, -18], radius: 9, band: 3, pad: [12, 13, -22] }, 70);
 // Missile Assault: A down in the Gorge by its breach (the west's flank, the Pulpit over it), B on the
 // Knoll's rock table, C at the Spine's tunnel (the east's flank).
 // C's launch pad is out of the tunnel, by its west mouth.

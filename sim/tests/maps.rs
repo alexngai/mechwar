@@ -57,21 +57,27 @@ fn objectives_stand_where_bots_can_reach_them() {
             for (silo, zone) in ["A", "B", "C"].iter().zip(&assault.silos) {
                 assert!(!zone.rally.is_empty(), "{name}: silo {silo} at {} has no waypoint in it", zone.at);
             }
-            // Launch pads lie on something, under open sky for their rockets.
             for (silo, spot) in ["A", "B", "C"].iter().zip(&map.objectives.silos) {
-                let pad = Vector::from_array(spot.pad.unwrap_or(spot.at));
-                let ground = arena.cast_ray(&rapier3d::prelude::Ray::new(pad + Vector::Y, Vector::NEG_Y), 2.0);
-                assert!(ground.is_some_and(|d| (d - 1.0).abs() < 0.6), "{name}: silo {silo}'s pad at {pad} isn't on anything");
-                assert!(arena.cast_ray(&rapier3d::prelude::Ray::new(pad + Vector::Y * 0.5, Vector::Y), 80.0).is_none(), "{name}: silo {silo}'s pad at {pad} is roofed");
+                open_to_the_sky(name, &format!("silo {silo}'s launch pad"), &arena, spot);
             }
         }
         if let Some(siege) = sim::siege::Siege::new(&map.objectives, waypoints) {
             assert!(!siege.aa.rally.is_empty(), "{name}: the AA gun at {} has no waypoint in it", siege.aa.at);
+            open_to_the_sky(name, "the AA gun", &arena, map.objectives.aa.as_ref().unwrap());
             for (zone, _) in &siege.stations {
                 assert!(!zone.rally.is_empty(), "{name}: the station at {} has no waypoint in it", zone.at);
             }
         }
     }
+}
+
+/// A silo's launch pad, or the AA gun, at `spot`'s `pad` (else its middle): on something, under
+/// open sky for its rockets or its fire.
+fn open_to_the_sky(name: &str, what: &str, arena: &Arena, spot: &sim::map::ZoneSpot) {
+    let pad = Vector::from_array(spot.pad.unwrap_or(spot.at));
+    let ground = arena.cast_ray(&rapier3d::prelude::Ray::new(pad + Vector::Y, Vector::NEG_Y), 2.0);
+    assert!(ground.is_some_and(|d| (d - 1.0).abs() < 0.6), "{name}: {what} at {pad} isn't on anything");
+    assert!(arena.cast_ray(&rapier3d::prelude::Ray::new(pad + Vector::Y * 0.5, Vector::Y), 80.0).is_none(), "{name}: {what} at {pad} is roofed");
 }
 
 /// Asymmetric by design: blockout (a test map), canopy and crashsite.

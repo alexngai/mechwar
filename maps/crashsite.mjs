@@ -509,7 +509,7 @@ bases([cx, 1.6, cz], [sx, 1.6, sz]);
 silos({ at: S(-78, 0, bowTop(-78)), radius: 12, band: 4 }, { at: S(0, 0, HOLD), radius: 14, band: 5 }, { at: S(96, 0, 1), radius: 14, band: 6, pad: [67.882, 15.87, 67.882] });
 // Siege: the station in the midship's hold, the AA gun on the bridge's roof (the highest place on
 // the map), the ships over the midship, clear of the bridge's mast.
-siege({ at: S(0, 0, HOLD), radius: 14, band: 5 }, { at: S(28, 0, BRIDGE), radius: 8, band: 3 }, 60);
+siege({ at: S(0, 0, HOLD), radius: 14, band: 5 }, { at: S(28, 0, BRIDGE), radius: 8, band: 3, pad: S(33, 5, BRIDGE) }, 60);
 write(
   new URL('./crashsite.json', import.meta.url),
   { name: 'Crash Site', size: SIZE, night: true, palette },

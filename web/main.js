@@ -444,7 +444,7 @@ gui.add(debugOn, 'on').name('Debug overlay').onChange((on) => {
   try { localStorage.setItem('mechwar.debug', on ? '1' : ''); } catch { /* private mode */ }
 });
 retune();
-const hud = { net: $('net'), score: $('score'), banner: $('banner'), summary: $('summary'), damage: $('damage') };
+const hud = { net: $('net'), score: $('score'), objective: $('objective'), banner: $('banner'), summary: $('summary'), damage: $('damage') };
 
 // --- Class picker ----------------------------------------------------------
 // Shown before the first deploy and on death; C reopens it. Online the pick applies on the next
@@ -525,7 +525,8 @@ const feed = [];
 // Our latest kill, named over the aim frame for a moment.
 let eliminated = null, callout = null, capture = null, blipAt = 0;
 /** Siege energy we carried as of the last frame; CARRY_MAX matches siege::CARRY_MAX. */
-let heldBefore = 0;
+let heldBefore = 0, bankBefore = 0;
+const ENERGY_COLOR = 0x5dff9a;
 const CARRY_MAX = 100;
 // Destroyed online by someone else: the camera follows them, their loadout showing, until we can
 // launch again (or C opens the hangar sooner). `killcam` is their id, `killYaw` the camera's heading.
@@ -773,7 +774,19 @@ function frame(now) {
   const carried = hudState?.[22] ?? 0, station = alive && sieging ? objectives.stationAt(pos) : -1;
   sound.gathering(station >= 0 && carried < CARRY_MAX && siege[station] > 0.5 ? carried / CARRY_MAX : null);
   if (sieging && carried >= CARRY_MAX && heldBefore < CARRY_MAX) sound.full();
-  heldBefore = carried;
+  // Our drop zone, pulsing while we carry; banking there (the only way a living mech's load goes
+  // to nothing): a sound, a burst and a callout. A teammate's: the bank jumping, softer.
+  objectives.showDropZones(sieging, myTeam, FRIEND.accent, FOE.accent, carried > 0, now);
+  const bank = sieging && myTeam >= 0 ? siege[objectives.stations.length + myTeam] ?? 0 : 0;
+  if (sieging && alive && heldBefore > 0 && carried === 0 && objectives.inDropZone(pos, myTeam)) {
+    sound.deposit(true);
+    objectives.banked(myTeam);
+    callout = { text: `+${heldBefore} EU BANKED`, color: hex(ENERGY_COLOR), at: now };
+  } else if (sieging && bank - bankBefore >= 5 && bankBefore > 0) {
+    sound.deposit(false);
+    objectives.banked(myTeam);
+  }
+  [heldBefore, bankBefore] = [carried, bank];
   // The server's respawn wait times it: our own predicted death can land a tick before or after the kill.
   if (killcam !== null && (pickerOpen || !remotes.has(killcam) || !(hudState?.[16] > 0))) {
     killcam = null;
@@ -1174,6 +1187,8 @@ function frame(now) {
     const next = `${mode_name(nextMode)} on ${MAPS[map_name(nextMap)]?.name ?? ''}`;
     const result = winner < 0 ? 'DRAW' : winner === team ? 'VICTORY' : dm ? `${nameOf(winner)} WINS` : 'DEFEAT';
     hud.banner.textContent = ended ? `${result} · next: ${next} in ${secondsLeft}s` : '';
+    // Siege: what stage it's at, and what to do, under the score.
+    hud.objective.textContent = sieging && !ended && team >= 0 ? objectives.stage(team, siege, [blue, red], hudState[22]) : '';
     // Progression: keep each record the server sends; a match's end brings its XP.
     const got = net.take_progress();
     if (got) {

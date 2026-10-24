@@ -164,7 +164,7 @@ bases([0, 0, 100]);
 silos({ at: [-62, 0, 45], radius: 10, band: 4, pad: [-57.5, 0, 45] }, { at: [0, 0, 0], radius: 16, band: 4, pad: [0, 14, 0] });
 // Siege: the station in the smelter's arcade, round its core, the AA gun on its roof (up the
 // skybridges from the bases, or the hover steps), the ships over the skybridge line.
-siege({ at: [0, 0, 0], radius: 16, band: 4 }, { at: [0, 14, 0], radius: 9, band: 3 }, 55);
+siege({ at: [0, 0, 0], radius: 16, band: 4 }, { at: [0, 14, 0], radius: 9, band: 3, pad: [-5, 14, 0] }, 55);
 
 // --- Spawns, twin, write ---------------------------------------------------------------------
 const north = [[-4, 0.1, 96], [-14, 0.1, 96], [-24, 0.1, 96], [-24, 0.1, 106]];

@@ -162,8 +162,8 @@ export function silos(a, b, c = { ...a, at: flip(a.at), ...(a.pad && { pad: flip
 
 /**
  * Siege: the energy station's zone `station` (`{ at, radius, band }`: one, mid-map, for the teams
- * to fight over), the anti-air gun's capture zone `aa` (the same shape), and `sky`, how high the
- * battleships cruise.
+ * to fight over), the anti-air gun's capture zone `aa` (the same shape, plus `pad`: where the gun
+ * stands, on a surface under open sky), and `sky`, how high the battleships cruise.
  */
 export function siege(station, aa, sky) {
   Object.assign(objectives, { stations: [station], aa, sky });

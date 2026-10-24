@@ -456,6 +456,21 @@ export class Sound {
     this.growl(out, 'sawtooth', 60, 32, 140, 0.005, 0.5, 0.4);
   }
 
+  /**
+   * Energy banked: a heavy latch, the charge draining off up a rising sweep, and a settled tone.
+   * `ours` is for our own deposit, else (softer) a teammate's.
+   */
+  deposit(ours) {
+    const out = this.voice(null, 0.8, this.ui);
+    if (!out) return;
+    out.gain.value = ours ? 1 : 0.4;
+    this.tone(out, 'triangle', 150, 90, 0.002, 0.12, 0.5);
+    this.noise(out, 'white', 'bandpass', 1200, 800, 0.002, 0.05, 0.35, 3);
+    this.tone(out, 'sine', 220, 880, 0.02, 0.3, 0.18, 0.06);
+    this.noise(out, 'white', 'bandpass', 900, 4200, 0.02, 0.3, 0.08, 2, 0.06);
+    this.tone(out, 'sine', 523, 523, 0.01, 0.4, 0.16, 0.34);
+  }
+
   /** Our hold just filled with energy: one soft, plain tone. */
   full() {
     const out = this.voice(null, 0.5, this.ui);

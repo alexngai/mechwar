@@ -136,9 +136,9 @@ point([52, 0, 84], [52, 7, 57], [-15, 0, 80], [15, 0, 80], [-15, 0, 96], [15, 0,
 bases([-16, 0, 105]);
 // B's launch pad is on the rail deck, over the road.
 silos({ at: [-84, 0, 46], radius: 10, band: 4, pad: [-84, 0, 42] }, { at: [0, 0, 0], radius: 10, band: 4, pad: [0, 10, 0] });
-// Siege: the station on the bridge's road deck, the AA gun on the service gantry under it, the
-// ships over the bridge.
-siege({ at: [0, 0, 0], radius: 10, band: 4 }, { at: [0, -8, 0], radius: 15, band: 3 }, 50);
+// Siege: the station on the bridge's road deck, the AA gun up on the rail deck over it (the top of
+// the bridge, by the ramps at the bridgeheads), the ships over the bridge.
+siege({ at: [0, 0, 0], radius: 10, band: 4 }, { at: [0, 10, 0], radius: 8, band: 3, pad: [0, 10, 5] }, 50);
 
 // --- Spawns, twin, write -------------------------------------------------------------------------
 const north = [[-20, 0.1, 102], [-12, 0.1, 108], [12, 0.1, 100], [20, 0.1, 96]];
