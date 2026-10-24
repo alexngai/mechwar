@@ -6,7 +6,7 @@ use rapier3d::prelude::{ColliderBuilder, Rotation, Vector};
 use serde::Deserialize;
 
 /// Compiled-in maps. The index is what goes over the wire.
-pub const MAPS: [(&str, &str); 9] = [
+pub const MAPS: [(&str, &str); 11] = [
     ("saltworks", include_str!("../../maps/saltworks.json")),
     ("blockout", include_str!("../../maps/blockout.json")),
     ("foundry", include_str!("../../maps/foundry.json")),
@@ -16,11 +16,13 @@ pub const MAPS: [(&str, &str); 9] = [
     ("sinkhole", include_str!("../../maps/sinkhole.json")),
     ("canopy", include_str!("../../maps/canopy.json")),
     ("crashsite", include_str!("../../maps/crashsite.json")),
+    ("ziggurat", include_str!("../../maps/ziggurat.json")),
+    ("span", include_str!("../../maps/span.json")),
 ];
 /// Foundry.
 pub const DEFAULT: usize = 2;
 /// Maps the server rotates through between matches (blockout is a test map).
-pub const ROTATION: [&str; 8] = ["foundry", "saltworks", "verdigris", "riftline", "sump", "sinkhole", "canopy", "crashsite"];
+pub const ROTATION: [&str; 10] = ["foundry", "saltworks", "verdigris", "riftline", "sump", "sinkhole", "canopy", "crashsite", "ziggurat", "span"];
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct Solid {

@@ -18,6 +18,8 @@ const COLORS = {
   moss: 0x5d6b45, hill: 0x55663f, hillTop: 0x62744a, trunk: 0x4a3d30, crown: 0x4c6e36, crownDark: 0x3c5a2c,
   mire: 0x4c5440, snag: 0x5c564a, scrub: 0x56603e,
 };
+// The desert's flats, mesas and domes under snow, for the 'snow' skyline.
+const SNOWFIELD = { ...COLORS, flat: 0xe4eaef, talus: 0xd2dae1, scree: 0xa9b3bd, cliff: 0x86909a, cap: 0xf1f4f7, salt: 0xe9eef2 };
 // Lit windows on a city skyline, unless the palette names its own.
 const WINDOWS = ['#ffd890', '#9dffc0', '#7fe8ff'];
 const FOG = [70, 230]; // near and far, meters
@@ -115,8 +117,9 @@ function skyMaterial(sunDir) {
 
 /**
  * All skyline triangles, written straight into one non-indexed geometry, `push` meters farther out:
- * the desert, or for `kind` 'city' tower blocks, whose lit windows come back as `windows` (unlit
- * specks in `windowColors`, so they read through fog at night). Every surface is tinted `tint`.
+ * the desert (`kind` 'snow': the same under snow), or for 'city' tower blocks, whose lit windows
+ * come back as `windows` (unlit specks in `windowColors`, so they read through fog at night).
+ * Every surface is tinted `tint`.
  */
 function skylineGeometry(push, kind = 'desert', windowColors = WINDOWS, tint = 0xffffff) {
   const rand = mulberry32(0x5a175a17);
@@ -231,7 +234,8 @@ function skylineGeometry(push, kind = 'desert', windowColors = WINDOWS, tint = 0
   }
 
   // Salt flat from the arena wall out to the haze, just under the arena floor. Rings run outer to inner so it faces up.
-  lathe(0, 0, [[400 + push, -0.1], [58 + push, -0.1]], [COLORS.flat], { sides: 32 });
+  const land = kind === 'snow' ? SNOWFIELD : COLORS;
+  lathe(0, 0, [[400 + push, -0.1], [58 + push, -0.1]], [land.flat], { sides: 32 });
 
   // Mesas: flat caprock over a cliff band and a sloping talus apron. The refinery sector gets low, far ones as a backdrop.
   const REFINERY = [3.45, 4.45]; // radians around the arena
@@ -245,7 +249,7 @@ function skylineGeometry(push, kind = 'desert', windowColors = WINDOWS, tint = 0
     const r = Math.min(h * (0.9 + rand() * 1.6), 45, (dist - 105) / sx);
     const cliff = 0.5 + rand() * 0.25; // height where the cliff band starts, as a fraction
     lathe(...at(angle, dist), [[r, 0], [r * 0.85, h * cliff * 0.5], [r * 0.7, h * cliff], [r * 0.64, h]],
-      [COLORS.talus, COLORS.scree, COLORS.cliff, COLORS.cap], { sides: 9, yaw: rand() * Math.PI, sx, wobble: 0.18 });
+      [land.talus, land.scree, land.cliff, land.cap], { sides: 9, yaw: rand() * Math.PI, sx, wobble: 0.18 });
   }
 
   // Refinery on the horizon: cooling towers, stacks, columns, tank farm, spheres and process halls.
@@ -272,7 +276,7 @@ function skylineGeometry(push, kind = 'desert', windowColors = WINDOWS, tint = 0
   // Salt storage domes and silos off to one side: the plant's own stockpile.
   for (let i = 0; i < 3; i++) {
     const r = 10 + rand() * 4;
-    sphere(at(1.02 + i * 0.09, 168 + rand() * 8), r, -0.15 * r, COLORS.salt, 0);
+    sphere(at(1.02 + i * 0.09, 168 + rand() * 8), r, -0.15 * r, land.salt, 0);
   }
   for (let i = 0; i < 3; i++) cylinder(at(1.32 + i * 0.03, 182), 4, 18 + rand() * 4, COLORS.tank, COLORS.dark);
   // A pair of lonely stacks across the flats.
