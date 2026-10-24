@@ -71,7 +71,7 @@ pub struct Tuning {
     pub fire_rate: f32,
     pub heat_per_shot: f32,
     /// Heat sheds `heat_decay` a second when full, rising to `heat_decay_cool` times that as it
-    /// empties, from `heat_decay_delay` s after the trigger's let go.
+    /// empties, from `heat_decay_delay` s after the last shot.
     pub heat_decay: f32,
     pub heat_decay_delay: f32,
     pub heat_decay_cool: f32,
@@ -958,9 +958,10 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
         m.heat = t.heat_max;
         m.overheated = true;
     }
-    // Heat sheds once the trigger's let go (holding it counts as firing, between shots too), and
+    // Heat sheds a moment after the last shot, trigger held or not, so a slow gun cools between
+    // shots while a fast one, firing inside that moment, doesn't (nor one charging a shot); and
     // faster the cooler it runs, so short bursts pay.
-    if m.shot || m.launched || m.beaming || (input.fire && !m.overheated) {
+    if m.shot || m.launched || m.beaming || m.charge > 0.0 {
         m.heat_wait = t.heat_decay_delay;
     } else {
         m.heat_wait = (m.heat_wait - DT).max(0.0);
@@ -1285,20 +1286,30 @@ mod tests {
     }
 
     #[test]
-    fn heat_sheds_once_the_trigger_is_let_go_faster_when_cool() {
+    fn heat_sheds_a_moment_after_the_last_shot_faster_when_cool() {
         let (mut sim, t) = class_sim(MechClass::B);
         let fire = Input { fire: true, ..Input::default() };
-        // Held between shots, it doesn't cool.
+        // Firing steadily, it doesn't cool between shots.
         run(&mut sim, fire, 2);
         let held = sim.mech.heat;
-        sim.step(&Input { fire: true, ..Input::default() });
-        assert!(sim.mech.heat >= held, "cooled with the trigger held");
-        // Let go, it cools at once, faster low than high.
+        sim.step(&fire);
+        assert!(sim.mech.heat >= held, "cooled between shots");
+        // With the next shot a while off, as a slow gun's is, it cools once `heat_decay_delay` is up
+        // after the last, trigger held; faster low than high.
+        sim.mech.fire_wait = 0.0;
+        sim.step(&fire);
+        assert!(sim.mech.shot);
+        sim.mech.fire_wait = 10.0;
+        let hot = sim.mech.heat;
+        run(&mut sim, fire, (t.heat_decay_delay * TICK_HZ) as usize - 1);
+        assert_eq!(sim.mech.heat, hot, "cooled before the delay was up");
+        run(&mut sim, fire, 2);
+        assert!(sim.mech.heat < hot, "never cooled with the trigger held");
         sim.mech.heat = 0.9 * t.heat_max;
-        sim.step(&Input::default());
+        sim.step(&fire);
         let high = 0.9 * t.heat_max - sim.mech.heat;
         sim.mech.heat = 0.1 * t.heat_max;
-        sim.step(&Input::default());
+        sim.step(&fire);
         let low = 0.1 * t.heat_max - sim.mech.heat;
         assert!(high > 0.0 && low > 2.0 * high, "high {high}, low {low}");
     }
