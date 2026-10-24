@@ -223,6 +223,8 @@ pub struct Game {
     pub bots: bool,
     /// Bots' skill, 0 (raw) to 1 (sharp): each bot's own spreads around it.
     pub bot_skill: f32,
+    /// Plays on with bots alone and no human connected, for balance runs (`add_bot` seats them).
+    pub headless: bool,
     pub mode: Mode,
     /// Team kills that win the match; in Deathmatch, as many solo kills' worth of points.
     pub score_limit: u16,
@@ -281,6 +283,7 @@ impl Game {
             tick: 0,
             bots: true,
             bot_skill: 0.5,
+            headless: false,
             score_limit: 25,
             match_seconds: 600.0,
             players: Vec::new(),
@@ -388,6 +391,11 @@ impl Game {
         Some(id)
     }
 
+    /// Seats `bot` on `team` (in Deathmatch, its own) as `class`: a balance run's line-up.
+    pub fn add_bot(&mut self, team: u8, bot: Bot, class: MechClass) -> Option<u8> {
+        self.add_player(team, Some(bot), class)
+    }
+
     pub fn leave(&mut self, id: u8) {
         self.players.retain(|p| p.id != id);
         self.roster_version += 1;
@@ -464,7 +472,7 @@ impl Game {
                 let class = MechClass::ALL[(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33) as usize % 3];
                 self.add_player(team, Some(Bot::with_skill(seed, self.bot_skill)), class);
             }
-        } else {
+        } else if !self.headless {
             if !self.players.is_empty() {
                 self.players.clear();
                 self.roster_version += 1;
@@ -1328,13 +1336,20 @@ impl Game {
         }
         target.mech.end_repair(tt);
         // Assist shares count the health a hit took, not its overkill.
+        let took = damage.min(target.mech.health);
         if let Some((id, _)) = from {
-            target.ledger.push((id, damage.min(target.mech.health), tick));
+            target.ledger.push((id, took, tick));
         }
+        target.tally.taken += took;
         target.mech.health -= damage;
-        if target.mech.health > 0.0 {
+        let dead = target.mech.health <= 0.0;
+        if let Some(a) = attacker.filter(|&a| a != j) {
+            self.players[a].tally.dealt += took;
+        }
+        if !dead {
             return;
         }
+        let target = &mut self.players[j];
         target.mech.health = 0.0;
         target.deaths += 1;
         target.tally.stats.deaths += 1;
@@ -1829,6 +1844,25 @@ mod tests {
             }
         }
         panic!("bots took {} silos in a minute", owned(&game));
+    }
+
+    #[test]
+    fn headless_bots_play_on_and_tally_the_damage() {
+        let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
+        (game.headless, game.match_seconds) = (true, 40.0);
+        for seat in 0..MAX_PLAYERS as u64 {
+            game.add_bot((seat % 2) as u8, Bot::new(seat), MechClass::ALL[seat as usize % 3]).unwrap();
+        }
+        while !game.match_state().ended {
+            game.step();
+        }
+        let tallies: Vec<&Tally> = game.players.iter().map(|p| &p.tally).collect();
+        let (dealt, taken): (f32, f32) = (tallies.iter().map(|t| t.dealt).sum(), tallies.iter().map(|t| t.taken).sum());
+        assert_eq!(game.players.len(), MAX_PLAYERS, "no one cleared out for want of a human");
+        assert!(dealt > 0.0, "no one hit anyone");
+        // Every hull point dealt was taken by someone; base guns' and turrets' with no owner here
+        // are only taken.
+        assert!(dealt <= taken + 1e-3, "dealt {dealt} > taken {taken}");
     }
 
     /// A Siege on Foundry, with one human in it (and bots, if `bots`).

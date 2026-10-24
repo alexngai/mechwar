@@ -6,3 +6,4 @@ sim/pkg/
 .sessionlog/
 .claude/worktrees/
 .claude/launch.json
+balance/out/

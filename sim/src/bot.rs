@@ -225,8 +225,6 @@ const BOOST_LEG: f32 = 15.0;
 const AIM_TOLERANCE: f32 = 2.0 * PI / 180.0;
 /// Farthest a Heavy lobs its grenade launcher's shells.
 const MORTAR_RANGE: f32 = 40.0;
-/// Farthest a bot lobs a grenade (short of its flat-ground reach).
-const GRENADE_RANGE: f32 = 28.0;
 /// Farthest a perch may be from the target.
 const VANTAGE_RANGE: f32 = 75.0;
 /// Flankers and sneaks take the long way only to a target farther off than this.
@@ -250,23 +248,15 @@ const HEAR_STEPS: f32 = 25.0;
 const MEMORY: f32 = 12.0;
 /// A last known position this close, with nobody there, is forgotten.
 const SEARCHED: f32 = 6.0;
-/// Target scoring, in metres of distance: an enemy that hit us lately (within `GRUDGE` s), and a
-/// wounded one (per missing fraction of hull), count as this much closer; so does the current
-/// target, so it isn't dropped for one a step nearer.
+/// Target scoring (beside `Policy`'s): an enemy that hit us within `GRUDGE` s counts as closer by
+/// `Policy::threat_m`, and the current target by `STICKY_M`, so it isn't dropped for one a step
+/// nearer.
 const GRUDGE: f32 = 3.0;
-const THREAT_M: f32 = 25.0;
-const WOUNDED_M: f32 = 30.0;
 const STICKY_M: f32 = 5.0;
-/// An enemy a teammate is already fighting counts as this much closer: bots focus fire.
-const FOCUS_M: f32 = 10.0;
-/// A bot following its lead with nothing to do holds within this distance of it.
-const FOLLOW: f32 = 10.0;
 /// A bot this far or more from its order's spot is on its way there: it fights on the move.
 const ERRAND: f32 = 6.0;
-/// Farther than this from its lead, a bot rejoins it before going after a vague contact: one it
-/// was only told of, or only heard from farther than `URGENT` (one it saw, felt, or heard close
-/// it goes after at once).
-const REGROUP: f32 = 30.0;
+/// A contact only told of, or only heard from farther than this, is vague: a bot far from its
+/// lead (`Policy::regroup`) rejoins it first. One it saw, felt, or heard close it goes after at once.
 const URGENT: f32 = 40.0;
 /// Bots' skill spreads this far (in all) around the server's default.
 const SKILL_SPREAD: f32 = 0.5;
@@ -275,20 +265,9 @@ const PATROL_FOR: f32 = 40.0;
 /// A last known position this close is watched while walking to it, not the way ahead.
 const WATCH: f32 = 50.0;
 
-// Tactics.
-/// Hull fraction a bot breaks off below, to mend at an orb or in cover, and stops mending at.
-const RETREAT_HULL: f32 = 0.35;
-const MENDED_HULL: f32 = 0.9;
-/// A bot carrying a shield dome puts it up once hit below this share of its hull.
-const DOME_HULL: f32 = 0.6;
-/// Farthest by route a bot goes for cover, and straight off for an orb.
-const COVER_RANGE: f32 = 35.0;
-const ORB_RANGE: f32 = 45.0;
+// Tactics (more in `Policy`).
 /// Close enough to an orb to be healed by it (its radius, less a margin).
 const AT_ORB: f32 = 4.0;
-/// A bot holds a retreat this long at most, and breaks it to fight an enemy this close in view.
-const HOLD_FOR: f32 = 12.0;
-const CORNERED: f32 = 15.0;
 /// A target that ducked out of view this recently gets a grenade lobbed at its last spot.
 const FLUSH_AFTER: f32 = 2.0;
 
@@ -375,9 +354,9 @@ fn preferred_range(t: &Tuning) -> f32 {
 }
 
 /// Engagement band around the preferred range: close in beyond `.1`, back off inside `.0`.
-fn band(t: &Tuning) -> (f32, f32) {
+fn band(t: &Tuning, p: &Policy) -> (f32, f32) {
     let r = preferred_range(t);
-    (0.6 * r, 1.4 * r)
+    (p.band_near * r, p.band_far * r)
 }
 
 /// Guardrails on a random build: a repair torch wants a gun that reaches well past its beam (it
@@ -404,6 +383,81 @@ enum Role {
     Flank(f32),
     /// Through a sunken channel (waypoints below the ground), then in.
     Sneak,
+}
+
+/// A bot's tactical choices as numbers: its genome in balance runs (`balance/evolve.py`), and
+/// today's hand-tuned bot by default. Hull and heat are shares of the max, distances m, times s.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Policy {
+    /// Hull it breaks off below, to mend at an orb or in cover, and stops mending at.
+    pub retreat_hull: f32,
+    pub mended_hull: f32,
+    /// Heat it stops firing at to cool off, and starts again at.
+    pub cool_high: f32,
+    pub cool_low: f32,
+    /// Farthest by route it goes for cover, and straight off for an orb.
+    pub cover_range: f32,
+    pub orb_range: f32,
+    /// Longest it holds a retreat, and how close an enemy in view breaks it to fight.
+    pub hold_for: f32,
+    pub cornered: f32,
+    /// Its engagement band as shares of its preferred range: it backs off inside the first and
+    /// closes in beyond the second.
+    pub band_near: f32,
+    pub band_far: f32,
+    /// Chance it dodges on a hit with the dodge ready.
+    pub dodge_chance: f32,
+    /// Its role each life: Hunt below the first cut, then Perch, Flank, and Sneak past the last.
+    pub role_cuts: [f32; 3],
+    /// Target scoring, in metres closer: an enemy that hit it lately, one wounded (per missing
+    /// share of hull), and one a teammate is fighting (focus fire).
+    pub threat_m: f32,
+    pub wounded_m: f32,
+    pub focus_m: f32,
+    /// With nothing to do it holds within `follow` of its lead; farther than `regroup` off, it
+    /// rejoins before going after a vague contact.
+    pub follow: f32,
+    pub regroup: f32,
+    /// Farthest it lobs a grenade (short of its flat-ground reach).
+    pub grenade_range: f32,
+    /// Hull it raises a shield dome below and a bulwark below (once hit), and EMPs a target that
+    /// isn't on thrusters below; heat it vents at, and fires a heat-fed launcher at.
+    pub dome_hull: f32,
+    pub brace_hull: f32,
+    pub emp_hull: f32,
+    pub vent_heat: f32,
+    pub heat_fed: f32,
+}
+
+impl Default for Policy {
+    fn default() -> Self {
+        Self {
+            retreat_hull: 0.35,
+            mended_hull: 0.9,
+            cool_high: 0.85,
+            cool_low: 0.4,
+            cover_range: 35.0,
+            orb_range: 45.0,
+            hold_for: 12.0,
+            cornered: 15.0,
+            band_near: 0.6,
+            band_far: 1.4,
+            dodge_chance: 0.3,
+            role_cuts: [0.4, 0.7, 0.9],
+            threat_m: 25.0,
+            wounded_m: 30.0,
+            focus_m: 10.0,
+            follow: 10.0,
+            regroup: 30.0,
+            grenade_range: 28.0,
+            dome_hull: 0.6,
+            brace_hull: 0.75,
+            emp_hull: 0.5,
+            vent_heat: 0.8,
+            heat_fed: 0.6,
+        }
+    }
 }
 
 pub struct Bot {
@@ -457,6 +511,9 @@ pub struct Bot {
     /// 0 (raw) to 1 (sharp): scales reaction time, aim wander and turn rate off the tuning's
     /// (which are skill 0.5's).
     pub skill: f32,
+    pub policy: Policy,
+    /// The build it always takes (a balance run's genome); None picks one each life.
+    pub build: Option<Loadout>,
     #[cfg(test)]
     pub(crate) last: Input,
 }
@@ -495,6 +552,8 @@ impl Bot {
             engaged: Vec::new(),
             order: None,
             skill: 0.5,
+            policy: Policy::default(),
+            build: None,
             #[cfg(test)]
             last: Input::default(),
         };
@@ -506,11 +565,12 @@ impl Bot {
     pub fn respawned(&mut self) {
         let r = self.rand();
         let side = if self.rand() < 0.5 { -1.0 } else { 1.0 };
-        self.role = if r < 0.4 {
+        let cuts = self.policy.role_cuts;
+        self.role = if r < cuts[0] {
             Role::Hunt
-        } else if r < 0.7 {
+        } else if r < cuts[1] {
             Role::Perch
-        } else if r < 0.9 {
+        } else if r < cuts[2] {
             Role::Flank(side)
         } else {
             Role::Sneak
@@ -525,9 +585,10 @@ impl Bot {
     /// at, else the nearest cover. None when there's neither.
     #[allow(clippy::too_many_arguments)]
     fn shelter(&self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, threat: Vector, why: Why, tick: u32) -> Option<Retreat> {
-        let orb = (why == Why::Mend).then(|| self.orbs.iter().copied().filter(|o| o.distance(me.pos) < ORB_RANGE).min_by(|a, b| a.distance(me.pos).total_cmp(&b.distance(me.pos)))).flatten();
-        let spot = orb.or_else(|| nav.cover(arena, t, nav.nearest(arena, me.pos), threat, COVER_RANGE).map(|i| nav.node(i)))?;
-        Some(Retreat { spot, why, until: tick + secs(HOLD_FOR) })
+        let p = &self.policy;
+        let orb = (why == Why::Mend).then(|| self.orbs.iter().copied().filter(|o| o.distance(me.pos) < p.orb_range).min_by(|a, b| a.distance(me.pos).total_cmp(&b.distance(me.pos)))).flatten();
+        let spot = orb.or_else(|| nav.cover(arena, t, nav.nearest(arena, me.pos), threat, p.cover_range).map(|i| nav.node(i)))?;
+        Some(Retreat { spot, why, until: tick + secs(p.hold_for) })
     }
 
     /// Falling back: to the spot, then holding it, out of sight of `target` if any. A mending bot
@@ -652,8 +713,9 @@ impl Bot {
         }
         let score = |c: &Contact| {
             let grudge = c.hit_at.is_some_and(|at| tick.saturating_sub(at) < secs(GRUDGE));
-            let shared = if self.engaged.contains(&c.id) { FOCUS_M } else { 0.0 };
-            c.pos.distance(me.pos) - if grudge { THREAT_M } else { 0.0 } - WOUNDED_M * (1.0 - c.hull) - shared - if self.focus == Some(c.id) { STICKY_M } else { 0.0 }
+            let p = &self.policy;
+            let shared = if self.engaged.contains(&c.id) { p.focus_m } else { 0.0 };
+            c.pos.distance(me.pos) - if grudge { p.threat_m } else { 0.0 } - p.wounded_m * (1.0 - c.hull) - shared - if self.focus == Some(c.id) { STICKY_M } else { 0.0 }
         };
         self.focus = self.contacts.iter().filter(|c| c.seen).min_by(|a, b| score(a).total_cmp(&score(b))).map(|c| c.id);
         self.focus
@@ -681,7 +743,7 @@ impl Bot {
         if let Some(c) = self.contacts.iter().filter(urgent).max_by_key(|c| c.at) {
             return (c.pos, Goal::Contact);
         }
-        if let Some(lead) = self.lead.filter(|l| flat(*l - me.pos).length() > REGROUP) {
+        if let Some(lead) = self.lead.filter(|l| flat(*l - me.pos).length() > self.policy.regroup) {
             return (lead, Goal::Lead);
         }
         if let Some(c) = self.contacts.iter().max_by_key(|c| c.at) {
@@ -713,6 +775,9 @@ impl Bot {
     /// rolled again until the guardrails (`sensible`) pass, and items it knows how to use and an
     /// ability that fits the class.
     pub fn pick_loadout(&mut self, arsenal: &Arsenal, class: MechClass) -> Loadout {
+        if let Some(build) = self.build {
+            return build;
+        }
         let (primaries, secondaries) = arsenal.counts();
         loop {
             let roll = |n: usize, r: f32| ((r * n as f32) as usize).min(n - 1) as u8;
@@ -746,10 +811,11 @@ impl Bot {
         let max_turn = self.max_turn(t);
         // Falling back: until cooled or mended, or out of time, or cornered (then fight).
         if let Some(r) = self.retreat {
-            let cornered = target.is_some_and(|m| m.health > 0.0 && m.pos.distance(me.pos) < CORNERED && sees(arena, t, me, m));
+            let p = &self.policy;
+            let cornered = target.is_some_and(|m| m.health > 0.0 && m.pos.distance(me.pos) < p.cornered && sees(arena, t, me, m));
             let done = match r.why {
-                Why::Cool => !me.overheated && me.heat <= 0.4 * t.heat_max,
-                Why::Mend => me.health >= MENDED_HULL * t.health_max,
+                Why::Cool => !me.overheated && me.heat <= p.cool_low * t.heat_max,
+                Why::Mend => me.health >= p.mended_hull * t.health_max,
             };
             if done || cornered || tick >= r.until {
                 self.retreat = None;
@@ -779,7 +845,7 @@ impl Bot {
             // when it's near, or patrol.
             self.seen.clear();
             let ducked = self.contacts.iter().find(|c| !c.seen && c.seen_at.is_some_and(|at| tick.saturating_sub(at) < secs(FLUSH_AFTER))).map(|c| c.pos);
-            if let Some(spot) = ducked.filter(|s| (t.grenade_radius + 2.0..GRENADE_RANGE).contains(&s.distance(me.pos)))
+            if let Some(spot) = ducked.filter(|s| (t.grenade_radius + 2.0..self.policy.grenade_range).contains(&s.distance(me.pos)))
                 && me.grenades > 0
                 && Item::of(me.loadout, true) == Item::Grenade
                 && tick >= self.grenade_at
@@ -791,7 +857,7 @@ impl Bot {
             // At its order, or with its lead and nothing else to go on, it holds there, looking about.
             let hold = match goal {
                 Goal::Order if (pos.y - me.pos.y).abs() < 2.0 => ARRIVE,
-                Goal::Lead => FOLLOW,
+                Goal::Lead => self.policy.follow,
                 _ => 0.0,
             };
             if flat(pos - me.pos).length() < hold {
@@ -807,7 +873,7 @@ impl Bot {
             self.seen.pop_front();
         }
         let range = flat(target.pos - me.pos).length();
-        let (near, far) = band(t);
+        let (near, far) = band(t, &self.policy);
 
         if sees(arena, t, me, target) {
             let err = self.aim_error(t);
@@ -823,7 +889,7 @@ impl Bot {
             let alt = me.alt_wait <= 0.0
                 && match use_ {
                     AltUse::Beam => dist < t.alt_beam,
-                    AltUse::HeatFed => me.heat >= 0.6 * t.heat_max && dist < 0.8 * t.alt_speed * t.alt_fuse,
+                    AltUse::HeatFed => me.heat >= self.policy.heat_fed * t.heat_max && dist < 0.8 * t.alt_speed * t.alt_fuse,
                     _ => dist < if t.alt_gravity > 0.0 { MORTAR_RANGE } else { 0.8 * t.alt_speed * t.alt_fuse } && dist > t.alt_radius + 2.0,
                 };
             let alt_cool = use_ == AltUse::HeatFed || (!me.overheated && me.heat + t.alt_heat < t.heat_max);
@@ -833,7 +899,7 @@ impl Bot {
                 && me.grenades > 0
                 && Item::of(me.loadout, true) == Item::Grenade
                 && tick >= self.grenade_at
-                && dist < GRENADE_RANGE
+                && dist < self.policy.grenade_range
                 && dist > t.grenade_radius + 2.0;
             // A turret goes down as a fight starts (the first tick it's in view), or to help hold a perch.
             let turret = me.grenades > 0 && matches!(Item::of(me.loadout, true), Item::MgTurret | Item::RocketTurret) && (self.seen.len() == 1 || self.perched(nav, me));
@@ -858,17 +924,18 @@ impl Bot {
                 self.strafe = if self.rand() < 0.5 { -1.0 } else { 1.0 };
                 self.strafe_until = tick + secs(0.8 + 1.2 * self.rand());
             }
-            let dodge = took_damage && me.dodge_cooldown <= 0.0 && self.rand() < 0.3;
+            let dodge = took_damage && me.dodge_cooldown <= 0.0 && self.rand() < self.policy.dodge_chance;
             // Fire in bursts: stop near the lockout and let heat fall well down (it sheds fastest
             // low) before firing again.
-            if me.overheated || me.heat >= 0.85 * t.heat_max {
+            let p = &self.policy;
+            if me.overheated || me.heat >= p.cool_high * t.heat_max {
                 self.cooling = true;
-            } else if me.heat <= 0.4 * t.heat_max {
+            } else if me.heat <= p.cool_low * t.heat_max {
                 self.cooling = false;
             }
             // Badly hurt, or too hot with no vent to hand: fall back, to an orb or out of sight.
             let vent = Ability::of(me.loadout) == Ability::Vent && me.ability_cooldown <= 0.0;
-            let why = if me.health < RETREAT_HULL * t.health_max {
+            let why = if me.health < self.policy.retreat_hull * t.health_max {
                 Some(Why::Mend)
             } else if self.cooling && !vent {
                 Some(Why::Cool)
@@ -935,10 +1002,10 @@ impl Bot {
                     && match Item::of(me.loadout, false) {
                         Item::Emp => {
                             target.jammed <= 0.0
-                                && (target.boosting || target.hovering || target.dodge_time > 0.0 || me.health < 0.5 * t.health_max)
+                                && (target.boosting || target.hovering || target.dodge_time > 0.0 || me.health < self.policy.emp_hull * t.health_max)
                                 && item::emp_reaches(arena, t, me, t, target)
                         }
-                        Item::Dome => took_damage && me.health < DOME_HULL * t.health_max,
+                        Item::Dome => took_damage && me.health < self.policy.dome_hull * t.health_max,
                         _ => false,
                     },
                 // Speed boost to close on a far target; vent before stalling; raise the bulwark
@@ -946,8 +1013,8 @@ impl Bot {
                 // on target in range. Camouflage is for falling back (see `hold`).
                 ability: match Ability::of(me.loadout) {
                     Ability::Slipstream => range > far,
-                    Ability::Vent => me.overheated || me.heat >= 0.8 * t.heat_max,
-                    Ability::Brace => took_damage && me.health < 0.75 * t.health_max,
+                    Ability::Vent => me.overheated || me.heat >= self.policy.vent_heat * t.heat_max,
+                    Ability::Brace => took_damage && me.health < self.policy.brace_hull * t.health_max,
                     Ability::Power => alt_fire,
                     Ability::Barrage | Ability::Artillery => fire && range <= far,
                     Ability::Cloak => false,
@@ -971,7 +1038,7 @@ impl Bot {
     #[allow(clippy::too_many_arguments)]
     fn walk(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: &Mech, watch: bool, tick: u32) -> Input {
         let max_turn = self.max_turn(t);
-        let (range, far) = (flat(target.pos - me.pos).length(), band(t).1);
+        let (range, far) = (flat(target.pos - me.pos).length(), band(t, &self.policy).1);
         let toward = self.route(arena, nav, t, me, target, tick);
         let dir = toward.normalize_or_zero();
         let face = if watch { flat(target.pos - me.pos) } else { dir };
@@ -1433,7 +1500,7 @@ mod tests {
     fn bots_raise_domes_when_hurt_and_barriers_to_fall_back() {
         let (arena, nav, t) = blockout();
         let carrying = |id: &str| Loadout { support: crate::arsenal::index(crate::Slot::Support, id), ..Loadout::of(MechClass::B) };
-        // A dome: not while whole, nor when hurt but not under fire; once hit below DOME_HULL.
+        // A dome: not while whole, nor when hurt but not under fire; once hit below `dome_hull`.
         let enemy = spawn_mech(&t, Vector::new(0.0, 0.1, 22.0));
         let domes = |health: f32, hit: bool| {
             let me = Mech { loadout: carrying("dome"), health: health * t.health_max, ..spawn_mech(&t, Vector::new(0.0, 0.1, 40.0)) };
@@ -1489,7 +1556,7 @@ mod tests {
         // A Light speed boosts to close on a target beyond its band.
         let light = t.for_class(MechClass::A);
         let me = Mech { class: MechClass::A, ..spawn_mech(&light, Vector::new(0.0, 0.1, 40.0)) };
-        let far = spawn_mech(&light, Vector::new(0.0, 0.1, 40.0 - band(&light).1 - 4.0));
+        let far = spawn_mech(&light, Vector::new(0.0, 0.1, 40.0 - band(&light, &Policy::default()).1 - 4.0));
         assert!(Bot::new(1).think(&arena, nav, &light, &me, Some(&far), 0).ability, "no speed boost toward a far target");
 
         // A target seen 21 m off that ducks behind the wall gets a grenade at its last spot.
@@ -1536,7 +1603,8 @@ mod tests {
             let input = bot.think(&arena, nav, &t, &me, None, tick);
             step_mech(&arena, &t, &mut me, &input);
         }
-        assert!(flat(lead - me.pos).length() < FOLLOW, "ended {} m off its lead", flat(lead - me.pos).length());
+        let follow = Policy::default().follow;
+        assert!(flat(lead - me.pos).length() < follow, "ended {} m off its lead", flat(lead - me.pos).length());
         assert!(flat(me.vel).length() < 1.0, "still walking once there");
     }
 

@@ -87,6 +87,10 @@ pub struct Tally {
     pub healed: f32,
     /// XP from objectives: captures, energy banked, ships shot.
     pub objective_xp: f32,
+    /// Hull taken off enemy mechs, and off this player's own (overkill not counted): for balance
+    /// runs.
+    pub dealt: f32,
+    pub taken: f32,
 }
 
 impl Tally {
