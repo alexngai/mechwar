@@ -326,7 +326,8 @@ impl WasmNetClient {
     /// b = victim. Blast (kind 2): a = owner, b = blast radius, xyz = where. Splash hit (kind 3): a = attacker,
     /// b = victim. EMP (kind 4): a = owner, b = bitmask of the ids it jammed, xyz = where. Beam (kind 5):
     /// a = owner, b = id it's on or -1, xyz = where it stops. Turret round (kind 6): a = the MG
-    /// turret's owner, b = hit id or -1, xyz = where it stopped.
+    /// turret's owner, b = hit id or -1, xyz = where it stopped. Turret hit (kind 7): a = who hit
+    /// it, b = 1 if that wrecked it.
     pub fn take_events(&mut self) -> Vec<f32> {
         let mut out = Vec::new();
         for e in std::mem::take(&mut self.0.events) {
@@ -338,6 +339,7 @@ impl WasmNetClient {
                 Event::Pulse { owner, pos, hits } => out.extend([4.0, f32::from(owner), f32::from(hits), pos.x, pos.y, pos.z]),
                 Event::Beam { owner, end, hit } => out.extend([5.0, f32::from(owner), hit.map_or(-1.0, f32::from), end.x, end.y, end.z]),
                 Event::TurretShot { owner, end, hit } => out.extend([6.0, f32::from(owner), hit.map_or(-1.0, f32::from), end.x, end.y, end.z]),
+                Event::TurretHit { attacker, wrecked } => out.extend([7.0, f32::from(attacker), if wrecked { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0]),
                 // The client turns these into the blasts and hits below.
                 Event::Launch(_) | Event::Blast { .. } => {}
             }

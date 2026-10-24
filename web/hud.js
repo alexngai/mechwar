@@ -345,9 +345,13 @@ export function radar(g, rx, ry, rr, u, f, map) {
   for (const c of f.contacts) {
     const p = relative(f.me.x, f.me.z, f.yaw, c.x, c.z);
     const px = rx + p.right * k, py = ry - p.ahead * k;
-    g.fillStyle = c.orb ? REPAIR : c.enemy ? f.enemyColor : f.friendColor;
+    g.fillStyle = g.strokeStyle = c.orb ? REPAIR : c.enemy ? f.enemyColor : f.friendColor;
     if (c.orb) g.fillRect(px - 2.5 * u, py - 2.5 * u, 5 * u, 5 * u); // health orb
-    else if (c.enemy) diamond(g, px, py, 5 * u);
+    else if (c.turret) {
+      // A turret: an open square.
+      g.lineWidth = 1.5 * u;
+      g.strokeRect(px - 3 * u, py - 3 * u, 6 * u, 6 * u);
+    } else if (c.enemy) diamond(g, px, py, 5 * u);
     else {
       g.beginPath();
       g.arc(px, py, 3.5 * u, 0, TAU);

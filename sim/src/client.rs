@@ -390,7 +390,7 @@ impl NetClient {
                         }
                     }
                 }
-                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } | Event::TurretShot { .. } => self.events.push(*e),
+                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } | Event::TurretShot { .. } | Event::TurretHit { .. } => self.events.push(*e),
             }
         }
         self.snapshots.push_back(s);

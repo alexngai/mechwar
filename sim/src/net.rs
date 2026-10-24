@@ -157,6 +157,8 @@ pub enum Event {
     Beam { owner: u8, end: Vector, hit: Option<u8> },
     /// A round from `owner`'s MG turret, stopping at `end`, on mech `hit` if any.
     TurretShot { owner: u8, end: Vector, hit: Option<u8> },
+    /// Player `attacker` hit a turret (and `wrecked` it).
+    TurretHit { attacker: u8, wrecked: bool },
 }
 
 pub fn encode<T: Serialize>(msg: &T) -> Vec<u8> {

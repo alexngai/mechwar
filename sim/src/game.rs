@@ -782,7 +782,7 @@ impl Game {
             self.apply_damage_by(Some(shooter), j, damage, cause);
         }
         for (k, damage) in wrecks {
-            self.damage_turret(k, damage);
+            self.damage_turret(k, damage, shooter_id);
         }
     }
 
@@ -821,7 +821,7 @@ impl Game {
             .filter(|&(_, damage)| damage > 0.0)
             .collect();
         for (k, damage) in wrecks {
-            self.damage_turret(k, damage);
+            self.damage_turret(k, damage, p.owner);
         }
         let attacker = self.players.iter().position(|q| q.id == p.owner);
         let cause = if p.n == projectile::TURRET && !p.primary {
@@ -970,16 +970,20 @@ impl Game {
             self.apply_damage_by(owner, j, damage, Cause::Weapon { slot: Slot::Offensive, index: Item::MgTurret.index() });
         }
         if let Some((k, _)) = turret {
-            self.damage_turret(k, damage);
+            self.damage_turret(k, damage, d.owner);
         }
     }
 
-    /// Shoots `amount` off turret `k` while the match is on; it's cleared at the tick's end once
-    /// its hull's gone.
-    fn damage_turret(&mut self, k: usize, amount: f32) {
-        if matches!(self.phase, Phase::Playing { .. }) {
-            self.deployables[k].hull -= amount;
+    /// Player `attacker` shoots `amount` off turret `k` while the match is on, and hears of it (a
+    /// hit marker); the turret's cleared at the tick's end once its hull's gone.
+    fn damage_turret(&mut self, k: usize, amount: f32, attacker: u8) {
+        if !matches!(self.phase, Phase::Playing { .. }) {
+            return;
         }
+        let d = &mut self.deployables[k];
+        let standing = d.hull > 0.0;
+        d.hull -= amount;
+        self.events.push(Event::TurretHit { attacker, wrecked: standing && d.hull <= 0.0 });
     }
 
     /// Where an orb for a mech at `feet` floats: over the ground below, if it's in the air.
@@ -1717,7 +1721,8 @@ mod tests {
 
     #[test]
     fn turrets_fall_to_enemy_fire() {
-        let t = Tuning { spread_deg: 0.0, bloom_per_shot: 0.0, falloff_start: 1000.0, falloff_end: 1000.0, turret_hull: 20.0, turret_warmup: 30.0, ..Tuning::default() };
+        let t = Tuning { spread_deg: 0.0, bloom_per_shot: 0.0, falloff_start: 1000.0, falloff_end: 1000.0, turret_warmup: 30.0, ..Tuning::default() };
+        assert_eq!(t.turret_hull, 25.0);
         let (mut game, owner, foes) = turret_range(t.clone(), "mg_turret", &[Vector::new(0.0, 0.1, 22.0)]);
         send(&mut game, owner, Input { grenade: true, ..Input::default() });
         game.step();
@@ -1725,14 +1730,23 @@ mod tests {
         let shooter = mech(&game, foes[0]);
         let d = gun - (shooter.pos + Vector::Y * t.eye_height);
         let aim = Input { fire: true, yaw: libm::atan2f(-d.x, -d.z), pitch: (d.y / d.length()).asin(), ..Input::default() };
+        // Each hit is the shooter's to hear of (a hit marker), and the last one wrecks it.
+        let mut hits = Vec::new();
         for _ in 0..secs(3.0) {
             send(&mut game, foes[0], aim);
             game.step();
+            hits.extend(game.events.iter().filter_map(|e| match *e {
+                Event::TurretHit { attacker, wrecked } => Some((attacker, wrecked)),
+                _ => None,
+            }));
             if game.deployables.is_empty() {
                 break;
             }
         }
         assert!(game.deployables.is_empty(), "never shot it down");
+        assert!(hits.len() >= 2 && hits.iter().all(|h| h.0 == foes[0]), "hits {hits:?}");
+        assert_eq!(hits.iter().filter(|h| h.1).count(), 1, "wrecked once: {hits:?}");
+        assert!(hits.last().unwrap().1, "the last hit didn't wreck it: {hits:?}");
         assert_eq!(mech(&game, owner).health, t.health_max, "shots went through it to its owner");
     }
 

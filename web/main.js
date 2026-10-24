@@ -867,6 +867,11 @@ function frame(now) {
       if (b === myId) tookHit(a, now, from);
       else if (b >= 0) remotes.get(b)?.mech.hit();
     }
+    if (kind === 7 && a === myId) {
+      // We hit a turret: a hit marker, and a kill's once it's wrecked.
+      hits.push({ at: now, kill: b > 0 });
+      sound.hitConfirm();
+    }
     if (kind === 5 && a !== myId) {
       // A remote's held beam; our own is drawn from our prediction.
       const e = remotes.get(a);
@@ -1362,6 +1367,33 @@ function drawGlass(now, myTeam) {
       health: e.health / healthMax, hp: Math.ceil(e.health), hpMax: healthMax, label: classes[CLASS_KEYS[e.cls]].name,
     };
     const angle = enemy ? look.angleTo(to.subVectors(chest, camera.position)) : Infinity;
+    if (angle < focusAngle) [focusAngle, focus] = [angle, tag];
+    tags.push(tag);
+  }
+  // Turrets: the other side's in sight get tags (hull, and the card under the crosshair) and radar
+  // marks, as enemy mechs do; our side's are marked on the radar.
+  const turrets = game.deployables();
+  for (let i = 0; i < turrets.length; i += 10) {
+    const [kind, team, owner, x, y, z, , , , hull] = turrets.subarray(i, i + 10);
+    if (kind < 2) continue;
+    const enemy = myTeam >= 0 && team !== myTeam; // offline, all ours
+    chest.set(x, y + classValue(1, 'turret_height') * 0.6, z);
+    const dist = chest.distanceTo(eye);
+    let visible = false;
+    if (enemy && dist <= T('weapon_range')) {
+      to.subVectors(chest, eye).normalize();
+      visible = game.cast_ray(eye.x, eye.y, eye.z, to.x, to.y, to.z, dist) >= dist - 0.5 && !smoked(eye, chest);
+    }
+    if (!enemy || visible) contacts.push({ x, z, enemy, turret: true });
+    if (!visible) continue;
+    ndc.copy(chest).project(camera);
+    if (ndc.z > 1 || Math.abs(ndc.x) > 1.1 || Math.abs(ndc.y) > 1.1) continue;
+    const hullMax = classValue(1, 'turret_hull'), label = kind === 2 ? 'MG turret' : 'Rocket turret';
+    const tag = {
+      ...toScreen(ndc), dist, enemy, unit: `turret:${owner}:${kind}`, name: `${nameOf(owner)}'s ${label}`, bot: false, status: '', focus: false,
+      health: Math.max(hull, 0) / hullMax, hp: Math.max(Math.ceil(hull), 0), hpMax: hullMax, label,
+    };
+    const angle = look.angleTo(to.subVectors(chest, camera.position));
     if (angle < focusAngle) [focusAngle, focus] = [angle, tag];
     tags.push(tag);
   }
