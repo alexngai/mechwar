@@ -534,7 +534,7 @@ console.log(`Pulpit top ${pTop} (ground ${heightAt(...PULPIT).toFixed(1)}, edge 
 const onGround = ([x, z]) => [x, r3(heightAt(x, z)), z];
 bases(onGround(BASES[0]), onGround(BASES[1]));
 // Base guns: two at each eco-station, either side of it.
-sentries([[-115, 1, -110], [-123, 1, -102]], [[123, 1, -102], [115, 1, -110]]);
+sentries([[-115, 1, -110], [-140, 1, -104]], [[140, 1, -104], [115, 1, -110]]);
 siege({ at: onGround(HOLLOW), radius: 12, band: 5 }, { at: [6, 13, -18], radius: 9, band: 3, pad: [12, 13, -22] }, 70);
 // Missile Assault: A down in the Gorge by its breach (the west's flank, the Pulpit over it), B on the
 // Knoll's rock table, C at the Spine's tunnel (the east's flank).
