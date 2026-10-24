@@ -28,13 +28,15 @@ const STATION_CAP = 400, AA_RANGE = 150, DUEL_RANGE = 120, BOMBARD_RANGE = 6, BA
 export const SHIP_HULL = 3000;
 /** The AA gun fires a burst of AA_BURST rounds AA_GAP ms apart every AA_EVERY ms, while firing; it turns at AA_TURN rad/s. */
 const AA_BURST = 4, AA_GAP = 110, AA_EVERY = 1000, AA_TURN = 1.6;
-/** The deployable kind of a battleship. */
-export const SHIP = 4;
+/** The deployable kinds of a battleship, and of a team mode's base gun. */
+export const SHIP = 4, SENTRY = 5;
+/** A base gun's muzzles, this high over its foot (deploy::SENTRY_HEIGHT). */
+const SENTRY_HEIGHT = 5.5;
 
 export class Objectives {
   /** `cast(ox, oy, oz, dx, dy, dz, max)`: how far a ray goes into the arena, up to `max`. */
   constructor(scene, fx, sound, cast) {
-    Object.assign(this, { scene, fx, sound, cast, silos: [], aa: [], zones: [], labels: [], stations: [], dropZones: [], bases: [], missiles: [], ships: new Map(), drops: [], fire: {}, seen: null });
+    Object.assign(this, { scene, fx, sound, cast, silos: [], aa: [], zones: [], labels: [], stations: [], dropZones: [], bases: [], missiles: [], ships: new Map(), sentries: new Map(), drops: [], fire: {}, seen: null });
     this.dropGeometry = new THREE.OctahedronGeometry(0.6);
     this.dropMaterial = hot(new THREE.MeshBasicMaterial({ color: ENERGY }));
   }
@@ -46,9 +48,9 @@ export class Objectives {
       o.traverse((m) => { if (m.geometry !== this.dropGeometry) m.geometry?.dispose(); if (m.material !== this.dropMaterial) m.material?.dispose(); });
     };
     for (const z of [...this.silos, ...this.aa, ...this.stations, ...this.dropZones]) gone(z.group);
-    for (const s of this.ships.values()) gone(s.group);
+    for (const s of [...this.ships.values(), ...this.sentries.values()]) gone(s.group);
     for (const m of [...this.missiles.map((m) => m.mesh), ...this.drops]) this.scene.remove(m);
-    Object.assign(this, { missiles: [], ships: new Map(), drops: [] });
+    Object.assign(this, { missiles: [], ships: new Map(), sentries: new Map(), drops: [] });
     const o = map.objectives ?? {};
     this.bases = (o.bases ?? []).map((b) => new THREE.Vector3(...b));
     const zone = ({ at, radius, band }) => ({ ...marker(this.scene, at, radius, NEUTRAL), radius, band, shown: null, owner: -1 });
@@ -297,6 +299,38 @@ export class Objectives {
     }
   }
 
+  /**
+   * The team modes' base guns among `list` (WasmNetClient.deployables): each a tower with a gun head
+   * the server turns (yaw, pitch), its lamps and stripe in its side's color. `guns` gets each one's
+   * muzzle, by `${owner}:2` as MG turrets' are.
+   */
+  drawSentries(list, myTeam, friend, foe, dt, guns) {
+    const live = new Set();
+    for (let i = 0; i < list.length; i += 10) {
+      if (list[i] !== SENTRY) continue;
+      const [, team, owner, x, y, z, yaw, pitch] = list.subarray(i, i + 10);
+      let s = this.sentries.get(owner);
+      if (!s) {
+        s = { group: sentryMesh(), yaw, pitch };
+        s.group.position.set(x, y, z);
+        this.scene.add(s.group);
+        this.sentries.set(owner, s);
+      }
+      live.add(owner);
+      // Eased toward the server's aim, so 30 Hz steps don't judder.
+      const ease = 1 - Math.exp(-14 * dt), turn = Math.atan2(Math.sin(yaw - s.yaw), Math.cos(yaw - s.yaw));
+      s.yaw += turn * ease;
+      s.pitch += (pitch - s.pitch) * ease;
+      const { head, cradle, tips, accents } = s.group.userData;
+      head.rotation.y = s.yaw;
+      cradle.rotation.x = s.pitch;
+      s.group.userData.dish.rotation.y += 2.5 * dt;
+      for (const a of accents) a.material.color.setHex(team === myTeam ? friend : foe);
+      guns.set(`${owner}:2`, tips[Math.floor(performance.now() / 50) % 2].getWorldPosition(new THREE.Vector3()));
+    }
+    for (const [owner, s] of this.sentries) if (!live.has(owner)) { this.scene.remove(s.group); this.sentries.delete(owner); }
+  }
+
   tracer(from, to) {
     this.fx.beam(from, to);
     this.fx.impact(to);
@@ -497,6 +531,57 @@ function aaMesh() {
   lamp.position.set(0, 0.65, 0.95);
   cradle.add(lamp);
   group.userData = { head, cradle, tips, lamp };
+  return group;
+}
+
+/**
+ * A base gun, its foot at y 0 and its muzzles SENTRY_HEIGHT up: a concrete tower banded in hazard
+ * yellow, a platform, and an armored head that turns (`userData.head`, yaw) over a cradle that
+ * elevates (`userData.cradle`, pitch, the guns along -z at 0) holding a pair of jacketed heavy MGs
+ * (`userData.tips`) under a spinning radar dish (`userData.dish`); lamps and a stripe in its side's
+ * color (`userData.accents`).
+ */
+function sentryMesh() {
+  const group = new THREE.Group();
+  const concrete = new THREE.MeshStandardMaterial({ color: 0x6a6e72, roughness: 0.9 });
+  const armor = new THREE.MeshStandardMaterial({ color: 0x32373d, roughness: 0.45, metalness: 0.55 });
+  const hazard = new THREE.MeshStandardMaterial({ color: 0xd4a017, roughness: 0.6 });
+  const accent = () => hot(new THREE.MeshBasicMaterial({ color: NEUTRAL }));
+  const add = (parent, geometry, material, x, y, z) => {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(x, y, z);
+    parent.add(mesh);
+    return mesh;
+  };
+  add(group, new THREE.BoxGeometry(2.2, 0.5, 2.2), concrete, 0, 0.25, 0);
+  add(group, new THREE.CylinderGeometry(0.7, 0.95, 3.8, 8), concrete, 0, 2.4, 0);
+  for (const y of [1.2, 3.6]) add(group, new THREE.CylinderGeometry(0.88, 0.88, 0.25, 8), hazard, 0, y, 0);
+  add(group, new THREE.CylinderGeometry(1.25, 1.1, 0.35, 12), armor, 0, 4.45, 0);
+  const accents = [];
+  const head = new THREE.Group();
+  head.position.y = 4.6;
+  group.add(head);
+  add(head, new THREE.BoxGeometry(1.7, 1.1, 1.9), armor, 0, 0.55, 0.15);
+  add(head, new THREE.BoxGeometry(1.4, 0.7, 0.6), armor, 0, 0.9, -0.9).rotation.x = -0.5; // sloped front plate
+  accents.push(add(head, new THREE.BoxGeometry(1.72, 0.14, 1.4), accent(), 0, 0.85, 0.3));
+  for (const x of [-0.95, 0.95]) accents.push(add(head, new THREE.BoxGeometry(0.16, 0.16, 0.16), accent(), x, 1.15, 0.9));
+  const dish = new THREE.Group();
+  dish.position.set(0, 1.35, 0.6);
+  head.add(dish);
+  add(dish, new THREE.CylinderGeometry(0.05, 0.05, 0.4, 6), armor, 0, 0.2, 0);
+  add(dish, new THREE.CylinderGeometry(0.45, 0.1, 0.12, 12), armor, 0, 0.45, 0).rotation.x = 1.2;
+  const cradle = new THREE.Group();
+  cradle.position.y = SENTRY_HEIGHT - 4.6;
+  head.add(cradle);
+  const tips = [-0.32, 0.32].map((x) => {
+    add(cradle, new THREE.CylinderGeometry(0.16, 0.16, 1.6, 10).rotateX(Math.PI / 2), armor, x, 0, -1.4); // cooling jacket
+    add(cradle, new THREE.CylinderGeometry(0.07, 0.07, 1.2, 8).rotateX(Math.PI / 2), armor, x, 0, -2.6);
+    const tip = new THREE.Object3D();
+    tip.position.set(x, 0, -3.2);
+    cradle.add(tip);
+    return tip;
+  });
+  group.userData = { head, cradle, tips, dish, accents };
   return group;
 }
 

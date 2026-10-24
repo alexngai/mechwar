@@ -71,6 +71,29 @@ fn objectives_stand_where_bots_can_reach_them() {
     }
 }
 
+#[test]
+fn base_guns_stand_over_their_spawns() {
+    for name in sim::map::ROTATION {
+        let index = MAPS.iter().position(|(n, _)| *n == name).unwrap();
+        let map = Map::load(index);
+        let arena = Arena::new(&map);
+        for (team, guns) in map.objectives.sentries.iter().enumerate() {
+            assert_eq!(guns.len(), 2, "{name}: team {team} has {} base guns", guns.len());
+            for at in guns.iter().map(|p| Vector::from_array(*p)) {
+                let ground = arena.cast_ray(&rapier3d::prelude::Ray::new(at + Vector::Y, Vector::NEG_Y), 2.0);
+                assert!(ground.is_some_and(|d| (d - 1.0).abs() < 0.6), "{name}: base gun at {at} isn't on anything");
+                assert!(arena.cast_ray(&rapier3d::prelude::Ray::new(at + Vector::Y * 0.2, Vector::Y), 7.0).is_none(), "{name}: base gun at {at} has no room for its tower");
+                // Not in a doorway: walls either side closer than a mech can pass beside it.
+                let room = |d: Vector| arena.cast_ray(&rapier3d::prelude::Ray::new(at + Vector::Y, d), 12.0).unwrap_or(12.0);
+                assert!(room(Vector::X) + room(Vector::NEG_X) >= 12.0 && room(Vector::Z) + room(Vector::NEG_Z) >= 12.0, "{name}: base gun at {at} stands in a doorway");
+                let gun = at + Vector::Y * sim::deploy::SENTRY_HEIGHT;
+                let sees = map.spawns[team].iter().map(|p| Vector::from_array(*p) + Vector::Y * 2.0).filter(|s| arena.cast_ray(&rapier3d::prelude::Ray::new(gun, (*s - gun).normalize()), s.distance(gun) - 0.3).is_none()).count();
+                assert!(sees >= 3, "{name}: base gun at {at} sees {sees} of its team's spawns");
+            }
+        }
+    }
+}
+
 /// A silo's launch pad, or the AA gun, at `spot`'s `pad` (else its middle): on something, under
 /// open sky for its rockets or its fire.
 fn open_to_the_sky(name: &str, what: &str, arena: &Arena, spot: &sim::map::ZoneSpot) {

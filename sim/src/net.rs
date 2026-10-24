@@ -151,6 +151,8 @@ pub struct MatchState {
     /// Team kills; in Deathmatch, the leader's and the runner-up's points; in Missile Assault and
     /// Siege, the bases' hull.
     pub scores: [u16; 2],
+    /// Team kills that win it; in Deathmatch, as many solo kills' worth of points.
+    pub limit: u16,
     /// Until the match ends, or after it ends, until the next one starts.
     pub seconds_left: u16,
     pub ended: bool,

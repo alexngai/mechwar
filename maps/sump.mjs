@@ -6,7 +6,7 @@
 // The north half (z > 0), the east half of the z = 0 street and the center are authored here;
 // `write` (maps/kit.mjs) adds the 180-degree twin. Metrics as the other maps': 10 m streets, 7.5 m
 // under the deck, ramps near 24 degrees, 3 m hover-up crates. Bots walk, so every way up is a ramp.
-import { box, growth, lamp, once, pad, point, railing, ramp, sign, write } from './kit.mjs';
+import { box, growth, lamp, once, pad, point, railing, ramp, sentries, sign, write } from './kit.mjs';
 
 const CYAN = '#3de0ff', BLUE = '#5a8cff', AMBER = '#ffb347';
 
@@ -116,6 +116,9 @@ point([20, 0, 0], [58, 0, 0], [-62, 0, 10], [-12, 0, 14], [22, 0, 8], [48, 0, 16
 point([-70, 0, 28], [-30, 0, 28], [20, 0, 28], [67, 0, 28], [-70, 0, 40], [-20, 0, 40], [5, 0, 40], [34, 0, 40], [70, 0, 40]);
 point([55, 0, 16], [50, 7, 41], [60, 7, 41]); // the east roof
 point([-15, 0, 48], [15, 0, 48], [-15, 0, 58], [15, 0, 58], [0, 0, 66], [-45, 0, 62], [65, 0, 58], [-60, 0, 70]); // base
+
+// --- Base guns: inside the gate wall, behind its middle span, out of the gates ---------------------
+sentries([[-6, 0, 55], [6, 0, 55]]);
 
 // --- Spawns, twin, write -------------------------------------------------------------------------
 const north = [[-20, 0.1, 64], [-12, 0.1, 70], [12, 0.1, 66], [20, 0.1, 62]];
