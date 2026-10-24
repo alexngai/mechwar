@@ -330,8 +330,8 @@ addEventListener('keydown', (e) => {
   else if (isShift && !keys.has('KeyW') && keys.has('KeyA') !== keys.has('KeyD')) dodge = keys.has('KeyA') ? -1 : 1;
   if ((shift() && e.code === 'KeyS') || (isShift && keys.has('KeyS') && !keys.has('KeyW'))) turnAbout();
   if (e.code === 'KeyF') ability = true;
-  if (e.code === 'KeyG') grenade = true;
-  if (e.code === 'KeyT') emp = true;
+  if (e.code === 'KeyQ') grenade = true;
+  if (e.code === 'KeyE') emp = true;
   if (e.code === 'KeyK' && sim) { sim.reset(); prev = curr = sim.state(); }
   if (e.code === 'KeyI') $('stats').hidden = !$('stats').hidden;
   if (e.code === 'KeyM') setMuted(!sound.muted);
@@ -1492,7 +1492,7 @@ function drawGlass(now, myTeam) {
     friendColor: hex(FRIEND.accent), enemyColor: hex(FOE.accent),
     repair: repairPhase(curr[S.REPAIR_T]), standing: curr[S.STAND] > 0,
     // A Limpet down turns G into its detonator.
-    items: [['G', 'offensive', S.GRENADES, S.GRENADE_WAIT], ['T', 'support', S.EMPS, S.EMP_WAIT]].map(([key, slot, charges, wait]) => {
+    items: [['Q', 'offensive', S.GRENADES, S.GRENADE_WAIT], ['E', 'support', S.EMPS, S.EMP_WAIT]].map(([key, slot, charges, wait]) => {
       const it = armament(loadout)[slot];
       const armed = slot === 'offensive' && !!curr[S.LIMPET];
       return { key, id: it.id, armed, charges: curr[charges], max: T(`${it.id}_charges`), recharge: 1 - curr[wait] / Math.max(T(`${it.id}_recharge`), 1e-6), wait: curr[wait] };
