@@ -245,6 +245,10 @@ const FIRE = [[1, 0.95, 0.7], [1, 0.35, 0.05]];
 const SPARK = [[1, 0.9, 0.5], [1, 0.3, 0.05]];
 const FLAME = [[0.85, 0.9, 1], [1, 0.45, 0.1]];
 const COOL_FLAME = [[0.85, 0.97, 1], [0.25, 0.55, 1]];
+// A fully charged HEAT slug's core and trail; it runs to them from orange (`FIRE`) as it charges.
+const SLUG_RED = new THREE.Color(0xff2010);
+const RED_FIRE = [[1, 0.6, 0.45], [0.95, 0.08, 0.03]];
+const slugFire = [[0, 0, 0], [0, 0, 0]];
 const DUST = [[0.62, 0.58, 0.5], [0.5, 0.47, 0.42]];
 const REPAIR = [[0.75, 1, 0.8], [0.25, 1, 0.5]];
 const EMBER = [[1, 0.78, 0.38], [0.9, 0.2, 0.02]];
@@ -386,7 +390,7 @@ export class Effects {
   /**
    * This frame's projectiles, each { pos, vel, look, charge, age, primary, grenade }, `look` the
    * weapon's weapons.json `projectile`: primary fire (and `flak`) is a small hot pellet with a short
-   * glow streak unless it's a burning `slug` (bigger and fierier the more it was charged, 0-1),
+   * glow streak unless it's a burning `slug` (bigger, fierier and redder the more it was charged, 0-1),
    * rockets and darts burn with a smoke trail, shells tumble dark with a blinking light, and grenades
    * tumble small with a light that blinks faster as the fuse runs down.
    */
@@ -433,9 +437,13 @@ export class Effects {
       item.core.visible = !shell || (p.age * 6) % 1 < 0.5;
       item.core.material.color.setHex(slug ? 0xff9a40 : pellet ? 0xffe2a0 : shell ? 0xff4020 : 0xffb060);
       if (slug) {
+        // A HEAT slug burns from orange to red the more it was charged; a Furnace ember stays orange.
+        const red = p.look === 'slug' ? p.charge : 0;
+        item.core.material.color.lerp(SLUG_RED, red);
+        for (let s = 0; s < 2; s++) for (let k = 0; k < 3; k++) slugFire[s][k] = FIRE[s][k] + (RED_FIRE[s][k] - FIRE[s][k]) * red;
         dir.copy(p.vel).normalize();
         for (let k = count(70 + 60 * p.charge, dt); k > 0; k--) {
-          this.glow.spawn(p.pos, scatter(dir, -3, 0.6), { life: rand(0.06, 0.14), size: [0.7 + 0.6 * p.charge, 0.1], color: FIRE, drag: 4 });
+          this.glow.spawn(p.pos, scatter(dir, -3, 0.6), { life: rand(0.06, 0.14), size: [0.7 + 0.6 * p.charge, 0.1], color: slugFire, drag: 4 });
         }
         return;
       }

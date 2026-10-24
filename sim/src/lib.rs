@@ -564,8 +564,8 @@ pub struct Sim {
     pub mech: Mech,
     /// Secondary fire and thrown items in flight; offline they only meet the arena.
     pub projectiles: Vec<projectile::Projectile>,
-    /// Where projectiles burst since the page last took them, with their blast radius.
-    pub blasts: Vec<(f32, Vector)>,
+    /// Where projectiles burst since the page last took them: blast radius, where, the shot's charge.
+    pub blasts: Vec<(f32, Vector, f32)>,
     /// Smoke hanging about (fading at `seq`s, as ticks).
     pub clouds: Vec<net::Cloud>,
     /// What's been put down (placed and expiring by `seq`, as ticks).
@@ -653,7 +653,7 @@ impl Sim {
                     false
                 }
                 Some(at) => {
-                    blasts.push((radius, at));
+                    blasts.push((radius, at, p.charge));
                     bomblets.extend(projectile::split(t, p, at));
                     false
                 }
@@ -1361,7 +1361,7 @@ mod tests {
         assert!(projectile::fly(sim.arena(), &t, &mut next, |_, _| None).is_none());
         sim.step(&Input { alt_fire: true, ..aim });
         assert!(sim.projectiles.is_empty());
-        assert_eq!(sim.blasts, [(t.alt_radius, next.pos)]);
+        assert_eq!(sim.blasts, [(t.alt_radius, next.pos, 0.0)]);
         assert!(next.pos.y > 3.0, "burst at {} isn't mid-air", next.pos);
     }
 

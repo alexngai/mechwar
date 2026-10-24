@@ -78,12 +78,13 @@ pub struct NetClient {
     /// Own projectiles that burst locally, and where.
     burst: VecDeque<(Id, Vector)>,
     replays: Vec<Replay>,
-    /// Blasts of others' projectiles (tick, id, radius, where), held until render time reaches
-    /// their tick.
-    held: Vec<(u32, Id, f32, Vector)>,
-    /// Explosions to show (owner, blast radius, where) and splash hits (attacker, victim) since
-    /// the page last took them. A Pall's burst shows none: its smoke comes with the snapshots.
-    pub blasts: Vec<(u8, f32, Vector)>,
+    /// Blasts of others' projectiles (tick, id, radius, where, charge), held until render time
+    /// reaches their tick.
+    held: Vec<(u32, Id, f32, Vector, f32)>,
+    /// Explosions to show (owner, blast radius, where, the shot's charge) and splash hits
+    /// (attacker, victim) since the page last took them. A Pall's burst shows none: its smoke comes
+    /// with the snapshots.
+    pub blasts: Vec<(u8, f32, Vector, f32)>,
     pub hits: Vec<(u8, u8)>,
     /// Callsigns by player id, from the server's latest Roster.
     pub names: HashMap<u8, String>,
@@ -227,7 +228,7 @@ impl NetClient {
                 return true;
             };
             if !smoke(p.id()) {
-                blasts.push((p.owner, projectile::radius(arsenal.get(p.class, p.loadout), p), at));
+                blasts.push((p.owner, projectile::radius(arsenal.get(p.class, p.loadout), p), at, p.charge));
             }
             bomblets.extend(projectile::split(arsenal.get(p.class, p.loadout), p, at));
             burst.push_back((p.id(), at));
@@ -378,17 +379,17 @@ impl NetClient {
                     let radius = projectile::radius(self.arsenal.get(class, loadout), &shape);
                     self.hits.extend((0..16).filter(|v| hits & 1 << v != 0).map(|v| (owner, v)));
                     if !self.predicts(id) {
-                        self.held.push((s.tick, id, radius, pos));
+                        self.held.push((s.tick, id, radius, pos, charge));
                     } else if let Some(&(_, local)) = self.burst.iter().find(|b| b.0 == id) {
                         // Already exploded where we predicted; only a real miss gets a second one.
                         if local.distance(pos) > BURST_MISMATCH && !smoke(id) {
-                            self.blasts.push((owner, radius, pos));
+                            self.blasts.push((owner, radius, pos, charge));
                         }
                     } else {
                         // It met a mech we didn't predict: end it where the server says.
                         self.projectiles.retain(|p| p.id() != id);
                         if !smoke(id) {
-                            self.blasts.push((owner, radius, pos));
+                            self.blasts.push((owner, radius, pos, charge));
                         }
                     }
                 }
@@ -421,12 +422,12 @@ impl NetClient {
     pub fn projectiles(&mut self, now_ms: f64) -> Vec<Drawn> {
         let at = self.render_tick(now_ms);
         let (blasts, replays) = (&mut self.blasts, &mut self.replays);
-        self.held.retain(|&(tick, id, radius, pos)| {
+        self.held.retain(|&(tick, id, radius, pos, charge)| {
             if tick as f32 > at {
                 return true;
             }
             if !smoke(id) {
-                blasts.push((id.0, radius, pos));
+                blasts.push((id.0, radius, pos, charge));
             }
             replays.retain(|r| r.p.id() != id);
             false

@@ -929,13 +929,16 @@ export class Mech {
     Mech.audio?.launch(this.weapons.secondary.sound, this.own ? null : tip);
   }
 
-  /** A projectile primary leaving the next barrel along `dir`: flash and light. Returns the muzzle; `from` as in `fire`. */
-  muzzle(dir, from = null) {
+  /**
+   * A projectile primary leaving the next barrel along `dir`, charged `charge` (0-1): flash and
+   * light. Returns the muzzle; `from` as in `fire`.
+   */
+  muzzle(dir, from = null, charge = 0) {
     const gun = this.guns[(this.nextGun = (this.nextGun + 1) % this.guns.length)];
     from ??= gun.tip.getWorldPosition(new THREE.Vector3());
     this.fx.muzzleLight(from, this.own);
     this.fx.muzzle(from, dir);
-    Mech.audio?.shot(this.weapons.primary.sound, this.own ? null : from);
+    Mech.audio?.shot(this.weapons.primary.sound, this.own ? null : from, charge);
     return from;
   }
 

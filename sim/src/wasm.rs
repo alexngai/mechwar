@@ -62,9 +62,9 @@ fn projectile_floats(drawn: impl IntoIterator<Item = Drawn>) -> Vec<f32> {
         .collect()
 }
 
-/// Blast event floats (kind 2): owner, blast radius, where.
-fn blast_floats(out: &mut Vec<f32>, (owner, radius, at): (u8, f32, Vector)) {
-    out.extend([2.0, f32::from(owner), radius, at.x, at.y, at.z]);
+/// Blast event floats (kind 2): the shot's charge, blast radius, where.
+fn blast_floats(out: &mut Vec<f32>, (radius, at, charge): (f32, Vector, f32)) {
+    out.extend([2.0, charge, radius, at.x, at.y, at.z]);
 }
 
 /// xyz per own hitscan pellet end.
@@ -148,8 +148,8 @@ impl WasmSim {
     /// Same layout as `WasmNetClient::take_events`; offline only Blasts happen.
     pub fn take_events(&mut self) -> Vec<f32> {
         let mut out = Vec::new();
-        for (radius, at) in std::mem::take(&mut self.sim.blasts) {
-            blast_floats(&mut out, (0, radius, at));
+        for blast in std::mem::take(&mut self.sim.blasts) {
+            blast_floats(&mut out, blast);
         }
         out
     }
@@ -323,9 +323,10 @@ impl WasmNetClient {
 
     /// Six floats per event since the last call: kind, a, b, x, y, z.
     /// Shot (kind 0): a = shooter, b = hit id or -1, xyz = where it stopped. Kill (kind 1): a = killer,
-    /// b = victim. Blast (kind 2): a = owner, b = blast radius, xyz = where. Splash hit (kind 3): a = attacker,
-    /// b = victim. EMP (kind 4): a = owner, b = bitmask of the ids it jammed, xyz = where. Beam (kind 5):
-    /// a = owner, b = id it's on or -1, xyz = where it stops. Turret round (kind 6): a = the MG
+    /// b = victim. Blast (kind 2): a = the shot's charge (0-1), b = blast radius, xyz = where.
+    /// Splash hit (kind 3): a = attacker, b = victim. EMP (kind 4): a = owner, b = bitmask of the
+    /// ids it jammed, xyz = where. Beam (kind 5): a = owner, b = id it's on or -1, xyz = where it
+    /// stops. Turret round (kind 6): a = the MG
     /// turret's owner, b = hit id or -1, xyz = where it stopped. Turret hit (kind 7): a = who hit
     /// it, b = 1 if that wrecked it.
     pub fn take_events(&mut self) -> Vec<f32> {
@@ -344,8 +345,8 @@ impl WasmNetClient {
                 Event::Launch(_) | Event::Blast { .. } => {}
             }
         }
-        for blast in std::mem::take(&mut self.0.blasts) {
-            blast_floats(&mut out, blast);
+        for (_, radius, at, charge) in std::mem::take(&mut self.0.blasts) {
+            blast_floats(&mut out, (radius, at, charge));
         }
         for (attacker, victim) in std::mem::take(&mut self.0.hits) {
             out.extend([3.0, f32::from(attacker), f32::from(victim), 0.0, 0.0, 0.0]);

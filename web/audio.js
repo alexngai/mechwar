@@ -8,6 +8,10 @@ const THRUST_SLOTS = 3; // remote thruster loops, for the nearest boosting or ho
 const EXHAUST_SLOTS = 4; // exhaust loops, for the nearest rockets and darts in flight
 const WEIGHT = { A: 0.65, B: 1, C: 1.5 }; // shot and landing heft by class
 const STEP_DEPTH = { A: 1, B: 1.5, C: 2.1 }; // footsteps: even the Light stomps; the Heavy shakes the ground
+// Primary shots past the usual level, reverb and length (0.6 s). Fast guns stay dry: at their
+// fire rate reverb smears into a wash. The slow, heavy ones ring out, and hit about as hard as
+// the rail gun; the HEAT cannon's boom rolls on longest.
+const SHOT_MIX = { shotgun: { gain: 1.35, send: 0.3 }, flak: { send: 0.15 }, rail: { gain: 1.1, send: 0.35, life: 1 } };
 // Outside sounds reach us through the cockpit's armor: highs cut, low body lifted.
 const COCKPIT_CUTOFF = 2400; // Hz
 // Under camouflage everything, our own mech and cockpit too, sounds muffled (`stealth`).
@@ -226,15 +230,14 @@ export class Sound {
   /**
    * A primary shot with weapons.json `sound` at `pos` (null: ours, clear on the cockpit bus;
    * others are heard through the hull). Each is a broadband report, a low punch, a body, and the
-   * weapon's mechanical action; no high ringing, which is what reads as a plink.
+   * weapon's mechanical action; no high ringing, which is what reads as a plink. A charged shot
+   * (`charge` 0-1) goes off louder, up to 30% at full.
    */
-  shot(sound, pos) {
-    // No reverb for fast guns: at their fire rate it smears into a wash. The slow, sharp ones get a
-    // touch, so the crack rings out.
-    const out = this.voice(pos, 0.6, undefined, sound === 'shotgun' ? 0.3 : sound === 'flak' ? 0.15 : 0);
+  shot(sound, pos, charge = 0) {
+    const mix = SHOT_MIX[sound] ?? {};
+    const out = this.voice(pos, mix.life ?? 0.6, undefined, mix.send ?? 0);
     if (!out) return;
-    // The shotgun hits about as hard as the rail gun.
-    out.gain.value = (pos ? 1.2 : 0.9) * (sound === 'shotgun' ? 1.35 : 1);
+    out.gain.value = (pos ? 1.2 : 0.9) * (mix.gain ?? 1) * (1 + 0.3 * charge);
     if (sound === 'vulcan') {
       // Submachine cannon: a sharp report, a short thump, and the bolt cycling right after.
       this.noise(out, 'white', 'highpass', 1400, 900, 0.001, 0.045, 0.85);
@@ -280,11 +283,19 @@ export class Sound {
       this.tone(out, 'sine', 140, 55, 0.002, 0.1, 0.7);
       this.noise(out, 'brown', 'lowpass', 900, 160, 0.002, 0.1, 0.35);
     } else if (sound === 'rail') {
-      // Charge cannon: a heavy slam and deep boom, and the coils' discharge zapping down.
-      this.noise(out, 'white', 'highpass', 600, 300, 0.001, 0.12, 1.0);
-      this.tone(out, 'sine', 80, 28, 0.002, 0.4, 1.0);
-      this.tone(out, 'sawtooth', 900, 160, 0.002, 0.18, 0.18);
-      this.noise(out, 'brown', 'lowpass', 1000, 120, 0.002, 0.4, 0.7);
+      // Charge cannon, fired like artillery: a sharp crack that tears for a moment and a broad
+      // muzzle blast, a punch and a deep concussive boom, a rolling rumble with a slap of echo
+      // off the terrain, and the coils' discharge zapping down.
+      this.noise(out, 'white', 'highpass', 7500, 4000, 0.0003, 0.02, 3.0);
+      this.noise(out, 'white', 'highpass', 4500, 2800, 0.0003, 0.018, 1.4, 1, 0.015);
+      this.noise(out, 'white', 'highpass', 1500, 600, 0.0005, 0.09, 1.0);
+      this.noise(out, 'white', 'lowpass', 6000, 1200, 0.0005, 0.06, 0.6);
+      this.tone(out, 'sine', 150, 45, 0.002, 0.3, 1.0);
+      this.tone(out, 'sine', 60, 24, 0.005, 0.6, 1.0);
+      this.noise(out, 'brown', 'lowpass', 900, 70, 0.01, 0.75, 0.85);
+      this.noise(out, 'white', 'lowpass', 2000, 500, 0.002, 0.08, 0.2, 1, 0.2);
+      this.noise(out, 'brown', 'lowpass', 700, 150, 0.02, 0.35, 0.35, 1, 0.22);
+      this.tone(out, 'sawtooth', 900, 160, 0.002, 0.18, 0.12);
     } else {
       // Rifle: a heavier report with a longer, deeper body and a slower action.
       this.noise(out, 'white', 'highpass', 1000, 600, 0.001, 0.07, 0.95);
@@ -356,12 +367,16 @@ export class Sound {
     if (sound === 'hornet') this.noise(out, 'white', 'bandpass', 1800, 3000, 0.005, 0.25, 0.4, 2);
   }
 
-  /** A burst of radius `radius` m at `pos`: a deep boom and rumble (the hull filter softens it). */
-  blast(radius, pos) {
+  /**
+   * A burst of radius `radius` m at `pos`: a deep boom and rumble (the hull filter softens it). A
+   * charged shot's (`charge` 0-1) is louder, up to 50% at full.
+   */
+  blast(radius, pos, charge = 0) {
     const size = Math.min(Math.max(radius / 4, 0.4), 2);
     const life = 0.55 + 0.4 * size;
     const out = this.voice(pos, life + 0.3, undefined, 0.2);
     if (!out) return;
+    out.gain.value = 1 + 0.5 * charge;
     this.noise(out, 'brown', 'lowpass', 900, 90, 0.005, life, Math.min(0.7 + 0.3 * size, 1.3));
     this.tone(out, 'sine', 56, 19, 0.005, life + 0.2, Math.min(0.6 + 0.35 * size, 1.2));
     this.noise(out, 'white', 'lowpass', 2200, 600, 0.002, 0.1, 0.3 * size);
@@ -702,14 +717,56 @@ export class Sound {
       osc.start();
       return { osc, mult };
     });
-    this.cockpitNodes = { whir, whirGain, spool, spoolFilter, spoolGain };
+    // The HEAT cannon's charge, a bow drawn across sheet metal: a sawtooth (the bow's stick and
+    // slip) and the plate's inharmonic partials, one a hair sharp so they shimmer, all with a
+    // slight vibrato, through a band-pass that follows the pitch; and the rosin's scrape. Sent to
+    // a longer reverb of its own too, so it rings on about a second once the bow lifts.
+    const bowFilter = ctx.createBiquadFilter();
+    bowFilter.type = 'bandpass';
+    bowFilter.Q.value = 1.2;
+    const bowGain = ctx.createGain();
+    bowGain.gain.value = 0;
+    bowFilter.connect(bowGain).connect(this.cockpitBus);
+    const bowSend = ctx.createGain();
+    bowSend.gain.value = 0.8;
+    const bowVerb = ctx.createConvolver();
+    bowVerb.buffer = impulse(ctx, 1.6, 0.28);
+    bowGain.connect(bowSend).connect(bowVerb).connect(this.cockpitBus);
+    const vibrato = ctx.createOscillator();
+    vibrato.frequency.value = 5.5;
+    const depth = ctx.createGain();
+    depth.gain.value = 9; // cents
+    vibrato.connect(depth);
+    vibrato.start();
+    const bow = [['sawtooth', 1, 0.5], ['sine', 1.006, 0.5], ['sine', 2.76, 0.35], ['sine', 5.4, 0.18]].map(([type, mult, level]) => {
+      const osc = ctx.createOscillator();
+      osc.type = type;
+      depth.connect(osc.detune);
+      const g = ctx.createGain();
+      g.gain.value = level;
+      osc.connect(g).connect(bowFilter);
+      osc.start();
+      return { osc, mult };
+    });
+    const scrape = ctx.createBufferSource();
+    scrape.buffer = this.white;
+    scrape.loop = true;
+    const scrapeFilter = ctx.createBiquadFilter();
+    scrapeFilter.type = 'bandpass';
+    scrapeFilter.Q.value = 6;
+    const scrapeGain = ctx.createGain();
+    scrapeGain.gain.value = 0.25;
+    scrape.connect(scrapeFilter).connect(scrapeGain).connect(bowGain);
+    scrape.start();
+    this.cockpitNodes = { whir, whirGain, spool, spoolFilter, spoolGain, bow, bowFilter, bowGain, scrapeFilter };
   }
 
   /**
    * Each frame: { alive, heat (0-1), overheated, hull (0-1), repairing (0-1 phase), jammed, beaming,
-   * spin (0-1), incoming (m, or null), lock (0-1) }. Drives the repair whir (higher and softer for a
-   * held beam) and the Gatling's spool, rising from a low hum to a high whine as the barrels spin up,
-   * and paces warning beeps, the missile alarm and the lock tones.
+   * spin (0-1), charge (0-1), incoming (m, or null), lock (0-1) }. Drives the repair whir (higher
+   * and softer for a held beam), the Gatling's spool, rising from a low hum to a high whine as the
+   * barrels spin up, and the HEAT cannon's bowed charge, and paces warning beeps, the missile alarm
+   * and the lock tones.
    */
   cockpit(s, dt) {
     if (!this.running) return;
@@ -720,6 +777,15 @@ export class Sound {
     for (const { osc, mult } of n.spool) osc.frequency.setTargetAtTime(f * mult, t, 0.05);
     n.spoolFilter.frequency.setTargetAtTime(f * 3, t, 0.05);
     n.spoolGain.gain.setTargetAtTime(0.02 * Math.sqrt(spin), t, 0.05);
+    // The HEAT cannon's charge (0-1): the bow draws a low note up, rounding out high and swelling
+    // from a whisper, and lifts off once full, leaving it to ring out in the reverb; it stops short
+    // if the shot goes first.
+    const charge = s.alive ? s.charge : 0, fb = 160 + 560 * (1 - (1 - charge) ** 2);
+    for (const { osc, mult } of n.bow) osc.frequency.setTargetAtTime(fb * mult, t, 0.03);
+    n.bowFilter.frequency.setTargetAtTime(fb * 2, t, 0.03);
+    n.scrapeFilter.frequency.setTargetAtTime(fb * 3.5, t, 0.03);
+    const bowing = charge > 0 && charge < 1;
+    n.bowGain.gain.setTargetAtTime(bowing ? 0.004 + 0.09 * charge ** 2 : 0, t, bowing ? 0.04 : charge >= 1 ? 0.06 : 0.015);
     if (!s.alive) return;
     // Warnings: a burst of fast alarm beeps as we overheat (then quiet through the cooldown),
     // soft beeps while running hot, a low-hull pulse, jam crackle.

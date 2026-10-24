@@ -844,7 +844,7 @@ function frame(now) {
       blastAt.set(x, y, z);
       debug.blast(blastAt, b);
       fx.explosion(blastAt, b / 5);
-      sound.blast(b, blastAt);
+      sound.blast(b, blastAt, a);
       fx.muzzleLight(blastAt);
     }
     if (kind === 4) {
@@ -903,7 +903,7 @@ function frame(now) {
     if (!shot) {
       let from = null;
       if (primary) {
-        if (n === 0) gunAt = mech?.muzzle(heading.set(vx, vy, vz).normalize(), predicted && firstPerson ? cockpit.fire(camera, new THREE.Vector3()) : null) ?? null;
+        if (n === 0) gunAt = mech?.muzzle(heading.set(vx, vy, vz).normalize(), predicted && firstPerson ? cockpit.fire(camera, new THREE.Vector3()) : null, charge) ?? null;
         from = gunAt;
       } else if (turret) {
         // From the owner's rocket turret, which gives nobody away.
@@ -1041,7 +1041,7 @@ function frame(now) {
   sound.cockpit({
     alive, heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     hull: curr[S.HEALTH] / T('health_max'), repairing: repairPhase(curr[S.REPAIR_T]), jammed: curr[S.JAMMED] > 0, beaming: !!curr[S.BEAM],
-    spin: curr[S.SPIN], incoming,
+    spin: curr[S.SPIN], charge: curr[S.CHARGE], incoming,
     lock: curr[S.LOCK] > 0 ? Math.min(curr[S.LOCK_T] / Math.max(T('alt_lock_time'), 1e-6), 1) : 0,
   }, dt);
   // A jump pad fires as a mech leaves it upward: a pulse on the pad and a thump.
