@@ -12,6 +12,9 @@ COPY Cargo.toml Cargo.lock tuning.json classes.json weapons.json ./
 COPY maps maps
 COPY sim sim
 COPY server server
+# Bake the bots' nav fresh, whatever maps/nav.json was committed with: walking it at startup
+# instead stalls the server for minutes on Fly's shared CPU (see sim/src/bot.rs).
+RUN cargo test -p sim --release --lib bake_nav -- --ignored
 RUN wasm-pack build sim --target web --release --no-pack -- --features wasm \
  && cargo build -p server --release
 

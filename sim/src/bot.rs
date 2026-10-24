@@ -30,8 +30,9 @@ pub struct Nav {
 
 /// Each map's edges as `bake_nav` (in the tests below) walked them, with a hash of the map they
 /// came from. Walking takes seconds per map (more on terrain): too long for a server waking up
-/// to a visitor, or a page starting offline practice. Re-bake after changing a map or how mechs
-/// walk: `cargo test -p sim --release --lib bake_nav -- --ignored`.
+/// to a visitor, or a page starting offline practice. The deploy bakes it fresh (see the
+/// Dockerfile); a map changed since the committed bake just walks here, slower, until it's
+/// re-baked: `cargo test -p sim --release --lib bake_nav -- --ignored`.
 const BAKED: &str = include_str!("../../maps/nav.json");
 
 #[derive(Serialize, Deserialize)]
@@ -49,16 +50,16 @@ impl Nav {
     /// Baked for each compiled-in map (walked here if the map has changed since), and cached.
     pub fn for_map(index: usize) -> &'static Nav {
         static CACHE: [OnceLock<Nav>; MAPS.len()] = [const { OnceLock::new() }; MAPS.len()];
-        CACHE[index].get_or_init(|| match Nav::baked(index) {
+        CACHE[index].get_or_init(|| match Nav::baked(BAKED, index) {
             Some(edges) => Nav { nodes: Map::load(index).nav.iter().map(|p| Vector::from_array(*p)).collect(), edges },
             None => Nav::walk_map(index),
         })
     }
 
-    /// Map `index`'s baked edges, if they were baked from the map as it is.
-    fn baked(index: usize) -> Option<Vec<(usize, usize)>> {
+    /// Map `index`'s edges from `bakes` (maps/nav.json's form), if baked from the map as it is.
+    fn baked(bakes: &str, index: usize) -> Option<Vec<(usize, usize)>> {
         let (name, json) = MAPS[index];
-        let mut bakes: BTreeMap<String, Baked> = serde_json::from_str(BAKED).expect("maps/nav.json is valid");
+        let mut bakes: BTreeMap<String, Baked> = serde_json::from_str(bakes).expect("maps/nav.json is valid");
         bakes.remove(name).filter(|b| b.source == source_hash(json)).map(|b| b.edges)
     }
 
@@ -1067,26 +1068,31 @@ mod tests {
     use super::*;
     use crate::projectile;
 
-    /// Writes maps/nav.json: every map walked as it is now.
+    /// maps/nav.json's contents for maps `indices`, walked as they are now.
+    fn bake(indices: impl IntoIterator<Item = usize>) -> String {
+        let bakes: BTreeMap<&str, Baked> =
+            indices.into_iter().map(|i| (MAPS[i].0, Baked { source: source_hash(MAPS[i].1), edges: Nav::walk_map(i).edges })).collect();
+        serde_json::to_string(&bakes).unwrap()
+    }
+
+    /// Writes maps/nav.json: every map walked as it is now. The deploy runs it (see the Dockerfile).
     #[test]
     #[ignore = "re-bakes maps/nav.json: cargo test -p sim --release --lib bake_nav -- --ignored"]
     fn bake_nav() {
-        let bakes: BTreeMap<&str, Baked> =
-            MAPS.iter().enumerate().map(|(i, (name, json))| (*name, Baked { source: source_hash(json), edges: Nav::walk_map(i).edges })).collect();
-        std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/../maps/nav.json"), serde_json::to_string(&bakes).unwrap()).unwrap();
+        std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/../maps/nav.json"), bake(0..MAPS.len())).unwrap();
     }
 
-    /// Every map's bake is from the map as it is, and two small ones still walk the same (so how
-    /// mechs walk hasn't changed under the bake).
+    /// A bake reads back as the edges it walked, and only for the map it was baked from: a server
+    /// that walked every map again would stall on waking (whether maps/nav.json here is up to date
+    /// doesn't matter, the deploy bakes its own).
     #[test]
-    fn nav_is_baked() {
-        for (index, (name, _)) in MAPS.iter().enumerate() {
-            assert!(Nav::baked(index).is_some(), "maps/nav.json is stale for {name}: cargo test -p sim --release --lib bake_nav -- --ignored");
-        }
-        for name in ["blockout", "saltworks"] {
-            let index = Map::index(name).unwrap();
-            assert_eq!(Nav::baked(index), Some(Nav::walk_map(index).edges), "{name} walks differently: re-bake maps/nav.json");
-        }
+    fn nav_bake_reads_back() {
+        let [blockout, saltworks] = ["blockout", "saltworks"].map(|name| Map::index(name).unwrap());
+        let bakes = bake([blockout]);
+        assert_eq!(Nav::baked(&bakes, blockout), Some(Nav::walk_map(blockout).edges));
+        assert_eq!(Nav::baked(&bakes, saltworks), None);
+        let edited = bakes.replace(&source_hash(MAPS[blockout].1), "0000000000000000");
+        assert_eq!(Nav::baked(&edited, blockout), None, "a bake of an older blockout");
     }
 
     #[test]
