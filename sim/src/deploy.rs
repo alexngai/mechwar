@@ -17,7 +17,8 @@
 //! A Siege battleship is one too (`Kind::Ship`, owned by no player: see `ship_owner`), so it's
 //! shot, locked onto and fought like a turret, and guns mechs down like an MG turret; `siege.rs`
 //! flies it. So are the base guns of the team modes (`Kind::Sentry`, nobody's either: see
-//! `sentry_owner`), manned like MG turrets, but part of the base: not shot, nor locked onto.
+//! `sentry_owner`), manned like MG turrets; shot down, one goes offline a while, not away
+//! (game.rs).
 
 use rapier3d::parry::query::RayCast;
 use rapier3d::prelude::{Capsule, Collider, ColliderBuilder, ColliderHandle, Pose, Ray, Rotation};
@@ -37,19 +38,16 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// Shot at, locked onto and fought like a turret.
+    /// Shot at, locked onto and fought like a turret, and manned: trains on enemies and fires
+    /// (`Game::man_turrets`).
     pub fn turret(self) -> bool {
-        matches!(self, Kind::MgTurret | Kind::RocketTurret | Kind::Ship)
-    }
-
-    /// Manned: trains on enemies and fires (`Game::man_turrets`).
-    pub fn armed(self) -> bool {
-        self.turret() || self == Kind::Sentry
+        matches!(self, Kind::MgTurret | Kind::RocketTurret | Kind::Ship | Kind::Sentry)
     }
 }
 
-/// A base gun's muzzle, this high over its foot (on its tower).
+/// A base gun's muzzle, this high over its foot (on its tower), and its tower's girth for shots.
 pub const SENTRY_HEIGHT: f32 = 5.5;
+const SENTRY_RADIUS: f32 = 1.4;
 
 /// The owner id of `team`'s base gun number `k`: past every player's and the ships', so it's
 /// nobody's.
@@ -169,8 +167,11 @@ pub fn targets<'a>(list: &'a [Deployable], t: &'a Tuning, which: impl Fn(&Deploy
 /// Turret `d`'s body, for shots to hit: a capsule up to its gun (a ship's, round its middle at
 /// `pos`), and its center.
 fn body(t: &Tuning, d: &Deployable) -> (Capsule, Vector) {
-    if d.kind == Kind::Ship {
-        return (Capsule::new_y(1.0, SHIP_RADIUS), d.pos);
+    match d.kind {
+        Kind::Ship => return (Capsule::new_y(1.0, SHIP_RADIUS), d.pos),
+        // The tower up to its head, over the muzzle.
+        Kind::Sentry => return (Capsule::new_y((SENTRY_HEIGHT + 1.0) * 0.5 - SENTRY_RADIUS, SENTRY_RADIUS), d.pos + Vector::Y * ((SENTRY_HEIGHT + 1.0) * 0.5)),
+        _ => {}
     }
     let r = t.turret_radius.min(t.turret_height * 0.5);
     (Capsule::new_y(t.turret_height * 0.5 - r, r), d.pos + Vector::Y * (t.turret_height * 0.5))
@@ -178,8 +179,10 @@ fn body(t: &Tuning, d: &Deployable) -> (Capsule, Vector) {
 
 /// Turret `d` as a stand-in mech, with the tuning that sizes it as one (for splash).
 pub fn as_mech(t: &Tuning, d: &Deployable) -> (Tuning, Mech) {
-    if d.kind == Kind::Ship {
-        return (Tuning { mech_height: 2.0 * SHIP_RADIUS, mech_radius: SHIP_RADIUS, ..t.clone() }, Mech { pos: d.pos - Vector::Y * SHIP_RADIUS, ..Mech::default() });
+    match d.kind {
+        Kind::Ship => return (Tuning { mech_height: 2.0 * SHIP_RADIUS, mech_radius: SHIP_RADIUS, ..t.clone() }, Mech { pos: d.pos - Vector::Y * SHIP_RADIUS, ..Mech::default() }),
+        Kind::Sentry => return (Tuning { mech_height: SENTRY_HEIGHT + 1.0, mech_radius: SENTRY_RADIUS, ..t.clone() }, Mech { pos: d.pos, ..Mech::default() }),
+        _ => {}
     }
     (Tuning { mech_height: t.turret_height, mech_radius: t.turret_radius, ..t.clone() }, Mech { pos: d.pos, ..Mech::default() })
 }

@@ -13,6 +13,7 @@ use crate::ability::{self, Ability};
 use crate::arsenal;
 use crate::bot::{self, Bot, Nav};
 use crate::collide;
+use crate::ctf::{self, Ctf, Happened};
 use crate::deploy::{self, Deployable, Kind};
 use crate::item::{self, Item};
 use crate::map::Objectives;
@@ -35,6 +36,12 @@ const POINTS_PER_KILL: f32 = 100.0;
 /// and each point of hull they shoot off the enemy ship.
 const CAPTURE_POINTS: f32 = 50.0;
 const EU_POINTS: f32 = 0.5;
+/// Capture the Flag: points for taking the enemy flag off its stand (as for a zone), for
+/// capturing it, and for carrying our own flag home.
+const FLAG_CAPTURE_POINTS: f32 = 200.0;
+const FLAG_RETURN_POINTS: f32 = 50.0;
+/// A dropped flag nobody can reach (no waypoint this near, or nothing under it) goes home.
+const FLAG_REACH: f32 = 12.0;
 const SHIP_POINTS: f32 = 0.05;
 /// A Siege battleship's guns: how far they reach (m; from its cruising height, a wide circle
 /// below), and their heavy, slow bursts: SHIP_BURST rounds SHIP_RATE a second apart, SHIP_PAUSE s
@@ -46,13 +53,21 @@ const SHIP_PAUSE: f32 = 2.0;
 const SHIP_ROUND: f32 = 15.0;
 /// The team modes' base guns: they fire on enemies within SENTRY_RANGE of them, and in Siege on
 /// the enemy ship within SENTRY_SHIP_RANGE; bursts of SENTRY_BURST rounds SENTRY_RATE a second
-/// apart, SENTRY_PAUSE s between bursts, each round dealing SENTRY_ROUND.
+/// apart, SENTRY_PAUSE s between bursts, each round dealing SENTRY_ROUND, opening up on a fresh
+/// contact SENTRY_ACQUIRE after it shows. Each has a SENTRY_SHIELD, regaining SENTRY_REGEN a
+/// second; shot through, the gun's offline for SENTRY_OFFLINE, then comes back full and can't be
+/// hurt for SENTRY_IMMUNE.
 const SENTRY_RANGE: f32 = 50.0;
 const SENTRY_SHIP_RANGE: f32 = 90.0;
 const SENTRY_BURST: u8 = 8;
 const SENTRY_RATE: f32 = 10.0;
 const SENTRY_PAUSE: f32 = 0.7;
-const SENTRY_ROUND: f32 = 7.0;
+const SENTRY_ROUND: f32 = 4.0;
+const SENTRY_ACQUIRE: f32 = 0.6;
+pub const SENTRY_SHIELD: f32 = 400.0;
+const SENTRY_REGEN: f32 = 25.0;
+const SENTRY_OFFLINE: f32 = 25.0;
+const SENTRY_IMMUNE: f32 = 15.0;
 /// Deathmatch is only played on maps up to this wide (m): on bigger ones eight pilots spend the
 /// match looking for each other.
 const DM_MAX_SIZE: f32 = 200.0;
@@ -70,10 +85,12 @@ pub enum Mode {
     /// Two teams; banked energy launches a battleship at the enemy base, and the last base
     /// standing wins.
     Siege,
+    /// Two teams; take the enemy flag from their base to yours, first to `ctf::CAPTURES_TO_WIN`.
+    CaptureTheFlag,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 4] = [Mode::TeamDeathmatch, Mode::Deathmatch, Mode::MissileAssault, Mode::Siege];
+    pub const ALL: [Mode; 5] = [Mode::TeamDeathmatch, Mode::Deathmatch, Mode::MissileAssault, Mode::Siege, Mode::CaptureTheFlag];
 
     /// As the lobby and the server's settings spell it.
     pub fn key(self) -> &'static str {
@@ -82,6 +99,7 @@ impl Mode {
             Mode::Deathmatch => "dm",
             Mode::MissileAssault => "ma",
             Mode::Siege => "siege",
+            Mode::CaptureTheFlag => "ctf",
         }
     }
 
@@ -92,6 +110,7 @@ impl Mode {
             Mode::Deathmatch => "Deathmatch",
             Mode::MissileAssault => "Missile Assault",
             Mode::Siege => "Siege",
+            Mode::CaptureTheFlag => "Capture the Flag",
         }
     }
 
@@ -106,6 +125,7 @@ impl Mode {
             Mode::Deathmatch => map.size[0].max(map.size[1]) <= DM_MAX_SIZE,
             Mode::MissileAssault => Assault::new(&map.objectives, &[]).is_some(),
             Mode::Siege => Siege::new(&map.objectives, &[]).is_some(),
+            Mode::CaptureTheFlag => Ctf::new(&map.objectives, &[]).is_some(),
         }
     }
 }
@@ -242,11 +262,12 @@ pub struct Game {
     nav: &'static Nav,
     /// Feet positions per team and slot, from the map.
     spawns: [Vec<Vector>; 2],
-    /// Where the map's objective modes play, and this match's objective state (Missile Assault's
-    /// or Siege's).
+    /// Where the map's objective modes play, and this match's objective state (Missile Assault's,
+    /// Siege's or Capture the Flag's).
     spots: Objectives,
     assault: Option<Assault>,
     siege: Option<Siege>,
+    ctf: Option<Ctf>,
     players: Vec<Player>,
     projectiles: Vec<Flying>,
     orbs: Vec<Orb>,
@@ -277,6 +298,7 @@ impl Game {
             spots: data.objectives,
             assault: None,
             siege: None,
+            ctf: None,
             arsenal: Arsenal::new(&tuning),
             tick: 0,
             bots: true,
@@ -516,13 +538,14 @@ impl Game {
         // First every bot looks and listens...
         let mut seen: Vec<(Option<u8>, Vec<(u8, Mech, f32)>)> = Vec::with_capacity(self.players.len());
         let mut radio: Vec<Vec<(u8, u8, Vector)>> = vec![Vec::new(); MAX_PLAYERS]; // (from, enemy, where)
-        // Objectives to take or hold, in Missile Assault and Siege.
-        let orders = match (&self.assault, &self.siege) {
-            (Some(a), _) => Some(a.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.mech.health > 0.0)).collect::<Vec<_>>())),
-            (_, Some(s)) => {
+        // Objectives to take or hold, in Missile Assault, Siege and Capture the Flag.
+        let orders = match (&self.assault, &self.siege, &self.ctf) {
+            (Some(a), _, _) => Some(a.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.mech.health > 0.0)).collect::<Vec<_>>())),
+            (_, Some(s), _) => {
                 let ships = [0, 1].map(|t| self.deployables.iter().any(|d| d.kind == Kind::Ship && d.team == t));
                 Some(s.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.eu)).collect::<Vec<_>>(), ships))
             }
+            (_, _, Some(c)) => Some(c.orders(&self.players.iter().map(|p| (p.id, p.team, p.mech.pos, p.bot.is_some() && p.mech.health > 0.0)).collect::<Vec<_>>())),
             _ => None,
         };
         for i in 0..self.players.len() {
@@ -544,7 +567,8 @@ impl Game {
             let sizes = items(&self.arsenal);
             enemies.extend(self.deployables.iter().filter(|d| d.kind.turret() && d.hull > 0.0 && d.team != me.team).map(|d| {
                 let at = deploy::center(sizes, d) - Vector::Y * (t.mech_height * 0.5);
-                (deploy::target_id(d), Mech { pos: at, health: d.hull, ..Mech::default() }, d.hull / sizes.turret_hull)
+                let full = if d.kind == Kind::Sentry { SENTRY_SHIELD } else { sizes.turret_hull };
+                (deploy::target_id(d), Mech { pos: at, health: d.hull, ..Mech::default() }, d.hull / full)
             }));
             let (team, id) = (usize::from(me.team), me.id);
             let p = &mut self.players[i];
@@ -702,7 +726,7 @@ impl Game {
             }
         }
 
-        self.build_sentries();
+        self.tend_sentries();
         self.man_turrets();
 
         // Projectiles fly once everyone has moved, against enemies where they stand now, and
@@ -771,7 +795,8 @@ impl Game {
         self.orbs.retain(|o| o.health > 1e-3 && tick < o.fades_at);
         self.clouds.retain(|c| tick < c.fades_at);
         let deployed = self.deployables.len();
-        self.deployables.retain(|d| tick < d.expires && d.hull > 0.0);
+        // A base gun shot through stays, offline (`tend_sentries`).
+        self.deployables.retain(|d| tick < d.expires && (d.hull > 0.0 || d.kind == Kind::Sentry));
         if self.deployables.len() != deployed {
             self.arena.set_barriers(items(&self.arsenal), &self.deployables);
         }
@@ -793,6 +818,7 @@ impl Game {
         self.scores = [0; 2];
         self.assault = None;
         self.siege = None;
+        self.ctf = None;
         self.projectiles.clear();
         self.orbs.clear();
         self.clouds.clear();
@@ -834,6 +860,11 @@ impl Game {
             },
             // The base with more hull left (the other one's fallen, or the clock ran out).
             Mode::MissileAssault | Mode::Siege => self.base_hull().and_then(|[a, b]| match a.total_cmp(&b) {
+                std::cmp::Ordering::Greater => Some(0),
+                std::cmp::Ordering::Less => Some(1),
+                std::cmp::Ordering::Equal => None,
+            }),
+            Mode::CaptureTheFlag => self.ctf.as_ref().and_then(|c| match c.captures[0].cmp(&c.captures[1]) {
                 std::cmp::Ordering::Greater => Some(0),
                 std::cmp::Ordering::Less => Some(1),
                 std::cmp::Ordering::Equal => None,
@@ -1121,8 +1152,18 @@ impl Game {
     /// a fresh spawn under its shield), and fires once on it and ready: the MG bursts of hitscan
     /// rounds (`turret_round`), the other a rocket led by its flight time.
     /// Each base's guns, in the team modes, where the map has them: built when missing (a new
-    /// match clears them with the rest), facing the map's middle.
-    fn build_sentries(&mut self) {
+    /// match clears them with the rest), facing the map's middle. One shot offline (no hull left)
+    /// comes back when its `ready` comes round, `placed` then (0 till it first does); one online
+    /// regains its shield.
+    fn tend_sentries(&mut self) {
+        let tick = self.tick;
+        for d in self.deployables.iter_mut().filter(|d| d.kind == Kind::Sentry) {
+            if d.hull > 0.0 {
+                d.hull = (d.hull + SENTRY_REGEN * DT).min(SENTRY_SHIELD);
+            } else if tick >= d.ready {
+                (d.hull, d.placed, d.ready, d.burst) = (SENTRY_SHIELD, tick, tick + secs(SENTRY_ACQUIRE), 0);
+            }
+        }
         if self.mode == Mode::Deathmatch || self.deployables.iter().any(|d| d.kind == Kind::Sentry) {
             return;
         }
@@ -1131,7 +1172,7 @@ impl Game {
                 let pos = Vector::from_array(*at);
                 let (yaw, _) = bot::look_at(pos, Vector::ZERO.with_y(pos.y));
                 let (team, owner) = (team as u8, deploy::sentry_owner(team as u8, k));
-                self.deployables.push(Deployable { kind: Kind::Sentry, team, owner, pos, yaw, pitch: 0.0, hull: f32::INFINITY, placed: self.tick, expires: u32::MAX, ready: self.tick, burst: 0 });
+                self.deployables.push(Deployable { kind: Kind::Sentry, team, owner, pos, yaw, pitch: 0.0, hull: SENTRY_SHIELD, placed: 0, expires: u32::MAX, ready: tick, burst: 0 });
             }
         }
     }
@@ -1141,7 +1182,7 @@ impl Game {
         let tick = self.tick;
         for k in 0..self.deployables.len() {
             let d = self.deployables[k];
-            if !d.kind.armed() || d.hull <= 0.0 {
+            if !d.kind.turret() || d.hull <= 0.0 {
                 continue;
             }
             let (t, rt) = (items(&self.arsenal), self.arsenal.get(MechClass::B, rocket));
@@ -1172,7 +1213,13 @@ impl Game {
                 .filter(|&(chest, _)| sighted(chest, range))
                 .min_by(|a, b| a.0.distance(gun).total_cmp(&b.0.distance(gun)))
                 .or_else(ship);
-            let Some((chest, vel)) = target else { continue };
+            let Some((chest, vel)) = target else {
+                if d.kind == Kind::Sentry {
+                    let d = &mut self.deployables[k];
+                    (d.ready, d.burst) = (d.ready.max(tick + secs(SENTRY_ACQUIRE)), 0);
+                }
+                continue;
+            };
             let lead = chest.distance(gun) / speed;
             let on = deploy::train(t, &mut self.deployables[k], chest + vel * lead);
             if !on || tick < d.ready {
@@ -1245,16 +1292,22 @@ impl Game {
     }
 
     /// Player `attacker` shoots `amount` off deployable `k` while the match is on, and hears of it
-    /// if it's a turret (a hit marker); it's cleared at the tick's end once its hull's gone.
+    /// if it's a turret (a hit marker); it's cleared at the tick's end once its hull's gone, but a
+    /// base gun goes offline for SENTRY_OFFLINE (and can't be hurt for SENTRY_IMMUNE once back).
     fn wear(&mut self, k: usize, amount: f32, attacker: u8) {
-        if !matches!(self.phase, Phase::Playing { .. }) {
+        let tick = self.tick;
+        let d = &mut self.deployables[k];
+        let rebooting = d.kind == Kind::Sentry && d.placed > 0 && tick < d.placed + secs(SENTRY_IMMUNE);
+        if !matches!(self.phase, Phase::Playing { .. }) || rebooting {
             return;
         }
-        let d = &mut self.deployables[k];
         let standing = d.hull > 0.0;
         let dealt = amount.min(d.hull.max(0.0));
         d.hull -= amount;
         let ship = d.kind == Kind::Ship;
+        if d.kind == Kind::Sentry && standing && d.hull <= 0.0 {
+            (d.ready, d.burst) = (tick + secs(SENTRY_OFFLINE), 0);
+        }
         if d.kind.turret() {
             self.events.push(Event::TurretHit { attacker, wrecked: standing && d.hull <= 0.0 });
         }
@@ -1372,6 +1425,13 @@ impl Game {
         if let Some(s) = self.siege.as_mut().filter(|_| eu > 0.0) {
             s.drop(spot, eu, self.tick);
         }
+        // A flag carried falls to the ground under them (where the orb floats over).
+        let ground = spot - Vector::Y * ORB_HEIGHT;
+        let reachable = self.reachable(ground).then_some(ground);
+        if let Some((team, what)) = self.ctf.as_mut().and_then(|c| c.fell(victim, reachable)) {
+            self.events.push(Event::Flag { team, what, by: Some(victim) });
+        }
+        self.players[j].mech.laden = false;
         let Some(a) = attacker else { return };
         let (killer, team) = (self.players[a].id, self.players[a].team);
         self.players[a].kills += 1;
@@ -1385,8 +1445,8 @@ impl Game {
                 let limit = f32::from(self.score_limit) * POINTS_PER_KILL * (1.0 + progress::KILLER_BONUS);
                 self.players.iter().any(|p| p.points >= limit)
             }
-            // Only a base falling ends it.
-            Mode::MissileAssault | Mode::Siege => false,
+            // Only a base falling, or the last capture, ends it.
+            Mode::MissileAssault | Mode::Siege | Mode::CaptureTheFlag => false,
         };
         if won {
             self.end_match();
@@ -1399,9 +1459,11 @@ impl Game {
             Phase::Playing { started_at } => (false, None, started_at + secs(self.match_seconds)),
             Phase::Ended { winner, restart_at } => (true, winner, restart_at),
         };
-        // In Deathmatch, the top two's points; in Missile Assault, the bases' hull.
+        // In Deathmatch, the top two's points; in Missile Assault and Siege, the bases' hull; in
+        // Capture the Flag, the captures.
         let scores = match self.mode {
             Mode::TeamDeathmatch => self.scores,
+            Mode::CaptureTheFlag => self.ctf.as_ref().map_or([0; 2], |c| c.captures),
             Mode::MissileAssault | Mode::Siege => self.base_hull().unwrap_or([objective::BASE_HULL; 2]).map(|h| h.ceil() as u16),
             Mode::Deathmatch => {
                 let top = self.standings();
@@ -1414,7 +1476,7 @@ impl Game {
             next_mode: self.next.0,
             next_map: self.next.1 as u8,
             scores,
-            limit: self.score_limit,
+            limit: if self.mode == Mode::CaptureTheFlag { ctf::CAPTURES_TO_WIN } else { self.score_limit },
             seconds_left: (until.saturating_sub(self.tick) as f32 / TICK_HZ).ceil() as u16,
             ended,
             winner,
@@ -1461,6 +1523,7 @@ impl Game {
                 _ => Vec::new(),
             },
             siege: self.siege.as_ref().map(Siege::net),
+            ctf: self.ctf.as_ref().map(Ctf::net),
             hangar: me.and_then(|p| p.respawn_at).map(|at| at.saturating_sub(self.tick) as f32 * DT),
             state: self.match_state(),
         }
@@ -1472,6 +1535,7 @@ impl Game {
         match self.mode {
             Mode::MissileAssault => self.step_assault(),
             Mode::Siege => self.step_siege(),
+            Mode::CaptureTheFlag => self.step_ctf(),
             _ => {}
         }
     }
@@ -1548,6 +1612,44 @@ impl Game {
         if fallen {
             self.end_match();
         }
+    }
+}
+
+impl Game {
+    /// Capture the Flag's tick: raids, pickups, returns and captures (events and credit), who's
+    /// laden with a flag (and so out of Camouflage), and the match's end at the last capture.
+    fn step_ctf(&mut self) {
+        let Some(mut c) = self.ctf.take().or_else(|| Ctf::new(&self.spots, self.nav.points())) else { return };
+        let living: Vec<(u8, u8, Vector)> = self.players.iter().filter(|p| p.mech.health > 0.0).map(|p| (p.id, p.team, p.mech.pos)).collect();
+        for (team, what, by) in c.step(&living) {
+            self.events.push(Event::Flag { team, what, by });
+            let Some(p) = self.players.iter_mut().find(|p| Some(p.id) == by) else { continue };
+            match what {
+                Happened::Taken | Happened::Captured => {
+                    p.points += if what == Happened::Taken { CAPTURE_POINTS } else { FLAG_CAPTURE_POINTS };
+                    p.tally.capture();
+                }
+                Happened::Returned => p.points += FLAG_RETURN_POINTS,
+                Happened::Dropped | Happened::PickedUp => {}
+            }
+        }
+        for p in &mut self.players {
+            p.mech.laden = c.carried_by(p.id).is_some();
+            if p.mech.laden && ability::on(&p.mech, Ability::Cloak) {
+                p.mech.ability_time = 0.0;
+            }
+        }
+        let won = c.won().is_some();
+        self.ctf = Some(c);
+        if won {
+            self.end_match();
+        }
+    }
+
+    /// Whether feet at `feet` are somewhere a mech can get to: ground under them, and a waypoint near.
+    fn reachable(&self, feet: Vector) -> bool {
+        let ground = self.arena.cast_ray(&Ray::new(feet + Vector::Y * 0.5, Vector::NEG_Y), 60.0).is_some();
+        ground && self.nav.points().iter().any(|w| w.distance(feet) <= FLAG_REACH)
     }
 }
 
@@ -1892,6 +1994,66 @@ mod tests {
         assert!(state.ended && state.winner == Some(1), "{state:?}");
     }
 
+    /// A Capture the Flag match on Foundry, with its stands at the bases, and a human in it.
+    fn capture_the_flag() -> (Game, u8) {
+        let mut game = Game::new(Tuning::default(), Map::index("foundry").unwrap());
+        (game.mode, game.bots) = (Mode::CaptureTheFlag, false);
+        let stand = |at: [f32; 3]| crate::map::ZoneSpot { at, radius: 5.0, band: 3.0, pad: None };
+        game.spots.flags = Some(game.spots.bases.unwrap().map(stand));
+        let id = game.join().unwrap();
+        game.step();
+        (game, id)
+    }
+
+    #[test]
+    fn a_flag_taken_off_the_enemy_stand_and_carried_home_scores_and_three_win() {
+        let (mut game, id) = capture_the_flag();
+        unshield(&mut game);
+        let me = game.players.iter().position(|p| p.id == id).unwrap();
+        let (team, stands) = (game.players[me].team, game.spots.bases.unwrap().map(Vector::from_array));
+        let (ours, theirs) = (stands[usize::from(team)], stands[usize::from(1 - team)]);
+        // Standing there, whatever their base guns do.
+        let hold = |game: &mut Game, at: Vector, seconds: f32| {
+            for _ in 0..secs(seconds) {
+                game.players[me].mech.pos = at;
+                game.players[me].mech.health = 100.0;
+                game.step();
+            }
+        };
+        hold(&mut game, theirs, ctf::TAKE_SECONDS + 0.2);
+        assert_eq!(game.ctf.as_ref().unwrap().carried_by(id), Some(1 - team));
+        assert!(game.players[me].mech.laden, "a carrier isn't laden");
+        let points = game.players[me].points;
+        hold(&mut game, ours, 0.1);
+        assert_eq!(game.ctf.as_ref().unwrap().captures[usize::from(team)], 1);
+        assert!(!game.players[me].mech.laden);
+        assert!((game.players[me].points - points - FLAG_CAPTURE_POINTS).abs() < 0.01);
+        assert_eq!(game.match_state().scores[usize::from(team)], 1);
+        game.ctf.as_mut().unwrap().captures[usize::from(team)] = ctf::CAPTURES_TO_WIN - 1;
+        hold(&mut game, theirs, ctf::TAKE_SECONDS + 0.2);
+        hold(&mut game, ours, 0.1);
+        let state = game.match_state();
+        assert!(state.ended && state.winner == Some(team), "{state:?}");
+    }
+
+    #[test]
+    fn a_fallen_carrier_drops_the_flag_unless_it_fell_out_of_reach() {
+        let (mut game, id) = capture_the_flag();
+        let foe = game.add_player(1, None, MechClass::B).unwrap();
+        unshield(&mut game);
+        let (me, them) = (game.players.iter().position(|p| p.id == id).unwrap(), game.players.iter().position(|p| p.id == foe).unwrap());
+        let flag = 1 - game.players[me].team;
+        game.ctf.as_mut().unwrap().flags[usize::from(flag)] = ctf::Flag::Carried { by: id };
+        game.apply_damage(Some(them), me, 1e3);
+        assert!(matches!(game.ctf.as_ref().unwrap().flags[usize::from(flag)], ctf::Flag::Dropped { .. }));
+        assert!(game.events.iter().any(|e| matches!(e, Event::Flag { team, what: Happened::Dropped, by } if *team == flag && *by == Some(id))));
+        // The foe carries it; it falls with them into the void.
+        game.ctf.as_mut().unwrap().flags[usize::from(flag)] = ctf::Flag::Carried { by: foe };
+        game.players[them].mech.pos = Vector::new(0.0, -200.0, 0.0);
+        game.apply_damage(Some(me), them, 1e3);
+        assert_eq!(game.ctf.as_ref().unwrap().flags[usize::from(flag)], ctf::Flag::Home);
+    }
+
     #[test]
     fn bots_bank_energy_on_their_own() {
         let (mut game, _) = siege(true);
@@ -1929,7 +2091,40 @@ mod tests {
             }
         }
         assert!(fell.is_some(), "the camper's still standing: {}", game.players[at(&game, camper)].mech.health);
+        // Not at once, though: a Heavy under both guns lasts over three seconds.
+        assert!(fell > Some(secs(3.0)), "cut down in {} ticks", fell.unwrap());
         assert!(game.players[at(&game, me)].mech.health > 0.0, "the base guns shot us");
+    }
+
+    #[test]
+    fn a_base_gun_shot_through_goes_offline_then_comes_back_unhurt_a_while() {
+        let mut game = Game::new(Tuning::default(), Map::index("sump").unwrap());
+        game.bots = false;
+        let raider = game.add_player(1, None, MechClass::C).unwrap();
+        game.step();
+        let k = game.deployables.iter().position(|d| d.kind == Kind::Sentry && d.team == 0).unwrap();
+        game.wear(k, SENTRY_SHIELD - 1.0, raider);
+        game.step();
+        assert!(game.deployables[k].hull < 0.5 * SENTRY_SHIELD, "it shrugged it off");
+        game.wear(k, SENTRY_SHIELD, raider);
+        let shot_at = game.tick;
+        game.step();
+        assert!(game.deployables[k].kind == Kind::Sentry && game.deployables[k].hull <= 0.0, "not offline, or gone");
+        // Offline, it holds its fire on a raider at its foot.
+        let (r, owner) = (game.players.iter().position(|p| p.id == raider).unwrap(), game.deployables[k].owner);
+        unshield(&mut game);
+        while game.tick < shot_at + secs(SENTRY_OFFLINE) - 1 {
+            game.players[r].mech.pos = game.deployables[k].pos + Vector::new(4.0, 0.0, 4.0);
+            game.step();
+            assert!(game.deployables[k].hull <= 0.0, "back too soon");
+            assert!(!game.events.iter().any(|e| matches!(e, Event::TurretShot { owner: o, .. } if *o == owner)), "it fired while offline");
+        }
+        game.step();
+        game.step();
+        assert_eq!(game.deployables[k].hull, SENTRY_SHIELD, "it didn't come back");
+        // Fresh back, it can't be hurt.
+        game.wear(k, SENTRY_SHIELD, raider);
+        assert_eq!(game.deployables[k].hull, SENTRY_SHIELD);
     }
 
     #[test]

@@ -6,7 +6,7 @@
 // tall and 3.6 m wide, so lanes and doors are 9+ m wide and clearances 6+ m; ramps stay near 23
 // degrees (walkable is 40); hover tops out at 3.5 m, so 3 m ledges are hover shortcuts and the 7 m
 // and 14 m tiers need ramps.
-import { bases, box, furnace, growth, lamp, once, pad, pipe, point, railing, ramp, sentries, siege, silos, stack, turned, write } from './kit.mjs';
+import { bases, box, flagStand, flags, furnace, growth, lamp, once, pad, pipe, point, railing, ramp, sentries, siege, silos, stack, turned, write } from './kit.mjs';
 
 // --- Floor and edges -------------------------------------------------------------------------
 box([-120, -1, 7], [120, 0, 120], 'ground'); // north floor
@@ -116,7 +116,7 @@ box([38, 0, 31], [41, 3, 35], 'rust');
 lamp([-9, 0, 30]);
 lamp([40, 0, 47]);
 lamp([-20, 0, 62]);
-point([-24, 0, 18], [28, 0, 22], [-32, 0, 38], [30, 0, 44], [0, 0, 44], [-22, 0, 56], [20, 0, 62], [-45, 0, 62], [45, 0, 62], [-40, 0, 76], [40, 0, 76]);
+point([-24, 0, 18], [28, 0, 22], [-32, 0, 38], [30, 0, 44], [0, 0, 44], [-22, 0, 56], [20, 0, 62], [-45, 0, 62], [45, 0, 62], [-40, 0, 76]);
 
 // --- East lane: pipe-rack catwalk (7) over container yards -----------------------------------
 // The whole rack is authored (it straddles z = 0); the twin is the west lane's.
@@ -162,6 +162,9 @@ point([-80, 0, 16], [-110, 0, 41], [-84, 0, 41], [-84, 0, 62], [-58, 0, 22], [-5
 bases([0, 0, 100]);
 // Base guns: one up on the gantry over the yard, one on the hangar roof.
 sentries([[22, 7, 110], [-9.5, 14, 86.5]]);
+// Capture the Flag: the stand outside the yard's east wall, by its east gate, its back to the base
+// guns and its doorways to the courtyard and the east lane.
+flags(flagStand([40, 0, 82], 0));
 // B's launch pad is on the smelter's roof, over the arcade.
 silos({ at: [-62, 0, 45], radius: 10, band: 4, pad: [-57.5, 0, 45] }, { at: [0, 0, 0], radius: 16, band: 4, pad: [0, 14, 0] });
 // Siege: the station in the smelter's arcade, round its core, the AA gun on its roof (up the

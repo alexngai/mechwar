@@ -19,7 +19,7 @@
 // Asymmetric: all of it is authored here and `write` gets both teams' spawns. The bases face the
 // wreck's two sides, each as far from the bow, the stern and the middle as the other.
 // Metrics as the other maps': 6.5 m+ clear under decks, ramps near 24 degrees, steps under 0.5 m.
-import { bases, beam, box, cylinder, decor, ground, heightAt, lamp, pad, point, r3, railing, ramp, sentries, siege, sign, silos, solids, turned, write } from './kit.mjs';
+import { bases, beam, box, cylinder, decor, flagStand, flags, ground, heightAt, lamp, pad, point, r3, railing, ramp, sentries, siege, sign, silos, solids, turned, write } from './kit.mjs';
 
 const SIZE = [300, 300], CELL = 4;
 const HALF = 140, CORNER = 60; // the playable ground: a square this far out, its corners rounded
@@ -70,6 +70,7 @@ const S = (a, c, y) => {
   return [x, r3(y), z];
 };
 const BASES = [W(0, -115), W(0, 115)]; // the salvage camp (team 0), the pumping station (team 1)
+const STANDS = [[-53, 71], [77, -51]]; // each base's flag stand, toward the wreck
 
 // The pieces, along the wreck: the bow, a gap, the midship, a gap, the stern, the engines beyond.
 const BOW = [-150, -66], MID = [-55, 55], STERN = [64, 128];
@@ -90,6 +91,7 @@ function height(x, z) {
   h += 3 * Math.exp(-((Math.abs(c) - 50) ** 2) / 60) * along * (0.6 + 0.4 * noise(a / 14, c / 14));
   h += 6 * Math.exp(-((a + 158) ** 2 + c * c) / 300);
   for (const b of BASES) h += (1.5 - h) * smoothstep(34, 22, dist(p, b)); // dry islands for the bases
+  for (const s of STANDS) h += (1.5 - h) * smoothstep(24, 14, dist(p, s)); // and for the flag stands
   // The crater's rim: banks too steep to climb, up to dead woods no hover reaches.
   const w = edge(p) + 8;
   if (w > 0) h += Math.min(w < 8 ? (w * w) / 10 : 6.4 + (w - 8) * 1.6, 18) + 3 * smoothstep(8, 14, w) * noise(x / 11, z / 11);
@@ -422,6 +424,11 @@ crate(-100, 30, groundAt(-100, 30) - 0.3, 'metal', 12, -15);
   clear(BASES[1], BASES[1], 36);
 }
 
+// Capture the Flag: each base's stand out on its island toward the wreck, its back to the base guns
+// and its doorways to the wreck. Hull plates roofed with rust.
+const stands = [0, 180].map((yaw, i) => flagStand([STANDS[i][0], 1.5, STANDS[i][1]], yaw, { wall: 'hull', roof: 'rust' }));
+for (const s of STANDS) clear(s, s, 16);
+
 // --- Jump pads: from each base onto the midship's top deck, landing with its width ahead -----------------
 function slabPad(x, z, to, apex) {
   const top = Math.round((heightAt(x, z) + 0.3) * 10) / 10;
@@ -506,6 +513,7 @@ const [cx, cz] = BASES[0], [sx, sz] = BASES[1];
 bases([cx, 1.6, cz], [sx, 1.6, sz]);
 // Base guns: two on each base island, over its landings.
 sentries([[-91.5, 6.5, 77], [-70.5, 1.5, 73]], [[76, 1.5, -65], [63, 1.5, -84]]);
+flags(...stands);
 // The pads: on the bow's sloping deck (tilted with it), on the hold's floor under the hatches, and up
 // on the stern's ridge walk over the cavern.
 silos({ at: S(-78, 0, bowTop(-78)), radius: 12, band: 4 }, { at: S(0, 0, HOLD), radius: 14, band: 5 }, { at: S(96, 0, 1), radius: 14, band: 6, pad: [67.882, 15.87, 67.882] });

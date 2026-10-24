@@ -98,6 +98,9 @@ pub struct Objectives {
     /// Each team's base guns (team 0's first), in every team mode: where each stands.
     #[serde(default)]
     pub sentries: [Vec<[f32; 3]>; 2],
+    /// Capture the Flag: each team's flag stand (team 0's first), its zone inside the shelter.
+    #[serde(default)]
+    pub flags: Option<[ZoneSpot; 2]>,
 }
 
 #[derive(Deserialize, Clone, Debug)]

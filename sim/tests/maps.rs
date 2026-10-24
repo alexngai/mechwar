@@ -99,6 +99,44 @@ fn base_guns_stand_over_their_spawns() {
     }
 }
 
+/// Capture the Flag: each team's flag stand is on something, with room for a Heavy under its roof,
+/// hidden from its own base guns but open through its doorways, a waypoint in its zone, off its base.
+#[test]
+fn flag_stands_shelter_their_flags() {
+    use rapier3d::prelude::Ray;
+    for (index, (name, _)) in MAPS.iter().enumerate() {
+        let map = Map::load(index);
+        let Some(flags) = map.objectives.flags else {
+            assert!(!["foundry", "riftline", "canopy", "crashsite", "verdigris", "sinkhole"].contains(name), "{name}: no flag stands");
+            continue;
+        };
+        let arena = Arena::new(&map);
+        for (team, spot) in flags.iter().enumerate() {
+            let at = Vector::from_array(spot.at);
+            let what = format!("{name}: team {team}'s flag at {at}");
+            assert!(arena.cast_ray(&Ray::new(at + Vector::Y, Vector::NEG_Y), 2.0).is_some(), "{what} isn't on anything");
+            assert!(arena.cast_ray(&Ray::new(at + Vector::Y * 0.05, Vector::Y), 6.5).is_none(), "{what} has under 6.5 m of headroom");
+            for gun in map.objectives.sentries[team].iter().map(|p| Vector::from_array(*p) + Vector::Y * sim::deploy::SENTRY_HEIGHT) {
+                for p in [Vector::ZERO, Vector::X, Vector::NEG_X, Vector::Z, Vector::NEG_Z].map(|d| at + d * 3.0 + Vector::Y * 2.5) {
+                    let d = p - gun;
+                    assert!(arena.cast_ray(&Ray::new(gun, d / d.length()), d.length()).is_some(), "{what}: its base gun at {gun} sees {p}");
+                }
+            }
+            let inside = |w: &[f32; 3]| Vector::new(w[0] - at.x, 0.0, w[2] - at.z).length() <= spot.radius && (w[1] - at.y).abs() <= spot.band;
+            assert!(map.nav.iter().any(inside), "{what} has no waypoint in its zone");
+            if let Some(base) = map.objectives.bases.map(|b| b[team]) {
+                let off = Vector::new(at.x - base[0], 0.0, at.z - base[2]).length();
+                assert!(off >= 14.0, "{what} is {off:.1} m from its base");
+            }
+            let open = (0..16)
+                .map(|i| i as f32 * std::f32::consts::TAU / 16.0)
+                .filter(|a| arena.cast_ray(&Ray::new(at + Vector::Y * 1.5, Vector::new(a.cos(), 0.0, a.sin())), 10.0).is_none())
+                .count();
+            assert!(open >= 2, "{what}: only {open} of 16 ways out past 10 m");
+        }
+    }
+}
+
 /// A silo's launch pad, or the AA gun, at `spot`'s `pad` (else its middle): on something, under
 /// open sky for its rockets or its fire.
 fn open_to_the_sky(name: &str, what: &str, arena: &Arena, spot: &sim::map::ZoneSpot) {

@@ -15,11 +15,12 @@
 // with an overlook and a pad up to it, about as far from the Knoll and the Crown as the other's.
 // Metrics as the other maps': 6.5 m+ under decks, ramps near 24 degrees, hover ledges 3-4 m. Ground
 // over 40 degrees can't be walked up (tuning's max_slope_deg), which makes the cliffs walls.
-import { bases, beam, box, cylinder, decor, ground, heightAt, lamp, pad, point, r3, railing, ramp, sentries, siege, sign, silos, solids, turned, write } from './kit.mjs';
+import { bases, beam, box, cylinder, decor, flagStand, flags, ground, heightAt, lamp, pad, point, r3, railing, ramp, sentries, siege, sign, silos, solids, turned, write } from './kit.mjs';
 
 const SIZE = [360, 360], CELL = 4;
 const A = [-140, -118], B = [140, -118], C = [0, 140], ROUND = 30; // the playable triangle, grown ROUND m
 const BASES = [[-122, -102], [122, -102]]; // west (team 0), east (team 1)
+const STANDS = [[-131, -74], [131, -74]]; // each base's flag stand, north of it
 const KNOLL = [6, -18], CROWN = [0, 112], HOLLOW = [0, -98], PULPIT = [-86, 30], GATE = [-52, -94];
 const GORGE = [[-96, -70], [-80, -20], [-62, 30], [-40, 76]];
 const SPINE = [[104, -72], [86, -14], [68, 40], [50, 80]];
@@ -100,6 +101,7 @@ function height(x, z) {
   h += bump(p, KNOLL, 14, 22) + bump(p, CROWN, 8, 26) - bump(p, HOLLOW, 3, 22);
   h += 3 * Math.exp(-(along(p, SPINE).d ** 2) / (2 * 14 * 14)); // a swell for the Spine to stand on
   for (const b of BASES) h += (1 - h) * smoothstep(34, 18, dist(p, b)); // level clearings at 1 m
+  for (const s of STANDS) h += (1 - h) * smoothstep(24, 14, dist(p, s)); // and under the flag stands
   // The Gorge: a level floor between walls too steep to climb, 7-14 m out, sloping up at its ends;
   // at the breach its east wall lies back to a 30 degree slope.
   const g = along(p, GORGE), ends = smoothstep(0, 40, g.s) * smoothstep(LG, LG - 34, g.s);
@@ -445,6 +447,10 @@ box([136, 0, -120], [140, 2.5, -112], 'concrete');
 sign([136.5, 0.6, -111.8], [139.5, 2, -111.6], [138, 1, -110], AMBER);
 for (const p of [[136, 7, -92], [112, 1, -114], [140, 1, -116]]) lamp(p);
 for (const b of BASES) clear(b, b, 36);
+// Capture the Flag: each base's stand north of it, its back to the base guns, its doorways to the
+// flank and toward the Knoll. A stone hut roofed with bark.
+const stands = [270, 180].map((yaw, i) => flagStand([STANDS[i][0], 1, STANDS[i][1]], yaw, { wall: 'stone', roof: 'bark' }));
+for (const s of STANDS) clear(s, s, 16);
 point([136, 7, -92], at(110, -92), at(-112, -92), at(-136, -110), at(136, -110));
 
 // --- Jump pads: the Gorge's floor up onto the Pulpit, and the east base onto the Spine ----------------
@@ -535,6 +541,7 @@ const onGround = ([x, z]) => [x, r3(heightAt(x, z)), z];
 bases(onGround(BASES[0]), onGround(BASES[1]));
 // Base guns: two at each eco-station, either side of it.
 sentries([[-115, 1, -110], [-140, 1, -104]], [[140, 1, -104], [115, 1, -110]]);
+flags(...stands);
 siege({ at: onGround(HOLLOW), radius: 12, band: 5 }, { at: [6, 13, -18], radius: 9, band: 3, pad: [12, 13, -22] }, 70);
 // Missile Assault: A down in the Gorge by its breach (the west's flank, the Pulpit over it), B on the
 // Knoll's rock table, C at the Spine's tunnel (the east's flank).

@@ -278,6 +278,11 @@ impl NetClient {
         self.snapshots.back().and_then(|s| s.siege.as_ref())
     }
 
+    /// Capture the Flag's flags, raids and captures as of the latest snapshot.
+    pub fn ctf(&self) -> Option<&crate::ctf::CtfNet> {
+        self.snapshots.back().and_then(|s| s.ctf.as_ref())
+    }
+
     /// Deployables as of the latest snapshot.
     pub fn deployables(&self) -> &[Deployable] {
         self.snapshots.back().map_or(&[], |s| &s.deployables)
@@ -405,7 +410,7 @@ impl NetClient {
                         }
                     }
                 }
-                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } | Event::TurretShot { .. } | Event::TurretHit { .. } | Event::Captured { .. } | Event::Missile { .. } | Event::Ship { .. } => self.events.push(*e),
+                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } | Event::TurretShot { .. } | Event::TurretHit { .. } | Event::Captured { .. } | Event::Missile { .. } | Event::Ship { .. } | Event::Flag { .. } => self.events.push(*e),
             }
         }
         self.snapshots.push_back(s);

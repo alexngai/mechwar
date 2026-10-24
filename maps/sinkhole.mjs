@@ -7,7 +7,7 @@
 // (maps/kit.mjs) adds the 180-degree twin. Metrics as Riftline's: 8 m terraces, 6.5 m+ under
 // every deck, ramps near 24 degrees. A side "facing" d degrees has its outward normal d degrees
 // clockwise from north; on it, p runs outward from the center and s runs clockwise along it.
-import { bases, box, growth, lamp, once, pad, point, r3, railing, ramp, sentries, sign, silos, turned, write } from './kit.mjs';
+import { bases, box, flagStand, flags, growth, lamp, once, pad, point, r3, railing, ramp, sentries, sign, silos, turned, write } from './kit.mjs';
 
 const BASE = -29; // bottom of every rock mass
 const CYAN = '#3de0ff';
@@ -174,6 +174,9 @@ point([-15, 0, 68], [15, 0, 68], [-15, 0, 80], [15, 0, 78], [0, 0, 94], [-60, 0,
 bases([-16, 0, 88]);
 // Base guns: either side of the yard's front.
 sentries([[-17, 0, 73.5], [18, 0, 73.5]]);
+// Capture the Flag: the stand outside the yard's west wall, its back to the base guns, its doorways
+// to the rim and the west gate.
+flags(flagStand([-47, 0, 90], 0));
 // B's launch pad is between two of the bridges, open to the sky.
 silos({ at: [-70, 0, 40], radius: 10, band: 4, pad: [-75, 0, 39.5] }, { at: [0, -28, 0], radius: 14, band: 4, pad: [-4.5, -28, 7.5] });
 

@@ -4,7 +4,7 @@
 // The north half (z > 0), the east district (straddling z = 0) and the center are authored here;
 // `write` (maps/kit.mjs) adds the 180-degree twin. Metrics as Foundry's: alleys and gates 9-10 m,
 // 6.5 m under every deck and street bridge, ramps near 23 degrees, 3 m hover ledges.
-import { bases, box, growth, lamp, once, pad, point, railing, ramp, sentries, sign, silos, write } from './kit.mjs';
+import { bases, box, flagStand, flags, growth, lamp, once, pad, point, railing, ramp, sentries, sign, silos, write } from './kit.mjs';
 
 const GREEN = '#3dff8a', TEAL = '#3de0ff', MAGENTA = '#ff4fd8';
 
@@ -27,9 +27,11 @@ ramp([54, -7, 47], [70, 0, 47], 10);
 ramp([-54, -7, 47], [-70, 0, 47], 10);
 for (const x of [-45, -17, 17, 45]) {
   box([x - 5, -0.5, 42], [x + 5, 0, 52], 'metal'); // grated street bridge
-  railing([x - 5, 0, 42], [x - 5, 0, 52]);
-  railing([x + 5, 0, 42], [x + 5, 0, 52]);
+  // Railings each side, but not where the flag stand's deck joins them (below).
+  for (const rx of [x - 5, x + 5]) if (rx !== -40 && rx !== -22) railing([rx, 0, 42], [rx, 0, 52]);
 }
+// The flag stand's deck over the drain, between the west gate's bridge and the next one west.
+box([-40, -0.5, 42], [-22, 0, 52], 'metal');
 lamp([0, -7, 51]);
 lamp([35, -7, 43]);
 point([-50, -7, 47], [-30, -7, 47], [0, -7, 47], [30, -7, 47], [50, -7, 47], [76, 0, 47], [-76, 0, 47]);
@@ -127,6 +129,9 @@ pad([69, 0, 7], [65, 14, 25], 17);
 bases([-17, 0, 80]);
 // Base guns: up on the shop roofs either side of the transit ramp, over the plaza.
 sentries([[-5, 7, 64], [5, 7, 64]]);
+// Capture the Flag: the stand on its deck over the drain, by the west gate, its back to the base
+// guns and its doorways onto the next bridge west and the street beyond the drain.
+flags(flagStand([-31, 0, 47], 90, { wall: 'panel' }));
 silos({ at: [-65, 0, 8], radius: 10, band: 4, pad: [-67.5, 0, 8] }, { at: [0, 0, 0], radius: 16, band: 4, pad: [-6.5, 0, 0] });
 
 // --- Spawns, twin, write ---------------------------------------------------------------------------
