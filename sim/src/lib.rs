@@ -93,10 +93,12 @@ pub struct Tuning {
     pub shot_gravity: f32,
     pub shot_radius: f32,
     /// Spin-up primaries fire at `spin_start` of `fire_rate` from rest, reaching all of it after
-    /// `spin_up` s of trigger (0: no spin-up), and spin down over `spin_down` s.
+    /// `spin_up` s of trigger (0: no spin-up), and spin down over `spin_down` s. They hold fire
+    /// until spun for `spin_delay` s.
     pub spin_up: f32,
     pub spin_down: f32,
     pub spin_start: f32,
+    pub spin_delay: f32,
     /// Burst primaries fire `burst` shots `burst_gap` s apart per pull, `fire_rate` bursts a second.
     pub burst: f32,
     pub burst_gap: f32,
@@ -910,8 +912,10 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
         }
         m.shot = !input.fire && m.charge > 0.0 && ready;
     } else {
-        // A burst, once started, fires out whether the trigger's held or not.
-        m.shot = (input.fire || m.burst_left > 0) && ready;
+        // A burst, once started, fires out whether the trigger's held or not; a spin-up gun once
+        // its barrels have wound up (the epsilon: spin builds in DT steps).
+        let wound = t.spin_up <= 0.0 || m.spin * t.spin_up >= t.spin_delay - 1e-4;
+        m.shot = (input.fire || m.burst_left > 0) && ready && wound;
     }
     // A heat-fed launcher fires even overheated: it spends heat rather than making it.
     // Most secondaries fire on the press; a release-fired one (a lock-on launcher) when let go.
@@ -1060,6 +1064,18 @@ mod tests {
         assert!(late > 2 * early, "early {early}, late {late}");
         run(&mut sim, Input::default(), 30);
         assert_eq!(sim.mech.spin, 0.0, "never spun down");
+    }
+
+    #[test]
+    fn spin_delay_holds_fire_until_wound_up() {
+        let mut sim = weapon_sim(|t| (t.fire_rate, t.spin_up, t.spin_start, t.spin_delay, t.heat_per_shot) = (20.0, 1.2, 0.2, 0.2, 0.0));
+        let fire = Input { fire: true, ..Input::default() };
+        // 0.2 s is six ticks: the sixth fires.
+        assert_eq!(shots(&mut sim, fire, 6).first(), Some(&5));
+        // Let go briefly once spun up: still spinning, it fires again at once.
+        run(&mut sim, fire, 45);
+        run(&mut sim, Input::default(), 3);
+        assert_eq!(shots(&mut sim, fire, 1), [0]);
     }
 
     #[test]

@@ -920,6 +920,7 @@ fn shotgun_hits() {
 fn predicted_grenade_matches_server() {
     use sim::projectile::GRENADE;
     let t = unshielded();
+    let rocket = sim::Arsenal::new(&t).get(MechClass::B, base_weapons()).alt_radius;
     let mut h = Harness::new();
     let (id, watcher) = (h.clients[0].0, 1);
     // A grenade, a rocket and an EMP on one input, aimed at the floor ahead; the enemy is far beyond.
@@ -932,7 +933,7 @@ fn predicted_grenade_matches_server() {
         for e in h.game.snapshot(id).events {
             match e {
                 Event::Launch(p) => launched.push(p.n),
-                Event::Blast { n, pos, .. } => server.push((if n == GRENADE { t.grenade_radius } else { t.alt_radius }, pos)),
+                Event::Blast { n, pos, .. } => server.push((if n == GRENADE { t.grenade_radius } else { rocket }, pos)),
                 Event::Pulse { owner, hits, .. } => pulses.push((owner, hits)),
                 _ => {}
             }
