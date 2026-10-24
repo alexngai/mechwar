@@ -10,6 +10,9 @@ const WEIGHT = { A: 0.65, B: 1, C: 1.5 }; // shot and landing heft by class
 const STEP_DEPTH = { A: 1, B: 1.5, C: 2.1 }; // footsteps: even the Light stomps; the Heavy shakes the ground
 // Outside sounds reach us through the cockpit's armor: highs cut, low body lifted.
 const COCKPIT_CUTOFF = 2400; // Hz
+// Under camouflage everything, our own mech and cockpit too, sounds muffled (`stealth`).
+const STEALTH_CUTOFF = 800; // Hz
+const OPEN_CUTOFF = 20000; // Hz: the filter's off
 
 export class Sound {
   constructor() {
@@ -34,7 +37,10 @@ export class Sound {
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -16;
     comp.ratio.value = 6;
-    this.master.connect(comp).connect(ctx.destination);
+    this.veil = ctx.createBiquadFilter();
+    this.veil.type = 'lowpass';
+    this.veil.frequency.value = OPEN_CUTOFF;
+    this.master.connect(this.veil).connect(comp).connect(ctx.destination);
     // World sounds are heard through the hull: a low-body lift, then a low-pass that also dips
     // briefly when we're hit. Our own mech's sounds skip it and stay clear.
     this.muffle = ctx.createBiquadFilter();
@@ -346,6 +352,13 @@ export class Sound {
     if (!out) return;
     this.noise(out, 'white', 'bandpass', 2600, 1900, 0.001, 0.045, 0.45, 1.4);
     this.tone(out, 'triangle', 820, 700, 0.001, 0.035, 0.07);
+  }
+
+  /** Camouflage on or off: the whole mix muffles, or clears, over a moment. */
+  stealth(on) {
+    if (!this.veil || on === this.stealthed) return;
+    this.stealthed = on;
+    this.veil.frequency.setTargetAtTime(on ? STEALTH_CUTOFF : OPEN_CUTOFF, this.ctx.currentTime, 0.12);
   }
 
   /** We were hit: a clang, a thud, and the world briefly muffled. */

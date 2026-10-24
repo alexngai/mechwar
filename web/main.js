@@ -747,6 +747,7 @@ function frame(now) {
   me.root.visible = !firstPerson;
   // Camouflage shows us as a ghost: our mech in the chase view, our guns from the cockpit.
   const myCloak = curr[S.ABILITY_T] > 0 && armament(loadout).ability.id === 'cloak' ? CLOAK_SEEN : 0;
+  sound.stealth(myCloak > 0);
   me.update(dt, {
     pos, yaw, pitch, scale: T('mech_height') / me.height,
     vel: vel.set(lerp(S.VEL), lerp(S.VEL + 1), lerp(S.VEL + 2)),
