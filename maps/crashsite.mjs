@@ -505,7 +505,7 @@ const [cx, cz] = BASES[0], [sx, sz] = BASES[1];
 // cavern and on its fallen deck.
 bases([cx, 1.6, cz], [sx, 1.6, sz]);
 // Base guns: two on each base island, over its landings.
-sentries([[-91.5, 6.5, 77], [-70.5, 1.5, 73]], [[76, 1.5, -65], [76, 1.5, -81]]);
+sentries([[-91.5, 6.5, 77], [-70.5, 1.5, 73]], [[76, 1.5, -65], [63, 1.5, -84]]);
 // The pads: on the bow's sloping deck (tilted with it), on the hold's floor under the hatches, and up
 // on the stern's ridge walk over the cavern.
 silos({ at: S(-78, 0, bowTop(-78)), radius: 12, band: 4 }, { at: S(0, 0, HOLD), radius: 14, band: 5 }, { at: S(96, 0, 1), radius: 14, band: 6, pad: [67.882, 15.87, 67.882] });
