@@ -11,7 +11,18 @@
     #glass { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
     #glass[hidden] { display: none; }
     #glass.glow { filter: drop-shadow(0 0 2px rgba(255, 170, 80, 0.7)); }
-    #score { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); padding: 4px 12px; background: #0009; font-size: 14px; white-space: pre; pointer-events: none; }
+    #score { position: fixed; z-index: 2; top: 10px; left: 50%; transform: translateX(-50%); min-width: 380px; padding: 6px 20px 8px; background: #000b; border: 1px solid #ffffff1c; border-radius: 4px; text-align: center; white-space: nowrap; pointer-events: none; }
+    #score .top { font-size: 11px; letter-spacing: 2px; color: #a9b3bd; }
+    #score .top b { margin-left: 12px; font-size: 13px; color: #fff; letter-spacing: 1px; }
+    #score .main { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 3px; font-size: 21px; font-weight: bold; letter-spacing: 1px; }
+    #score .main small { font-size: 11px; font-weight: normal; letter-spacing: 2px; opacity: 0.85; }
+    #score .us { color: var(--us); } #score .them { color: var(--them); } #score .dim { color: #8d969e; }
+    #score .bar { display: inline-block; width: 64px; height: 6px; margin: 0 6px; background: #ffffff24; vertical-align: middle; }
+    #score .bar i { display: block; height: 100%; background: currentColor; }
+    #score .pip { display: inline-block; min-width: 20px; padding: 0 5px; border: 2px solid currentColor; border-radius: 3px; font-size: 15px; line-height: 20px; }
+    #score .pip.contested { animation: blink 0.5s steps(2) infinite; }
+    @keyframes blink { 50% { opacity: 0.35; } }
+    #score .state { margin-top: 4px; font-size: 13px; letter-spacing: 1px; color: #e9f1ea; }
     #banner { position: fixed; top: 30%; left: 0; right: 0; text-align: center; font-size: 28px; letter-spacing: 2px; text-shadow: 0 2px 6px #000; pointer-events: none; }
     #score:empty, #banner:empty, #summary:empty { display: none; }
     #summary { position: fixed; top: calc(30% + 46px); left: 50%; transform: translateX(-50%); padding: 8px 18px; text-align: center; font-size: 14px; line-height: 1.6; letter-spacing: 1px; color: #ffc46a; background: #0a0d10e0; border: 1px solid #ffc46a55; pointer-events: none; }

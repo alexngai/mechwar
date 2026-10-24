@@ -2,6 +2,9 @@
 //! format can't drift between client and server.
 
 use crate::deploy::Deployable;
+use crate::game::Mode;
+use crate::objective::ZoneState;
+use crate::siege::SiegeNet;
 use crate::progress::MatchXp;
 use crate::projectile::Projectile;
 use crate::{Input, Loadout, Mech, MechClass, Slot, Vector};
@@ -58,6 +61,10 @@ pub struct Snapshot {
     pub orbs: Vec<Orb>,
     pub clouds: Vec<Cloud>,
     pub deployables: Vec<Deployable>,
+    /// Missile Assault's silos, A to C, or Siege's AA gun (empty in other modes).
+    pub zones: Vec<ZoneState>,
+    /// Siege's stations, banks and drops.
+    pub siege: Option<SiegeNet>,
     /// In the hangar (destroyed, or not launched yet): seconds until it can launch (0: now).
     /// None while out in the arena.
     pub hangar: Option<f32>,
@@ -94,6 +101,10 @@ pub struct PlayerNet {
     pub bot: bool,
     pub kills: u16,
     pub deaths: u16,
+    /// Kill credit this match (`Game`'s POINTS_PER_KILL a kill), and objective points.
+    pub points: u16,
+    /// Siege energy carried.
+    pub eu: u8,
     /// In the hangar with its wreck cleared: not drawn.
     pub docked: bool,
     pub view: MechView,
@@ -132,10 +143,16 @@ impl From<&Mech> for MechView {
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct MatchState {
-    /// The map being played, and the one the next match will be on (indices into `map::MAPS`).
+    /// The mode and map being played, and the next match's (maps index `map::MAPS`).
+    pub mode: Mode,
     pub map: u8,
+    pub next_mode: Mode,
     pub next_map: u8,
+    /// Team kills; in Deathmatch, the leader's and the runner-up's points; in Missile Assault and
+    /// Siege, the bases' hull.
     pub scores: [u16; 2],
+    /// Team kills that win it; in Deathmatch, as many solo kills' worth of points.
+    pub limit: u16,
     /// Until the match ends, or after it ends, until the next one starts.
     pub seconds_left: u16,
     pub ended: bool,
@@ -146,7 +163,9 @@ pub struct MatchState {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum Event {
     Shot { shooter: u8, end: Vector, hit: Option<u8> },
-    Kill { killer: u8, victim: u8 },
+    /// `assists` has bit `id` set for each other player who dealt enough of the victim's damage
+    /// to count an assist (`progress::ASSIST_SHARE`).
+    Kill { killer: u8, victim: u8, assists: u16 },
     /// A projectile (secondary, or a projectile primary) leaving its owner, before its first tick of flight; clients replay it.
     Launch(Projectile),
     /// A projectile burst at `pos`. `hits` has bit `id` set for each player its splash hurt.
@@ -159,6 +178,12 @@ pub enum Event {
     TurretShot { owner: u8, end: Vector, hit: Option<u8> },
     /// Player `attacker` hit a turret (and `wrecked` it).
     TurretHit { attacker: u8, wrecked: bool },
+    /// `team` took zone `zone` (a silo, by its index).
+    Captured { zone: u8, team: u8 },
+    /// Silo `silo`, held by `team`, fired at the other team's base; it lands after `objective::MISSILE_FLIGHT`.
+    Missile { silo: u8, team: u8 },
+    /// `team`'s battleship launched (`up`) or went down.
+    Ship { team: u8, up: bool },
 }
 
 pub fn encode<T: Serialize>(msg: &T) -> Vec<u8> {

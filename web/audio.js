@@ -79,6 +79,8 @@ export class Sound {
     this.applyVolume();
     this.loops = { own: this.loop(null), remote: Array.from({ length: THRUST_SLOTS }, () => this.loop(ctx.createPanner())) };
     this.jets = Array.from({ length: EXHAUST_SLOTS }, () => this.jet(ctx.createPanner()));
+    this.hulls = [0, 1].map(() => this.drone(ctx.createPanner()));
+    this.gatherLoop();
     this.remoteThrust = new Map();
     this.cockpitLoops();
   }
@@ -380,6 +382,101 @@ export class Sound {
     this.noise(out, 'brown', 'lowpass', 900, 90, 0.005, life, Math.min(0.7 + 0.3 * size, 1.3));
     this.tone(out, 'sine', 56, 19, 0.005, life + 0.2, Math.min(0.6 + 0.35 * size, 1.2));
     this.noise(out, 'white', 'lowpass', 2200, 600, 0.002, 0.1, 0.3 * size);
+  }
+
+  /**
+   * A silo launching at `pos`: the hatch unlocking with a clank, its doors grinding apart, a blast
+   * of steam, then the rocket lighting: a roar building over a deep thump.
+   */
+  silo(pos) {
+    const out = this.voice(pos, 3.4, undefined, 0.3);
+    if (!out) return;
+    out.gain.value = 1.6;
+    this.noise(out, 'white', 'bandpass', 900, 700, 0.002, 0.08, 0.6, 3);
+    this.tone(out, 'triangle', 140, 120, 0.002, 0.2, 0.4);
+    this.growl(out, 'sawtooth', 70, 52, 380, 0.15, 0.7, 0.3, 0.06);
+    this.noise(out, 'white', 'highpass', 1800, 900, 0.05, 0.9, 0.35, 0.7, 0.45);
+    this.noise(out, 'brown', 'lowpass', 260, 900, 0.9, 1.9, 1.2, 1, 0.9);
+    this.tone(out, 'sine', 48, 30, 0.01, 1.6, 1.0, 0.95);
+  }
+
+  /**
+   * An objective changing hands: one plain tone, higher when it's `took` (ours now) than when it's
+   * `lost` (ours no more) or `enemy` (theirs now).
+   */
+  zone(kind) {
+    const out = this.voice(null, 0.6, this.ui);
+    if (!out) return;
+    const f = kind === 'took' ? 587 : 294;
+    this.tone(out, 'triangle', f, f, 0.01, 0.42, 0.3);
+    this.tone(out, 'sine', f / 2, f / 2, 0.01, 0.42, 0.12);
+  }
+
+  /**
+   * A blip while we take an objective, rising two octaves as it comes our way (`share`: 0 theirs,
+   * 0.5 neutral, 1 ours); a low double buzz while it's contested.
+   */
+  capturing(share, contested) {
+    const out = this.voice(null, 0.3, this.ui);
+    if (!out) return;
+    if (contested) {
+      this.tone(out, 'square', 110, 104, 0.003, 0.07, 0.09);
+      this.tone(out, 'square', 110, 104, 0.003, 0.07, 0.09, 0.12);
+      return;
+    }
+    const f = 330 * 2 ** (2 * share);
+    this.tone(out, 'sine', f, f, 0.003, 0.09, 0.17);
+    this.tone(out, 'triangle', 2 * f, 2 * f, 0.003, 0.05, 0.04);
+  }
+
+  /**
+   * A battleship lifting off at `pos`: a deep boom, then a long, bass-heavy rumble of engines
+   * spooling up. Heard everywhere: in 3D near it, and as distant thunder through the hull past that.
+   */
+  shipLaunch(pos) {
+    const l = this.listener, near = pos && Math.hypot(pos.x - l.x, pos.y - l.y, pos.z - l.z) <= MAX_DISTANCE;
+    const out = this.voice(near ? pos : null, 5.2, this.world, 0.4);
+    if (!out) return;
+    out.gain.value = near ? 3.2 : 0.7;
+    this.tone(out, 'sine', 52, 30, 0.01, 1.4, 1.2);
+    this.noise(out, 'brown', 'lowpass', 600, 90, 0.005, 1.0, 1.0);
+    this.noise(out, 'brown', 'lowpass', 90, 240, 1.2, 3.6, 1.3, 1, 0.3);
+    this.tone(out, 'sine', 31, 38, 1.0, 3.8, 1.1, 0.4);
+    this.growl(out, 'sawtooth', 44, 58, 160, 1.4, 3.2, 0.5, 0.5);
+  }
+
+  /** A battleship's gun at `pos`: a heavy cannon report, all low end, with a long tail. */
+  shipGun(pos) {
+    const out = this.voice(pos, 1.2, undefined, 0.4);
+    if (!out) return;
+    out.gain.value = 2.6;
+    this.tone(out, 'sine', 74, 28, 0.003, 0.7, 1.2);
+    this.noise(out, 'brown', 'lowpass', 520, 70, 0.003, 0.8, 1.1);
+    this.noise(out, 'white', 'lowpass', 2400, 400, 0.001, 0.06, 0.35);
+    this.growl(out, 'sawtooth', 60, 32, 140, 0.005, 0.5, 0.4);
+  }
+
+  /**
+   * Energy banked: a heavy latch, the charge draining off up a rising sweep, and a settled tone.
+   * `ours` is for our own deposit, else (softer) a teammate's.
+   */
+  deposit(ours) {
+    const out = this.voice(null, 0.8, this.ui);
+    if (!out) return;
+    out.gain.value = ours ? 1 : 0.4;
+    this.tone(out, 'triangle', 150, 90, 0.002, 0.12, 0.5);
+    this.noise(out, 'white', 'bandpass', 1200, 800, 0.002, 0.05, 0.35, 3);
+    this.tone(out, 'sine', 220, 880, 0.02, 0.3, 0.18, 0.06);
+    this.noise(out, 'white', 'bandpass', 900, 4200, 0.02, 0.3, 0.08, 2, 0.06);
+    this.tone(out, 'sine', 523, 523, 0.01, 0.4, 0.16, 0.34);
+  }
+
+  /** Our hold just filled with energy: one soft, plain tone. */
+  full() {
+    const out = this.voice(null, 0.5, this.ui);
+    if (!out) return;
+    this.tone(out, 'sine', 440, 440, 0.01, 0.35, 0.22);
+    this.tone(out, 'triangle', 880, 880, 0.01, 0.2, 0.05);
   }
 
   /** A mech destroyed: a big blast and a metal crunch. */
@@ -696,16 +793,16 @@ export class Sound {
     return { band, gain, panner };
   }
 
-  /** Rockets and darts in flight this frame, as [{ x, y, z, dart }]: the nearest few roar along with them. */
+  /** Rockets and darts in flight this frame, as [{ x, y, z, dart, big }] (big: a silo's rocket): the nearest few roar along with them. */
   exhausts(list) {
     if (!this.running) return;
     const l = this.listener, t = this.ctx.currentTime;
     const near = list.sort((a, b) => dist2(a, l) - dist2(b, l)).slice(0, EXHAUST_SLOTS);
     this.jets.forEach((jet, i) => {
       const o = near[i];
-      jet.gain.gain.setTargetAtTime(o ? (o.dart ? 0.2 : 0.55) : 0, t, o ? 0.02 : 0.06);
+      jet.gain.gain.setTargetAtTime(o ? (o.big ? 1.1 : o.dart ? 0.2 : 0.55) : 0, t, o ? 0.02 : 0.06);
       if (!o) return;
-      jet.band.frequency.setTargetAtTime(o.dart ? 2600 : 1100, t, 0.02);
+      jet.band.frequency.setTargetAtTime(o.big ? 520 : o.dart ? 2600 : 1100, t, 0.02);
       if (jet.panner.positionX) {
         jet.panner.positionX.setTargetAtTime(o.x, t, 0.01);
         jet.panner.positionY.setTargetAtTime(o.y, t, 0.01);
@@ -714,6 +811,103 @@ export class Sound {
         jet.panner.setPosition(o.x, o.y, o.z);
       }
     });
+  }
+
+  /**
+   * A battleship's engines: a sub-bass drone (two low sines a fifth apart, beating slowly, over
+   * low-passed brown noise), silent until `ships` drives it; heard from far off.
+   */
+  drone(panner) {
+    const { ctx } = this;
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    Object.assign(panner, { panningModel: 'equalpower', distanceModel: 'inverse', refDistance: 30, maxDistance: 600, rolloffFactor: 1 });
+    gain.connect(panner).connect(this.world);
+    for (const [f, level] of [[34, 0.9], [51.3, 0.5]]) {
+      const osc = ctx.createOscillator();
+      osc.frequency.value = f;
+      const g = ctx.createGain();
+      g.gain.value = level;
+      osc.connect(g).connect(gain);
+      osc.start();
+    }
+    const rumble = ctx.createBufferSource();
+    rumble.buffer = this.brown;
+    rumble.loop = true;
+    const low = ctx.createBiquadFilter();
+    low.type = 'lowpass';
+    low.frequency.value = 140;
+    rumble.connect(low).connect(gain);
+    rumble.start(0, Math.random());
+    return { gain, panner };
+  }
+
+  /** The battleships up this frame, as [{ x, y, z }]: each drones from where it is. */
+  ships(list) {
+    if (!this.running) return;
+    const t = this.ctx.currentTime;
+    this.hulls.forEach((hull, i) => {
+      const o = list[i];
+      hull.gain.gain.setTargetAtTime(o ? 1.6 : 0, t, o ? 0.4 : 0.8);
+      if (!o) return;
+      if (hull.panner.positionX) {
+        hull.panner.positionX.setTargetAtTime(o.x, t, 0.05);
+        hull.panner.positionY.setTargetAtTime(o.y, t, 0.05);
+        hull.panner.positionZ.setTargetAtTime(o.z, t, 0.05);
+      } else {
+        hull.panner.setPosition(o.x, o.y, o.z);
+      }
+    });
+  }
+
+  /**
+   * Drawing energy: a soft hum with a shimmer on it, pulsing, that climbs as the hold fills; built
+   * once on unlock, silent until `gathering` drives it.
+   */
+  gatherLoop() {
+    const { ctx } = this;
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    gain.connect(this.cockpitBus);
+    const pulse = ctx.createGain();
+    pulse.gain.value = 0.7;
+    pulse.connect(gain);
+    const lfo = ctx.createOscillator(), depth = ctx.createGain();
+    lfo.frequency.value = 7;
+    depth.gain.value = 0.3;
+    lfo.connect(depth).connect(pulse.gain);
+    lfo.start();
+    const tones = [['sine', 1, 0.5], ['triangle', 2, 0.12], ['sine', 3.01, 0.05]].map(([type, mult, level]) => {
+      const osc = ctx.createOscillator();
+      osc.type = type;
+      const g = ctx.createGain();
+      g.gain.value = level;
+      osc.connect(g).connect(pulse);
+      osc.start();
+      return { osc, mult };
+    });
+    const hiss = ctx.createBufferSource();
+    hiss.buffer = this.white;
+    hiss.loop = true;
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.frequency.value = 3200;
+    band.Q.value = 2;
+    const hissGain = ctx.createGain();
+    hissGain.gain.value = 0.04;
+    hiss.connect(band).connect(hissGain).connect(pulse);
+    hiss.start(0, Math.random());
+    this.gatherNodes = { gain, tones };
+  }
+
+  /** Drawing energy with the hold `share` full (0 to 1), or not (null): the hum on, climbing, or off. */
+  gathering(share) {
+    if (!this.running || !this.gatherNodes) return;
+    const t = this.ctx.currentTime, { gain, tones } = this.gatherNodes;
+    gain.gain.setTargetAtTime(share === null ? 0 : 0.22, t, share === null ? 0.08 : 0.05);
+    if (share === null) return;
+    const f = 160 * 2 ** (1.3 * share);
+    for (const { osc, mult } of tones) osc.frequency.setTargetAtTime(f * mult, t, 0.05);
   }
 
   /** The repair drone's whir and the Gatling's spool; built once on unlock. */

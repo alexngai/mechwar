@@ -64,6 +64,40 @@ pub struct Pad {
     pub apex: f32,
 }
 
+/// A capture zone: mechs with their feet within `radius` of `at` across, and `band` up or down,
+/// stand in it. A silo's `pad` is where its launch pad lies (on a surface, under open sky): in the
+/// zone, or over it where the zone is roofed.
+#[derive(Deserialize, Clone, Copy, Debug)]
+pub struct ZoneSpot {
+    pub at: [f32; 3],
+    pub radius: f32,
+    pub band: f32,
+    #[serde(default)]
+    pub pad: Option<[f32; 3]>,
+}
+
+/// Where a map's objective modes play.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct Objectives {
+    /// Each team's base, team 0's first: where missiles land.
+    #[serde(default)]
+    pub bases: Option<[[f32; 3]; 2]>,
+    /// Missile Assault's silos: A (team 0's side), B, C.
+    #[serde(default)]
+    pub silos: Vec<ZoneSpot>,
+    /// Siege's energy station (one, mid-map, for the teams to fight over), its anti-air gun's
+    /// zone, and how high its ships cruise.
+    #[serde(default)]
+    pub stations: Vec<ZoneSpot>,
+    #[serde(default)]
+    pub aa: Option<ZoneSpot>,
+    #[serde(default)]
+    pub sky: Option<f32>,
+    /// Each team's base guns (team 0's first), in every team mode: where each stands.
+    #[serde(default)]
+    pub sentries: [Vec<[f32; 3]>; 2],
+}
+
 #[derive(Deserialize, Clone, Debug)]
 pub struct Map {
     pub name: String,
@@ -78,6 +112,8 @@ pub struct Map {
     pub size: [f32; 2],
     #[serde(default)]
     pub terrain: Option<Terrain>,
+    #[serde(default)]
+    pub objectives: Objectives,
 }
 
 impl Map {
@@ -123,7 +159,7 @@ mod tests {
         let n = (size / cell) as usize + 1;
         let at = |i: usize| i as f32 * cell - size / 2.0;
         let heights = (0..n).map(|r| (0..n).map(|c| height(at(c), at(r))).collect()).collect();
-        Map { name: "hills".into(), solids: vec![], spawns: [vec![], vec![]], nav: vec![], pads: vec![], size: [size, size], terrain: Some(Terrain { cell, heights }) }
+        Map { name: "hills".into(), solids: vec![], spawns: [vec![], vec![]], nav: vec![], pads: vec![], size: [size, size], terrain: Some(Terrain { cell, heights }), objectives: Objectives::default() }
     }
 
     /// The ground at (x, z) on the triangles `Terrain` documents (maps/kit.mjs's `heightAt`).

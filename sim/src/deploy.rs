@@ -13,6 +13,11 @@
 //! (`gap`), till it breaks. A turret is a tripod gun that trains on the nearest enemy it can see
 //! (`train`) and fires at it; mechs walk through it, and the other side's shots hit it
 //! (`first_turret`).
+//!
+//! A Siege battleship is one too (`Kind::Ship`, owned by no player: see `ship_owner`), so it's
+//! shot, locked onto and fought like a turret, and guns mechs down like an MG turret; `siege.rs`
+//! flies it. So are the base guns of the team modes (`Kind::Sentry`, nobody's either: see
+//! `sentry_owner`), manned like MG turrets, but part of the base: not shot, nor locked onto.
 
 use rapier3d::parry::query::RayCast;
 use rapier3d::prelude::{Capsule, Collider, ColliderBuilder, ColliderHandle, Pose, Ray, Rotation};
@@ -27,12 +32,37 @@ pub enum Kind {
     Barrier,
     MgTurret,
     RocketTurret,
+    Ship,
+    Sentry,
 }
 
 impl Kind {
+    /// Shot at, locked onto and fought like a turret.
     pub fn turret(self) -> bool {
-        matches!(self, Kind::MgTurret | Kind::RocketTurret)
+        matches!(self, Kind::MgTurret | Kind::RocketTurret | Kind::Ship)
     }
+
+    /// Manned: trains on enemies and fires (`Game::man_turrets`).
+    pub fn armed(self) -> bool {
+        self.turret() || self == Kind::Sentry
+    }
+}
+
+/// A base gun's muzzle, this high over its foot (on its tower).
+pub const SENTRY_HEIGHT: f32 = 5.5;
+
+/// The owner id of `team`'s base gun number `k`: past every player's and the ships', so it's
+/// nobody's.
+pub fn sentry_owner(team: u8, k: usize) -> u8 {
+    crate::game::MAX_PLAYERS as u8 + 2 + 2 * team + k as u8
+}
+
+/// A ship's hull as shots meet it: a ball about this big around its middle.
+pub const SHIP_RADIUS: f32 = 10.0;
+
+/// The owner id of `team`'s ship: past every player's, so it's nobody's.
+pub fn ship_owner(team: u8) -> u8 {
+    crate::game::MAX_PLAYERS as u8 + team
 }
 
 /// A turret's gun is on target once trained within this of its aim, in yaw and pitch (radians).
@@ -101,6 +131,7 @@ pub fn place<'a>(arena: &Arena, t: &Tuning, m: &Mech, kind: Kind, team: u8, owne
         Kind::Dome => (m.pos, t.dome_seconds, t.dome_hull),
         Kind::Barrier => (ahead(t.barrier_distance, t.barrier_thickness * 0.5 + 0.1), t.barrier_seconds, t.barrier_hull),
         Kind::MgTurret | Kind::RocketTurret => (ahead(t.turret_distance, t.turret_radius + 0.1), t.turret_seconds, t.turret_hull),
+        Kind::Ship | Kind::Sentry => unreachable!("ships are launched and base guns built, not put down"),
     };
     // The ground below, from a little over the mech's feet (so a barrier on a slope or step finds it).
     let from = Vector::new(at.x, m.pos.y + 2.0, at.z);
@@ -110,9 +141,13 @@ pub fn place<'a>(arena: &Arena, t: &Tuning, m: &Mech, kind: Kind, team: u8, owne
     (kind != Kind::Barrier || !mechs.any(|(tm, q)| d.blocks(t, tm, q))).then_some(d)
 }
 
-/// Where turret `d`'s gun is.
+/// Where turret `d`'s gun is (a ship's, under its hull).
 pub fn gun(t: &Tuning, d: &Deployable) -> Vector {
-    d.pos + Vector::Y * t.turret_height
+    match d.kind {
+        Kind::Ship => d.pos - Vector::Y * (SHIP_RADIUS * 0.6),
+        Kind::Sentry => d.pos + Vector::Y * SENTRY_HEIGHT,
+        _ => d.pos + Vector::Y * t.turret_height,
+    }
 }
 
 /// Turret `d`'s id for lock-on and homing (see `TARGET`).
@@ -131,14 +166,21 @@ pub fn targets<'a>(list: &'a [Deployable], t: &'a Tuning, which: impl Fn(&Deploy
     list.iter().filter(move |d| d.kind.turret() && d.hull > 0.0 && which(d)).map(|d| (target_id(d), gun(t, d)))
 }
 
-/// Turret `d`'s body, for shots to hit: a capsule up to its gun, and its center.
+/// Turret `d`'s body, for shots to hit: a capsule up to its gun (a ship's, round its middle at
+/// `pos`), and its center.
 fn body(t: &Tuning, d: &Deployable) -> (Capsule, Vector) {
+    if d.kind == Kind::Ship {
+        return (Capsule::new_y(1.0, SHIP_RADIUS), d.pos);
+    }
     let r = t.turret_radius.min(t.turret_height * 0.5);
     (Capsule::new_y(t.turret_height * 0.5 - r, r), d.pos + Vector::Y * (t.turret_height * 0.5))
 }
 
 /// Turret `d` as a stand-in mech, with the tuning that sizes it as one (for splash).
 pub fn as_mech(t: &Tuning, d: &Deployable) -> (Tuning, Mech) {
+    if d.kind == Kind::Ship {
+        return (Tuning { mech_height: 2.0 * SHIP_RADIUS, mech_radius: SHIP_RADIUS, ..t.clone() }, Mech { pos: d.pos - Vector::Y * SHIP_RADIUS, ..Mech::default() });
+    }
     (Tuning { mech_height: t.turret_height, mech_radius: t.turret_radius, ..t.clone() }, Mech { pos: d.pos, ..Mech::default() })
 }
 
@@ -176,7 +218,7 @@ pub fn gap(t: &Tuning, d: &Deployable, at: Vector) -> f32 {
 
 /// The standing dome or barrier of another side than `team` that a shot stopping at `at` landed on.
 pub fn struck(list: &[Deployable], t: &Tuning, team: u8, at: Vector) -> Option<usize> {
-    list.iter().position(|d| !d.kind.turret() && d.team != team && d.hull > 0.0 && gap(t, d, at) < 0.01)
+    list.iter().position(|d| matches!(d.kind, Kind::Dome | Kind::Barrier) && d.team != team && d.hull > 0.0 && gap(t, d, at) < 0.01)
 }
 
 /// `list` with `d` added, in place of any of its owner's of the same kind.

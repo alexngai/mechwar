@@ -2,6 +2,7 @@
 
 use crate::client::{Drawn, NetClient};
 use crate::deploy::Deployable;
+use crate::game::Mode;
 use crate::net::{Cloud, Event};
 use crate::arsenal::{classes_json, weapons_json};
 use crate::{Arena, Arsenal, DT, Input, Loadout, Mech, MechClass, Sim, Slot, Tuning, Vector, map};
@@ -30,7 +31,7 @@ fn mech_state(m: &Mech) -> Vec<f32> {
     ]
 }
 
-/// Ten floats per deployable: kind (0 dome, 1 barrier, 2 MG turret, 3 rocket turret), team,
+/// Ten floats per deployable: kind (0 dome, 1 barrier, 2 MG turret, 3 rocket turret, 4 battleship, 5 base gun), team,
 /// owner, base xyz, facing yaw and pitch, seconds left as of tick `now`, and hull left (infinite
 /// for a dome or barrier).
 fn deployable_floats(list: &[Deployable], now: u32) -> Vec<f32> {
@@ -257,12 +258,13 @@ impl WasmNetClient {
         self.0.progress.take().map_or_else(String::new, |(record, end)| serde_json::json!({ "record": record, "end": end }).to_string())
     }
 
-    /// Six floats per player, us included, for the scoreboard: id, team, class, bot (0/1), kills, deaths.
+    /// Seven floats per player, us included, for the scoreboard: id, team, class, bot (0/1), kills,
+    /// deaths, points.
     pub fn board(&self) -> Vec<f32> {
         self.0
             .board()
             .iter()
-            .flat_map(|p| [f32::from(p.id), f32::from(p.team), p.class.index() as f32, if p.bot { 1.0 } else { 0.0 }, f32::from(p.kills), f32::from(p.deaths)])
+            .flat_map(|p| [f32::from(p.id), f32::from(p.team), p.class.index() as f32, if p.bot { 1.0 } else { 0.0 }, f32::from(p.kills), f32::from(p.deaths), f32::from(p.points)])
             .collect()
     }
 
@@ -281,6 +283,18 @@ impl WasmNetClient {
     /// What's been put down; see `deployable_floats`.
     pub fn deployables(&self) -> Vec<f32> {
         deployable_floats(self.0.deployables(), self.0.clouds().1)
+    }
+
+    /// Three floats per Missile Assault silo, A to C: the team holding it (-1: none), the capture's
+    /// progress (-1 team 1's to 1 team 0's), contested (0/1).
+    pub fn zones(&self) -> Vec<f32> {
+        self.0.zones().iter().flat_map(|z| [z.owner.map_or(-1.0, f32::from), z.progress, if z.contested { 1.0 } else { 0.0 }]).collect()
+    }
+
+    /// Siege as of the latest snapshot: each station's EU (as many as the map has), each team's
+    /// bank, then four floats per drop (xyz, EU). Empty outside Siege.
+    pub fn siege(&self) -> Vec<f32> {
+        self.0.siege().map_or_else(Vec::new, |s| s.stations.iter().copied().chain(s.banks).chain(s.drops.iter().flat_map(|d| [d.at.x, d.at.y, d.at.z, d.eu])).collect())
     }
 
     /// Index of the server's map, or -1 before the Welcome.
@@ -323,10 +337,12 @@ impl WasmNetClient {
 
     /// Six floats per event since the last call: kind, a, b, x, y, z.
     /// Shot (kind 0): a = shooter, b = hit id or -1, xyz = where it stopped. Kill (kind 1): a = killer,
-    /// b = victim. Blast (kind 2): a = the shot's charge (0-1), b = blast radius, xyz = where.
-    /// Splash hit (kind 3): a = attacker, b = victim. EMP (kind 4): a = owner, b = bitmask of the
-    /// ids it jammed, xyz = where. Beam (kind 5): a = owner, b = id it's on or -1, xyz = where it
-    /// stops. Turret round (kind 6): a = the MG
+    /// b = victim, x = bitmask of the ids credited with an assist. Blast (kind 2): a = the shot's
+    /// charge (0-1), b = blast radius, xyz = where. Splash hit (kind 3): a = attacker, b = victim.
+    /// EMP (kind 4): a = owner, b = bitmask of the ids it jammed, xyz = where. Beam (kind 5): a =
+    /// owner, b = id it's on or -1, xyz = where it stops. Captured (kind 8): a = zone, b = team.
+    /// Missile (kind 9): a = silo, b = the team that fired it. Ship (kind 10): a = team, b = 1
+    /// launched, 0 down. Turret round (kind 6): a = the MG
     /// turret's owner, b = hit id or -1, xyz = where it stopped. Turret hit (kind 7): a = who hit
     /// it, b = 1 if that wrecked it.
     pub fn take_events(&mut self) -> Vec<f32> {
@@ -336,11 +352,14 @@ impl WasmNetClient {
                 Event::Shot { shooter, end, hit } => {
                     out.extend([0.0, f32::from(shooter), hit.map_or(-1.0, f32::from), end.x, end.y, end.z]);
                 }
-                Event::Kill { killer, victim } => out.extend([1.0, f32::from(killer), f32::from(victim), 0.0, 0.0, 0.0]),
+                Event::Kill { killer, victim, assists } => out.extend([1.0, f32::from(killer), f32::from(victim), f32::from(assists), 0.0, 0.0]),
                 Event::Pulse { owner, pos, hits } => out.extend([4.0, f32::from(owner), f32::from(hits), pos.x, pos.y, pos.z]),
                 Event::Beam { owner, end, hit } => out.extend([5.0, f32::from(owner), hit.map_or(-1.0, f32::from), end.x, end.y, end.z]),
                 Event::TurretShot { owner, end, hit } => out.extend([6.0, f32::from(owner), hit.map_or(-1.0, f32::from), end.x, end.y, end.z]),
                 Event::TurretHit { attacker, wrecked } => out.extend([7.0, f32::from(attacker), if wrecked { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0]),
+                Event::Captured { zone, team } => out.extend([8.0, f32::from(zone), f32::from(team), 0.0, 0.0, 0.0]),
+                Event::Missile { silo, team } => out.extend([9.0, f32::from(silo), f32::from(team), 0.0, 0.0, 0.0]),
+                Event::Ship { team, up } => out.extend([10.0, f32::from(team), if up { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0]),
                 // The client turns these into the blasts and hits below.
                 Event::Launch(_) | Event::Blast { .. } => {}
             }
@@ -355,9 +374,11 @@ impl WasmNetClient {
     }
 
     /// id (-1 until welcomed), kills, deaths, ping ms, last correction m, full (0/1), team,
-    /// team 0 score, team 1 score, seconds left, ended (0/1), winner (-1 for none or a draw), class,
-    /// next match's map, primary, secondary, seconds until we can launch from the hangar (-1 when
-    /// out in the arena), offensive item, support item, ability.
+    /// team 0 score, team 1 score (in Deathmatch: the top two's points), seconds left, ended (0/1),
+    /// winner (-1 for none or a draw; in Deathmatch a player id), class, next match's map, primary,
+    /// secondary, seconds until we can launch from the hangar (-1 when out in the arena), offensive
+    /// item, support item, ability, mode, next match's mode (modes index `Mode::ALL`), Siege energy
+    /// carried, the score limit (team kills; in Deathmatch, solo kills' worth of points).
     pub fn hud(&self) -> Vec<f32> {
         let (c, s) = (&self.0, &self.0.state);
         vec![
@@ -381,8 +402,22 @@ impl WasmNetClient {
             f32::from(c.loadout.offensive),
             f32::from(c.loadout.support),
             f32::from(c.loadout.ability),
+            mode_index(s.mode),
+            mode_index(s.next_mode),
+            c.board().iter().find(|p| Some(p.id) == c.id).map_or(0.0, |p| f32::from(p.eu)),
+            f32::from(s.limit),
         ]
     }
+}
+
+fn mode_index(mode: Mode) -> f32 {
+    Mode::ALL.iter().position(|&m| m == mode).unwrap_or(0) as f32
+}
+
+/// Name of mode `i` (`Mode::ALL`'s order), as players see it, or "" past the end.
+#[wasm_bindgen]
+pub fn mode_name(i: u8) -> String {
+    Mode::ALL.get(usize::from(i)).map_or(String::new(), |m| m.name().into())
 }
 
 /// Name of compiled-in map `i` (matching a file in maps/), or "" past the end.

@@ -1,11 +1,12 @@
 //! Serves the built client, a small lobby API and the game WebSocket on one port. Every room is
 //! its own match on its own 30 Hz loop (a tokio task); each connection gets a reader and a writer
 //! task and joins one room. Env: `PORT` (9001), `STATIC_DIR` (`dist`), `LAG_MS` (one-way delay
-//! for testing), and quick play's room settings: `MAP` (one map; else the rotation),
-//! `SCORE_LIMIT`, `MATCH_SECONDS`, `BOT_SKILL` (`easy`, `normal`, `hard`, or 0 to 1). And
+//! for testing), and quick play's room settings: `MODE` (`tdm`, `dm`, `ma` or `siege`; else every mode in turn),
+//! `MAP` (one map; else the rotation), `SCORE_LIMIT`, `MATCH_SECONDS`, `BOT_SKILL` (`easy`,
+//! `normal`, `hard`, or 0 to 1). And
 //! `PROGRESS_KEY`, the secret that signs progression records (a dev key stands in without it).
 //!
-//! Lobby API: `GET /api/rooms` lists the public rooms and the maps; `POST /api/rooms` opens one
+//! Lobby API: `GET /api/rooms` lists the public rooms, the modes and the maps; `POST /api/rooms` opens one
 //! from JSON settings; `POST /api/quick` picks a quick-play room (opening one if none fits);
 //! `GET /api/rooms/{code}` looks one up. Each room answers with its info, including the `code`
 //! that `/ws?room={code}` joins (`/ws` alone joins quick play). `POST /api/progress` checks a
@@ -37,7 +38,7 @@ use futures_util::{SinkExt, StreamExt};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use sim::game::{Game, MAX_PLAYERS};
+use sim::game::{Game, MAX_PLAYERS, Mode};
 use sim::map::{MAPS, ROTATION};
 use sim::net::{self, ClientMsg, ServerMsg};
 use sim::progress::{MatchXp, RECORD_VERSION, Record, Tally};
@@ -75,12 +76,13 @@ enum Cmd {
     Leave(u8),
 }
 
-/// How a room plays: its name, whether the lobby lists it, one map or the rotation, and its
-/// match and bot settings.
+/// How a room plays: its name, whether the lobby lists it, one mode or every mode in turn, one
+/// map or the rotation, and its match and bot settings.
 #[derive(Clone, Debug)]
 struct Settings {
     name: String,
     public: bool,
+    mode: Option<Mode>,
     map: Option<usize>,
     score_limit: u16,
     match_seconds: f32,
@@ -94,6 +96,8 @@ struct RoomInfo {
     code: String,
     name: String,
     public: bool,
+    /// The mode being played (`Mode::key`).
+    mode: &'static str,
     map: String,
     humans: usize,
     bots: usize,
@@ -166,10 +170,14 @@ async fn main() {
     let static_dir = env::var("STATIC_DIR").unwrap_or_else(|_| "dist".into());
     let seed = SystemTime::now().duration_since(UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64) | 1;
 
-    let mut quick = Settings { name: "Quick play".into(), public: true, map: None, score_limit: 25, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
+    let mut quick = Settings { name: "Quick play".into(), public: true, mode: None, map: None, score_limit: 25, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
+    if let Ok(key) = env::var("MODE") {
+        quick.mode = Some(Mode::from_key(&key).expect("MODE must be tdm, dm, ma or siege"));
+    }
     if let Ok(name) = env::var("MAP") {
         quick.map = Some(Map::index(&name).expect("MAP must name a map in maps/"));
     }
+    assert!(!deck(&quick).is_empty(), "MAP doesn't play MODE");
     if let Ok(v) = env::var("SCORE_LIMIT") {
         quick.score_limit = v.parse().expect("SCORE_LIMIT must be a kill count");
     }
@@ -207,11 +215,12 @@ async fn main() {
     std::process::exit(1);
 }
 
-/// The lobby's view: public rooms, busiest first, and the maps a room can be pinned to, each as
-/// [key, name] ("crashsite", "Crash Site").
+/// The lobby's view: public rooms, busiest first, and the modes and maps a room can be pinned
+/// to, each as [key, name] ("crashsite", "Crash Site").
 #[derive(Serialize)]
 struct Lobby {
     rooms: Vec<RoomInfo>,
+    modes: Vec<(&'static str, &'static str)>,
     maps: &'static [(&'static str, String)],
 }
 
@@ -222,7 +231,7 @@ static MAP_NAMES: LazyLock<Vec<(&'static str, String)>> =
 async fn list(State(app): State<App>) -> Json<Lobby> {
     let mut rooms: Vec<RoomInfo> = infos(&app.rooms).into_iter().filter(|r| r.public).collect();
     rooms.sort_by(|a, b| b.humans.cmp(&a.humans).then_with(|| a.code.cmp(&b.code)));
-    Json(Lobby { rooms, maps: &MAP_NAMES })
+    Json(Lobby { rooms, modes: Mode::ALL.iter().map(|m| (m.key(), m.name())).collect(), maps: &MAP_NAMES })
 }
 
 async fn lookup(Path(code): Path<String>, State(app): State<App>) -> Result<Json<RoomInfo>, StatusCode> {
@@ -235,6 +244,7 @@ async fn lookup(Path(code): Path<String>, State(app): State<App>) -> Result<Json
 struct NewRoom {
     name: Option<String>,
     public: Option<bool>,
+    mode: Option<String>,
     map: Option<String>,
     score_limit: Option<u16>,
     bots: Option<bool>,
@@ -243,13 +253,19 @@ struct NewRoom {
 
 async fn create(State(app): State<App>, Json(new): Json<NewRoom>) -> Result<Json<RoomInfo>, (StatusCode, &'static str)> {
     let bad = |why| (StatusCode::BAD_REQUEST, why);
-    let mut settings = Settings { name: "Private game".into(), public: false, map: None, ..(*app.quick).clone() };
+    let mut settings = Settings { name: "Private game".into(), public: false, mode: None, map: None, ..(*app.quick).clone() };
     if let Some(name) = new.name.as_deref().map(callsign).filter(|n| !n.is_empty()) {
         settings.name = name;
     }
     settings.public = new.public.unwrap_or(false);
+    if let Some(mode) = new.mode.filter(|m| !m.is_empty()) {
+        settings.mode = Some(Mode::from_key(&mode).ok_or(bad("no such mode"))?);
+    }
     if let Some(map) = new.map.filter(|m| !m.is_empty()) {
         settings.map = Some(Map::index(&map).ok_or(bad("no such map"))?);
+    }
+    if deck(&settings).is_empty() {
+        return Err(bad("that map doesn't play that mode"));
     }
     if let Some(limit) = new.score_limit {
         settings.score_limit = (5..=100).contains(&limit).then_some(limit).ok_or(bad("score limit must be 5 to 100"))?;
@@ -376,16 +392,26 @@ fn open(app: &App, rooms: &mut HashMap<String, Room>, settings: Settings) -> Opt
     Some(code)
 }
 
-fn new_game(settings: &Settings, seed: u64) -> Game {
-    let (map, rotation) = match settings.map {
-        Some(map) => (map, Vec::new()),
-        None => {
-            let rotation: Vec<usize> = ROTATION.iter().map(|name| Map::index(name).expect("rotation names a map")).collect();
-            (rotation[(seed % rotation.len() as u64) as usize], rotation)
-        }
+/// The modes each compiled-in map plays, worked out once (it reads every map).
+static PLAYS: LazyLock<Vec<Vec<Mode>>> = LazyLock::new(|| (0..MAPS.len()).map(Map::load).map(|map| Mode::ALL.into_iter().filter(|m| m.fits(&map)).collect()).collect());
+
+/// Every mode and map pair `settings` plays: its mode (else every mode) on its map (else the
+/// rotation's), where the map plays the mode.
+fn deck(settings: &Settings) -> Vec<(Mode, usize)> {
+    let maps: Vec<usize> = match settings.map {
+        Some(map) => vec![map],
+        None => ROTATION.iter().map(|name| Map::index(name).expect("rotation names a map")).collect(),
     };
+    let modes = settings.mode.map_or(Mode::ALL.to_vec(), |m| vec![m]);
+    modes.iter().flat_map(|&mode| maps.iter().filter(move |&&map| PLAYS[map].contains(&mode)).map(move |&map| (mode, map))).collect()
+}
+
+fn new_game(settings: &Settings, seed: u64) -> Game {
+    let deck = deck(settings);
+    let (mode, map) = deck[(seed % deck.len() as u64) as usize];
     let mut game = Game::new(Tuning::default(), map);
-    game.rotate(rotation, seed);
+    game.mode = mode;
+    game.rotate(deck, seed);
     (game.score_limit, game.match_seconds, game.bots, game.bot_skill) = (settings.score_limit, settings.match_seconds, settings.bots, settings.bot_skill);
     game
 }
@@ -396,6 +422,7 @@ fn describe(code: &str, settings: &Settings, game: &Game) -> RoomInfo {
         code: code.into(),
         name: settings.name.clone(),
         public: settings.public,
+        mode: state.mode.key(),
         map: MAPS[usize::from(state.map)].0.into(),
         humans,
         bots,
@@ -597,7 +624,7 @@ mod tests {
     use sim::Slot;
 
     fn room(code: &str, public: bool, humans: usize, seconds_left: u16, ended: bool) -> RoomInfo {
-        RoomInfo { code: code.into(), name: String::new(), public, map: String::new(), humans, bots: 0, capacity: MAX_PLAYERS, seconds_left, ended, scores: [0; 2] }
+        RoomInfo { code: code.into(), name: String::new(), public, mode: "tdm", map: String::new(), humans, bots: 0, capacity: MAX_PLAYERS, seconds_left, ended, scores: [0; 2] }
     }
 
     #[test]
@@ -629,6 +656,26 @@ mod tests {
     }
 
     #[test]
+    fn rooms_deal_the_modes_and_maps_their_settings_allow() {
+        let settings = |mode, map: Option<&str>| Settings { name: String::new(), public: true, mode, map: map.map(|m| Map::index(m).unwrap()), score_limit: 25, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
+        let every = deck(&settings(None, None));
+        assert_eq!(every.iter().filter(|(m, _)| *m == Mode::TeamDeathmatch).count(), ROTATION.len());
+        // Deathmatch only on the smaller maps.
+        let dm: Vec<&str> = deck(&settings(Some(Mode::Deathmatch), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
+        assert_eq!(dm, ["saltworks", "verdigris", "sump", "sinkhole"]);
+        let ma: Vec<&str> = deck(&settings(Some(Mode::MissileAssault), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
+        assert_eq!(ma, ["foundry", "verdigris", "riftline", "sinkhole", "canopy", "crashsite"]);
+        let siege: Vec<&str> = deck(&settings(Some(Mode::Siege), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
+        assert_eq!(siege, ["foundry", "riftline", "canopy", "crashsite"]);
+        let canopy = Map::index("canopy").unwrap();
+        assert_eq!(deck(&settings(None, Some("canopy"))), [(Mode::TeamDeathmatch, canopy), (Mode::MissileAssault, canopy), (Mode::Siege, canopy)]);
+        assert!(deck(&settings(Some(Mode::Deathmatch), Some("canopy"))).is_empty());
+        // A room starts on a pair from its deck.
+        let game = new_game(&settings(Some(Mode::Deathmatch), None), 3);
+        assert_eq!(game.mode, Mode::Deathmatch);
+    }
+
+    #[test]
     fn settings_parse_and_clean() {
         assert_eq!((skill("easy"), skill("hard"), skill("0.9"), skill("2"), skill("sharp")), (Some(0.25), Some(0.75), Some(0.9), None, None));
         assert_eq!(callsign("  Friday\n night fights, all welcome!!  "), "Friday night fights, all");
@@ -638,7 +685,7 @@ mod tests {
     fn records_round_trip_and_tampering_is_refused() {
         let signer = Signer::new(b"a key");
         let mut tally = Tally::default();
-        tally.kill(Some("pike"), false);
+        tally.kill(Some("pike"), false, 1.25);
         let (record, _) = Record::guest(signer.guest_id(), "Ace").with(&tally, true, true);
         let token = signer.sign(&record);
         assert_eq!(signer.verify(&token), Some(record));
@@ -661,7 +708,7 @@ mod tests {
     /// bringing `record`: the room's task, the way to send it the player's messages (with their
     /// id), and what it sends them.
     async fn join_room(key: &[u8], match_seconds: f32, record: &str) -> (tokio::task::JoinHandle<()>, impl Fn(ClientMsg) + use<>, mpsc::UnboundedReceiver<(Instant, Vec<u8>)>) {
-        let settings = Settings { name: "Test".into(), public: false, map: None, score_limit: 25, match_seconds, bots: false, bot_skill: 0.5 };
+        let settings = Settings { name: "Test".into(), public: false, mode: Some(Mode::TeamDeathmatch), map: None, score_limit: 25, match_seconds, bots: false, bot_skill: 0.5 };
         let game = new_game(&settings, 1);
         let info = Arc::new(Mutex::new(describe("TEST", &settings, &game)));
         let (cmds, cmd_rx) = mpsc::unbounded_channel();

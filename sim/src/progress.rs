@@ -16,15 +16,23 @@ use crate::{Loadout, MechClass, Slot, arsenal};
 /// The record format; bump when a field changes meaning.
 pub const RECORD_VERSION: u8 = 1;
 
-/// XP for a kill (a bot's is worth a quarter), and an assist earns the killer's XP times its
-/// share of the damage; per hit point healed on a teammate; for being there at a match's end,
-/// and for winning it.
+/// XP for a kill (a bot's is worth a quarter), shared out as kill credit (`KILLER_BONUS`); per hit
+/// point healed on a teammate; for being there at a match's end, and for winning it.
 pub const KILL_XP: f32 = 100.0;
 pub const BOT_KILL_XP: f32 = 25.0;
 pub const HEAL_XP: f32 = 0.5;
 pub const MATCH_XP: u32 = 100;
 pub const WIN_XP: u32 = 150;
-/// Assists count for whoever dealt at least this share of a victim's damage (the killer aside).
+/// XP for each capture of an objective, to every mech in on it; for each EU banked in Siege, and
+/// each point of hull shot off an enemy battleship.
+pub const CAPTURE_XP: f32 = 50.0;
+pub const EU_XP: f32 = 0.5;
+pub const SHIP_XP: f32 = 0.05;
+/// Kill credit: everyone who damaged a victim lately gets their share of that damage, and the
+/// killer this much more, so a solo kill is worth 1.25 kills and a stolen one little.
+pub const KILLER_BONUS: f32 = 0.25;
+/// Whoever dealt at least this share of a victim's damage (the killer aside) is told of their
+/// assist and has it counted; a smaller share still earns its credit.
 pub const ASSIST_SHARE: f32 = 0.15;
 /// Levels top out here.
 pub const MAX_LEVEL: u32 = 99;
@@ -46,6 +54,8 @@ pub struct Stats {
     pub bot_assists: u32,
     pub healing: u32,
     pub weapon_kills: BTreeMap<String, u32>,
+    /// Objectives taken (silos).
+    pub captures: u32,
 }
 
 impl Stats {
@@ -58,42 +68,67 @@ impl Stats {
         self.bot_kills += other.bot_kills;
         self.bot_assists += other.bot_assists;
         self.healing += other.healing;
+        self.captures += other.captures;
         for (weapon, n) in &other.weapon_kills {
             *self.weapon_kills.entry(weapon.clone()).or_default() += n;
         }
     }
 }
 
-/// One player's match so far: counts, plus the damage shares behind its assists (on humans and
-/// on bots) and the exact healing, which its XP comes from.
+/// One player's match so far: counts, plus the kill credit behind its kills and assists (on
+/// humans and on bots) and the exact healing, which its XP comes from.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Tally {
     pub stats: Stats,
+    pub kill_credit: f32,
+    pub bot_kill_credit: f32,
     pub assist_share: f32,
     pub bot_assist_share: f32,
     pub healed: f32,
+    /// XP from objectives: captures, energy banked, ships shot.
+    pub objective_xp: f32,
 }
 
 impl Tally {
-    /// A kill of a human or a bot, with `weapon` (an id) if known.
-    pub fn kill(&mut self, weapon: Option<&str>, bot: bool) {
+    /// A kill of a human or a bot, with `weapon` (an id) if known, earning `credit` (the
+    /// killer's share of the damage plus `KILLER_BONUS`).
+    pub fn kill(&mut self, weapon: Option<&str>, bot: bool, credit: f32) {
         if bot {
-            self.stats.bot_kills += 1;
+            (self.stats.bot_kills, self.bot_kill_credit) = (self.stats.bot_kills + 1, self.bot_kill_credit + credit);
         } else {
-            self.stats.kills += 1;
+            (self.stats.kills, self.kill_credit) = (self.stats.kills + 1, self.kill_credit + credit);
         }
         if let Some(weapon) = weapon {
             *self.stats.weapon_kills.entry(weapon.into()).or_default() += 1;
         }
     }
 
-    /// An assist on a human or a bot, for dealing `share` of its damage.
-    pub fn assist(&mut self, share: f32, bot: bool) {
+    /// A hand in killing a human or a bot, for dealing `share` of its damage: whether that's
+    /// enough to count as an assist (`ASSIST_SHARE`).
+    pub fn assist(&mut self, share: f32, bot: bool) -> bool {
+        let counts = share >= ASSIST_SHARE;
         if bot {
-            (self.stats.bot_assists, self.bot_assist_share) = (self.stats.bot_assists + 1, self.bot_assist_share + share);
+            (self.stats.bot_assists, self.bot_assist_share) = (self.stats.bot_assists + u32::from(counts), self.bot_assist_share + share);
         } else {
-            (self.stats.assists, self.assist_share) = (self.stats.assists + 1, self.assist_share + share);
+            (self.stats.assists, self.assist_share) = (self.stats.assists + u32::from(counts), self.assist_share + share);
         }
+        counts
+    }
+
+    /// In on taking an objective.
+    pub fn capture(&mut self) {
+        self.stats.captures += 1;
+        self.objective_xp += CAPTURE_XP;
+    }
+
+    /// Banked `eu` in Siege.
+    pub fn bank(&mut self, eu: f32) {
+        self.objective_xp += EU_XP * eu;
+    }
+
+    /// Shot `hull` off an enemy battleship.
+    pub fn hit_ship(&mut self, hull: f32) {
+        self.objective_xp += SHIP_XP * hull;
     }
 }
 
@@ -103,23 +138,25 @@ pub struct MatchXp {
     pub kills: u32,
     pub assists: u32,
     pub healing: u32,
+    #[serde(default)]
+    pub objectives: u32,
     pub completion: u32,
     pub win: u32,
 }
 
 impl MatchXp {
     pub fn total(&self) -> u32 {
-        self.kills + self.assists + self.healing + self.completion + self.win
+        self.kills + self.assists + self.healing + self.objectives + self.completion + self.win
     }
 }
 
 /// XP for `tally`, plus the completion bonus if the player saw the match out, and the win bonus.
 pub fn match_xp(tally: &Tally, completed: bool, won: bool) -> MatchXp {
-    let s = &tally.stats;
     MatchXp {
-        kills: (KILL_XP * s.kills as f32 + BOT_KILL_XP * s.bot_kills as f32).round() as u32,
+        kills: (KILL_XP * tally.kill_credit + BOT_KILL_XP * tally.bot_kill_credit).round() as u32,
         assists: (KILL_XP * tally.assist_share + BOT_KILL_XP * tally.bot_assist_share).round() as u32,
         healing: (HEAL_XP * tally.healed).round() as u32,
+        objectives: tally.objective_xp.round() as u32,
         completion: if completed { MATCH_XP } else { 0 },
         win: if completed && won { WIN_XP } else { 0 },
     }
@@ -224,18 +261,21 @@ mod tests {
     #[test]
     fn xp_weighs_humans_above_bots_and_counts_the_rest() {
         let mut t = Tally::default();
-        t.kill(Some("pike"), false);
-        t.kill(Some("pike"), true);
-        t.kill(Some("grenade"), true);
-        t.assist(0.5, false);
-        t.assist(0.4, true);
+        t.kill(Some("pike"), false, 1.25);
+        t.kill(Some("pike"), true, 1.25);
+        t.kill(Some("grenade"), true, 0.75);
+        assert!(t.assist(0.5, false));
+        assert!(t.assist(0.4, true));
+        // A sliver earns its credit, but isn't an assist.
+        assert!(!t.assist(0.1, false));
         t.healed = 61.0;
         t.stats.deaths = 2;
         let xp = match_xp(&t, true, true);
-        assert_eq!(xp, MatchXp { kills: 150, assists: 60, healing: 31, completion: 100, win: 150 });
-        assert_eq!(xp.total(), 491);
+        assert_eq!(xp, MatchXp { kills: 175, assists: 70, healing: 31, objectives: 0, completion: 100, win: 150 });
+        assert_eq!(xp.total(), 526);
+        assert_eq!((t.stats.kills, t.stats.bot_kills, t.stats.assists, t.stats.bot_assists), (1, 2, 1, 1));
         // Left mid-match: no completion or win.
-        assert_eq!(match_xp(&t, false, true).total(), 241);
+        assert_eq!(match_xp(&t, false, true).total(), 276);
         assert_eq!(t.stats.weapon_kills, BTreeMap::from([("grenade".into(), 1), ("pike".into(), 2)]));
     }
 
@@ -245,7 +285,7 @@ mod tests {
         assert_eq!(base.id, "0000000000000abc");
         let mut t = Tally::default();
         for _ in 0..5 {
-            t.kill(Some("pike"), false);
+            t.kill(Some("pike"), false, 1.0);
         }
         t.healed = 10.4;
         let (next, xp) = base.with(&t, true, false);

@@ -6,7 +6,7 @@
 // tall and 3.6 m wide, so lanes and doors are 9+ m wide and clearances 6+ m; ramps stay near 23
 // degrees (walkable is 40); hover tops out at 3.5 m, so 3 m ledges are hover shortcuts and the 7 m
 // and 14 m tiers need ramps.
-import { box, furnace, growth, lamp, once, pad, pipe, point, railing, ramp, stack, turned, write } from './kit.mjs';
+import { bases, box, furnace, growth, lamp, once, pad, pipe, point, railing, ramp, sentries, siege, silos, stack, turned, write } from './kit.mjs';
 
 // --- Floor and edges -------------------------------------------------------------------------
 box([-120, -1, 7], [120, 0, 120], 'ground'); // north floor
@@ -155,6 +155,18 @@ pipe([-96, 10, 34], [-96, 10, 48], 0.8);
 pipe([-102, 4, 28], [-119.5, 4, 28], 0.6);
 lamp([-88, 0, 41]);
 point([-80, 0, 16], [-110, 0, 41], [-84, 0, 41], [-84, 0, 62], [-58, 0, 22], [-58, 0, 52], [-108, 0, 72], [-60, 0, 96], [-96, 0, 92]);
+
+// --- Objectives ------------------------------------------------------------------------------
+// Missile Assault: A by the north-west stacks at the west lane's north end (C its twin in the east),
+// B in the smelter's arcade round the core, under the ring deck.
+bases([0, 0, 100]);
+// Base guns: one up on the gantry over the yard, one on the hangar roof.
+sentries([[22, 7, 110], [-9.5, 14, 86.5]]);
+// B's launch pad is on the smelter's roof, over the arcade.
+silos({ at: [-62, 0, 45], radius: 10, band: 4, pad: [-57.5, 0, 45] }, { at: [0, 0, 0], radius: 16, band: 4, pad: [0, 14, 0] });
+// Siege: the station in the smelter's arcade, round its core, the AA gun on its roof (up the
+// skybridges from the bases, or the hover steps), the ships over the skybridge line.
+siege({ at: [0, 0, 0], radius: 16, band: 4 }, { at: [0, 14, 0], radius: 9, band: 3, pad: [-5, 14, 0] }, 55);
 
 // --- Spawns, twin, write ---------------------------------------------------------------------
 const north = [[-4, 0.1, 96], [-14, 0.1, 96], [-24, 0.1, 96], [-24, 0.1, 106]];

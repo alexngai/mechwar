@@ -7,7 +7,7 @@
 // (maps/kit.mjs) adds the 180-degree twin. Metrics as the other maps': 9-10 m lanes and gates,
 // 6.5 m+ under decks, ramps near 24 degrees, 3 m hover ledges. Hover lasts about 5 s and a dash is
 // 8.5 m, so a 12 m gap takes a hover; there's no fall damage, so the chasm is a slow road, not a pit.
-import { box, growth, lamp, once, pad, point, railing, ramp, sign, turned, write } from './kit.mjs';
+import { bases, box, growth, lamp, once, pad, point, railing, ramp, sentries, siege, sign, silos, turned, write } from './kit.mjs';
 
 const BASE = -25; // bottom of every rock mass
 const MAGENTA = '#ff6be0', LILAC = '#c9a2ff';
@@ -129,6 +129,18 @@ point([-110, -8, 32], [-85, -8, 32], [-20, -8, 32], [0, -8, 32], [18, -8, 32], [
 point([-105, 0, 45], [-75, 0, 42], [-50, 0, 45], [-15, 0, 44], [20, 0, 44], [35, 0, 45], [75, 0, 44], [105, 0, 45]);
 point([-105, 0, 72], [-70, 0, 70], [-45, 0, 74], [-15, 0, 64], [20, 0, 62], [70, 0, 72], [105, 0, 74]);
 point([52, 0, 84], [52, 7, 57], [-15, 0, 80], [15, 0, 80], [-15, 0, 96], [15, 0, 96], [0, 0, 116], [-20, 0, 112]);
+
+// --- Objectives ----------------------------------------------------------------------------------
+// Missile Assault: A on the north rim's west end, by the west pipeline and the floor's pad up (C its
+// twin on the south rim), B on the bridge's road deck, the rail and the gantry out of its band.
+bases([-16, 0, 105]);
+// Base guns: one at the back of the yard, one up on the hangar roof.
+sentries([[-14, 0, 117.5], [12, 7, 107.5]]);
+// B's launch pad is on the rail deck, over the road.
+silos({ at: [-84, 0, 46], radius: 10, band: 4, pad: [-84, 0, 42] }, { at: [0, 0, 0], radius: 10, band: 4, pad: [0, 10, 0] });
+// Siege: the station on the bridge's road deck, the AA gun up on the rail deck over it (the top of
+// the bridge, by the ramps at the bridgeheads), the ships over the bridge.
+siege({ at: [0, 0, 0], radius: 10, band: 4 }, { at: [0, 10, 0], radius: 8, band: 3, pad: [0, 10, 5] }, 50);
 
 // --- Spawns, twin, write -------------------------------------------------------------------------
 const north = [[-20, 0.1, 102], [-12, 0.1, 108], [12, 0.1, 100], [20, 0.1, 96]];

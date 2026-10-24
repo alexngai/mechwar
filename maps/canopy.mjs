@@ -15,7 +15,7 @@
 // with an overlook and a pad up to it, about as far from the Knoll and the Crown as the other's.
 // Metrics as the other maps': 6.5 m+ under decks, ramps near 24 degrees, hover ledges 3-4 m. Ground
 // over 40 degrees can't be walked up (tuning's max_slope_deg), which makes the cliffs walls.
-import { beam, box, cylinder, decor, ground, heightAt, lamp, pad, point, r3, railing, ramp, sign, solids, turned, write } from './kit.mjs';
+import { bases, beam, box, cylinder, decor, ground, heightAt, lamp, pad, point, r3, railing, ramp, sentries, siege, sign, silos, solids, turned, write } from './kit.mjs';
 
 const SIZE = [360, 360], CELL = 4;
 const A = [-140, -118], B = [140, -118], C = [0, 140], ROUND = 30; // the playable triangle, grown ROUND m
@@ -529,4 +529,15 @@ const palette = {
 // Diagnostics: how steep the walkable slabs run, and where the key pieces stand.
 for (const s of solids.filter((s) => s.half[1] === 0.25 && s.tilt)) if (Math.abs(s.tilt) > 26) console.warn(`steep ramp ${s.mat} at ${s.box}: ${s.tilt} degrees`);
 console.log(`Pulpit top ${pTop} (ground ${heightAt(...PULPIT).toFixed(1)}, edge ${edge(PULPIT).toFixed(1)}), crest ${crestY(36)}-${crestY(LS / 2)}, tunnel floor ${heightAt(...station(SPINE, TUNNEL).at).toFixed(1)}`);
+// Siege: the station down in the Hollow on the south road, halfway between the bases, the AA gun on
+// the Knoll's rock table, the ships along the south road.
+const onGround = ([x, z]) => [x, r3(heightAt(x, z)), z];
+bases(onGround(BASES[0]), onGround(BASES[1]));
+// Base guns: two at each eco-station, either side of it.
+sentries([[-115, 1, -110], [-123, 1, -102]], [[123, 1, -102], [115, 1, -110]]);
+siege({ at: onGround(HOLLOW), radius: 12, band: 5 }, { at: [6, 13, -18], radius: 9, band: 3, pad: [12, 13, -22] }, 70);
+// Missile Assault: A down in the Gorge by its breach (the west's flank, the Pulpit over it), B on the
+// Knoll's rock table, C at the Spine's tunnel (the east's flank).
+// C's launch pad is out of the tunnel, by its west mouth.
+silos({ at: [-68, -13, 13], radius: 12, band: 5 }, { at: [6, 13, -18], radius: 9, band: 3, pad: [2.5, 13, -17.5] }, { at: [76, -1, 15], radius: 12, band: 5, pad: [70.5, -1.4, 12.5] });
 write(new URL('./canopy.json', import.meta.url), { name: 'Canopy', size: SIZE, night: true, palette }, spawns(BASES[0], 1), spawns(BASES[1], -1));

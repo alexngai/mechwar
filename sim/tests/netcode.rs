@@ -210,7 +210,7 @@ fn duel(no_rewind: bool, ticks: u32, fire: Range<u32>, strafe: impl Fn(u32) -> f
                     shots += 1;
                     hits += u32::from(hit == Some(1));
                 }
-                Event::Kill { killer: 0, victim: 1 } => killed = true,
+                Event::Kill { killer: 0, victim: 1, .. } => killed = true,
                 _ => {}
             }
         }

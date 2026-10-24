@@ -393,6 +393,16 @@ export class Effects {
     for (let i = 0; i < 14; i++) this.glow.spawn(p, scatter(UP, 0, 5), { life: rand(0.15, 0.3), size: [1.5, 0.3], color: STATIC, drag: 4 });
   }
 
+  /** Energy banked at a drop zone `radius` m across round `p`: a green ring racing out, sparks rising. */
+  bank(p, radius) {
+    const life = 0.6;
+    for (let i = 0; i < 72; i++) {
+      const a = (i / 72) * Math.PI * 2;
+      this.glow.spawn(p, v.set(Math.cos(a), rand(0.05, 0.2), Math.sin(a)).multiplyScalar(radius / life), { life, size: [1.2, 0.4], color: REPAIR });
+    }
+    for (let i = 0; i < 40; i++) this.glow.spawn(p, scatter(UP, rand(4, 10), 3), { life: rand(0.6, 1.2), size: [0.6, 0.1], color: REPAIR, drag: 1 });
+  }
+
   /** A jammed mech's crackle: stray blue sparks around its chest `p`. */
   jam(p, dt) {
     for (let i = count(25, dt); i > 0; i--) {
