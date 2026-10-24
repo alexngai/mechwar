@@ -794,7 +794,7 @@ function frame(now) {
         grounded: !hovering && Math.abs(e.vel.y) < 1.5, boosting: !!boosting, hovering: !!hovering, health,
         ability: !!abilityOn, damage: 1 - health / classValue(cls, 'health_max'), shielded: !!shielded,
         repair: repairPhase(e.repairAt === null ? 0 : (now - e.repairAt) / 1000 + 1e-3, cls),
-        cloak: e.hidden ? CLOAK_HIDDEN : e.cloaked ? CLOAK_SEEN : 0,
+        cloak: e.hidden ? CLOAK_HIDDEN : e.cloaked ? CLOAK_SEEN : 0, hidden: e.hidden,
       });
       if (now - (e.beamAt ?? -Infinity) < BEAM_HOLD) fx.mend(id + 1, e.mech.launcher.getWorldPosition(beamFrom), e.beamTo, dt);
       if (now < (e.jammedUntil ?? 0) && !e.hidden) fx.jam(toChest(spark.copy(e.pos), cls), dt);

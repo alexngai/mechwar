@@ -160,6 +160,14 @@ export function cloak(root, ghost, on, skip = null) {
 
 /** The material camouflage draws in, faintly. */
 export const ghostMaterial = () => new THREE.MeshBasicMaterial({ color: 0x9fd8ff, transparent: true, opacity: 0, depthWrite: false });
+
+/**
+ * How an enemy's camouflage draws: no color of its own, it dims what's behind it by its opacity, so
+ * it's as faint on a dark map as a bright one (a pale ghost glows against the dark).
+ */
+const veilMaterial = () => new THREE.MeshBasicMaterial({
+  transparent: true, opacity: 0, depthWrite: false, blending: THREE.CustomBlending, blendSrc: THREE.ZeroFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+});
 const DASH_SPOT = 22; // m/s sideways, and mostly sideways: only a dash does that (a diagonal boost doesn't)
 const REPAIR_GLOW = 0x6dff9a;
 
@@ -601,7 +609,8 @@ export class Mech {
     this.nozzleMat = new THREE.MeshLambertMaterial({ color: 0x3a2f28, flatShading: true });
     // Camouflage draws every part in this, faintly (see `update`).
     this.ghostMat = ghostMaterial();
-    this.cloaked = false;
+    this.veilMat = veilMaterial();
+    this.cloaked = null; // the material camouflage draws in now, if it's on
     this.t = 0;
     this.phase = 0;
     this.squash = 0;
@@ -723,7 +732,8 @@ export class Mech {
   /**
    * Pose from sim state: { pos, yaw, pitch, scale, vel, grounded, boosting, hovering, health,
    * heat (0-1), overheated, ability (on), damage (0 full health to 1), repair (0 none, wind-up
-   * fraction, 1 healing), cloak (how faint camouflage shows it, 0 for not hidden) }. Also emits
+   * fraction, 1 healing), cloak (how faint camouflage shows it, 0 for not hidden), hidden (an
+   * enemy's camouflage: a veil, not a ghost) }. Also emits
    * thruster, footstep, smoke, spark and death effects.
    */
   update(dt, s) {
@@ -888,15 +898,17 @@ export class Mech {
     this.wear.uFlash.value = this.flash;
     this.plateMat.color.setScalar(1 - 0.85 * this.wreck);
 
-    // Camouflage: every part swaps to the ghost material, casting no shadow, shimmering faintly;
-    // glows go dark and effects (thrust, dust, smoke, sparks) stop until it drops.
-    const cloaked = alive && s.cloak > 0;
-    if (cloaked !== this.cloaked) {
-      this.cloaked = cloaked;
-      this.fx = cloaked ? QUIET : this.realFx;
-      cloak(root, this.ghostMat, cloaked, this.shell);
+    // Camouflage: every part swaps to the ghost material (an enemy's to the veil), casting no
+    // shadow, shimmering faintly; glows go dark and effects (thrust, dust, smoke, sparks) stop until
+    // it drops.
+    const look = alive && s.cloak > 0 ? (s.hidden ? this.veilMat : this.ghostMat) : null;
+    if (look !== this.cloaked) {
+      if (this.cloaked) cloak(root, this.cloaked, false, this.shell);
+      if (look) cloak(root, look, true, this.shell);
+      this.cloaked = look;
+      this.fx = look ? QUIET : this.realFx;
     }
-    if (cloaked) this.ghostMat.opacity = s.cloak * (0.75 + 0.25 * Math.sin(this.t * 6));
+    if (look) look.opacity = s.cloak * (0.75 + 0.25 * Math.sin(this.t * 6));
   }
 
   /** Drone over the backpack: rises with the wind-up, then circles and beams while healing. */
@@ -987,7 +999,7 @@ export class Mech {
     this.root.traverse((o) => o.geometry?.dispose());
     this.root.traverse((o) => o.isSprite && o.material.dispose());
     this.plateMat.map.dispose();
-    for (const m of [this.hull, this.hullCurved, this.pods, this.trim, this.hazard, this.accent, this.plateMat, this.barrels, this.nozzleMat, this.shellMat, this.beamMat, this.ghostMat]) m.dispose();
+    for (const m of [this.hull, this.hullCurved, this.pods, this.trim, this.hazard, this.accent, this.plateMat, this.barrels, this.nozzleMat, this.shellMat, this.beamMat, this.ghostMat, this.veilMat]) m.dispose();
   }
 }
 
