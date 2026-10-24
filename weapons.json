@@ -1,11 +1,11 @@
 {
   "primaries": [
     {
-      "id": "stitcher", "name": "SMG", "unlock": 1, "desc": "Rapid fire; the spread blooms while held, and hits fade past 30 m", "sound": "vulcan", "recoil": "low",
+      "id": "stitcher", "name": "SMG", "unlock": 1, "desc": "Rapid fire; the spread blooms while held, and hits fade past 40 m", "sound": "vulcan", "recoil": "low",
       "stats": {
         "fire_rate": 14, "shot_damage": 4.2, "heat_per_shot": 2,
         "spread_deg": 0.6, "bloom_per_shot": 0.4, "bloom_max": 4.5, "bloom_recovery": 3,
-        "falloff_start": 30, "falloff_end": 70, "falloff_floor": 0.4
+        "falloff_start": 40, "falloff_end": 90, "falloff_floor": 0.4
       }
     },
     {
@@ -23,7 +23,7 @@
     {
       "id": "gyre", "name": "Gatling", "unlock": 2, "desc": "Spins up while held: opens fire after 0.2 s, from a chug to a torrent, and runs hot", "sound": "rotary", "recoil": "high",
       "stats": {
-        "fire_rate": 18, "spin_up": 1.2, "spin_down": 0.8, "spin_start": 0.2, "spin_delay": 0.2, "shot_damage": 3.73, "heat_per_shot": 2.5,
+        "fire_rate": 18, "spin_up": 1.2, "spin_down": 0.8, "spin_start": 0.2, "spin_delay": 0.2, "shot_damage": 4.1, "heat_per_shot": 2.5,
         "spread_deg": 1, "bloom_per_shot": 0.12, "bloom_max": 2.5, "bloom_recovery": 3,
         "falloff_start": 35, "falloff_end": 80, "falloff_floor": 0.5
       }
