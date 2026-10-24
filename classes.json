@@ -6,12 +6,14 @@
       "health_max": 70, "mech_radius": 0.95, "mech_height": 3.5, "eye_height": 3.0,
       "mech_mass": 35
     },
-    "weapons": { "primary": "stitcher", "secondary": "rocket", "offensive": "grenade", "support": "emp", "ability": "slipstream" }
+    "weapons": { "primary": "stitcher", "secondary": "rocket", "offensive": "grenade", "support": "emp", "ability": "slipstream" },
+    "unlocked": ["kiln", "darts"]
   },
   "B": {
     "name": "Medium", "role": "balanced", "source": "own tuning",
     "overrides": {},
-    "weapons": { "primary": "pike", "secondary": "hornet", "offensive": "grenade", "support": "emp", "ability": "vent" }
+    "weapons": { "primary": "pike", "secondary": "hornet", "offensive": "grenade", "support": "emp", "ability": "vent" },
+    "unlocked": ["triplet", "spindle"]
   },
   "C": {
     "name": "Heavy", "role": "slow, tough, heavy cannon", "source": "own tuning",
@@ -20,6 +22,7 @@
       "health_max": 150, "mech_radius": 1.8, "mech_height": 5.8, "eye_height": 4.9, "heat_max": 240,
       "mech_mass": 80
     },
-    "weapons": { "primary": "squall", "secondary": "mortar", "offensive": "grenade", "support": "emp", "ability": "brace" }
+    "weapons": { "primary": "squall", "secondary": "mortar", "offensive": "grenade", "support": "emp", "ability": "brace" },
+    "unlocked": ["gyre", "furnace"]
   }
 }

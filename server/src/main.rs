@@ -731,17 +731,17 @@ mod tests {
         assert_eq!(next_record(&mut inbox).await.points(), 3);
 
         let (light, own) = (sim::MechClass::A, Loadout::of(sim::MechClass::A));
-        let (rail, heat) = (weapon(Slot::Secondary, "spindle"), weapon(Slot::Primary, "kiln"));
+        let (rail, gatling) = (weapon(Slot::Secondary, "spindle"), weapon(Slot::Primary, "gyre"));
         // Locked: launches with the light's own weapons instead.
-        send(ClientMsg::Pick(light, Loadout { primary: heat, secondary: rail, ..own }));
+        send(ClientMsg::Pick(light, Loadout { primary: gatling, secondary: rail, ..own }));
         assert_eq!(loadout_after(&mut inbox).await, own);
 
         send(ClientMsg::Unlock { class: light, slot: Slot::Secondary, index: rail });
         let unlocked = next_record(&mut inbox).await;
         assert_eq!((unlocked.unlocks["A"].clone(), unlocked.points()), (vec!["spindle".to_string()], 0));
-        // Out of points: the heat gun stays locked, and the next launch carries the rail gun alone.
-        send(ClientMsg::Unlock { class: light, slot: Slot::Primary, index: heat });
-        send(ClientMsg::Pick(light, Loadout { primary: heat, secondary: rail, ..own }));
+        // Out of points: the gatling stays locked, and the next launch carries the rail gun alone.
+        send(ClientMsg::Unlock { class: light, slot: Slot::Primary, index: gatling });
+        send(ClientMsg::Pick(light, Loadout { primary: gatling, secondary: rail, ..own }));
         assert_eq!(loadout_after(&mut inbox).await, Loadout { secondary: rail, ..own });
         room.abort();
     }

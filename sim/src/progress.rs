@@ -1,8 +1,8 @@
 //! A pilot's progression: the lifetime record the server signs and the browser keeps (see
 //! server/src/main.rs), the tally of one match that's added to it, the XP and level math, and
 //! the weapons and items it unlocks. Each mech starts with its own two weapons and two items
-//! (classes.json's `weapons`); levels earn points that unlock the rest, mech by mech, at
-//! weapons.json's `unlock` prices.
+//! (classes.json's `weapons`) and a few more (its `unlocked`); levels earn points that unlock the
+//! rest, mech by mech, at weapons.json's `unlock` prices.
 //!
 //! Records carry a format version and a random guest id, so a later server database can take a
 //! verified record as a player's first row as it is.
@@ -174,18 +174,20 @@ impl Record {
         (next, gained)
     }
 
-    /// Unlock points earned by level and not yet spent.
+    /// Unlock points earned by level and not yet spent. Unlocks a mech now starts with are free.
     pub fn points(&self) -> u32 {
-        let spent: u32 = self.unlocks.values().flatten().map(|id| arsenal::price(id)).sum();
+        let spent: u32 = self.unlocks.iter().flat_map(|(key, ids)| ids.iter().filter(|id| !arsenal::starts_unlocked(key, id))).map(|id| arsenal::price(id)).sum();
         (POINTS_PER_LEVEL * self.level.saturating_sub(1)).saturating_sub(spent)
     }
 
     /// Whether `class` may carry the weapon, item or ability at `index` in `slot`'s list: its own,
-    /// or one that fits it (`arsenal::fits`) unlocked for it.
+    /// or one that fits it (`arsenal::fits`) it starts with or has unlocked.
     pub fn owns(&self, class: MechClass, slot: Slot, index: u8) -> bool {
         index == Loadout::of(class).get(slot)
             || arsenal::fits(class, slot, index)
-                && arsenal::weapon(slot, index).is_some_and(|(id, _)| self.unlocks.get(class.key()).is_some_and(|ids| ids.iter().any(|u| u == id)))
+                && arsenal::weapon(slot, index).is_some_and(|(id, _)| {
+                    arsenal::starts_unlocked(class.key(), id) || self.unlocks.get(class.key()).is_some_and(|ids| ids.iter().any(|u| u == id))
+                })
     }
 
     /// `loadout` for `class`, with each weapon, item and ability this pilot doesn't own for it
@@ -258,11 +260,18 @@ mod tests {
     fn levels_earn_points_that_unlock_weapons_mech_by_mech() {
         let (light, heavy) = (MechClass::A, MechClass::C);
         let mut r = Record::guest(1, "Ace");
-        let wanted = Loadout::named("kiln", "spindle");
+        let wanted = Loadout::named("pike", "spindle");
         let rail = wanted.secondary;
-        // Each mech owns its own two weapons; nothing else until unlocked.
-        assert!(r.owns(light, Slot::Primary, Loadout::of(light).primary) && r.owns(light, Slot::Secondary, Loadout::of(light).secondary));
-        assert!(!r.owns(light, Slot::Secondary, rail));
+        // Each mech owns its own two weapons and the two more it starts with; nothing else until unlocked.
+        let starts = [(light, "kiln", "darts"), (MechClass::B, "triplet", "spindle"), (heavy, "gyre", "furnace")];
+        for (class, primary, secondary) in starts {
+            let own = Loadout::of(class);
+            let (primary, secondary) = (arsenal::index(Slot::Primary, primary), arsenal::index(Slot::Secondary, secondary));
+            assert!([own.primary, primary].into_iter().all(|p| r.owns(class, Slot::Primary, p)));
+            assert!([own.secondary, secondary].into_iter().all(|s| r.owns(class, Slot::Secondary, s)));
+            assert!(!r.unlock(class, Slot::Primary, primary), "unlocked one it starts with");
+        }
+        assert!(!r.owns(light, Slot::Secondary, rail) && !r.owns(light, Slot::Primary, wanted.primary));
         assert_eq!(r.points(), 0);
         assert!(!r.unlock(light, Slot::Secondary, rail), "unlocked with no points");
 
@@ -332,5 +341,8 @@ mod tests {
         let old = r#"{"version":1,"id":"00000000000000ab","callsign":"Ace","xp":600,"level":2,"stats":{"matches":1},"issued":5}"#;
         let r: Record = serde_json::from_str(old).unwrap();
         assert_eq!((r.unlocks.len(), r.points()), (0, POINTS_PER_LEVEL));
+        // Points spent on one a mech has since started with come back.
+        let bought = Record { level: 2, unlocks: [("A".to_string(), vec!["kiln".to_string()])].into(), ..Record::guest(1, "Ace") };
+        assert_eq!(bought.points(), POINTS_PER_LEVEL);
     }
 }
