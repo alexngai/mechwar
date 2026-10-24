@@ -517,7 +517,8 @@ impl Game {
         // radio in of those they see; it fights the one it picks from those in view, favoring one
         // a teammate is already on. With nothing to go on it groups on its team's lead (a human
         // if there's one alive), and a repair torch follows the nearest teammate and gets the
-        // most hurt one it can see within twice its beam's reach.
+        // most hurt one it can see within twice its beam's reach, to mend all but a scratch off
+        // (stopping at 80% left the torch idle between fights, its mates going in short).
         let alive = |p: &Player| p.mech.health > 0.0;
         let lead_of = |team: u8| {
             let mates = || self.players.iter().filter(move |p| p.team == team && alive(p));
@@ -582,7 +583,7 @@ impl Game {
             let heal = (t.alt_beam > 0.0)
                 .then(|| {
                     mates()
-                        .filter(|q| hurt(q) < 0.8)
+                        .filter(|q| hurt(q) < 0.97)
                         .filter(|q| q.mech.pos.distance(me.mech.pos) < 2.0 * t.alt_beam && bot::sees(&self.arena, t, &me.mech, &q.mech))
                         .min_by(|a, b| hurt(a).total_cmp(&hurt(b)))
                         .map(|q| q.mech)
@@ -2699,6 +2700,30 @@ mod tests {
             }
         }
         assert!(walked.iter().all(|&w| w > 60.0), "walked {walked:?} m in 20 s");
+    }
+
+    #[test]
+    fn repair_torches_mend_teammates_near_full() {
+        let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
+        game.bots = false;
+        // Two bots with no one to fight: one carrying a torch, and a teammate 15 m off a few hits
+        // down. The torch mends it near full, not just to where it isn't badly hurt.
+        let human = game.join().unwrap();
+        game.dock(human);
+        let torch = (0..game.arsenal.counts().1 as u8).find(|&s| game.arsenal.get(MechClass::B, Loadout { secondary: s, ..Loadout::of(MechClass::B) }).alt_beam > 0.0).unwrap();
+        let (medic, mate) = (game.add_player(0, Some(Bot::new(1)), MechClass::B).unwrap(), game.add_player(0, Some(Bot::new(2)), MechClass::B).unwrap());
+        game.pick(medic, MechClass::B, Loadout { secondary: torch, ..Loadout::of(MechClass::B) });
+        game.pick(mate, MechClass::B, Loadout::of(MechClass::B));
+        let max = game.arsenal.of(&mech(&game, mate)).health_max;
+        for (id, pos) in [(medic, Vector::new(0.0, 0.1, 40.0)), (mate, Vector::new(8.0, 0.1, 27.0))] {
+            game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = pos;
+        }
+        game.players.iter_mut().find(|p| p.id == mate).unwrap().mech.health = 0.85 * max;
+        for _ in 0..secs(6.0) {
+            game.step();
+        }
+        let hull = mech(&game, mate).health / max;
+        assert!(hull > 0.95, "mended to {:.0}%", 100.0 * hull);
     }
 
     #[test]

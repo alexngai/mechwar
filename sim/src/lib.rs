@@ -207,8 +207,9 @@ pub struct Tuning {
     pub alt_split_radius: f32,
     pub alt_split_speed: f32,
     /// A beam secondary (`alt_beam` > 0, its reach in m) launches nothing: held, it runs from the
-    /// eye along the aim to the first mech or wall, mending a teammate `alt_beam_heal` hp/s or
-    /// burning an enemy `alt_damage` hp/s, for `alt_heat` heat/s.
+    /// eye along the aim to the first mech or wall (or bends to a mech just off the aim:
+    /// `weapon::beam`), mending a teammate `alt_beam_heal` hp/s or burning an enemy `alt_damage`
+    /// hp/s, for `alt_heat` heat/s.
     pub alt_beam: f32,
     pub alt_beam_heal: f32,
     /// A melee secondary (`alt_melee` > 0, its reach in m) launches nothing: held, it winds up
