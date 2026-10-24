@@ -130,14 +130,32 @@ const DASH_TRAIL = 0.2; // s of smoke laid behind a dash
 /** Effects that go nowhere: what a camouflaged mech emits. */
 const QUIET = new Proxy({}, { get: () => () => {} });
 
+// A camouflaged part's twin writes only depth, just before the ghosts draw, so each mech takes the
+// ghost once, on its nearest surface: parts overlapping would otherwise stack it several times as
+// thick. Both go after everything else in the scene, effects included, so nothing meets the twins'
+// depth.
+const GHOST_ORDER = 1000;
+const ghostDepth = new THREE.MeshBasicMaterial({ colorWrite: false, transparent: true });
+
 /** Camouflage: every mesh under `root` (but `skip`) swaps to `ghost` and out of the shadow pass, or back; sprites hide meanwhile. */
 export function cloak(root, ghost, on, skip = null) {
+  const parts = [];
   root.traverse((o) => {
     if (o.isSprite) o.visible = !on;
-    if (!o.isMesh || o === skip) return;
-    if (on) [o.userData.coat, o.userData.shadow, o.material, o.castShadow] = [o.material, o.castShadow, ghost, false];
-    else [o.material, o.castShadow] = [o.userData.coat, o.userData.shadow];
+    if (o.isMesh && o !== skip && o.material !== ghostDepth) parts.push(o);
   });
+  for (const o of parts) {
+    if (on) {
+      const twin = new THREE.Mesh(o.geometry, ghostDepth);
+      twin.renderOrder = GHOST_ORDER;
+      o.add(twin);
+      [o.userData.coat, o.userData.shadow, o.userData.order, o.userData.twin] = [o.material, o.castShadow, o.renderOrder, twin];
+      [o.material, o.castShadow, o.renderOrder] = [ghost, false, GHOST_ORDER + 1];
+    } else {
+      o.remove(o.userData.twin);
+      [o.material, o.castShadow, o.renderOrder] = [o.userData.coat, o.userData.shadow, o.userData.order];
+    }
+  }
 }
 
 /** The material camouflage draws in, faintly. */
