@@ -87,6 +87,11 @@ impl Nav {
         Nav { nodes, edges }
     }
 
+    /// Every waypoint.
+    pub fn points(&self) -> &[Vector] {
+        &self.nodes
+    }
+
     fn node(&self, i: usize) -> Vector {
         self.nodes[i]
     }
@@ -248,6 +253,8 @@ const STICKY_M: f32 = 5.0;
 const FOCUS_M: f32 = 10.0;
 /// A bot following its lead with nothing to do holds within this distance of it.
 const FOLLOW: f32 = 10.0;
+/// A bot this far or more from its order's spot is on its way there: it fights on the move.
+const ERRAND: f32 = 6.0;
 /// Farther than this from its lead, a bot rejoins it before going after a vague contact: one it
 /// was only told of, or only heard from farther than `URGENT` (one it saw, felt, or heard close
 /// it goes after at once).
@@ -311,6 +318,8 @@ struct Contact {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Goal {
     Contact,
+    /// An objective it's been sent to (`Bot::order`).
+    Order,
     Lead,
     Patrol,
 }
@@ -424,6 +433,9 @@ pub struct Bot {
     /// itself), and the enemies teammates are fighting.
     pub lead: Option<Vector>,
     pub engaged: Vec<u8>,
+    /// Where its team wants it, set by the server each tick: a waypoint in an objective to take
+    /// or hold.
+    pub order: Option<Vector>,
     /// 0 (raw) to 1 (sharp): scales reaction time, aim wander and turn rate off the tuning's
     /// (which are skill 0.5's).
     pub skill: f32,
@@ -458,6 +470,7 @@ impl Bot {
             domes: Vec::new(),
             lead: None,
             engaged: Vec::new(),
+            order: None,
             skill: 0.5,
         };
         bot.respawned();
@@ -625,12 +638,16 @@ impl Bot {
         }
     }
 
-    /// Where to go with no enemy in view, and what that is: the freshest last known position of
-    /// an urgent contact (seen, felt, or heard close); else its lead, when far from it; else the
-    /// freshest of any contact; else its lead; else a random waypoint it can reach, patrolled to.
+    /// Where to go with no enemy in view, and what that is: its order; else the freshest last
+    /// known position of an urgent contact (seen, felt, or heard close); else its lead, when far
+    /// from it; else the freshest of any contact; else its lead; else a random waypoint it can
+    /// reach, patrolled to.
     /// A last known position reached with nobody there is forgotten.
     fn goal(&mut self, arena: &Arena, nav: &Nav, me: &Mech, tick: u32) -> (Vector, Goal) {
         self.contacts.retain(|c| c.seen || flat(c.pos - me.pos).length() > SEARCHED);
+        if let Some(spot) = self.order {
+            return (spot, Goal::Order);
+        }
         let urgent = |c: &&Contact| !c.told && (c.seen_at.is_some() || c.hit_at.is_some() || flat(c.pos - me.pos).length() < URGENT);
         if let Some(c) = self.contacts.iter().filter(urgent).max_by_key(|c| c.at) {
             return (c.pos, Goal::Contact);
@@ -729,8 +746,13 @@ impl Bot {
             }
             let (pos, goal) = self.goal(arena, nav, me, tick);
             let spot = Mech { pos, ..Mech::default() };
-            // With its lead and nothing else to go on, it holds there, looking about.
-            if goal == Goal::Lead && flat(pos - me.pos).length() < FOLLOW {
+            // At its order, or with its lead and nothing else to go on, it holds there, looking about.
+            let hold = match goal {
+                Goal::Order if (pos.y - me.pos.y).abs() < 2.0 => ARRIVE,
+                Goal::Lead => FOLLOW,
+                _ => 0.0,
+            };
+            if flat(pos - me.pos).length() < hold {
                 return Input { yaw: me.yaw + 0.5 * DT, pitch: me.pitch * 0.9, ..idle };
             }
             let watch = goal == Goal::Contact && pos.distance(me.pos) < WATCH;
@@ -832,9 +854,11 @@ impl Bot {
             // target: on a tiered map that keeps bots on their ramps and decks, not off ledges.
             // Perches keep climbing to their vantage too, then hold it, and a bot cooling off
             // repositions along its route. In range, hold the band and strafe.
+            // On its way to an order, it keeps going there, firing as it goes.
             let perch = self.role == Role::Perch && self.vantage.is_some();
-            let (move_x, move_z) = if range > far || perch || self.cooling {
-                let dir = self.route(arena, nav, t, me, target, tick).normalize_or_zero();
+            let errand = self.errand(me);
+            let (move_x, move_z) = if range > far || perch || self.cooling || errand.is_some() {
+                let dir = self.route(arena, nav, t, me, errand.as_ref().unwrap_or(target), tick).normalize_or_zero();
                 let rot = Rotation::from_rotation_y(new_yaw);
                 (dir.dot(rot * Vector::X), dir.dot(rot * Vector::NEG_Z))
             } else {
@@ -890,8 +914,14 @@ impl Bot {
             };
         }
 
-        // No line of sight: walk the waypoint graph toward the target.
-        self.walk(arena, nav, t, me, target, false, tick)
+        // No line of sight: walk the waypoint graph toward the target (or on with its order).
+        let errand = self.errand(me);
+        self.walk(arena, nav, t, me, errand.as_ref().unwrap_or(target), false, tick)
+    }
+
+    /// Its order's spot while it's still on its way there.
+    fn errand(&self, me: &Mech) -> Option<Mech> {
+        self.order.filter(|o| flat(*o - me.pos).length() > ERRAND).map(|pos| Mech { pos, ..Mech::default() })
     }
 
     /// Walking the waypoint graph toward `target` (a mech, or just a spot), out of the fight:

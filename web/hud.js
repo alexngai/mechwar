@@ -209,14 +209,58 @@ export class Hud {
       g.font = font(13, 'bold');
       g.fillText(`${Math.round(f.incoming)} m`, cx, top - 20 * u);
     }
-    // Our latest kill, over the frame where a missile warning goes (above one if both), fading out.
+    // Objectives: each one's letter over it in its holder's color, flashing while contested.
+    g.save();
+    for (const o of f.objectives ?? []) {
+      g.globalAlpha = o.contested && Math.floor(f.now / 250) % 2 ? 0.3 : 0.9;
+      g.strokeStyle = g.fillStyle = o.color;
+      g.lineWidth = 1.5 * u;
+      g.strokeRect(o.x - 11 * u, o.y - 11 * u, 22 * u, 22 * u);
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.font = font(14, 'bold');
+      g.fillText(o.label, o.x, o.y + u);
+      g.textBaseline = 'top';
+      g.font = font(10);
+      g.fillText(`${Math.round(o.dist)} m`, o.x, o.y + 14 * u);
+      g.globalAlpha = 1;
+    }
+    // An objective we're taking: what's happening, and a bar from theirs through neutral (the mark
+    // in the middle) to ours, flashing while contested.
+    if (f.capture) {
+      const c = f.capture, w = 220 * u, x0 = cx - w / 2, y0 = 186 * u, flash = c.contested && Math.floor(f.now / 250) % 2;
+      g.textAlign = 'center';
+      g.textBaseline = 'bottom';
+      g.font = font(13, 'bold');
+      g.fillStyle = c.contested ? '#ffffff' : f.friendColor;
+      g.fillText(c.contested ? `${c.name} CONTESTED` : `TAKING ${c.name}`, cx, y0 - 4 * u);
+      g.fillStyle = 'rgba(0,0,0,0.45)';
+      g.fillRect(x0, y0, w, 6 * u);
+      g.fillStyle = flash ? '#ffffff' : f.friendColor;
+      g.fillRect(x0, y0, w * c.share, 6 * u);
+      g.fillStyle = '#ffffff';
+      g.fillRect(cx - u, y0 - 2 * u, 2 * u, 10 * u);
+    }
+    // An objective changing hands, high up, fading out.
+    const said = f.callout ? f.now - f.callout.at : Infinity;
+    if (said < 3000) {
+      g.globalAlpha = Math.min(1, (3000 - said) / 500);
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillStyle = f.callout.color;
+      g.font = font(18, 'bold');
+      g.fillText(f.callout.text, cx, 150 * u);
+      g.globalAlpha = 1;
+    }
+    g.restore();
+    // Our latest kill or assist, over the frame where a missile warning goes (above one if both), fading out.
     const since = f.eliminated ? f.now - f.eliminated.at : Infinity;
     if (since < 2500) {
       g.globalAlpha = Math.min(1, (2500 - since) / 500);
       g.textAlign = 'center';
       g.fillStyle = '#fff';
       g.font = font(14, 'bold');
-      g.fillText(`ELIMINATED ${f.eliminated.name}`, cx, cy - R * Math.sin(span) - (f.incoming !== null ? 68 : 30) * u);
+      g.fillText(`ELIMINATED ${f.eliminated.name}${f.eliminated.assist ? ' (ASSIST)' : ''}`, cx, cy - R * Math.sin(span) - (f.incoming !== null ? 68 : 30) * u);
       g.globalAlpha = 1;
     }
     // A fresh launch is shielded until we act: say so under the frame.
@@ -345,8 +389,14 @@ export function radar(g, rx, ry, rr, u, f, map) {
   for (const c of f.contacts) {
     const p = relative(f.me.x, f.me.z, f.yaw, c.x, c.z);
     const px = rx + p.right * k, py = ry - p.ahead * k;
-    g.fillStyle = g.strokeStyle = c.orb ? REPAIR : c.enemy ? f.enemyColor : f.friendColor;
-    if (c.orb) g.fillRect(px - 2.5 * u, py - 2.5 * u, 5 * u, 5 * u); // health orb
+    g.fillStyle = g.strokeStyle = c.color ?? (c.orb ? REPAIR : c.enemy ? f.enemyColor : f.friendColor);
+    if (c.objective) {
+      // An objective: its letter.
+      g.font = `bold ${Math.round(11 * u)}px ui-monospace, Menlo, monospace`;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText(c.objective, px, py);
+    } else if (c.orb) g.fillRect(px - 2.5 * u, py - 2.5 * u, 5 * u, 5 * u); // health orb
     else if (c.turret) {
       // A turret: an open square.
       g.lineWidth = 1.5 * u;

@@ -8,6 +8,8 @@ import { writeFileSync } from 'node:fs';
 import { heightAt as groundAt } from './ground.js';
 
 export const solids = [], decor = [], nav = [], pads = [];
+/** Where the objective modes play (see `bases` and `silos`); written only if any are set. */
+export const objectives = {};
 const single = new Set(); // pieces that are their own twin
 let terrain = null;
 export const r3 = (v) => Math.round(v * 1000) / 1000;
@@ -144,6 +146,29 @@ export const once = (build) => {
 
 const flip = ([x, y, z]) => [r3(-x) || 0, y, r3(-z) || 0];
 
+/** Each team's base, where missiles land: `south` defaults to `north`'s twin. */
+export function bases(north, south = flip(north)) {
+  objectives.bases = [north, south];
+}
+
+/**
+ * Missile Assault's silos, each a capture zone `{ at, radius, band, pad? }` (feet within `radius`
+ * across and `band` up or down count as in it; `pad` is where its launch pad lies, on a surface
+ * under open sky, `at` by default): A on team 0's side, B, and C, which defaults to A's twin.
+ */
+export function silos(a, b, c = { ...a, at: flip(a.at), ...(a.pad && { pad: flip(a.pad) }) }) {
+  objectives.silos = [a, b, c];
+}
+
+/**
+ * Siege: the energy station's zone `station` (`{ at, radius, band }`: one, mid-map, for the teams
+ * to fight over), the anti-air gun's capture zone `aa` (the same shape), and `sky`, how high the
+ * battleships cruise.
+ */
+export function siege(station, aa, sky) {
+  Object.assign(objectives, { stations: [station], aa, sky });
+}
+
 /**
  * Writes `file` (a URL) with `meta` (name, size, night, palette...), the terrain if any, and each
  * team's `spawns`. Without `south`, first adds the 180-degree twin of everything authored, and the
@@ -164,11 +189,12 @@ export function write(file, meta, north, south) {
   for (const s of solids) if (s.yaw === 0 || s.yaw === undefined) delete s.yaw;
   if (terrain && terrain.size.some((v, i) => v !== meta.size[i])) throw new Error(`${meta.name}: terrain is ${terrain.size}, map is ${meta.size}`);
 
-  const map = { ...meta, solids, decor, pads, spawns: [north, south], nav };
+  const map = { ...meta, solids, decor, pads, spawns: [north, south], nav, objectives };
   // One solid, prop, waypoint or terrain row per line, so edits diff cleanly.
   const lines = (key, list = map[key]) => `"${key}": [\n    ${list.map((v) => JSON.stringify(v)).join(',\n    ')}\n  ]`;
   const head = Object.entries(meta).map(([k, v]) => `"${k}": ${JSON.stringify(v).replaceAll(',', ', ')}`).join(',\n  ');
   const ground = terrain ? `,\n  "terrain": {"cell": ${terrain.cell}, ${lines('heights', terrain.heights)}}` : '';
-  writeFileSync(file, `{\n  ${head},\n  ${['solids', 'decor', ...(pads.length ? ['pads'] : [])].map((k) => lines(k)).join(',\n  ')},\n  "spawns": ${JSON.stringify(map.spawns)},\n  ${lines('nav')}${ground}\n}\n`);
+  const goals = Object.keys(objectives).length ? `,\n  "objectives": ${JSON.stringify(objectives)}` : '';
+  writeFileSync(file, `{\n  ${head},\n  ${['solids', 'decor', ...(pads.length ? ['pads'] : [])].map((k) => lines(k)).join(',\n  ')},\n  "spawns": ${JSON.stringify(map.spawns)},\n  ${lines('nav')}${goals}${ground}\n}\n`);
   console.log(`${meta.name}: ${solids.length} solids, ${decor.length} decor, ${pads.length} pads, ${nav.length} waypoints${terrain ? `, ${terrain.heights.length}x${terrain.heights[0].length} terrain` : ''}`);
 }

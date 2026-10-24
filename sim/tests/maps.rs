@@ -43,6 +43,37 @@ fn nav_graph_connects_every_waypoint() {
     }
 }
 
+#[test]
+fn objectives_stand_where_bots_can_reach_them() {
+    for (index, (name, _)) in MAPS.iter().enumerate() {
+        let map = Map::load(index);
+        let arena = Arena::new(&map);
+        for base in map.objectives.bases.iter().flatten() {
+            let ground = arena.cast_ray(&rapier3d::prelude::Ray::new(Vector::from_array(*base) + Vector::Y * 2.0, Vector::NEG_Y), 10.0);
+            assert!(ground.is_some_and(|d| (d - 2.0).abs() < 1.0), "{name}: base {base:?} isn't on the ground");
+        }
+        let waypoints = Nav::for_map(index).points();
+        if let Some(assault) = sim::objective::Assault::new(&map.objectives, waypoints) {
+            for (silo, zone) in ["A", "B", "C"].iter().zip(&assault.silos) {
+                assert!(!zone.rally.is_empty(), "{name}: silo {silo} at {} has no waypoint in it", zone.at);
+            }
+            // Launch pads lie on something, under open sky for their rockets.
+            for (silo, spot) in ["A", "B", "C"].iter().zip(&map.objectives.silos) {
+                let pad = Vector::from_array(spot.pad.unwrap_or(spot.at));
+                let ground = arena.cast_ray(&rapier3d::prelude::Ray::new(pad + Vector::Y, Vector::NEG_Y), 2.0);
+                assert!(ground.is_some_and(|d| (d - 1.0).abs() < 0.6), "{name}: silo {silo}'s pad at {pad} isn't on anything");
+                assert!(arena.cast_ray(&rapier3d::prelude::Ray::new(pad + Vector::Y * 0.5, Vector::Y), 80.0).is_none(), "{name}: silo {silo}'s pad at {pad} is roofed");
+            }
+        }
+        if let Some(siege) = sim::siege::Siege::new(&map.objectives, waypoints) {
+            assert!(!siege.aa.rally.is_empty(), "{name}: the AA gun at {} has no waypoint in it", siege.aa.at);
+            for (zone, _) in &siege.stations {
+                assert!(!zone.rally.is_empty(), "{name}: the station at {} has no waypoint in it", zone.at);
+            }
+        }
+    }
+}
+
 /// Asymmetric by design: blockout (a test map), canopy and crashsite.
 const ASYMMETRIC: [&str; 3] = ["blockout", "canopy", "crashsite"];
 

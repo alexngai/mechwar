@@ -1,11 +1,13 @@
-//! Authoritative team deathmatch: applies each client's inputs through `step_mech`, resolves
-//! hits with lag compensation, fills teams with bots, keeps score and runs the match clock.
+//! Authoritative matches (team deathmatch, deathmatch, Missile Assault, Siege): applies each client's inputs through
+//! `step_mech`, resolves hits with lag compensation, fills teams with bots, keeps score and runs
+//! the match clock.
 //! Pure logic; `server/` owns the sockets.
 
 use std::collections::VecDeque;
 
 use rapier3d::parry::query::RayCast;
 use rapier3d::prelude::{Pose, Ray, Rotation};
+use serde::{Deserialize, Serialize};
 
 use crate::ability::{self, Ability};
 use crate::arsenal;
@@ -13,7 +15,10 @@ use crate::bot::{self, Bot, Nav};
 use crate::collide;
 use crate::deploy::{self, Deployable, Kind};
 use crate::item::{self, Item};
+use crate::map::Objectives;
 use crate::net::{Cloud, Event, InputMsg, MatchState, MechView, Orb, PlayerNet, Snapshot};
+use crate::objective::{self, Assault};
+use crate::siege::{self, Siege};
 use crate::progress::{self, Tally};
 use crate::projectile::{self, Projectile};
 use crate::weapon;
@@ -24,6 +29,77 @@ pub const MAX_PLAYERS: usize = 2 * TEAM_SIZE;
 const _: () = assert!(MAX_PLAYERS <= 16, "Blast hits are a u16 bitmask of player ids");
 const _: () = assert!(MAX_PLAYERS <= deploy::TARGET as usize, "turrets' lock-on ids follow the players'");
 const POST_MATCH_SECONDS: f32 = 10.0;
+/// A kill's worth in points, shared out as kill credit (`progress::KILLER_BONUS`).
+const POINTS_PER_KILL: f32 = 100.0;
+/// Points for each mech in a zone when its team takes it; a Siege pilot's for each EU they bank,
+/// and each point of hull they shoot off the enemy ship.
+const CAPTURE_POINTS: f32 = 50.0;
+const EU_POINTS: f32 = 0.5;
+const SHIP_POINTS: f32 = 0.05;
+/// A Siege battleship's guns: how far they reach (m; from its cruising height, a wide circle
+/// below), and their heavy, slow bursts: SHIP_BURST rounds SHIP_RATE a second apart, SHIP_PAUSE s
+/// between bursts, each round dealing SHIP_ROUND.
+const SHIP_GUN_RANGE: f32 = 110.0;
+const SHIP_BURST: u8 = 3;
+const SHIP_RATE: f32 = 2.5;
+const SHIP_PAUSE: f32 = 2.0;
+const SHIP_ROUND: f32 = 15.0;
+/// Deathmatch is only played on maps up to this wide (m): on bigger ones eight pilots spend the
+/// match looking for each other.
+const DM_MAX_SIZE: f32 = 200.0;
+
+/// How a match is played and won.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Mode {
+    /// Two teams; each kill scores for the killer's.
+    #[default]
+    TeamDeathmatch,
+    /// Everyone for themselves, ranked by points (kill credit).
+    Deathmatch,
+    /// Two teams; held silos fire on the enemy base, and the last base standing wins.
+    MissileAssault,
+    /// Two teams; banked energy launches a battleship at the enemy base, and the last base
+    /// standing wins.
+    Siege,
+}
+
+impl Mode {
+    pub const ALL: [Mode; 4] = [Mode::TeamDeathmatch, Mode::Deathmatch, Mode::MissileAssault, Mode::Siege];
+
+    /// As the lobby and the server's settings spell it.
+    pub fn key(self) -> &'static str {
+        match self {
+            Mode::TeamDeathmatch => "tdm",
+            Mode::Deathmatch => "dm",
+            Mode::MissileAssault => "ma",
+            Mode::Siege => "siege",
+        }
+    }
+
+    /// As players see it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Mode::TeamDeathmatch => "Team Deathmatch",
+            Mode::Deathmatch => "Deathmatch",
+            Mode::MissileAssault => "Missile Assault",
+            Mode::Siege => "Siege",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Mode> {
+        Mode::ALL.into_iter().find(|m| m.key() == key)
+    }
+
+    /// Whether `map` plays this mode.
+    pub fn fits(self, map: &Map) -> bool {
+        match self {
+            Mode::TeamDeathmatch => true,
+            Mode::Deathmatch => map.size[0].max(map.size[1]) <= DM_MAX_SIZE,
+            Mode::MissileAssault => Assault::new(&map.objectives, &[]).is_some(),
+            Mode::Siege => Siege::new(&map.objectives, &[]).is_some(),
+        }
+    }
+}
 /// Inputs queued beyond this drop oldest first.
 const MAX_QUEUED: usize = 8;
 /// Input credit earned per tick. 2% over real time lets a client with a slightly fast clock drain
@@ -61,8 +137,9 @@ pub fn sanitize_name(raw: &str) -> String {
 
 struct Player {
     id: u8,
+    /// In Deathmatch, the player's own id.
     team: u8,
-    /// Index into the team's spawn points, used for the first spawn of each match.
+    /// Which spawn point the first spawn of each match takes (`Game::spawn_point`).
     slot: usize,
     class: MechClass,
     loadout: Loadout,
@@ -78,6 +155,10 @@ struct Player {
     history: VecDeque<(u32, Vector, bool)>,
     kills: u16,
     deaths: u16,
+    /// Kill credit this match, in points (POINTS_PER_KILL a kill), and objective points.
+    points: f32,
+    /// Siege energy carried.
+    eu: f32,
     /// Tick the player can launch from the hangar at, while destroyed or not launched yet.
     respawn_at: Option<u32>,
     /// Asked to launch: a human stays in the hangar until they do (bots launch on their own).
@@ -133,24 +214,30 @@ pub struct Game {
     pub bots: bool,
     /// Bots' skill, 0 (raw) to 1 (sharp): each bot's own spreads around it.
     pub bot_skill: f32,
-    /// Team kills that win the match.
+    pub mode: Mode,
+    /// Team kills that win the match; in Deathmatch, as many solo kills' worth of points.
     pub score_limit: u16,
     pub match_seconds: f32,
     /// Index into `map::MAPS`; clients load the same map from their Welcome, and switch with
     /// the match state's.
     pub map: usize,
-    /// Maps to rotate through, dealt like a shuffled deck: each plays once before any repeats,
-    /// never twice in a row. Empty to stay on `map`.
-    pub rotation: Vec<usize>,
-    /// The rest of the current deck; the next map comes off the end.
-    upcoming: Vec<usize>,
-    next_map: usize,
+    /// Modes and maps to rotate through, dealt like a shuffled deck: each pair plays once before
+    /// any repeats, never the same map twice in a row. Empty to stay on `mode` and `map`.
+    pub rotation: Vec<(Mode, usize)>,
+    /// The rest of the current deck.
+    upcoming: Vec<(Mode, usize)>,
+    next: (Mode, usize),
     /// xorshift64 state for shuffling the rotation.
     rng: u64,
     arena: Arena,
     nav: &'static Nav,
     /// Feet positions per team and slot, from the map.
     spawns: [Vec<Vector>; 2],
+    /// Where the map's objective modes play, and this match's objective state (Missile Assault's
+    /// or Siege's).
+    spots: Objectives,
+    assault: Option<Assault>,
+    siege: Option<Siege>,
     players: Vec<Player>,
     projectiles: Vec<Flying>,
     orbs: Vec<Orb>,
@@ -170,13 +257,17 @@ impl Game {
         assert!(data.spawns.iter().all(|s| s.len() >= TEAM_SIZE), "map needs {TEAM_SIZE} spawns per team");
         Self {
             map,
+            mode: Mode::default(),
             rotation: Vec::new(),
             upcoming: Vec::new(),
-            next_map: map,
+            next: (Mode::default(), map),
             rng: 0x9E37_79B9_7F4A_7C15,
             arena: Arena::new(&data),
             nav: Nav::for_map(map),
             spawns: data.spawns.map(|team| team.iter().map(|p| Vector::from_array(*p)).collect()),
+            spots: data.objectives,
+            assault: None,
+            siege: None,
             arsenal: Arsenal::new(&tuning),
             tick: 0,
             bots: true,
@@ -195,13 +286,15 @@ impl Game {
         }
     }
 
-    /// Adds a human to the team with fewer humans, taking a bot's slot there if needed.
-    /// None when every slot already holds a human.
+    /// Adds a human to the team with fewer humans (in Deathmatch, anywhere), taking a bot's slot
+    /// there if needed. None when every slot already holds a human.
     pub fn join(&mut self) -> Option<u8> {
         let humans = |team| self.players.iter().filter(|p| p.team == team && p.bot.is_none()).count();
         let team = if humans(1) < humans(0) { 1 } else { 0 };
-        if self.team_count(team) >= TEAM_SIZE {
-            let bot = self.players.iter().position(|p| p.team == team && p.bot.is_some())?;
+        let dm = self.mode == Mode::Deathmatch;
+        let full = if dm { self.players.len() >= MAX_PLAYERS } else { self.team_count(team) >= TEAM_SIZE };
+        if full {
+            let bot = self.players.iter().position(|p| (dm || p.team == team) && p.bot.is_some())?;
             self.players.remove(bot);
             self.roster_version += 1;
         }
@@ -238,9 +331,21 @@ impl Game {
         self.players.iter().filter(|p| p.team == team).count()
     }
 
+    /// A team with a place for a bot: in Deathmatch any free place (the bot's id picks its team),
+    /// else the first team short of TEAM_SIZE.
+    fn open_team(&self) -> Option<u8> {
+        match self.mode {
+            Mode::Deathmatch => (self.players.len() < MAX_PLAYERS).then_some(0),
+            _ => (0..2).find(|&team| self.team_count(team) < TEAM_SIZE),
+        }
+    }
+
     fn add_player(&mut self, team: u8, mut bot: Option<Bot>, class: MechClass) -> Option<u8> {
         let id = (0..MAX_PLAYERS as u8).find(|id| !self.players.iter().any(|p| p.id == *id))?;
-        let slot = (0..TEAM_SIZE).find(|s| !self.players.iter().any(|p| p.team == team && p.slot == *s))?;
+        let (team, slot) = match self.mode {
+            Mode::Deathmatch => (id, usize::from(id)),
+            _ => (team, (0..TEAM_SIZE).find(|s| !self.players.iter().any(|p| p.team == team && p.slot == *s))?),
+        };
         // Humans start with the class's own weapons until they launch; bots pick a build.
         let loadout = bot.as_mut().map_or(Loadout::of(class), |b| b.pick_loadout(&self.arsenal, class));
         self.players.push(Player {
@@ -251,13 +356,15 @@ impl Game {
             loadout,
             next_class: class,
             next_loadout: loadout,
-            mech: spawn(&self.arsenal, class, loadout, self.spawns[usize::from(team)][slot]),
+            mech: spawn(&self.arsenal, class, loadout, self.spawn_point(team, slot)),
             inputs: VecDeque::new(),
             credit: 0.0,
             ack_seq: 0,
             history: VecDeque::new(),
             kills: 0,
             deaths: 0,
+            points: 0.0,
+            eu: 0.0,
             respawn_at: None,
             launch: false,
             name: if bot.is_some() { BOT_NAMES[usize::from(id) % BOT_NAMES.len()].into() } else { format!("Pilot-{id:02}") },
@@ -341,12 +448,12 @@ impl Game {
         // Bots top up both teams while any human is here; an empty server keeps no one and
         // holds the match at its start, so the clock runs from the first human's arrival.
         if self.players.iter().any(|p| p.bot.is_none()) {
-            for team in 0..2 {
-                while self.bots && self.team_count(team) < TEAM_SIZE {
-                    let seed = u64::from(self.tick) << 8 | self.players.len() as u64;
-                    let class = MechClass::ALL[(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33) as usize % 3];
-                    self.add_player(team, Some(Bot::with_skill(seed, self.bot_skill)), class);
-                }
+            while self.bots
+                && let Some(team) = self.open_team()
+            {
+                let seed = u64::from(self.tick) << 8 | self.players.len() as u64;
+                let class = MechClass::ALL[(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33) as usize % 3];
+                self.add_player(team, Some(Bot::with_skill(seed, self.bot_skill)), class);
             }
         } else {
             if !self.players.is_empty() {
@@ -359,7 +466,8 @@ impl Game {
         match self.phase {
             Phase::Playing { started_at } if self.tick >= started_at + secs(self.match_seconds) => self.end_match(),
             Phase::Ended { restart_at, .. } if self.tick >= restart_at => {
-                self.load_map(self.next_map);
+                self.load_map(self.next.1);
+                self.set_mode(self.next.0);
                 self.start_match();
             }
             _ => {}
@@ -392,11 +500,22 @@ impl Game {
             let mates = || self.players.iter().filter(move |p| p.team == team && alive(p));
             mates().find(|p| p.bot.is_none()).or_else(|| mates().min_by_key(|p| p.id)).map(|p| p.id)
         };
-        let leads = [lead_of(0), lead_of(1)];
-        let engaged: [Vec<u8>; 2] = [0, 1].map(|team| self.players.iter().filter(|p| p.team == team).filter_map(|p| p.bot.as_ref()?.focus()).collect());
+        // By team (in Deathmatch everyone's alone: no lead, no radio).
+        let teams = 0..MAX_PLAYERS as u8;
+        let leads: Vec<Option<u8>> = teams.clone().map(lead_of).collect();
+        let engaged: Vec<Vec<u8>> = teams.map(|team| self.players.iter().filter(|p| p.team == team).filter_map(|p| p.bot.as_ref()?.focus()).collect()).collect();
         // First every bot looks and listens...
         let mut seen: Vec<(Option<u8>, Vec<(u8, Mech, f32)>)> = Vec::with_capacity(self.players.len());
-        let mut radio: [Vec<(u8, u8, Vector)>; 2] = [Vec::new(), Vec::new()]; // (from, enemy, where)
+        let mut radio: Vec<Vec<(u8, u8, Vector)>> = vec![Vec::new(); MAX_PLAYERS]; // (from, enemy, where)
+        // Objectives to take or hold, in Missile Assault and Siege.
+        let orders = match (&self.assault, &self.siege) {
+            (Some(a), _) => Some(a.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.mech.health > 0.0)).collect::<Vec<_>>())),
+            (_, Some(s)) => {
+                let ships = [0, 1].map(|t| self.deployables.iter().any(|d| d.kind == Kind::Ship && d.team == t));
+                Some(s.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.eu)).collect::<Vec<_>>(), ships))
+            }
+            _ => None,
+        };
         for i in 0..self.players.len() {
             let me = &self.players[i];
             if me.bot.is_none() {
@@ -462,6 +581,7 @@ impl Game {
                 }
             }
             bot.lead = lead;
+            bot.order = orders.as_ref().and_then(|o| o[i]);
             bot.orbs.clear();
             bot.orbs.extend(self.orbs.iter().filter(|o| o.dropped.is_none_or(|(_, side)| usize::from(side) == team)).map(|o| o.pos));
             let (focus, enemies) = &seen[i];
@@ -641,6 +761,10 @@ impl Game {
             self.arena.set_barriers(items(&self.arsenal), &self.deployables);
         }
 
+        if matches!(self.phase, Phase::Playing { .. }) {
+            self.step_objectives();
+        }
+
         for p in &mut self.players {
             p.history.push_back((self.tick, p.mech.pos, p.mech.health > 0.0));
             if p.history.len() > HISTORY_TICKS {
@@ -649,9 +773,11 @@ impl Game {
         }
     }
 
-    /// Fresh scores, and everyone back at their team spawn with full health.
+    /// Fresh scores and objectives, and everyone back at their team spawn with full health.
     fn start_match(&mut self) {
         self.scores = [0; 2];
+        self.assault = None;
+        self.siege = None;
         self.projectiles.clear();
         self.orbs.clear();
         self.clouds.clear();
@@ -660,13 +786,15 @@ impl Game {
         self.phase = Phase::Playing { started_at: self.tick };
         for p in &mut self.players {
             (p.class, p.loadout) = (p.next_class, p.next_loadout);
-            p.mech = spawn(&self.arsenal, p.class, p.loadout, self.spawns[usize::from(p.team)][p.slot]);
+            p.mech = spawn(&self.arsenal, p.class, p.loadout, spawn_point(self.mode, &self.spawns, p.team, p.slot));
             if let Some(bot) = &mut p.bot {
                 bot.respawned();
             }
             p.respawn_at = None;
             p.kills = 0;
             p.deaths = 0;
+            p.points = 0.0;
+            p.eu = 0.0;
             p.tally = Tally::default();
             p.ledger.clear();
         }
@@ -678,42 +806,93 @@ impl Game {
     }
 
     fn end_match(&mut self) {
-        let [a, b] = self.scores;
-        let winner = match a.cmp(&b) {
-            std::cmp::Ordering::Greater => Some(0),
-            std::cmp::Ordering::Less => Some(1),
-            std::cmp::Ordering::Equal => None,
+        let winner = match self.mode {
+            Mode::TeamDeathmatch => match self.scores[0].cmp(&self.scores[1]) {
+                std::cmp::Ordering::Greater => Some(0),
+                std::cmp::Ordering::Less => Some(1),
+                std::cmp::Ordering::Equal => None,
+            },
+            Mode::Deathmatch => match self.standings()[..] {
+                [a, b, ..] if (a.points, a.kills) == (b.points, b.kills) => None,
+                [a, ..] => Some(a.team),
+                [] => None,
+            },
+            // The base with more hull left (the other one's fallen, or the clock ran out).
+            Mode::MissileAssault | Mode::Siege => self.base_hull().and_then(|[a, b]| match a.total_cmp(&b) {
+                std::cmp::Ordering::Greater => Some(0),
+                std::cmp::Ordering::Less => Some(1),
+                std::cmp::Ordering::Equal => None,
+            }),
         };
         self.phase = Phase::Ended { winner, restart_at: self.tick + secs(POST_MATCH_SECONDS) };
-        // The next map comes off the deck; an empty deck is shuffled anew, not leading with this map.
-        if self.rotation.len() > 1 {
-            if self.upcoming.is_empty() {
-                self.upcoming = self.shuffled(self.rotation.clone());
-                if self.upcoming.last() == Some(&self.map) {
-                    self.upcoming.swap(0, self.rotation.len() - 1);
-                }
+        // The next match comes off the deck: the top card for another map than this one (an empty
+        // deck shuffled anew, or a fresh one under the last cards if they're all this map).
+        // Without a rotation, it's this mode and map again.
+        if self.rotation.len() <= 1 {
+            self.next = (self.mode, self.map);
+        } else {
+            let map = self.map;
+            let other = |deck: &[(Mode, usize)]| deck.iter().rposition(|&(_, m)| m != map);
+            // (With one map in the rotation there's no other to find: just deal on.)
+            if other(&self.upcoming).is_none() && (self.upcoming.is_empty() || self.rotation.iter().any(|&(_, m)| m != map)) {
+                let mut deck = self.shuffled(self.rotation.clone());
+                deck.append(&mut self.upcoming);
+                self.upcoming = deck;
             }
-            self.next_map = self.upcoming.pop().expect("a refilled deck has maps");
+            let i = other(&self.upcoming).unwrap_or(self.upcoming.len() - 1);
+            self.next = self.upcoming.remove(i);
         }
     }
 
-    /// Rotates through `maps` from here on, shuffling with `seed`. The first deck leaves out the
-    /// current map, so every map has played before any comes round again.
-    pub fn rotate(&mut self, maps: Vec<usize>, seed: u64) {
-        self.rng = seed | 1;
-        self.upcoming = self.shuffled(maps.iter().copied().filter(|&m| m != self.map).collect());
-        self.rotation = maps;
+    /// The bases' hull, in the modes with bases.
+    fn base_hull(&self) -> Option<[f32; 2]> {
+        self.assault.as_ref().map(|a| a.hull).or(self.siege.as_ref().map(|s| s.hull))
     }
 
-    /// `maps` in a random order (Fisher-Yates, on the xorshift64 state).
-    fn shuffled(&mut self, mut maps: Vec<usize>) -> Vec<usize> {
-        for i in (1..maps.len()).rev() {
+    /// Players best first: by points, then kills.
+    fn standings(&self) -> Vec<&Player> {
+        let mut by_rank: Vec<&Player> = self.players.iter().collect();
+        by_rank.sort_by(|a, b| b.points.total_cmp(&a.points).then(b.kills.cmp(&a.kills)));
+        by_rank
+    }
+
+    /// Rotates through `matches` (modes and maps) from here on, shuffling with `seed`. The first
+    /// deck leaves out the current pair, so every pair has played before any comes round again.
+    pub fn rotate(&mut self, matches: Vec<(Mode, usize)>, seed: u64) {
+        self.rng = seed | 1;
+        let now = (self.mode, self.map);
+        self.upcoming = self.shuffled(matches.iter().copied().filter(|&m| m != now).collect());
+        self.rotation = matches;
+    }
+
+    /// Switches to `mode` between matches, putting everyone on teams for it if it's to or from
+    /// Deathmatch: there each their own; else humans in turn over the two teams, where bots fill in
+    /// round them.
+    fn set_mode(&mut self, mode: Mode) {
+        let regroup = (mode == Mode::Deathmatch) != (self.mode == Mode::Deathmatch);
+        self.mode = mode;
+        if !regroup {
+            return;
+        }
+        self.players.retain(|p| p.bot.is_none());
+        for (i, p) in self.players.iter_mut().enumerate() {
+            (p.team, p.slot) = match mode {
+                Mode::Deathmatch => (p.id, usize::from(p.id)),
+                _ => ((i % 2) as u8, i / 2),
+            };
+        }
+        self.roster_version += 1;
+    }
+
+    /// `deck` in a random order (Fisher-Yates, on the xorshift64 state).
+    fn shuffled(&mut self, mut deck: Vec<(Mode, usize)>) -> Vec<(Mode, usize)> {
+        for i in (1..deck.len()).rev() {
             self.rng ^= self.rng << 13;
             self.rng ^= self.rng >> 7;
             self.rng ^= self.rng << 17;
-            maps.swap(i, (self.rng % (i as u64 + 1)) as usize);
+            deck.swap(i, (self.rng % (i as u64 + 1)) as usize);
         }
-        maps
+        deck
     }
 
     /// Swaps in map `index`: its arena, nav and spawns. Matches start on it from their spawns.
@@ -726,12 +905,18 @@ impl Game {
         self.arena = Arena::new(&data);
         self.nav = Nav::for_map(index);
         self.spawns = data.spawns.map(|team| team.iter().map(|p| Vector::from_array(*p)).collect());
+        self.spots = data.objectives;
         for p in &mut self.players {
             p.history.clear();
         }
     }
 
-    /// The team spawn farthest from the nearest living enemy.
+    /// Where slot `slot` of `team` starts a match.
+    fn spawn_point(&self, team: u8, slot: usize) -> Vector {
+        spawn_point(self.mode, &self.spawns, team, slot)
+    }
+
+    /// The spawn (the team's; in Deathmatch, any) farthest from the nearest living enemy.
     fn respawn_point(&self, team: u8) -> Vector {
         let threat = |spawn: Vector| {
             self.players
@@ -740,8 +925,13 @@ impl Game {
                 .map(|p| p.mech.pos.distance(spawn))
                 .fold(f32::MAX, f32::min)
         };
-        self.spawns[usize::from(team)]
+        let spawns = match self.mode {
+            Mode::Deathmatch => &self.spawns[..],
+            _ => std::slice::from_ref(&self.spawns[usize::from(team)]),
+        };
+        spawns
             .iter()
+            .flatten()
             .copied()
             .max_by(|a, b| threat(*a).total_cmp(&threat(*b)))
             .expect("teams have spawns")
@@ -914,7 +1104,11 @@ impl Game {
                 continue;
             }
             let (t, rt) = (items(&self.arsenal), self.arsenal.get(MechClass::B, rocket));
-            let (range, speed) = if d.kind == Kind::MgTurret { (t.mg_turret_range, f32::INFINITY) } else { (t.rocket_turret_range, rt.alt_speed) };
+            let (range, speed) = match d.kind {
+                Kind::MgTurret => (t.mg_turret_range, f32::INFINITY),
+                Kind::Ship => (SHIP_GUN_RANGE, f32::INFINITY),
+                _ => (t.rocket_turret_range, rt.alt_speed),
+            };
             let gun = deploy::gun(t, &d);
             let (arena, clouds) = (&self.arena, &self.clouds);
             // Not one across a dome's surface, which would only soak up the fire.
@@ -935,12 +1129,14 @@ impl Game {
                 continue;
             }
             let d = &mut self.deployables[k];
-            if d.kind == Kind::MgTurret {
+            if d.kind != Kind::RocketTurret {
+                let ship = d.kind == Kind::Ship;
                 if d.burst == 0 {
-                    d.burst = t.mg_turret_burst as u8;
+                    d.burst = if ship { SHIP_BURST } else { t.mg_turret_burst as u8 };
                 }
                 d.burst -= 1;
-                d.ready = tick + secs(if d.burst > 0 { 1.0 / t.mg_turret_rate } else { t.mg_turret_pause });
+                let (rate, pause) = if ship { (SHIP_RATE, SHIP_PAUSE) } else { (t.mg_turret_rate, t.mg_turret_pause) };
+                d.ready = tick + secs(if d.burst > 0 { 1.0 / rate } else { pause });
                 self.turret_round(k);
             } else {
                 d.ready = tick + secs(t.rocket_turret_cooldown);
@@ -960,7 +1156,8 @@ impl Game {
     fn turret_round(&mut self, k: usize) {
         let (d, t) = (self.deployables[k], items(&self.arsenal));
         let ray = Ray::new(deploy::gun(t, &d), weapon::in_cone(d.yaw, d.pitch, t.mg_turret_spread_deg.to_radians(), self.tick, u32::from(d.owner)));
-        let wall = self.arena.cast_ray(&ray, t.mg_turret_range).unwrap_or(t.mg_turret_range);
+        let range = if d.kind == Kind::Ship { SHIP_GUN_RANGE } else { t.mg_turret_range };
+        let wall = self.arena.cast_ray(&ray, range).unwrap_or(range);
         let mut best = deploy::stops(&self.deployables, t, &ray, wall).unwrap_or(wall);
         let mut hit = None;
         for (j, q) in self.players.iter().enumerate().filter(|(_, q)| q.team != d.team && q.mech.health > 0.0) {
@@ -974,7 +1171,7 @@ impl Game {
             (best, hit) = (toi, None);
         }
         let hit = hit.filter(|_| matches!(self.phase, Phase::Playing { .. }));
-        let damage = t.mg_turret_damage;
+        let damage = if d.kind == Kind::Ship { SHIP_ROUND } else { t.mg_turret_damage };
         self.events.push(Event::TurretShot { owner: d.owner, end: ray.point_at(best), hit: hit.map(|j| self.players[j].id) });
         let owner = self.players.iter().position(|q| q.id == d.owner);
         if let Some(j) = hit {
@@ -993,8 +1190,14 @@ impl Game {
         }
         let d = &mut self.deployables[k];
         let standing = d.hull > 0.0;
+        let dealt = amount.min(d.hull.max(0.0));
         d.hull -= amount;
+        let ship = d.kind == Kind::Ship;
         self.events.push(Event::TurretHit { attacker, wrecked: standing && d.hull <= 0.0 });
+        if let Some(p) = self.players.iter_mut().find(|p| p.id == attacker).filter(|_| ship) {
+            p.points += SHIP_POINTS * dealt;
+            p.tally.hit_ship(dealt);
+        }
     }
 
     /// Where an orb for a mech at `feet` floats: over the ground below, if it's in the air.
@@ -1038,9 +1241,9 @@ impl Game {
     }
 
     /// Damages player `j` (less while braced) while the match is on, ending any repair. A kill
-    /// drops a health orb, and scores for `attacker`, if they're still here; it goes on the
-    /// attacker's tally (by `cause`'s weapon), as an assist on the tally of anyone else who dealt
-    /// enough of the victim's recent damage, and as a death on the victim's.
+    /// drops a health orb, and scores for `attacker`, if they're still here; it shares out kill
+    /// credit (points, and on tallies: the killer's by `cause`'s weapon, assists for the rest who
+    /// dealt the victim's recent damage), and goes as a death on the victim's tally.
     fn apply_damage_by(&mut self, attacker: Option<usize>, j: usize, amount: f32, cause: Cause) {
         let target = &self.players[j];
         if !matches!(self.phase, Phase::Playing { .. }) || target.mech.health <= 0.0 || target.mech.shield > 0.0 {
@@ -1069,40 +1272,56 @@ impl Game {
         target.deaths += 1;
         target.tally.stats.deaths += 1;
         target.respawn_at = Some(respawn_at);
-        // Credit: the killer by weapon, and assists by share of the recent damage.
+        // Kill credit: everyone their share of the recent damage, the killer KILLER_BONUS more.
         let (bot, ledger) = (target.bot.is_some(), std::mem::take(&mut target.ledger));
         let (victim, fell) = (target.id, target.mech.pos);
         let killer = from.map(|(id, _)| id);
         let recent = |&&(_, _, at): &&(u8, f32, u32)| tick.saturating_sub(at) < secs(ASSIST_WINDOW);
         let total: f32 = ledger.iter().filter(recent).map(|l| l.1).sum();
-        let mut shares: Vec<(u8, f32)> = Vec::new();
-        for &(id, dealt, _) in ledger.iter().filter(recent).filter(|l| Some(l.0) != killer) {
-            match shares.iter_mut().find(|s| s.0 == id) {
-                Some(s) => s.1 += dealt,
-                None => shares.push((id, dealt)),
+        let mut credits: Vec<(u8, f32)> = killer.map(|id| (id, progress::KILLER_BONUS)).into_iter().collect();
+        for &(id, dealt, _) in ledger.iter().filter(recent).filter(|_| total > 0.0) {
+            match credits.iter_mut().find(|c| c.0 == id) {
+                Some(c) => c.1 += dealt / total,
+                None => credits.push((id, dealt / total)),
             }
         }
-        for (id, dealt) in shares {
-            if total > 0.0 && dealt / total >= progress::ASSIST_SHARE
-                && let Some(p) = self.players.iter_mut().find(|p| p.id == id)
-            {
-                p.tally.assist(dealt / total, bot);
+        let weapon = match cause {
+            Cause::Weapon { slot, index } => arsenal::weapon(slot, index).map(|(id, _)| id.to_string()),
+            Cause::Unknown => None,
+        };
+        let mut assists = 0u16;
+        for (id, credit) in credits {
+            let Some(p) = self.players.iter_mut().find(|p| p.id == id) else { continue };
+            p.points += POINTS_PER_KILL * credit;
+            if Some(id) == killer {
+                p.tally.kill(weapon.as_deref(), bot, credit);
+            } else if p.tally.assist(credit, bot) {
+                assists |= 1 << id;
             }
-        }
-        if let Some(a) = attacker {
-            let weapon = match cause {
-                Cause::Weapon { slot, index } => arsenal::weapon(slot, index).map(|(id, _)| id.to_string()),
-                Cause::Unknown => None,
-            };
-            self.players[a].tally.kill(weapon.as_deref(), bot);
         }
         self.orbs.push(Orb { pos: self.orb_spot(fell), health: ORB_HEALTH, fades_at: self.tick + secs(ORB_SECONDS), dropped: None });
+        // What it carried falls with it, for anyone to pick up.
+        let (eu, spot) = (std::mem::take(&mut self.players[j].eu), self.orb_spot(fell));
+        if let Some(s) = self.siege.as_mut().filter(|_| eu > 0.0) {
+            s.drop(spot, eu, self.tick);
+        }
         let Some(a) = attacker else { return };
         let (killer, team) = (self.players[a].id, self.players[a].team);
         self.players[a].kills += 1;
-        self.events.push(Event::Kill { killer, victim });
-        self.scores[usize::from(team)] += 1;
-        if self.scores[usize::from(team)] >= self.score_limit {
+        self.events.push(Event::Kill { killer, victim, assists });
+        let won = match self.mode {
+            Mode::TeamDeathmatch => {
+                self.scores[usize::from(team)] += 1;
+                self.scores[usize::from(team)] >= self.score_limit
+            }
+            Mode::Deathmatch => {
+                let limit = f32::from(self.score_limit) * POINTS_PER_KILL * (1.0 + progress::KILLER_BONUS);
+                self.players.iter().any(|p| p.points >= limit)
+            }
+            // Only a base falling ends it.
+            Mode::MissileAssault | Mode::Siege => false,
+        };
+        if won {
             self.end_match();
         }
     }
@@ -1113,10 +1332,21 @@ impl Game {
             Phase::Playing { started_at } => (false, None, started_at + secs(self.match_seconds)),
             Phase::Ended { winner, restart_at } => (true, winner, restart_at),
         };
+        // In Deathmatch, the top two's points; in Missile Assault, the bases' hull.
+        let scores = match self.mode {
+            Mode::TeamDeathmatch => self.scores,
+            Mode::MissileAssault | Mode::Siege => self.base_hull().unwrap_or([objective::BASE_HULL; 2]).map(|h| h.ceil() as u16),
+            Mode::Deathmatch => {
+                let top = self.standings();
+                [0, 1].map(|i| top.get(i).map_or(0, |p| p.points.round() as u16))
+            }
+        };
         MatchState {
+            mode: self.mode,
             map: self.map as u8,
-            next_map: self.next_map as u8,
-            scores: self.scores,
+            next_mode: self.next.0,
+            next_map: self.next.1 as u8,
+            scores,
             seconds_left: (until.saturating_sub(self.tick) as f32 / TICK_HZ).ceil() as u16,
             ended,
             winner,
@@ -1147,6 +1377,8 @@ impl Game {
                     bot: p.bot.is_some(),
                     kills: p.kills,
                     deaths: p.deaths,
+                    points: p.points.round() as u16,
+                    eu: p.eu.round() as u8,
                     docked: p.respawn_at.is_some_and(|at| self.tick >= at),
                     view: MechView::from(&p.mech),
                 })
@@ -1155,8 +1387,98 @@ impl Game {
             orbs: self.orbs.clone(),
             clouds: self.clouds.clone(),
             deployables: self.deployables.clone(),
+            zones: match (&self.assault, &self.siege) {
+                (Some(a), _) => a.silos.iter().map(|z| z.state).collect(),
+                (_, Some(s)) => vec![s.aa.state],
+                _ => Vec::new(),
+            },
+            siege: self.siege.as_ref().map(Siege::net),
             hangar: me.and_then(|p| p.respawn_at).map(|at| at.saturating_sub(self.tick) as f32 * DT),
             state: self.match_state(),
+        }
+    }
+}
+
+impl Game {
+    fn step_objectives(&mut self) {
+        match self.mode {
+            Mode::MissileAssault => self.step_assault(),
+            Mode::Siege => self.step_siege(),
+            _ => {}
+        }
+    }
+
+    /// Missile Assault's tick: who stands in each silo (the living), captures (an event, and
+    /// credit for each capturer), missiles fired, and the match's end when a base falls.
+    fn step_assault(&mut self) {
+        let waypoints = self.nav.points();
+        let Some(mut assault) = self.assault.take().or_else(|| Assault::new(&self.spots, waypoints)) else { return };
+        let living = || self.players.iter().filter(|p| p.mech.health > 0.0);
+        let counts: Vec<[usize; 2]> = assault.silos.iter().map(|z| [0, 1].map(|t| living().filter(|p| p.team == t && z.holds(p.mech.pos)).count())).collect();
+        let outcome = assault.step(self.tick, &counts);
+        for &(zone, team) in &outcome.captured {
+            self.events.push(Event::Captured { zone: zone as u8, team });
+            let silo = &assault.silos[zone];
+            for p in self.players.iter_mut().filter(|p| p.team == team && p.mech.health > 0.0 && silo.holds(p.mech.pos)) {
+                p.points += CAPTURE_POINTS;
+                p.tally.capture();
+            }
+        }
+        self.events.extend(outcome.fired.iter().map(|&(silo, team)| Event::Missile { silo: silo as u8, team }));
+        let fallen = assault.fallen().is_some();
+        self.assault = Some(assault);
+        if fallen {
+            self.end_match();
+        }
+    }
+
+    /// Siege's tick: ships gone down since the last, the AA gun's zone, energy drawn, carried,
+    /// picked up and banked (with credit), launches, the ships' flight, and the match's end when a
+    /// base falls.
+    fn step_siege(&mut self) {
+        let waypoints = self.nav.points();
+        let Some(mut s) = self.siege.take().or_else(|| Siege::new(&self.spots, waypoints)) else { return };
+        let ship_up = |list: &[Deployable], team: u8| list.iter().any(|d| d.kind == Kind::Ship && d.team == team);
+        let up = [0, 1].map(|t| ship_up(&self.deployables, t));
+        for team in (0..2).filter(|&t| s.up[usize::from(t)] && !up[usize::from(t)]) {
+            self.events.push(Event::Ship { team, up: false });
+        }
+        let count = [0, 1].map(|t| self.players.iter().filter(|p| p.team == t && p.mech.health > 0.0 && s.aa.holds(p.mech.pos)).count());
+        if let Some(team) = s.aa.step(count) {
+            self.events.push(Event::Captured { zone: 0, team });
+            for p in self.players.iter_mut().filter(|p| p.team == team && p.mech.health > 0.0 && s.aa.holds(p.mech.pos)) {
+                p.points += CAPTURE_POINTS;
+                p.tally.capture();
+            }
+        }
+        let living: Vec<usize> = (0..self.players.len()).filter(|&i| self.players[i].mech.health > 0.0).collect();
+        let mut mechs: Vec<(u8, Vector, f32)> = living.iter().map(|&i| (self.players[i].team, self.players[i].mech.pos, self.players[i].eu)).collect();
+        let banked = s.energy(self.tick, &mut mechs, up[0] || up[1]);
+        for ((&i, m), eu) in living.iter().zip(&mechs).zip(banked) {
+            let p = &mut self.players[i];
+            p.eu = m.2;
+            if eu > 0.0 {
+                p.points += EU_POINTS * eu;
+                p.tally.bank(eu);
+            }
+        }
+        if let Some(team) = s.launch(up) {
+            let pos = s.ship_start(team);
+            self.deployables.push(Deployable { kind: Kind::Ship, team, owner: deploy::ship_owner(team), pos, yaw: 0.0, pitch: 0.0, hull: siege::SHIP_HULL, placed: self.tick, expires: u32::MAX, ready: self.tick, burst: 0 });
+            self.events.push(Event::Ship { team, up: true });
+        }
+        let flying: Vec<usize> = (0..self.deployables.len()).filter(|&k| self.deployables[k].kind == Kind::Ship && self.deployables[k].hull > 0.0).collect();
+        let mut ships: Vec<siege::Ship> = flying.iter().map(|&k| (self.deployables[k].team, self.deployables[k].pos, self.deployables[k].hull)).collect();
+        s.fly(&mut ships);
+        for (&k, &(_, pos, hull)) in flying.iter().zip(&ships) {
+            (self.deployables[k].pos, self.deployables[k].hull) = (pos, hull);
+        }
+        // Ships shot down this tick are cleared before the next, which tells of them.
+        s.up = [0, 1].map(|t| ship_up(&self.deployables, t));
+        let fallen = s.fallen().is_some();
+        self.siege = Some(s);
+        if fallen {
+            self.end_match();
         }
     }
 }
@@ -1182,6 +1504,15 @@ impl Game {
 /// Item values, the same for every mech: what deployables are sized by.
 fn items(arsenal: &Arsenal) -> &Tuning {
     arsenal.get(MechClass::B, Loadout::default())
+}
+
+/// Where slot `slot` of `team` starts a match: in Deathmatch, slots take the two teams' spawns in
+/// turn.
+fn spawn_point(mode: Mode, spawns: &[Vec<Vector>; 2], team: u8, slot: usize) -> Vector {
+    match mode {
+        Mode::Deathmatch => spawns[slot % 2][slot / 2],
+        _ => spawns[usize::from(team)][slot],
+    }
 }
 
 /// A fresh mech of `class` carrying `loadout` at `pos`.
@@ -1232,25 +1563,41 @@ mod tests {
         game.players.iter().find(|p| p.id == id).unwrap().mech
     }
 
+    /// The matches `deck` deals over `rounds` decks' worth from `seed`, without loading each map
+    /// (only the order matters), checking no map comes twice in a row.
+    fn deal(deck: &[(Mode, usize)], seed: u64, rounds: usize) -> Vec<(Mode, usize)> {
+        let mut game = Game::new(Tuning::default(), deck[0].1);
+        game.rotate(deck.to_vec(), seed);
+        let mut played = vec![(game.mode, game.map)];
+        for _ in 1..deck.len() * rounds {
+            game.end_match();
+            assert_ne!(game.next.1, game.map, "seed {seed}: the same map twice in a row: {played:?}");
+            (game.mode, game.map) = game.next;
+            played.push(game.next);
+        }
+        played
+    }
+
     #[test]
     fn rotation_plays_every_map_before_any_repeats() {
-        let maps: Vec<usize> = crate::map::ROTATION.iter().map(|name| Map::index(name).unwrap()).collect();
+        let maps: Vec<(Mode, usize)> = crate::map::ROTATION.iter().map(|name| (Mode::TeamDeathmatch, Map::index(name).unwrap())).collect();
         for seed in [1, 42, 0xdead_beef, 1_792_656_822_821_000_000] {
-            let mut game = Game::new(Tuning::default(), maps[0]);
-            game.rotate(maps.clone(), seed);
-            // Deal 4 decks' worth without loading each map: only the order matters here.
-            let mut played = vec![game.map];
-            for _ in 1..maps.len() * 4 {
-                game.end_match();
-                assert_ne!(game.next_map, game.map, "seed {seed}: the same map twice in a row: {played:?}");
-                game.map = game.next_map;
-                played.push(game.map);
-            }
+            let played = deal(&maps, seed, 4);
             for deck in played.chunks(maps.len()) {
                 let mut seen = deck.to_vec();
-                seen.sort();
+                seen.sort_by_key(|&(_, m)| m);
                 seen.dedup();
                 assert_eq!(seen.len(), maps.len(), "seed {seed}: a deck missed a map: {played:?}");
+            }
+        }
+        // Modes in turn too, some maps in two: each pair still comes round about once a deck.
+        let small = ["saltworks", "sump", "sinkhole"].map(|name| (Mode::Deathmatch, Map::index(name).unwrap()));
+        let mixed: Vec<(Mode, usize)> = maps.iter().copied().chain(small).collect();
+        for seed in [1, 42, 0xdead_beef] {
+            let played = deal(&mixed, seed, 6);
+            for pair in &mixed {
+                let n = played.iter().filter(|p| *p == pair).count();
+                assert!((5..=7).contains(&n), "seed {seed}: {pair:?} played {n} times in 6 decks");
             }
         }
     }
@@ -1266,7 +1613,7 @@ mod tests {
         (0..=secs(POST_MATCH_SECONDS)).for_each(|_| game.step());
         assert_eq!(game.map, foundry);
 
-        game.rotate(vec![foundry, saltworks], 42);
+        game.rotate(vec![(Mode::TeamDeathmatch, foundry), (Mode::TeamDeathmatch, saltworks)], 42);
         game.end_match();
         let s = game.snapshot(id).state;
         assert_eq!((s.map, s.next_map), (foundry as u8, saltworks as u8), "the next map isn't announced");
@@ -1296,6 +1643,229 @@ mod tests {
         assert_eq!((h.stats.kills, h.stats.assists), (0, 1));
         assert!((h.assist_share - 0.4).abs() < 1e-4, "share {}", h.assist_share);
         assert_eq!(d.stats.deaths, 1);
+        // Kill credit: the helper's 40%, the killer's 60% plus the bonus; the helper hears of it.
+        assert!((k.kill_credit - 0.85).abs() < 1e-4, "killer's credit {}", k.kill_credit);
+        let points = |id| game.players.iter().find(|p| p.id == id).unwrap().points;
+        assert!((points(killer) - 85.0).abs() < 0.01 && (points(helper) - 40.0).abs() < 0.01, "points {} {}", points(killer), points(helper));
+        assert!(game.events.iter().any(|e| matches!(e, Event::Kill { assists, .. } if *assists == 1 << helper)), "{:?}", game.events);
+    }
+
+    #[test]
+    fn a_sliver_of_the_damage_earns_credit_but_no_assist() {
+        let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
+        game.bots = false;
+        let (killer, chip, victim) = (game.join().unwrap(), game.join().unwrap(), game.join().unwrap());
+        let at = |game: &Game, id| game.players.iter().position(|p| p.id == id).unwrap();
+        unshield(&mut game);
+        let v = at(&game, victim);
+        game.players[v].mech.health = 100.0;
+        game.apply_damage(Some(at(&game, chip)), v, 10.0);
+        game.apply_damage(Some(at(&game, killer)), v, 1e3);
+        let c = &game.players[at(&game, chip)];
+        assert_eq!((c.tally.stats.assists, c.points.round()), (0, 10.0));
+        assert!(game.events.iter().any(|e| matches!(e, Event::Kill { assists: 0, .. })));
+    }
+
+    /// A Deathmatch on Sump (small enough for one), bots on, with one human in it.
+    fn deathmatch() -> (Game, u8) {
+        let mut game = Game::new(Tuning::default(), Map::index("sump").unwrap());
+        game.mode = Mode::Deathmatch;
+        let id = game.join().unwrap();
+        game.step();
+        (game, id)
+    }
+
+    #[test]
+    fn deathmatch_puts_everyone_on_their_own_team() {
+        let (mut game, _) = deathmatch();
+        assert_eq!(game.players.len(), MAX_PLAYERS);
+        assert!(game.players.iter().all(|p| p.team == p.id), "teams aren't ids");
+        // Everyone starts on a spawn of their own.
+        for p in &game.players {
+            assert!(game.players.iter().all(|q| q.id == p.id || q.mech.pos.distance(p.mech.pos) > 1.0), "two on one spawn");
+        }
+        // Humans take bots' places until there are none left.
+        for _ in 1..MAX_PLAYERS {
+            assert!(game.join().is_some());
+        }
+        assert_eq!((game.join(), game.headcount()), (None, (MAX_PLAYERS, 0)));
+    }
+
+    /// A Missile Assault on Foundry, with one human in it (and bots, if `bots`).
+    fn assault(bots: bool) -> (Game, u8) {
+        let mut game = Game::new(Tuning::default(), Map::index("foundry").unwrap());
+        (game.mode, game.bots) = (Mode::MissileAssault, bots);
+        let id = game.join().unwrap();
+        game.step();
+        (game, id)
+    }
+
+    #[test]
+    fn standing_on_a_silo_takes_it_and_credits_the_taker() {
+        let (mut game, id) = assault(false);
+        let a = game.assault.as_ref().expect("Foundry has silos").silos[0].rally[0];
+        let me = game.players.iter().position(|p| p.id == id).unwrap();
+        game.players[me].mech.pos = a;
+        let mut captured = false;
+        for _ in 0..secs(10.0) {
+            game.players[me].mech.pos = a;
+            game.step();
+            captured |= game.events.iter().any(|e| matches!(e, Event::Captured { zone: 0, team: 0 }));
+        }
+        assert!(captured, "{:?}", game.snapshot(id).zones);
+        let p = &game.players[me];
+        assert_eq!((p.points, p.tally.stats.captures), (CAPTURE_POINTS, 1));
+        assert_eq!(game.snapshot(id).zones[0].owner, Some(0));
+        // A held silo fires on the other base; the missile lands after its flight.
+        let mut fired = false;
+        for _ in 0..secs(11.0) {
+            game.step();
+            fired |= game.events.iter().any(|e| matches!(e, Event::Missile { silo: 0, team: 0 }));
+        }
+        assert!(fired, "no missile");
+        assert_eq!(game.match_state().scores, [objective::BASE_HULL as u16; 2]);
+        (0..secs(objective::MISSILE_FLIGHT)).for_each(|_| game.step());
+        assert!(game.match_state().scores[1] < objective::BASE_HULL as u16);
+    }
+
+    #[test]
+    fn a_fallen_base_ends_missile_assault() {
+        let (mut game, _) = assault(false);
+        game.assault.as_mut().unwrap().hull[1] = 0.0;
+        game.step();
+        let state = game.match_state();
+        assert!(state.ended && state.winner == Some(0), "{state:?}");
+    }
+
+    #[test]
+    fn bots_take_silos_on_their_own() {
+        let (mut game, _) = assault(true);
+        let owned = |game: &Game| game.assault.as_ref().unwrap().silos.iter().filter(|z| z.state.owner.is_some()).count();
+        for _ in 0..secs(60.0) {
+            game.step();
+            if owned(&game) >= 2 {
+                return;
+            }
+        }
+        panic!("bots took {} silos in a minute", owned(&game));
+    }
+
+    /// A Siege on Foundry, with one human in it (and bots, if `bots`).
+    fn siege(bots: bool) -> (Game, u8) {
+        let mut game = Game::new(Tuning::default(), Map::index("foundry").unwrap());
+        (game.mode, game.bots) = (Mode::Siege, bots);
+        let id = game.join().unwrap();
+        game.step();
+        (game, id)
+    }
+
+    #[test]
+    fn energy_carried_home_launches_a_ship_that_goes_down_when_shot() {
+        let (mut game, id) = siege(false);
+        let me = game.players.iter().position(|p| p.id == id).unwrap();
+        let (station, base) = { let s = game.siege.as_ref().unwrap(); (s.stations[0].0.rally[0], s.bases[0]) };
+        // Fill up at a station, then walk it home.
+        for _ in 0..secs(6.0) {
+            game.players[me].mech.pos = station;
+            game.step();
+        }
+        assert_eq!(game.players[me].eu, siege::CARRY_MAX);
+        assert_eq!(game.snapshot(id).players.iter().find(|p| p.id == id).unwrap().eu, 100);
+        game.players[me].mech.pos = base;
+        game.step();
+        let s = game.siege.as_ref().unwrap();
+        assert!(s.banks[0] >= siege::CARRY_MAX && game.players[me].eu == 0.0, "bank {}", s.banks[0]);
+        assert!((game.players[me].points - EU_POINTS * siege::CARRY_MAX).abs() < 0.01);
+        // A full bank launches the ship.
+        game.siege.as_mut().unwrap().banks[0] = siege::LAUNCH_EU;
+        game.step();
+        assert!(game.events.iter().any(|e| matches!(e, Event::Ship { team: 0, up: true })));
+        let k = game.deployables.iter().position(|d| d.kind == Kind::Ship).expect("a ship");
+        assert_eq!((game.deployables[k].team, game.deployables[k].pos.y), (0, 55.0));
+        let z = game.deployables[k].pos.z;
+        game.step();
+        assert!(game.deployables[k].pos.z < z, "it flies at the enemy base");
+        // Shot down (by a player of the other team, for credit): it says so as it goes.
+        let foe = game.add_player(1, None, MechClass::B).unwrap();
+        game.damage_turret(k, siege::SHIP_HULL, foe);
+        let shooter = game.players.iter().find(|p| p.id == foe).unwrap();
+        assert!((shooter.points - SHIP_POINTS * siege::SHIP_HULL).abs() < 0.01);
+        game.step();
+        assert!(game.deployables.iter().all(|d| d.kind != Kind::Ship));
+        assert!(game.events.iter().any(|e| matches!(e, Event::Ship { team: 0, up: false })), "{:?}", game.events);
+    }
+
+    #[test]
+    fn a_fallen_mech_drops_its_energy_and_a_fallen_base_ends_siege() {
+        let (mut game, id) = siege(false);
+        let foe = game.add_player(1, None, MechClass::B).unwrap();
+        unshield(&mut game);
+        let (me, them) = (game.players.iter().position(|p| p.id == id).unwrap(), game.players.iter().position(|p| p.id == foe).unwrap());
+        game.players[me].eu = 60.0;
+        game.apply_damage(Some(them), me, 1e3);
+        let drops = &game.siege.as_ref().unwrap().drops;
+        assert_eq!((drops.len(), drops[0].eu, game.players[me].eu), (1, 60.0, 0.0));
+        game.siege.as_mut().unwrap().hull[0] = 0.0;
+        game.step();
+        let state = game.match_state();
+        assert!(state.ended && state.winner == Some(1), "{state:?}");
+    }
+
+    #[test]
+    fn bots_bank_energy_on_their_own() {
+        let (mut game, _) = siege(true);
+        let trickle = 60.0; // a minute's worth: what a team gets for nothing
+        for _ in 0..secs(60.0) {
+            game.step();
+        }
+        let banks = game.siege.as_ref().unwrap().banks;
+        let launched = game.deployables.iter().any(|d| d.kind == Kind::Ship);
+        assert!(launched || banks.iter().any(|&b| b > trickle + 50.0), "banks {banks:?}");
+    }
+
+    #[test]
+    fn a_room_on_one_mode_stays_on_it() {
+        let (mut game, _) = deathmatch();
+        game.end_match();
+        (0..=secs(POST_MATCH_SECONDS) + 1).for_each(|_| game.step());
+        assert_eq!((game.mode, game.match_state().ended), (Mode::Deathmatch, false));
+    }
+
+    #[test]
+    fn deathmatch_ends_on_points_and_crowns_the_leader() {
+        let (mut game, id) = deathmatch();
+        game.score_limit = 2;
+        unshield(&mut game);
+        let at = |game: &Game, id| game.players.iter().position(|p| p.id == id).unwrap();
+        let me = at(&game, id);
+        let (a, b) = ((0..game.players.len()).find(|&i| i != me).unwrap(), (0..game.players.len()).rfind(|&i| i != me).unwrap());
+        game.apply_damage(Some(me), a, 1e3);
+        assert!(!game.match_state().ended, "one solo kill (125) isn't 2 kills' worth");
+        assert_eq!(game.match_state().scores, [125, 0]);
+        game.apply_damage(Some(me), b, 1e3);
+        let state = game.match_state();
+        assert!(state.ended && state.winner == Some(id), "{state:?}");
+    }
+
+    #[test]
+    fn a_new_mode_sorts_everyone_onto_teams_for_it() {
+        let (foundry, sump) = (Map::index("foundry").unwrap(), Map::index("sump").unwrap());
+        let mut game = Game::new(Tuning::default(), foundry);
+        let humans: Vec<u8> = (0..3).map(|_| game.join().unwrap()).collect();
+        game.step();
+        game.rotate(vec![(Mode::TeamDeathmatch, foundry), (Mode::Deathmatch, sump)], 7);
+        game.end_match();
+        assert_eq!((game.match_state().next_mode, game.match_state().next_map), (Mode::Deathmatch, sump as u8));
+        (0..=secs(POST_MATCH_SECONDS) + 1).for_each(|_| game.step());
+        assert_eq!((game.mode, game.map, game.players.len()), (Mode::Deathmatch, sump, MAX_PLAYERS));
+        assert!(game.players.iter().all(|p| p.team == p.id));
+        // And back: humans spread over both teams, bots round them.
+        game.end_match();
+        (0..=secs(POST_MATCH_SECONDS) + 1).for_each(|_| game.step());
+        assert_eq!(game.mode, Mode::TeamDeathmatch);
+        let team_of = |id| game.players.iter().find(|p| p.id == id).unwrap().team;
+        assert_eq!(humans.iter().map(|&id| team_of(id)).collect::<Vec<_>>(), [0, 1, 0]);
+        assert_eq!([0, 1].map(|t| game.team_count(t)), [TEAM_SIZE, TEAM_SIZE]);
     }
 
     #[test]
@@ -1924,6 +2494,7 @@ mod tests {
             pads: vec![],
             size: [100.0, 100.0],
             terrain: None,
+            objectives: Default::default(),
         };
         // Returns the blast, where the rocket was a tick before plus that tick's travel, and the
         // enemy's health after.

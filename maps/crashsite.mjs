@@ -19,7 +19,7 @@
 // Asymmetric: all of it is authored here and `write` gets both teams' spawns. The bases face the
 // wreck's two sides, each as far from the bow, the stern and the middle as the other.
 // Metrics as the other maps': 6.5 m+ clear under decks, ramps near 24 degrees, steps under 0.5 m.
-import { beam, box, cylinder, decor, ground, heightAt, lamp, pad, point, r3, railing, ramp, sign, solids, turned, write } from './kit.mjs';
+import { bases, beam, box, cylinder, decor, ground, heightAt, lamp, pad, point, r3, railing, ramp, siege, sign, silos, solids, turned, write } from './kit.mjs';
 
 const SIZE = [300, 300], CELL = 4;
 const HALF = 140, CORNER = 60; // the playable ground: a square this far out, its corners rounded
@@ -500,6 +500,16 @@ const palette = {
 // Four each, on the base islands, clear of their props.
 const spawns = (points) => points.map(([x, z]) => [x, 1.6, z]);
 const [cx, cz] = BASES[0], [sx, sz] = BASES[1];
+// Missile Assault: a silo on each piece of the wreck, as far from either base: A up on the bow's
+// overlook, B in the midship's hold (the decks over its hatches out of its band), C in the stern's
+// cavern and on its fallen deck.
+bases([cx, 1.6, cz], [sx, 1.6, sz]);
+// The pads: on the bow's sloping deck (tilted with it), on the hold's floor under the hatches, and up
+// on the stern's ridge walk over the cavern.
+silos({ at: S(-78, 0, bowTop(-78)), radius: 12, band: 4 }, { at: S(0, 0, HOLD), radius: 14, band: 5 }, { at: S(96, 0, 1), radius: 14, band: 6, pad: [67.882, 15.87, 67.882] });
+// Siege: the station in the midship's hold, the AA gun on the bridge's roof (the highest place on
+// the map), the ships over the midship, clear of the bridge's mast.
+siege({ at: S(0, 0, HOLD), radius: 14, band: 5 }, { at: S(28, 0, BRIDGE), radius: 8, band: 3 }, 60);
 write(
   new URL('./crashsite.json', import.meta.url),
   { name: 'Crash Site', size: SIZE, night: true, palette },
