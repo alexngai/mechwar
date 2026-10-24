@@ -7,6 +7,8 @@ use crate::ability::{self, Ability};
 use crate::deploy::{self, Deployable};
 use crate::item::Item;
 use crate::net::{self, ClientMsg, Cloud, Event, InputMsg, MatchState, Orb, PlayerNet, ServerMsg, Snapshot};
+use crate::objective::ZoneState;
+use crate::siege::SiegeNet;
 use crate::progress::MatchXp;
 use crate::projectile::{self, Id, Projectile};
 use crate::{Arena, Arsenal, DT, Input, Loadout, Map, Mech, MechClass, Slot, Tuning, Vector, collide, map, step_mech, weapon};
@@ -266,6 +268,16 @@ impl NetClient {
         self.snapshots.back().map_or_else(Vec::new, |s| s.orbs.clone())
     }
 
+    /// Missile Assault's silos as of the latest snapshot.
+    pub fn zones(&self) -> &[ZoneState] {
+        self.snapshots.back().map_or(&[], |s| &s.zones)
+    }
+
+    /// Siege's stations, banks and drops as of the latest snapshot.
+    pub fn siege(&self) -> Option<&SiegeNet> {
+        self.snapshots.back().and_then(|s| s.siege.as_ref())
+    }
+
     /// Deployables as of the latest snapshot.
     pub fn deployables(&self) -> &[Deployable] {
         self.snapshots.back().map_or(&[], |s| &s.deployables)
@@ -393,7 +405,7 @@ impl NetClient {
                         }
                     }
                 }
-                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } | Event::TurretShot { .. } | Event::TurretHit { .. } => self.events.push(*e),
+                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } | Event::TurretShot { .. } | Event::TurretHit { .. } | Event::Captured { .. } | Event::Missile { .. } | Event::Ship { .. } => self.events.push(*e),
             }
         }
         self.snapshots.push_back(s);

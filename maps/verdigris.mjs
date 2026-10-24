@@ -4,7 +4,7 @@
 // The north half (z > 0), the east district (straddling z = 0) and the center are authored here;
 // `write` (maps/kit.mjs) adds the 180-degree twin. Metrics as Foundry's: alleys and gates 9-10 m,
 // 6.5 m under every deck and street bridge, ramps near 23 degrees, 3 m hover ledges.
-import { box, growth, lamp, once, pad, point, railing, ramp, sign, write } from './kit.mjs';
+import { bases, box, growth, lamp, once, pad, point, railing, ramp, sign, silos, write } from './kit.mjs';
 
 const GREEN = '#3dff8a', TEAL = '#3de0ff', MAGENTA = '#ff4fd8';
 
@@ -120,6 +120,12 @@ growth([-32, 16, 84], [1, 0], 7);
 growth([75, 12, 72], [0, -1], 7); // over the north-east yard
 growth([74, 14, 25], [-1, 0], 9, { shelf: 5, lit: true }); // the east perch
 pad([69, 0, 7], [65, 14, 25], 17);
+
+// --- Objectives ------------------------------------------------------------------------------------
+// Missile Assault: B in the market inside the viaduct ring (the ring the high ground over it), A in
+// the west district by its roof landing (C its twin in the east). The ring links all three at 14 m.
+bases([-17, 0, 80]);
+silos({ at: [-65, 0, 8], radius: 10, band: 4, pad: [-67.5, 0, 8] }, { at: [0, 0, 0], radius: 16, band: 4, pad: [-6.5, 0, 0] });
 
 // --- Spawns, twin, write ---------------------------------------------------------------------------
 const north = [[-22, 0.1, 78], [-12, 0.1, 82], [12, 0.1, 82], [22, 0.1, 78]];

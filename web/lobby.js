@@ -51,6 +51,7 @@ lobby.innerHTML = `
     <h3>OPEN A GAME</h3>
     <div class="row">
       <input id="new-name" maxlength="24" placeholder="Name" autocomplete="off">
+      <select id="new-mode"><option value="">Every mode</option></select>
       <select id="new-map"><option value="">Map rotation</option></select>
       <select id="new-score"><option value="10">First to 10</option><option value="25" selected>First to 25</option><option value="50">First to 50</option></select>
       <select id="new-skill"><option value="easy">Easy bots</option><option value="normal" selected>Normal bots</option><option value="hard">Hard bots</option><option value="">No bots</option></select>
@@ -157,7 +158,7 @@ async function api(path, body) {
 }
 
 const clock = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-let mapNames = null; // key -> name, once the server has listed its maps ([key, name] pairs)
+let mapNames = null, modeNames = {}; // key -> name, once the server has listed its maps and modes ([key, name] pairs)
 async function refresh() {
   let lobbyState;
   try { lobbyState = await api('/api/rooms'); } catch { return; }
@@ -165,12 +166,14 @@ async function refresh() {
     mapNames = Object.fromEntries(lobbyState.maps);
     const options = lobbyState.maps.map(([key, name]) => `<option value="${esc(key)}">${esc(name)}</option>`).join('');
     for (const id of ['new-map', 'practice-map']) $(id).insertAdjacentHTML('beforeend', options);
+    modeNames = Object.fromEntries(lobbyState.modes ?? []);
+    $('new-mode').insertAdjacentHTML('beforeend', (lobbyState.modes ?? []).map(([key, name]) => `<option value="${esc(key)}">${esc(name)}</option>`).join(''));
   }
   $('games').innerHTML = lobbyState.rooms.length
     ? lobbyState.rooms.map((r) => `<tr>
-        <td>${esc(r.name)}</td><td>${esc(mapNames[r.map] ?? r.map)}</td>
+        <td>${esc(r.name)}</td><td>${esc(modeNames[r.mode] ?? r.mode)} · ${esc(mapNames[r.map] ?? r.map)}</td>
         <td>${r.humans}/${r.capacity} pilots${r.bots ? ` · ${r.bots} bots` : ''}</td>
-        <td>${r.ended ? 'between matches' : `${clock(r.seconds_left)} left · ${r.scores[0]}–${r.scores[1]}`}</td>
+        <td>${r.ended ? 'between matches' : `${clock(r.seconds_left)} left · ${r.mode === 'dm' ? `leader ${r.scores[0]} pts` : `${r.scores[0]}–${r.scores[1]}`}`}</td>
         <td><button data-code="${esc(r.code)}">JOIN</button></td></tr>`).join('')
     : '<tr><td>No listed games right now: quick play opens one.</td></tr>';
 }
@@ -192,6 +195,7 @@ $('create').addEventListener('click', async () => {
   const settings = {
     name: $('new-name').value.trim() || undefined,
     public: $('new-public').checked,
+    mode: $('new-mode').value || undefined,
     map: $('new-map').value || undefined,
     score_limit: Number($('new-score').value),
     bots: skill !== '',

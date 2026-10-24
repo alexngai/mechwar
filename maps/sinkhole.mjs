@@ -7,7 +7,7 @@
 // (maps/kit.mjs) adds the 180-degree twin. Metrics as Riftline's: 8 m terraces, 6.5 m+ under
 // every deck, ramps near 24 degrees. A side "facing" d degrees has its outward normal d degrees
 // clockwise from north; on it, p runs outward from the center and s runs clockwise along it.
-import { box, growth, lamp, once, pad, point, r3, railing, ramp, sign, turned, write } from './kit.mjs';
+import { bases, box, growth, lamp, once, pad, point, r3, railing, ramp, sign, silos, turned, write } from './kit.mjs';
 
 const BASE = -29; // bottom of every rock mass
 const CYAN = '#3de0ff';
@@ -167,6 +167,13 @@ for (const d of [24, 44, 62]) { const [x, z] = along(HIGH + 180, d); point([x, 8
 { const [x, z] = along(HIGH + 180, 88); point([x, 0, z]); }
 point([65, 0, 88], [62, 7, 62], [68, 7, 62]); // pump house
 point([-15, 0, 68], [15, 0, 68], [-15, 0, 80], [15, 0, 78], [0, 0, 94], [-60, 0, 60], [-70, 0, 80], [-85, 0, 85], [45, 0, 80], [85, 0, 85], [86, 0, 60], [90, 0, 30], [85, 0, 15]);
+
+// --- Objectives ----------------------------------------------------------------------------------
+// Missile Assault: B on the pit floor under all three bridges, A at the high bridge's north-west
+// head (C its twin at the other end): the bridge runs straight between them over B.
+bases([-16, 0, 88]);
+// B's launch pad is between two of the bridges, open to the sky.
+silos({ at: [-70, 0, 40], radius: 10, band: 4, pad: [-75, 0, 39.5] }, { at: [0, -28, 0], radius: 14, band: 4, pad: [-4.5, -28, 7.5] });
 
 // --- Spawns, twin, write -------------------------------------------------------------------------
 const north = [[-20, 0.1, 84], [-12, 0.1, 92], [12, 0.1, 80], [20, 0.1, 82]];
