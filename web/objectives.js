@@ -159,15 +159,15 @@ export class Objectives {
       const base = this.bases[1 - s.team];
       return !!base && Math.hypot(s.pos.x - base.x, s.pos.z - base.z) <= BOMBARD_RANGE + 1;
     };
-    if (ours && theirs) return `BATTLESHIPS ENGAGED · ${aa} THE AA GUN TO TURN THE FIGHT   [OURS ${ship(ours)} · THEIRS ${ship(theirs)}]`;
-    if (theirs && over(theirs)) return `ENEMY BATTLESHIP BOMBARDING OUR BASE · SHOOT IT DOWN   [SHIP ${ship(theirs)} · BASE ${hull[myTeam]}/${BASE_HULL}]`;
-    if (theirs) return `ENEMY BATTLESHIP LAUNCHED · ${aa === 'HOLD' ? 'DEFEND' : 'TAKE'} THE AA GUN AND SHOOT IT DOWN   [SHIP ${ship(theirs)}]`;
-    if (ours && over(ours)) return `OUR BATTLESHIP IS BOMBARDING THEIR BASE · KEEP IT FLYING   [THEIR BASE ${hull[1 - myTeam]}/${BASE_HULL}]`;
-    if (ours) return `OUR BATTLESHIP LAUNCHED · ESCORT IT AND ${aa} THE AA GUN   [SHIP ${ship(ours)}]`;
+    if (ours && theirs) return `${aa === 'HOLD' ? 'HOLD' : 'CAPTURE'} THE AA TO DESTROY THE ENEMY SHIP   [OURS ${ship(ours)} · THEIRS ${ship(theirs)}]`;
+    if (theirs && over(theirs)) return `ENEMY SHIP HITTING OUR BASE · SHOOT IT DOWN   [SHIP ${ship(theirs)} · BASE ${hull[myTeam]}/${BASE_HULL}]`;
+    if (theirs) return `ENEMY SHIP INBOUND · ${aa === 'HOLD' ? 'DEFEND' : 'TAKE'} THE AA, SHOOT IT DOWN   [SHIP ${ship(theirs)}]`;
+    if (ours && over(ours)) return `OUR SHIP HAS REACHED THEIR BASE   [THEIR BASE ${hull[1 - myTeam]}/${BASE_HULL}]`;
+    if (ours) return `OUR SHIP IS UP · ESCORT IT, ${aa} THE AA   [SHIP ${ship(ours)}]`;
     const bank = Math.floor(floats[this.stations.length + myTeam] ?? 0);
     return carried > 0
-      ? `BRING YOUR ENERGY TO THE DROP ZONE AT YOUR BASE   [${bank}/${LAUNCH_EU} · CARRYING ${carried}]`
-      : `GATHER ENERGY AT THE STATION AND BANK IT AT YOUR DROP ZONE   [${bank}/${LAUNCH_EU}]`;
+      ? `CARRYING ${carried} EU · RETURN TO THE DROP ZONE   [${bank}/${LAUNCH_EU}]`
+      : `GATHER AT THE ENERGY STATION AND RETURN TO THE DROP ZONE   [${bank}/${LAUNCH_EU}]`;
   }
 
   /**

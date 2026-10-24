@@ -110,10 +110,9 @@ const DEATHMATCH = 1, MISSILE_ASSAULT = 2, SIEGE = 3; // their indices in the si
 const SHIP_OWNERS = 8;
 /** Base guns' owner ids start here, past the ships' (deploy::sentry_owner). */
 const SENTRY_OWNERS = 10;
-/** A solo kill's points in Deathmatch (Game's POINTS_PER_KILL with the killer's bonus); hull a held
- * silo takes off the enemy base a second (objective::MISSILE_DAMAGE / MISSILE_SECONDS); a Siege
+/** A solo kill's points in Deathmatch (Game's POINTS_PER_KILL with the killer's bonus); a Siege
  * launch's EU (siege::LAUNCH_EU). */
-const DM_POINTS_PER_KILL = 125, MA_HULL_PER_SECOND = 2, LAUNCH_EU = 500;
+const DM_POINTS_PER_KILL = 125, LAUNCH_EU = 500;
 // Volley indices of thrown items, from ITEM_N up; match projectile::GRENADE, LIMPET and SMOKE in
 // sim/src/projectile.rs. THROWN gives each one's weapons.json id.
 const GRENADE_N = 255, LIMPET_N = 254, ITEM_N = 253;
@@ -1242,10 +1241,11 @@ function summaryHtml({ end, after }) {
 
 /**
  * The top panel: the mode, map and clock; the score from our side (ours left in our color, theirs
- * right in theirs), as each mode keeps it; and where the match stands, and what to do about it.
+ * right in theirs), as each mode keeps it; and a line under it where there's more to say: the
+ * Deathmatch race, the Siege stage, who won.
  */
 function topPanel(hudState, myId, zones, siege, clock) {
-  const [, , , , , , team, blue, red, secondsLeft, ended] = hudState;
+  const [, , , , , , team, blue, red, secondsLeft, ended, winner] = hudState;
   const mode = hudState[20], limit = hudState[23], carried = hudState[22];
   const map = MAPS[map_name(net.map())]?.name ?? '';
   const top = `<div class="top">${mode_name(mode).toUpperCase()} · ${map.toUpperCase()}<b>${ended ? `NEXT MATCH IN ${secondsLeft}s` : clock}</b></div>`;
@@ -1253,26 +1253,20 @@ function topPanel(hudState, myId, zones, siege, clock) {
   const [ours, theirs] = team === 0 ? [blue, red] : [red, blue];
   const color = (owner) => (owner < 0 ? 'dim' : owner === team ? 'us' : 'them');
   const bar = (hull) => `<span class="bar"><i style="width:${Math.max(0, Math.min(100, hull / 10))}%"></i></span>`;
-  const time = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
   let main = '', state = '';
   if (mode === DEATHMATCH) {
     // Our place (ties share one), and the best of the rest: the leader, or whoever's next.
     const rows = boardRows(), mine = rows.find((r) => r.id === myId), other = standings(rows.filter((r) => r.id !== myId))[0];
     const place = 1 + rows.filter((r) => r.points > (mine?.points ?? 0)).length;
     main = `<span class="us">${ordinal(place)}</span><small>OF ${rows.length}</small><span>${mine?.points ?? 0}</span><small>POINTS</small>`;
-    const rival = !other ? '' : place > 1 ? `LEADER ${nameOf(other.id)} ${other.points}` : other.points === mine?.points ? `TIED WITH ${nameOf(other.id)}` : `YOU LEAD ${nameOf(other.id)} BY ${(mine?.points ?? 0) - other.points}`;
+    const name = other && esc(nameOf(other.id));
+    const rival = !other ? '' : place > 1 ? `LEADER ${name} ${other.points}` : other.points === mine?.points ? `TIED WITH ${name}` : `YOU LEAD ${name} BY ${(mine?.points ?? 0) - other.points}`;
     state = `FIRST TO ${limit * DM_POINTS_PER_KILL} POINTS${rival ? ` · ${rival}` : ''}`;
   } else if (mode === MISSILE_ASSAULT) {
-    // The bases either side of the silos; what the silos held mean for each base.
+    // The bases either side of the silos, each silo's pip in its holder's color.
     const owners = [0, 1, 2].map((i) => (zones.length ? zones[3 * i] : -1)), contested = [0, 1, 2].filter((i) => zones[3 * i + 2]);
     const pips = owners.map((o, i) => `<span class="pip ${color(o)}${contested.includes(i) ? ' contested' : ''}">${'ABC'[i]}</span>`).join(' ');
     main = `<span class="us"><small>OUR BASE</small>${bar(ours)}${ours}</span>${pips}<span class="them">${theirs}${bar(theirs)}<small>ENEMY BASE</small></span>`;
-    const [held, lost] = [owners.filter((o) => o === team).length, owners.filter((o) => o >= 0 && o !== team).length];
-    // Each held silo takes MA_HULL_PER_SECOND off the other base.
-    state = held > lost ? `WE HOLD ${held} OF 3 SILOS · THEIR BASE FALLS IN ~${time(theirs / (held * MA_HULL_PER_SECOND))}`
-      : lost > held ? `THEY HOLD ${lost} OF 3 SILOS · OUR BASE FALLS IN ~${time(ours / (lost * MA_HULL_PER_SECOND))} · TAKE ONE BACK`
-      : held ? `${held} SILO${held > 1 ? 'S' : ''} EACH · HOLD MORE TO OUTGUN THEM` : 'TAKE THE SILOS: EACH ONE WE HOLD FIRES ON THEIR BASE';
-    if (contested.length) state += ` · ${contested.map((i) => 'ABC'[i]).join(', ')} CONTESTED`;
   } else if (mode === SIEGE) {
     // Each side's base, then its bank (or its ship, while it's up), the AA gun between.
     const ships = new Map(), list = game.deployables();
@@ -1282,11 +1276,13 @@ function topPanel(hudState, myId, zones, siege, clock) {
     main = `<span class="us"><small>OUR BASE</small>${bar(ours)}${ours} <small>${side(team)}</small></span>${aa}<span class="them"><small>${side(1 - team)}</small> ${theirs}${bar(theirs)}<small>ENEMY BASE</small></span>`;
     state = objectives.stage(team, siege, [blue, red], carried);
   } else {
-    const lead = ours - theirs;
     main = `<span class="us"><small>OUR TEAM</small> ${ours}</span><span class="dim">–</span><span class="them">${theirs} <small>ENEMY</small></span>`;
-    state = `FIRST TO ${limit} KILLS · ${lead > 0 ? `WE LEAD BY ${lead}` : lead < 0 ? `WE TRAIL BY ${-lead}` : 'TIED'}`;
   }
-  return `${top}<div class="main">${main}</div>${ended ? '' : `<div class="state">${state}</div>`}`;
+  if (ended) {
+    const won = mode === DEATHMATCH ? winner === myId : winner === team;
+    state = winner < 0 ? 'DRAW' : `<span class="${won ? 'us' : 'them'}">${mode === DEATHMATCH ? (won ? 'YOU WIN' : `${esc(nameOf(winner))} WINS`) : won ? 'OUR TEAM WINS' : 'ENEMY TEAM WINS'}</span>`;
+  }
+  return `${top}<div class="main">${main}</div>${state ? `<div class="state">${state}</div>` : ''}`;
 }
 
 /** The scoreboard's rows from the server: id, team, class, bot, kills, deaths, points. */
