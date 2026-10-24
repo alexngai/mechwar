@@ -264,6 +264,12 @@ pub struct Game {
 
 impl Game {
     pub fn new(tuning: Tuning, map: usize) -> Self {
+        Self::with_arsenal(Arsenal::new(&tuning), map)
+    }
+
+    /// `new` with weapons and classes other than the compiled-in ones: a balance run's tweaks
+    /// (`Arsenal::tweaked`).
+    pub fn with_arsenal(arsenal: Arsenal, map: usize) -> Self {
         let data = Map::load(map);
         assert!(data.spawns.iter().all(|s| s.len() >= TEAM_SIZE), "map needs {TEAM_SIZE} spawns per team");
         Self {
@@ -279,7 +285,7 @@ impl Game {
             spots: data.objectives,
             assault: None,
             siege: None,
-            arsenal: Arsenal::new(&tuning),
+            arsenal,
             tick: 0,
             bots: true,
             bot_skill: 0.5,

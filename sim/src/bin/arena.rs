@@ -8,15 +8,21 @@
 //!   "genomes": {"base": {}, "x": {"class": "A", "build": {"primary": "pike", ...}, "policy": {...}}},
 //!   "matches": [{"map": "foundry", "seed": 1, "teams": [["x", "base", ...], [...]]}]}`.
 //! A genome without a class takes one at random per seat; without a build, one per life.
+//!
+//! Stat tweaks, all optional: `"tuning": {"grenade_radius": 5}` sets tuning.json values (items,
+//! abilities, movement; a class or weapon that sets the same value keeps its own),
+//! `"classes": {"B": {"health_max": 110}}` classes.json overrides, and
+//! `"weapons": {"rocket": {"alt_radius": 6.4}}` weapons.json stats.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 
 use serde::Deserialize;
+use serde_json::{Map, Value};
 use sim::bot::{Bot, Policy};
 use sim::game::{Game, Mode};
-use sim::{Loadout, MechClass, Slot, TICK_HZ, Tuning, arsenal, map};
+use sim::{Arsenal, Loadout, MechClass, Slot, TICK_HZ, Tuning, arsenal, map};
 
 #[derive(Deserialize)]
 struct Job {
@@ -31,6 +37,12 @@ struct Job {
     ideal: bool,
     genomes: BTreeMap<String, Genome>,
     matches: Vec<Match>,
+    #[serde(default)]
+    tuning: Map<String, Value>,
+    #[serde(default)]
+    classes: Value,
+    #[serde(default)]
+    weapons: Value,
 }
 
 fn tdm() -> String {
@@ -92,6 +104,15 @@ fn main() {
     if job.ideal {
         (tuning.bot_aim_error_deg, tuning.bot_reaction_s, tuning.bot_turn_rate_deg) = (0.0, 0.0, 720.0);
     }
+    let mut values = serde_json::to_value(&tuning).expect("tuning serializes");
+    for (name, value) in &job.tuning {
+        if values.get(name).is_none() {
+            fail(&format!("no tuning value {name}"));
+        }
+        values[name] = value.clone();
+    }
+    let tuning: Tuning = serde_json::from_value(values).unwrap_or_else(|e| fail(&format!("tuning: {e}")));
+    let arsenal = Arsenal::tweaked(&tuning, &job.classes, &job.weapons);
 
     println!("match,map,seed,team,genome,class,primary,secondary,offensive,support,ability,kills,deaths,assists,dealt,taken,result,score,opp_score,seconds");
     let next = AtomicUsize::new(0);
@@ -99,12 +120,12 @@ fn main() {
     let workers = std::thread::available_parallelism().map_or(4, |n| n.get());
     std::thread::scope(|s| {
         for _ in 0..workers {
-            let (tx, next, job, tuning) = (tx.clone(), &next, &job, &tuning);
+            let (tx, next, job, arsenal) = (tx.clone(), &next, &job, &arsenal);
             s.spawn(move || {
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some(m) = job.matches.get(i) else { break };
-                    tx.send((i, play(job, mode, tuning, i, m))).expect("main thread waits");
+                    tx.send((i, play(job, mode, arsenal, i, m))).expect("main thread waits");
                 }
             });
         }
@@ -123,8 +144,8 @@ fn main() {
 }
 
 /// Plays match `i` to its end: its CSV rows.
-fn play(job: &Job, mode: Mode, tuning: &Tuning, i: usize, m: &Match) -> String {
-    let mut game = Game::new(tuning.clone(), map_index(&m.map));
+fn play(job: &Job, mode: Mode, arsenal: &Arsenal, i: usize, m: &Match) -> String {
+    let mut game = Game::with_arsenal(arsenal.clone(), map_index(&m.map));
     (game.headless, game.mode, game.match_seconds) = (true, mode, job.seconds);
     let mut seated = Vec::new();
     for (team, ids) in m.teams.iter().enumerate() {

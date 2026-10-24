@@ -88,7 +88,7 @@ def play(pool, appear, seed, rng, args):
     rng.shuffle(seats)
     seats += ['base'] * (-len(seats) % 8)
     matches = [{'map': rng.choice(MAPS), 'seed': seed + i, 'teams': [seats[8 * i:8 * i + 4], seats[8 * i + 4:8 * i + 8]]} for i in range(len(seats) // 8)]
-    job = {'seconds': args.seconds, 'skill': args.skill, 'ideal': args.ideal, 'genomes': {'base': {}, **pool}, 'matches': matches}
+    job = {'seconds': args.seconds, 'skill': args.skill, 'ideal': args.ideal, 'genomes': {'base': {}, **pool}, 'matches': matches, **args.tweaks}
     path = args.out / 'job.json'
     path.write_text(json.dumps(job))
     run = subprocess.run([ARENA, path], capture_output=True, text=True)
@@ -147,6 +147,7 @@ def main():
     ap.add_argument('--seconds', type=float, default=120)
     ap.add_argument('--skill', type=float, default=0.5)
     ap.add_argument('--ideal', action='store_true', help='no aim error, reaction lag or turn cap')
+    ap.add_argument('--tweaks', type=json.loads, default={}, help='stat changes, as the arena job takes them (`tuning`, `classes`, `weapons`)')
     ap.add_argument('--z', type=float, default=1.0, help='margin, in standard errors, a child must win its cell by')
     ap.add_argument('--seed', type=int, default=1)
     ap.add_argument('--out', type=Path, default=ROOT / 'balance' / 'out' / 'poc')
