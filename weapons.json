@@ -109,14 +109,14 @@
     { "id": "grenade", "name": "Tumbler", "unlock": 0, "desc": "A frag grenade, lobbed: it bounces about, then bursts" },
     { "id": "limpet", "name": "Limpet", "unlock": 2, "desc": "A remote mine: thrown, it sticks where it lands, and G again sets it off; one down at a time" },
     { "id": "smoke", "name": "Pall", "unlock": 1, "desc": "A smoke grenade: bursts into a cloud 16 m wide that hides whoever's in or behind it for 10 s" },
-    { "id": "mg_turret", "name": "MG turret", "unlock": 2, "desc": "A tripod gun set down ahead for 20 s: it fires short bursts at the nearest enemy it sees within 40 m, until its 25 hull is shot off" },
-    { "id": "rocket_turret", "name": "Rocket turret", "unlock": 3, "desc": "A tripod launcher set down ahead for 20 s: a rocket every 2 s at the nearest enemy it sees within 60 m, until its 25 hull is shot off" }
+    { "id": "mg_turret", "name": "MG turret", "unlock": 2, "desc": "A tripod gun set down ahead for 20 s: it fires short bursts at the nearest enemy it sees within 30 m, until its 25 hull is shot off" },
+    { "id": "rocket_turret", "name": "Rocket turret", "unlock": 3, "desc": "A tripod launcher set down ahead for 20 s: a rocket every 2 s at the nearest enemy it sees within 45 m, until its 25 hull is shot off" }
   ],
   "support": [
     { "id": "emp", "name": "Brownout", "unlock": 0, "desc": "An EMP around you: drains enemies' fuel and jams their boost" },
     { "id": "orb", "name": "Salve", "unlock": 2, "desc": "Drops a repair orb at your feet, like a wreck's, that only your side can heal from" },
-    { "id": "dome", "name": "Shield dome", "unlock": 2, "desc": "A half-sphere 21 m across around you for 6 s: no shot crosses it either way, whoever fires it, so to hit someone under it you have to walk in; mechs walk through" },
-    { "id": "barrier", "name": "Barrier", "unlock": 2, "desc": "Raises a wall 16 m wide and 8 m tall, 4 m ahead across your aim, for 8 s: nothing gets through, either way" }
+    { "id": "dome", "name": "Shield dome", "unlock": 2, "desc": "A half-sphere 21 m across around you for 4 s, or until enemy fire wears off its 150 hull: no shot crosses it either way, whoever fires it, so to hit someone under it you have to walk in or break it; mechs walk through" },
+    { "id": "barrier", "name": "Barrier", "unlock": 2, "desc": "Raises a wall 8 m wide and 8 m tall, 4 m ahead across your aim, for 5 s, or until enemy fire wears off its 200 hull: nothing gets through, either way" }
   ],
   "abilities": [
     { "id": "slipstream", "name": "Speed boost", "unlock": 0, "classes": ["A"], "desc": "Refills the fuel tank, then 4 s of boost that burns no fuel and runs 25% faster" },

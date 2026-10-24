@@ -238,12 +238,14 @@ pub struct Tuning {
     pub orb_charges: f32,
     pub orb_recharge: f32,
     /// Support: a half-sphere shield at the feet that the other side's shots stop at
-    /// (`deploy.rs`), for `dome_seconds`.
+    /// (`deploy.rs`), for `dome_seconds` or until they've worn off its `dome_hull`.
     pub dome_charges: f32,
     pub dome_recharge: f32,
     pub dome_radius: f32,
     pub dome_seconds: f32,
-    /// Support: a wall `barrier_distance` ahead across the aim, for `barrier_seconds`.
+    pub dome_hull: f32,
+    /// Support: a wall `barrier_distance` ahead across the aim, for `barrier_seconds` or until
+    /// the other side's shots have worn off its `barrier_hull`.
     pub barrier_charges: f32,
     pub barrier_recharge: f32,
     pub barrier_width: f32,
@@ -251,11 +253,12 @@ pub struct Tuning {
     pub barrier_thickness: f32,
     pub barrier_distance: f32,
     pub barrier_seconds: f32,
+    pub barrier_hull: f32,
     /// Offensive: turrets, set down `turret_distance` ahead, lasting `turret_seconds` unless
     /// their hull's shot off. Each trains on the nearest enemy it sees in range at
     /// `turret_turn_deg` a second and, after `turret_warmup`, fires: the MG bursts of
-    /// `mg_turret_burst` hitscan rounds, the other a rocket (the Rocket's) every
-    /// `rocket_turret_cooldown`.
+    /// `mg_turret_burst` hitscan rounds, the other a rocket (the Rocket's, dealing
+    /// `rocket_turret_damage`) every `rocket_turret_cooldown`.
     pub turret_distance: f32,
     pub turret_height: f32,
     pub turret_radius: f32,
@@ -274,6 +277,7 @@ pub struct Tuning {
     pub rocket_turret_charges: f32,
     pub rocket_turret_recharge: f32,
     pub rocket_turret_range: f32,
+    pub rocket_turret_damage: f32,
     pub rocket_turret_cooldown: f32,
 
     pub bot_turn_rate_deg: f32,

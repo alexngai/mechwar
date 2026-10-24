@@ -786,19 +786,20 @@ impl Game {
             if let Some((_, toi)) = turret {
                 (best, hit) = (toi, None);
             }
+            let worn = worn(&self.deployables, t, team, turret, hit.is_some(), ray.point_at(best));
             // After the match ends shots still fly, but don't hit anyone.
             let hit = hit.filter(|_| matches!(self.phase, Phase::Playing { .. }));
             self.events.push(Event::Shot { shooter: shooter_id, end: ray.point_at(best), hit: hit.map(|j| self.players[j].id) });
             let damage = t.shot_damage * weapon::power(t, m.shot_charge) * weapon::falloff(t, best) * ability::damage_mult(t, m);
             hits.extend(hit.map(|j| (j, damage)));
-            wrecks.extend(turret.map(|(k, _)| (k, damage)));
+            wrecks.extend(worn.map(|k| (k, damage)));
         }
         let cause = Cause::Weapon { slot: Slot::Primary, index: m.loadout.primary };
         for (j, damage) in hits {
             self.apply_damage_by(Some(shooter), j, damage, cause);
         }
         for (k, damage) in wrecks {
-            self.damage_turret(k, damage, shooter_id);
+            self.wear(k, damage, shooter_id);
         }
     }
 
@@ -822,22 +823,31 @@ impl Game {
             .map(|(j, q)| (j, projectile::splash(&self.arena, &t, p.primary, at, self.arsenal.of(&q.mech), &q.mech)))
             .filter(|&(_, damage)| damage > 0.0)
             .collect();
-        // Turrets of the other side in reach take it too (but not through a dome).
+        // The other side's deployables in reach take it too: turrets (but not through a dome), and
+        // domes and barriers by how near their surface it burst.
+        // ponytail: a dome or barrier takes it through a wall too; the blast's only a few metres.
         let sizes = items(&self.arsenal);
         let domed = |d: &Deployable| {
             let to = deploy::gun(sizes, d) - at;
             deploy::stops(&self.deployables, sizes, &Ray::new(at, to.normalize_or_zero()), to.length()).is_some()
         };
         let wrecks: Vec<(usize, f32)> = (self.deployables.iter().enumerate())
-            .filter(|(_, d)| d.kind.turret() && d.team != team && d.hull > 0.0 && !domed(d))
+            .filter(|(_, d)| d.team != team && d.hull > 0.0)
             .map(|(k, d)| {
-                let (tm, m) = deploy::as_mech(sizes, d);
-                (k, projectile::splash(&self.arena, &t, p.primary, at, &tm, &m))
+                let damage = if !d.kind.turret() {
+                    projectile::blast(&t, p.primary, deploy::gap(sizes, d, at))
+                } else if domed(d) {
+                    0.0
+                } else {
+                    let (tm, m) = deploy::as_mech(sizes, d);
+                    projectile::splash(&self.arena, &t, p.primary, at, &tm, &m)
+                };
+                (k, damage)
             })
             .filter(|&(_, damage)| damage > 0.0)
             .collect();
         for (k, damage) in wrecks {
-            self.damage_turret(k, damage, p.owner);
+            self.wear(k, damage, p.owner);
         }
         let attacker = self.players.iter().position(|q| q.id == p.owner);
         let cause = if p.n == projectile::TURRET && !p.primary {
@@ -978,6 +988,7 @@ impl Game {
         if let Some((_, toi)) = turret {
             (best, hit) = (toi, None);
         }
+        let worn = worn(&self.deployables, t, d.team, turret, hit.is_some(), ray.point_at(best));
         let hit = hit.filter(|_| matches!(self.phase, Phase::Playing { .. }));
         let damage = t.mg_turret_damage;
         self.events.push(Event::TurretShot { owner: d.owner, end: ray.point_at(best), hit: hit.map(|j| self.players[j].id) });
@@ -985,21 +996,23 @@ impl Game {
         if let Some(j) = hit {
             self.apply_damage_by(owner, j, damage, Cause::Weapon { slot: Slot::Offensive, index: Item::MgTurret.index() });
         }
-        if let Some((k, _)) = turret {
-            self.damage_turret(k, damage, d.owner);
+        if let Some(k) = worn {
+            self.wear(k, damage, d.owner);
         }
     }
 
-    /// Player `attacker` shoots `amount` off turret `k` while the match is on, and hears of it (a
-    /// hit marker); the turret's cleared at the tick's end once its hull's gone.
-    fn damage_turret(&mut self, k: usize, amount: f32, attacker: u8) {
+    /// Player `attacker` shoots `amount` off deployable `k` while the match is on, and hears of it
+    /// if it's a turret (a hit marker); it's cleared at the tick's end once its hull's gone.
+    fn wear(&mut self, k: usize, amount: f32, attacker: u8) {
         if !matches!(self.phase, Phase::Playing { .. }) {
             return;
         }
         let d = &mut self.deployables[k];
         let standing = d.hull > 0.0;
         d.hull -= amount;
-        self.events.push(Event::TurretHit { attacker, wrecked: standing && d.hull <= 0.0 });
+        if d.kind.turret() {
+            self.events.push(Event::TurretHit { attacker, wrecked: standing && d.hull <= 0.0 });
+        }
     }
 
     /// Where an orb for a mech at `feet` floats: over the ground below, if it's in the air.
@@ -1023,6 +1036,9 @@ impl Game {
         let (owner, team, heal, burn) = (u.id, u.team, t.alt_beam_heal * DT, t.alt_damage * DT * ability::damage_mult(t, &u.mech));
         self.players[user].mech.beam_end = end;
         self.events.push(Event::Beam { owner, end, hit });
+        if let Some(k) = worn(&self.deployables, t, team, None, hit.is_some(), end) {
+            self.wear(k, burn, owner);
+        }
         let Some(j) = hit.and_then(|id| self.players.iter().position(|q| q.id == id)) else { return };
         if self.players[j].team == team {
             let max = self.arsenal.of(&self.players[j].mech).health_max;
@@ -1199,6 +1215,16 @@ fn spawn(arsenal: &Arsenal, class: MechClass, loadout: Loadout, pos: Vector) -> 
 
 fn secs(s: f32) -> u32 {
     (s * TICK_HZ).round() as u32
+}
+
+/// What a shot by `team` stopping at `end` wears down: the `turret` it hit, or else, hitting no
+/// mech, the other side's dome or barrier it landed on.
+fn worn(list: &[Deployable], t: &Tuning, team: u8, turret: Option<(usize, f32)>, hit_mech: bool, end: Vector) -> Option<usize> {
+    match turret {
+        Some((k, _)) => Some(k),
+        None if hit_mech => None,
+        None => deploy::struck(list, t, team, end),
+    }
 }
 
 /// Feet position at fractional tick `at`, interpolated like the client draws it; None if dead then.
@@ -1668,6 +1694,34 @@ mod tests {
         assert!(mech(&game, owner).pos.z < wall.pos.z - 2.0, "still blocked at z {}", mech(&game, owner).pos.z);
     }
 
+    #[test]
+    fn domes_and_barriers_wear_down_under_the_other_sides_fire_and_break() {
+        for item in ["dome", "barrier"] {
+            let (mut game, owner, enemy) = standoff(item);
+            send(&mut game, owner, Input { emp: true, ..Input::default() });
+            game.step();
+            let (full, expires) = (game.deployables[0].hull, game.deployables[0].expires);
+            let fire = |game: &mut Game, from, to, input: Input| {
+                for _ in 0..secs(0.5) {
+                    send(game, from, Input { fire: input.fire, alt_fire: input.alt_fire, ..aim_at(game, from, to) });
+                    game.step();
+                }
+                game.deployables.first().map_or(0.0, |d| d.hull)
+            };
+            let (rifle, rocket) = (Input { fire: true, ..Input::default() }, Input { alt_fire: true, ..Input::default() });
+            assert_eq!(fire(&mut game, owner, enemy, rifle), full, "{item}: its own side wore it");
+            let shot = fire(&mut game, enemy, owner, rifle);
+            assert!(shot < full, "{item}: rifle rounds didn't wear it");
+            assert!(fire(&mut game, enemy, owner, rocket) < shot, "{item}: the rocket didn't wear it");
+            // Worn through, it's gone before its time, and shots get through.
+            game.deployables[0].hull = 1.0;
+            fire(&mut game, enemy, owner, rifle);
+            assert!(game.deployables.is_empty() && game.tick < expires, "{item}: still up");
+            let max = game.arsenal.of(&mech(&game, owner)).health_max;
+            assert!(mech(&game, owner).health < max, "{item}: nothing got through once it broke");
+        }
+    }
+
     /// A game on blockout with no bots, tuned by `t`: player 0 (team 0) at (0, 40) facing south
     /// (-z) carrying offensive item `offensive`, enemies (team 1) at the `enemies` positions, and
     /// any teammates joining between them parked out west.
@@ -1695,8 +1749,8 @@ mod tests {
     #[test]
     fn mg_turrets_fire_on_the_nearest_enemy_in_range_and_credit_their_owner() {
         let t = Tuning { mg_turret_spread_deg: 0.0, ..Tuning::default() };
-        // One enemy 15 m off the turret, one 30 m off, one past its range.
-        let (near, far, out) = (Vector::new(0.0, 0.1, 22.0), Vector::new(8.0, 0.1, 8.0), Vector::new(0.0, 0.1, -10.0));
+        // One enemy 15 m off the turret, one 23 m off, one past its range.
+        let (near, far, out) = (Vector::new(0.0, 0.1, 22.0), Vector::new(8.0, 0.1, 16.0), Vector::new(0.0, 0.1, -10.0));
         let (mut game, owner, foes) = turret_range(t.clone(), "mg_turret", &[near, far, out]);
         send(&mut game, owner, Input { grenade: true, ..Input::default() });
         game.step();
@@ -1844,7 +1898,7 @@ mod tests {
     #[test]
     fn rocket_turrets_launch_at_enemies_in_their_range() {
         let t = Tuning::default();
-        let (mut game, owner, foes) = turret_range(t.clone(), "rocket_turret", &[Vector::new(0.0, 0.1, -12.0)]);
+        let (mut game, owner, foes) = turret_range(t.clone(), "rocket_turret", &[Vector::new(0.0, 0.1, 0.0)]);
         send(&mut game, owner, Input { grenade: true, ..Input::default() });
         game.step();
         assert_eq!(game.deployables[0].kind, Kind::RocketTurret);

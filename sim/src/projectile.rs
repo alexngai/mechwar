@@ -137,8 +137,9 @@ pub fn thrown(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Projectile {
 }
 
 /// The tuning projectile `p` flies and bursts with, given its owner's tuning `t`: thrown items
-/// swap their ballistics into the secondary's fields, a charged shell (a primary's charge, or a
-/// heat-fed secondary's) hits harder and wider, and so may a boosted one.
+/// swap their ballistics into the secondary's fields, a turret's rocket hits for
+/// `rocket_turret_damage`, a charged shell (a primary's charge, or a heat-fed secondary's) hits
+/// harder and wider, and so may a boosted one.
 pub fn tuning_for<'a>(t: &'a Tuning, p: &Projectile) -> Cow<'a, Tuning> {
     let tuned = unboosted(t, p);
     if !p.boosted {
@@ -156,7 +157,7 @@ fn unboosted<'a>(t: &'a Tuning, p: &Projectile) -> Cow<'a, Tuning> {
         return Cow::Owned(t.thrown(item));
     }
     if p.n == TURRET && !p.primary {
-        return Cow::Borrowed(t);
+        return Cow::Owned(Tuning { alt_damage: t.rocket_turret_damage, ..t.clone() });
     }
     if p.n >= BOMBLET && !p.primary {
         let mut b = t.clone();
@@ -348,20 +349,26 @@ pub fn first_mech<'a>(ray: &Ray, mut max: f32, mechs: impl IntoIterator<Item = (
 }
 
 /// Damage a burst at `at` from a weapon tuned by `t` (the primary if `primary`) does to mech `m`
-/// (tuned by `tm`): full at contact, falling linearly to EDGE_DAMAGE at the weapon's radius, none
-/// beyond it or through the arena.
+/// (tuned by `tm`): `blast` at its surface, none through the arena.
 pub fn splash(arena: &Arena, t: &Tuning, primary: bool, at: Vector, tm: &Tuning, m: &Mech) -> f32 {
-    let b = ballistics(t, primary);
     let (c, center) = hit_shape(tm, m);
     let h = c.half_height();
     let axis = Vector::new(center.x, at.y.clamp(center.y - h, center.y + h), center.z);
     let to = axis - at;
     let dist = to.length();
     let surface = (dist - c.radius).max(0.0);
-    if surface >= b.radius {
+    let damage = blast(t, primary, surface);
+    if damage > 0.0 && surface > 0.0 && arena.cast_ray(&Ray::new(at, to / dist), surface).is_some() {
         return 0.0;
     }
-    if surface > 0.0 && arena.cast_ray(&Ray::new(at, to / dist), surface).is_some() {
+    damage
+}
+
+/// Damage a burst from a weapon tuned by `t` (the primary if `primary`) does `surface` m off:
+/// full at contact, falling linearly to EDGE_DAMAGE at the weapon's radius, none beyond it.
+pub fn blast(t: &Tuning, primary: bool, surface: f32) -> f32 {
+    let b = ballistics(t, primary);
+    if surface >= b.radius {
         return 0.0;
     }
     b.damage * (1.0 - (1.0 - EDGE_DAMAGE) * surface / b.radius)
