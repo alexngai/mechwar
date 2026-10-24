@@ -1390,7 +1390,8 @@ function drawGlass(now, myTeam) {
     if (ndc.z > 1 || Math.abs(ndc.x) > 1.1 || Math.abs(ndc.y) > 1.1) continue;
     const hullMax = classValue(1, 'turret_hull'), label = kind === 2 ? 'MG turret' : 'Rocket turret';
     const tag = {
-      ...toScreen(ndc), dist, enemy, unit: `turret:${owner}:${kind}`, name: `${nameOf(owner)}'s ${label}`, bot: false, status: '', focus: false,
+      // `unit` is its lock-on id (deploy::target_id), so the lock diamond finds it.
+      ...toScreen(ndc), dist, enemy, unit: 64 + 2 * owner + (kind === 3 ? 1 : 0), name: `${nameOf(owner)}'s ${label}`, bot: false, status: '', focus: false,
       health: Math.max(hull, 0) / hullMax, hp: Math.max(Math.ceil(hull), 0), hpMax: hullMax, label,
     };
     const angle = look.angleTo(to.subVectors(chest, camera.position));

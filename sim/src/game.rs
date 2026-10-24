@@ -22,6 +22,7 @@ use crate::{Arena, Arsenal, DT, Loadout, Map, Mech, MechClass, Slot, TICK_HZ, Tu
 pub const TEAM_SIZE: usize = 4;
 pub const MAX_PLAYERS: usize = 2 * TEAM_SIZE;
 const _: () = assert!(MAX_PLAYERS <= 16, "Blast hits are a u16 bitmask of player ids");
+const _: () = assert!(MAX_PLAYERS <= deploy::TARGET as usize, "turrets' lock-on ids follow the players'");
 const POST_MATCH_SECONDS: f32 = 10.0;
 /// Inputs queued beyond this drop oldest first.
 const MAX_QUEUED: usize = 8;
@@ -404,12 +405,19 @@ impl Game {
             }
             let t = self.arsenal.of(&me.mech);
             let hurt = |q: &Player| q.mech.health / self.arsenal.of(&q.mech).health_max;
-            let enemies: Vec<(u8, Mech, f32)> = self
+            let mut enemies: Vec<(u8, Mech, f32)> = self
                 .players
                 .iter()
                 .filter(|q| q.team != me.team && q.mech.health > 0.0 && q.mech.shield <= 0.0 && !cloaked(q))
                 .map(|q| (q.id, q.mech, hurt(q)))
                 .collect();
+            // The other side's turrets too, each as a mech to fight (by its lock-on id), set so
+            // the bot's chest-high aim lands on its body.
+            let sizes = items(&self.arsenal);
+            enemies.extend(self.deployables.iter().filter(|d| d.kind.turret() && d.hull > 0.0 && d.team != me.team).map(|d| {
+                let at = deploy::center(sizes, d) - Vector::Y * (t.mech_height * 0.5);
+                (deploy::target_id(d), Mech { pos: at, health: d.hull, ..Mech::default() }, d.hull / sizes.turret_hull)
+            }));
             let (team, id) = (usize::from(me.team), me.id);
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
@@ -534,7 +542,8 @@ impl Game {
                 }
                 if self.arsenal.of(&self.players[i].mech).alt_lock_time > 0.0 {
                     let team = self.players[i].team;
-                    let chests = self.chests(|q| q.team != team && !cloaked(q));
+                    let mut chests = self.chests(|q| q.team != team && !cloaked(q));
+                    chests.extend(deploy::targets(&self.deployables, items(&self.arsenal), |d| d.team != team));
                     let t = self.arsenal.of(&self.players[i].mech).clone();
                     projectile::track(&self.arena, &t, &mut self.players[i].mech, &chests);
                 }
@@ -566,8 +575,9 @@ impl Game {
         // half the shooter's RTT if hits feel late.
         let mut flying = std::mem::take(&mut self.projectiles);
         let mut bursts = Vec::new();
-        let chests = self.chests(|q| !cloaked(q));
         let sizes = items(&self.arsenal);
+        let mut chests = self.chests(|q| !cloaked(q));
+        chests.extend(deploy::targets(&self.deployables, sizes, |_| true));
         flying.retain_mut(|f| {
             let enemies = || {
                 self.players
@@ -1717,6 +1727,66 @@ mod tests {
             game.step();
         }
         assert!(game.deployables.is_empty(), "the turret outlived its time");
+    }
+
+    #[test]
+    fn hellfires_lock_onto_turrets_and_home_on_them() {
+        let t = Tuning { turret_warmup: 30.0, ..Tuning::default() };
+        // From 40 m off: closer in, aiming down at something this low, the volley's wide fan puts
+        // missiles into the floor before they start to home.
+        let (mut game, owner, foes) = turret_range(t.clone(), "mg_turret", &[Vector::new(0.0, 0.1, -2.5)]);
+        send(&mut game, owner, Input { grenade: true, ..Input::default() });
+        game.step();
+        let turret = game.deployables[0];
+        let shooter = mech(&game, foes[0]);
+        let ts = game.arsenal.of(&shooter).clone();
+        assert!(ts.alt_lock_time > 0.0, "the foe's secondary doesn't lock on");
+        let d = deploy::center(&t, &turret) - (shooter.pos + Vector::Y * ts.eye_height);
+        let aim = Input { yaw: libm::atan2f(-d.x, -d.z), pitch: (d.y / d.length()).asin(), ..Input::default() };
+        // Middle-click on it, hold until the lock's made, and fire: the volley homes on it (turning
+        // harder than on a mech) and brings it down.
+        let id = deploy::target_id(&turret) + 1;
+        let (mut locked, mut homing) = (false, false);
+        for tick in 0..secs(3.0) {
+            let m = mech(&game, foes[0]);
+            let made = m.lock == id && m.lock_time >= ts.alt_lock_time;
+            send(&mut game, foes[0], Input { aux: tick > 0, alt_fire: made && !homing, ..aim });
+            game.step();
+            locked |= made;
+            homing |= game.events.iter().any(|e| matches!(e, Event::Launch(p) if p.target == id));
+        }
+        assert!(locked, "never locked onto the turret");
+        assert!(homing, "no volley was sent after it");
+        assert!(game.deployables.is_empty(), "the volley left it at {:?}", game.deployables.first().map(|d| d.hull));
+    }
+
+    #[test]
+    fn bots_go_after_enemy_turrets() {
+        let t = Tuning::default();
+        let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+        game.bots = false;
+        // A human far off on one side (so the game runs), and a bot of the other side with an
+        // enemy turret 15 m ahead of it (one that holds its fire).
+        let human = game.join().unwrap();
+        let bot = game.add_player(1, Some(Bot::with_skill(3, 0.9)), MechClass::B).unwrap();
+        for (id, pos) in [(human, Vector::new(45.0, 0.1, 45.0)), (bot, Vector::new(0.0, 0.1, 30.0))] {
+            game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = pos;
+        }
+        // A rifle, which won't send it off to cool before it's done.
+        game.pick(bot, MechClass::B, Loadout::named("pike", "rocket"));
+        let team = game.players.iter().find(|p| p.id == human).unwrap().team;
+        let tick = game.tick;
+        game.deployables.push(Deployable {
+            kind: Kind::MgTurret, team, owner: human, pos: Vector::new(0.0, 0.0, 15.0), yaw: 0.0, pitch: 0.0, hull: t.turret_hull,
+            placed: tick, expires: tick + secs(60.0), ready: tick + secs(60.0), burst: 0,
+        });
+        for _ in 0..secs(10.0) {
+            game.step();
+            if game.deployables.is_empty() {
+                break;
+            }
+        }
+        assert!(game.deployables.is_empty(), "the bot left the turret standing");
     }
 
     #[test]

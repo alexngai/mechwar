@@ -246,6 +246,11 @@ pub fn track(arena: &Arena, t: &Tuning, m: &mut Mech, chests: &[(u8, Vector)]) {
     }
 }
 
+
+/// Shells locked on a turret turn this many times as hard as on a mech: a turret's small and low,
+/// and a volley that fans out as wide as the Hellfire's would otherwise mostly fly past it.
+const TURRET_TURN: f32 = 3.0;
+
 /// Turns homing shell `p` (tuned by `t`) toward `goal`, by at most this tick's `alt_turn`, once
 /// it's flown `alt_home_delay`.
 pub fn home(t: &Tuning, p: &mut Projectile, goal: Vector) {
@@ -256,7 +261,8 @@ pub fn home(t: &Tuning, p: &mut Projectile, goal: Vector) {
     let have = p.vel / speed;
     let axis = have.cross(want).normalize_or_zero();
     if axis != Vector::ZERO {
-        p.vel = Rotation::from_axis_angle(axis, have.angle_between(want).min(t.alt_turn.to_radians() * DT)) * have * speed;
+        let turn = t.alt_turn * if p.target > crate::deploy::TARGET { TURRET_TURN } else { 1.0 };
+        p.vel = Rotation::from_axis_angle(axis, have.angle_between(want).min(turn.to_radians() * DT)) * have * speed;
     }
 }
 

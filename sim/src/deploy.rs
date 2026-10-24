@@ -36,6 +36,10 @@ impl Kind {
 /// A turret's gun is on target once trained within this of its aim, in yaw and pitch (radians).
 const ON_TARGET: f32 = 0.05;
 
+/// Lock-on and homing (`projectile::track`, `home`) know turrets by ids past every player's:
+/// this, plus twice the owner's id, plus 1 for a rocket turret.
+pub const TARGET: u8 = 64;
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Deployable {
     pub kind: Kind,
@@ -107,6 +111,22 @@ pub fn place<'a>(arena: &Arena, t: &Tuning, m: &Mech, kind: Kind, team: u8, owne
 /// Where turret `d`'s gun is.
 pub fn gun(t: &Tuning, d: &Deployable) -> Vector {
     d.pos + Vector::Y * t.turret_height
+}
+
+/// Turret `d`'s id for lock-on and homing (see `TARGET`).
+pub fn target_id(d: &Deployable) -> u8 {
+    TARGET + 2 * d.owner + u8::from(d.kind == Kind::RocketTurret)
+}
+
+/// The middle of turret `d`'s body.
+pub fn center(t: &Tuning, d: &Deployable) -> Vector {
+    body(t, d).1
+}
+
+/// The standing turrets in `list` that `which` picks, as lock-on and homing targets: their ids,
+/// and their guns (aimed at the body's middle, missiles curving down onto it hit the floor short).
+pub fn targets<'a>(list: &'a [Deployable], t: &'a Tuning, which: impl Fn(&Deployable) -> bool + 'a) -> impl Iterator<Item = (u8, Vector)> + 'a {
+    list.iter().filter(move |d| d.kind.turret() && d.hull > 0.0 && which(d)).map(|d| (target_id(d), gun(t, d)))
 }
 
 /// Turret `d`'s body, for shots to hit: a capsule up to its gun, and its center.

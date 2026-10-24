@@ -178,10 +178,11 @@ impl NetClient {
         if let (true, Some(id)) = (self.mech.alt_pressed, self.id) {
             projectile::detonate(id, &mut self.projectiles);
         }
-        // Lock-on, against enemies where they were last seen.
+        // Lock-on, against enemies (and their turrets) where they were last seen.
         let t = self.arsenal.of(&self.mech);
         if t.alt_lock_time > 0.0 {
-            let chests: Vec<_> = self.obstacles.iter().filter(|(_, team, m)| *team != self.team && m.health > 0.0 && !ability::on(m, Ability::Cloak)).map(|(id, _, m)| (*id, m.pos + Vector::Y * (self.arsenal.of(m).mech_height * 0.5))).collect();
+            let mut chests: Vec<_> = self.obstacles.iter().filter(|(_, team, m)| *team != self.team && m.health > 0.0 && !ability::on(m, Ability::Cloak)).map(|(id, _, m)| (*id, m.pos + Vector::Y * (self.arsenal.of(m).mech_height * 0.5))).collect();
+            chests.extend(deploy::targets(self.deployables(), t, |d| d.team != self.team));
             let t = t.clone();
             projectile::track(&self.arena, &t, &mut self.mech, &chests);
         }
@@ -213,8 +214,9 @@ impl NetClient {
         self.projectiles.retain_mut(|p| {
             let enemies = || obstacles.iter().filter(|(_, t, m)| *t != team && m.health > 0.0).map(|(_, _, m)| (arsenal.of(m), m));
             let t = projectile::tuning_for(arsenal.get(p.class, p.loadout), p);
-            if let Some((_, _, m)) = obstacles.iter().find(|(id, _, m)| p.target == id + 1 && !ability::on(m, Ability::Cloak)) {
-                projectile::home(&t, p, m.pos + Vector::Y * (arsenal.of(m).mech_height * 0.5));
+            let mech = obstacles.iter().find(|(id, _, m)| p.target == id + 1 && !ability::on(m, Ability::Cloak)).map(|(_, _, m)| m.pos + Vector::Y * (arsenal.of(m).mech_height * 0.5));
+            if let Some(goal) = mech.or_else(|| deploy::targets(domes, &t, |_| true).find(|(id, _)| p.target == id + 1).map(|(_, at)| at)) {
+                projectile::home(&t, p, goal);
             }
             let hit = projectile::fly(arena, &t, p, |ray, max| {
                 let dome = deploy::stops(domes, &t, ray, max);
@@ -436,6 +438,8 @@ impl NetClient {
             // unless camouflage hides it.
             let us = self.id.map(|id| (id, self.team, self.mech));
             let goal = self.obstacles.iter().chain(us.iter()).find(|(id, _, m)| r.p.target == id + 1 && !ability::on(m, Ability::Cloak)).map(|(_, _, m)| m.pos + Vector::Y * (self.arsenal.of(m).mech_height * 0.5));
+            let turrets = self.snapshots.back().map_or(&[][..], |s| &s.deployables);
+            let goal = goal.or_else(|| deploy::targets(turrets, &t, |_| true).find(|(id, _)| r.p.target == id + 1).map(|(_, at)| at));
             // State after `flown` ticks is as of tick `launched - 1 + flown`.
             let due = (at - r.launched as f32 + 1.0).floor().max(0.0) as u32;
             while r.flown < due && !r.done {
