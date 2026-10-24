@@ -29,6 +29,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use axum::serve::ListenerExt;
 use axum::{Json, Router};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
@@ -193,7 +194,13 @@ async fn main() {
         .fallback_service(client)
         .with_state(app);
 
-    let listener = TcpListener::bind(("0.0.0.0", port)).await.expect("bind port");
+    // Snapshots are small and go out 30 times a second: send each at once, not held back until
+    // the last one is acknowledged (Nagle's algorithm, on by default).
+    let listener = TcpListener::bind(("0.0.0.0", port)).await.expect("bind port").tap_io(|tcp| {
+        if let Err(e) = tcp.set_nodelay(true) {
+            eprintln!("couldn't set TCP_NODELAY: {e}");
+        }
+    });
     println!("serving {static_dir}/ and ws://localhost:{port}/ws (LAG_MS={})", lag.as_millis());
     let served = axum::serve(listener, router).into_future().await;
     eprintln!("server stopped: {served:?}");

@@ -6,7 +6,7 @@
 # Match state lives in memory: run exactly one machine (first deploy with --ha=false).
 # It stops when idle and wakes on the next visit.
 app = 'webhawk'
-primary_region = 'iad'
+primary_region = 'sjc'
 
 [build]
 [env]
