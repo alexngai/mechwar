@@ -601,15 +601,19 @@ impl Game {
             {
                 bot.last = input;
             }
-            // Burst a shell that has flown past the target with the target inside its blast.
-            if let Some(tm) = &target {
-                let tt = self.arsenal.of(tm);
-                let chest = tm.pos + Vector::Y * (tt.mech_height * 0.5);
-                input.alt_fire |= self.projectiles.iter().any(|f| {
-                    let ts = self.arsenal.get(f.p.class, f.p.loadout);
-                    f.p.owner == p.id && projectile::armed(&f.p) && f.p.vel.dot(chest - f.p.pos) < 0.0 && projectile::splash(&self.arena, ts, false, f.p.pos, tt, tm) > 0.0
-                });
-            }
+            // Burst a shell that has flown past the target with the target inside its blast, and a
+            // splitting one as soon as any enemy it knows of (in view or not) is inside it: left to
+            // reach them, it would burst on contact, whole, without its bomblets. Pressed now, it
+            // still splits if it hits them in this tick's flight.
+            input.alt_fire |= self.projectiles.iter().filter(|f| f.p.owner == p.id && projectile::armed(&f.p)).any(|f| {
+                let ts = self.arsenal.get(f.p.class, f.p.loadout);
+                let inside = |tm: &Mech| projectile::splash(&self.arena, ts, false, f.p.pos, self.arsenal.of(tm), tm) > 0.0;
+                if ts.alt_split >= 1.0 {
+                    enemies.iter().any(|e| bot.knows(e.0) && inside(&e.1))
+                } else {
+                    target.as_ref().is_some_and(|tm| f.p.vel.dot(tm.pos + Vector::Y * (self.arsenal.of(tm).mech_height * 0.5) - f.p.pos) < 0.0 && inside(tm))
+                }
+            });
             bot.seq += 1;
             p.inputs.push_back(InputMsg { seq: bot.seq, input, view_tick: self.tick as f32 });
         }
@@ -2747,5 +2751,42 @@ mod tests {
         game.step();
         let hits = game.events.iter().find_map(|e| if let Event::Blast { owner, hits, .. } = *e { Some((owner, hits)) } else { None });
         assert_eq!(hits, Some((bot, 1 << human)));
+    }
+
+    #[test]
+    fn bots_split_cluster_canisters_at_their_target() {
+        let t = Tuning::default();
+        let bomblet = |n: u8| (projectile::BOMBLET..projectile::TURRET).contains(&n);
+        let (mut canisters, mut splits, mut bomblets, mut bomblet_hits) = (0, 0, 0, 0);
+        for seed in 1..=6 {
+            let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+            game.bots = false;
+            let human = game.join().unwrap();
+            let bot = game.add_player(1, Some(Bot::new(seed)), MechClass::B).unwrap();
+            // A bot with the cluster launcher 30 m south of a human standing in the open.
+            for (id, pos) in [(human, Vector::new(0.0, 0.1, -5.0)), (bot, Vector::new(0.0, 0.1, 25.0))] {
+                let m = &mut game.players.iter_mut().find(|p| p.id == id).unwrap().mech;
+                m.pos = pos;
+                m.loadout = Loadout::named("pike", "splitter");
+            }
+            unshield(&mut game);
+            for _ in 0..secs(30.0) {
+                game.step();
+                for e in &game.events {
+                    match *e {
+                        Event::Blast { owner, primary: false, n, .. } if owner == bot && n < projectile::BOMBLET => canisters += 1,
+                        Event::Launch(p) if p.owner == bot && bomblet(p.n) => {
+                            splits += u32::from(p.n == projectile::BOMBLET);
+                            bomblets += 1;
+                        }
+                        Event::Blast { owner, primary: false, n, hits, .. } if owner == bot && bomblet(n) && hits & 1 << human != 0 => bomblet_hits += 1,
+                        _ => {}
+                    }
+                }
+                game.players.iter_mut().find(|p| p.id == human).unwrap().mech.health = t.health_max; // so it never dies
+            }
+        }
+        assert!(splits * 3 >= canisters * 2, "only {splits} of {canisters} canisters split");
+        assert!(bomblet_hits * 2 >= bomblets, "only {bomblet_hits} of {bomblets} bomblets hit");
     }
 }
