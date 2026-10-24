@@ -54,10 +54,10 @@
       }
     },
     {
-      "id": "hornet", "name": "Hellfire", "unlock": 1, "desc": "Lock-on volley: middle-click locks the enemy nearest your aim within 30° in 0.35 s, and the lock holds 2.5 s wherever you look; fire eight slow missiles that fan out wide for 0.2 s, then curve onto it, even round a corner", "sound": "hornet", "recoil": "none", "projectile": "dart",
+      "id": "hornet", "name": "Hellfire", "unlock": 1, "desc": "Lock-on volley: middle-click locks the enemy nearest your aim within 30° and 150 m in 0.35 s, and the lock holds 2.5 s wherever you look; fire eight slow missiles that fan out wide for 0.2 s, then curve onto it, even round a corner", "sound": "hornet", "recoil": "none", "projectile": "dart",
       "stats": {
         "alt_lock_time": 0.35, "alt_lock_cone": 30, "alt_lock_hold": 2.5, "alt_turn": 60, "alt_home_delay": 0.2, "alt_count": 8, "alt_cone": 1, "alt_spread_deg": 18,
-        "alt_speed": 33, "alt_speed_jitter": 0.15, "alt_gravity": 0, "alt_loft_deg": 6, "alt_bounce": 0, "alt_fuse": 3, "alt_damage": 5, "alt_radius": 2,
+        "alt_speed": 33, "alt_speed_jitter": 0.15, "alt_gravity": 0, "alt_loft_deg": 6, "alt_bounce": 0, "alt_fuse": 4.55, "alt_damage": 5, "alt_radius": 2,
         "alt_cooldown": 5, "alt_heat": 36
       }
     },

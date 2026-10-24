@@ -21,8 +21,9 @@ export class Sound {
     this.volume = 0.8;
     this.muted = false;
     this.listener = { x: 0, y: 0, z: 0 };
-    this.timers = { heat: 0, hull: 0, missile: 0, seek: 0 };
+    this.timers = { heat: 0, hull: 0, missile: 0 };
     this.overheated = false;
+    this.lockStep = -1;
     this.lockMade = false;
   }
 
@@ -228,9 +229,12 @@ export class Sound {
    * weapon's mechanical action; no high ringing, which is what reads as a plink.
    */
   shot(sound, pos) {
-    const out = this.voice(pos, 0.6); // no reverb: at fire rate it smears into a wash
+    // No reverb for fast guns: at their fire rate it smears into a wash. The slow, sharp ones get a
+    // touch, so the crack rings out.
+    const out = this.voice(pos, 0.6, undefined, sound === 'shotgun' ? 0.3 : sound === 'flak' ? 0.15 : 0);
     if (!out) return;
-    out.gain.value = pos ? 1.2 : 0.9;
+    // The shotgun hits about as hard as the rail gun.
+    out.gain.value = (pos ? 1.2 : 0.9) * (sound === 'shotgun' ? 1.35 : 1);
     if (sound === 'vulcan') {
       // Submachine cannon: a sharp report, a short thump, and the bolt cycling right after.
       this.noise(out, 'white', 'highpass', 1400, 900, 0.001, 0.045, 0.85);
@@ -239,20 +243,28 @@ export class Sound {
       this.noise(out, 'brown', 'lowpass', 900, 200, 0.002, 0.08, 0.35);
       this.noise(out, 'white', 'bandpass', 650, 550, 0.001, 0.03, 0.22, 2, 0.028);
     } else if (sound === 'shotgun') {
-      // Shotgun: a hard, bright crack with little boom under it, then the pump racking quick.
-      this.noise(out, 'white', 'highpass', 3200, 1800, 0.0005, 0.025, 1.0);
-      this.noise(out, 'white', 'highpass', 1300, 700, 0.001, 0.06, 0.85);
-      this.noise(out, 'white', 'lowpass', 4200, 1200, 0.001, 0.035, 0.45);
-      this.tone(out, 'sine', 140, 52, 0.002, 0.12, 0.8);
-      this.noise(out, 'brown', 'lowpass', 1300, 220, 0.002, 0.1, 0.4);
-      this.noise(out, 'white', 'bandpass', 900, 700, 0.001, 0.03, 0.3, 2.5, 0.16);
-      this.noise(out, 'white', 'bandpass', 620, 520, 0.001, 0.04, 0.32, 2.5, 0.24);
+      // Shotgun: a high, sharp crack that tears for a moment and a hard blast, over a punch
+      // sweeping down from the mid-bass (as the rail gun's does, where small speakers still play
+      // it) and a deep boom and rumble rolling on behind them, then the pump racking.
+      this.noise(out, 'white', 'highpass', 8500, 4500, 0.0003, 0.02, 2.8);
+      this.noise(out, 'white', 'highpass', 5500, 3500, 0.0003, 0.015, 1.4, 1, 0.014);
+      this.noise(out, 'white', 'highpass', 2600, 1200, 0.0005, 0.07, 1.0);
+      this.noise(out, 'white', 'lowpass', 7000, 1800, 0.0005, 0.045, 0.55);
+      this.tone(out, 'sine', 170, 50, 0.002, 0.22, 1.0);
+      this.tone(out, 'sine', 80, 28, 0.004, 0.35, 0.9);
+      this.noise(out, 'brown', 'lowpass', 1100, 100, 0.004, 0.4, 0.7);
+      this.noise(out, 'white', 'bandpass', 900, 700, 0.001, 0.03, 0.3, 2.5, 0.28);
+      this.noise(out, 'white', 'bandpass', 620, 520, 0.001, 0.04, 0.32, 2.5, 0.36);
     } else if (sound === 'flak') {
-      // Flak cannon: a loud, sharp report, a deep boom and rumble, then the breech racking.
-      this.noise(out, 'white', 'highpass', 700, 400, 0.001, 0.1, 1.0);
-      this.noise(out, 'white', 'lowpass', 3000, 700, 0.001, 0.06, 0.5);
-      this.tone(out, 'sine', 95, 34, 0.002, 0.3, 1.0);
-      this.noise(out, 'brown', 'lowpass', 1100, 120, 0.002, 0.35, 0.8);
+      // Flak cannon: a crack like the rail gun's with two quick aftercracks, a shotgun's hard
+      // blast, a deep boom and rumble, then the breech racking.
+      this.noise(out, 'white', 'highpass', 6500, 3500, 0.0003, 0.02, 1.8);
+      this.noise(out, 'white', 'highpass', 3400, 2200, 0.0003, 0.015, 0.9, 1, 0.016);
+      this.noise(out, 'white', 'highpass', 3000, 1900, 0.0003, 0.02, 0.6, 1, 0.038);
+      this.noise(out, 'white', 'highpass', 1800, 700, 0.0005, 0.07, 0.9);
+      this.noise(out, 'white', 'lowpass', 7000, 1400, 0.0005, 0.045, 0.5);
+      this.tone(out, 'sine', 95, 34, 0.002, 0.28, 0.85);
+      this.noise(out, 'brown', 'lowpass', 1100, 120, 0.002, 0.28, 0.6);
       this.noise(out, 'white', 'bandpass', 480, 420, 0.002, 0.04, 0.3, 2, 0.2);
       this.noise(out, 'white', 'bandpass', 330, 300, 0.002, 0.05, 0.3, 2, 0.29);
     } else if (sound === 'rotary') {
@@ -284,7 +296,7 @@ export class Sound {
   }
 
   /**
-   * Secondary fire with weapons.json `sound` leaving its launcher; the mortar adds a hollow knock.
+   * Secondary fire with weapons.json `sound` leaving its launcher; the mortar pops from its tube.
    * A flak volley booms like a gun instead, a rail slug cracks like a sniper's rifle, and a mine is
    * dispensed rather than launched.
    */
@@ -306,6 +318,23 @@ export class Sound {
       this.tone(out, 'sawtooth', 1600, 320, 0.001, 0.14, 0.15);
       return;
     }
+    if (sound === 'mortar') {
+      // Tube launcher: a deep, hollow "pwoomp" like a giant cork drawn from a bottle, with no
+      // motor's whoosh. A pressure crack as the shell clears the muzzle, the tube's air column
+      // ringing up in pitch, a falling hollow body and sub thump from the charge, and gas rushing
+      // out after.
+      const out = this.voice(pos, 0.6, undefined, 0.15);
+      if (!out) return;
+      out.gain.value = pos ? 1.6 : 1.2;
+      this.noise(out, 'white', 'highpass', 1800, 1000, 0.0005, 0.015, 0.55);
+      this.noise(out, 'white', 'lowpass', 2500, 400, 0.001, 0.05, 0.5);
+      this.tone(out, 'sine', 200, 480, 0.002, 0.09, 0.6);
+      this.tone(out, 'sine', 180, 95, 0.004, 0.28, 1.0);
+      this.growl(out, 'sawtooth', 150, 80, 600, 0.004, 0.22, 0.35);
+      this.tone(out, 'sine', 75, 38, 0.003, 0.32, 0.9);
+      this.noise(out, 'white', 'bandpass', 700, 250, 0.01, 0.25, 0.45, 1.2);
+      return;
+    }
     const out = this.voice(pos, 0.5);
     if (!out) return;
     out.gain.value = pos ? 1 : 0.6;
@@ -323,7 +352,6 @@ export class Sound {
     }
     this.noise(out, 'white', 'bandpass', 400, 2600, 0.01, 0.36, 0.5, 1.5);
     this.tone(out, 'sine', 120, 55, 0.003, 0.16, 0.5);
-    if (sound === 'mortar') this.tone(out, 'triangle', 190, 120, 0.002, 0.12, 0.45);
     if (sound === 'furnace') this.noise(out, 'brown', 'lowpass', 600, 120, 0.01, 0.5, 0.7);
     if (sound === 'hornet') this.noise(out, 'white', 'bandpass', 1800, 3000, 0.005, 0.25, 0.4, 2);
   }
@@ -723,14 +751,14 @@ export class Sound {
         this.tone(out, 'square', 1150, 1150, 0.002, 0.05, 0.11, 0.06);
       }
     }
-    // Our own lock (`lock`, 0 to 1 made; 0 for none): quick pips climbing while it locks, then a
-    // bright rising chirp once it's made.
-    this.timers.seek -= dt;
-    if (s.lock > 0 && s.lock < 1 && this.timers.seek <= 0) {
-      this.timers.seek = 0.07;
-      const out = this.voice(null, 0.1, this.ui);
-      if (out) this.tone(out, 'sine', 900 + 600 * s.lock, 900 + 600 * s.lock, 0.002, 0.03, 0.09);
+    // Our own lock (`lock`, 0 to 1 made; 0 for none): three tracking beeps climbing while it
+    // locks, one per third, then a bright rising chirp once it's made.
+    const step = s.lock > 0 && s.lock < 1 ? Math.floor(s.lock * 3) : -1;
+    if (step >= 0 && step !== this.lockStep) {
+      const out = this.voice(null, 0.15, this.ui);
+      if (out) this.tone(out, 'triangle', 1100 + 150 * step, 1100 + 150 * step, 0.002, 0.06, 0.16);
     }
+    this.lockStep = step;
     if (s.lock >= 1 && !this.lockMade) {
       const out = this.voice(null, 0.3, this.ui);
       if (out) {
