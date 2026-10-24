@@ -646,9 +646,9 @@ const eye = new THREE.Vector3(), offset = new THREE.Vector3(), aim = new THREE.V
 const pos = new THREE.Vector3(), vel = new THREE.Vector3(), seen = new THREE.Vector3(), step = new THREE.Vector3();
 const beamFrom = new THREE.Vector3(), beamTo = new THREE.Vector3();
 const BEAM_HOLD = 120; // ms a remote's beam stays drawn after the server last said it was on
-// How faint camouflage draws a mech: our own or a teammate's, and an enemy's (a shimmer at most:
-// the least that still reads, about 4 levels of 255 over the arena).
-const CLOAK_SEEN = 0.25, CLOAK_HIDDEN = 0.03;
+// How faint camouflage draws a mech: our own or a teammate's (a ghost), and an enemy's (a veil
+// that dims what's behind it by about 6%, on any map: faint, but there to see).
+const CLOAK_SEEN = 0.25, CLOAK_HIDDEN = 0.05;
 // Our own guns from the cockpit show it more strongly: the pilot's cue that they're hidden.
 const CLOAK_GUNS = 0.5;
 const ray = new THREE.Ray(), sphere = new THREE.Sphere(), crossing = new THREE.Vector3();
