@@ -260,6 +260,8 @@ export class Effects {
     this.soft = new Pool(scene, 1200, THREE.NormalBlending); // room for a few smoke clouds
     // Sparks and cinders: tiny, many, and never bigger than a few pixels however close.
     this.embers = new Pool(scene, 800, THREE.AdditiveBlending, 0.012);
+    // Weather: solid flakes (snow), not glowing, so they show against a white sky.
+    this.flakes = new Pool(scene, 2400, THREE.NormalBlending, 0.02);
     this.beams = new Beams(scene);
     // Held beams: one slot per mech (0 for our own, id + 1 for others), refreshed while on.
     this.mends = new Beams(scene, 17, 0x60ffb0, 0.5);
@@ -279,7 +281,7 @@ export class Effects {
 
   /** Drops every particle in flight (a map change: last map's smoke shouldn't hang in the new sky). */
   clear() {
-    for (const pool of [this.glow, this.soft, this.embers]) pool.clear();
+    for (const pool of [this.glow, this.soft, this.embers, this.flakes]) pool.clear();
   }
 
   /** Smoke and dust are lit by the scene, so they darken at night; fire and sparks glow regardless. */
@@ -293,6 +295,7 @@ export class Effects {
     this.glow.update(dt, scale);
     this.soft.update(dt, scale);
     this.embers.update(dt, scale);
+    this.flakes.update(dt, scale);
     this.beams.update(dt, camera);
     this.mends.update(dt, camera);
     for (const l of this.lights) {
@@ -539,13 +542,16 @@ export class Effects {
 
   /**
    * A map's own motes adrift around `p` (the camera), as its palette's `motes` describes them:
-   * pollen, fireflies, spores. `color` is [start, end]; they drift `drift` m/s, rise `rise` m/s.
+   * pollen, fireflies, spores, snow. `color` is [start, end]; they drift `drift` m/s, rise `rise`
+   * m/s, and blow along `wind` ([x, z] m/s, steady), born within `range` m across of `p` (upwind of
+   * it, so they blow through); `solid` ones are flakes, not glowing specks.
    */
-  motes(p, dt, { color, rate = 60, size = 0.22, drift = 0.5, rise = 0.2, life = 6 }) {
+  motes(p, dt, { color, rate = 60, size = 0.22, drift = 0.5, rise = 0.2, life = 6, wind = [0, 0], range = 35, solid = false }) {
+    const [wx, wz] = wind, back = life * 0.4, pool = solid ? this.flakes : this.embers;
     for (let i = count(rate, dt); i > 0; i--) {
-      spot.set(p.x + rand(-35, 35), p.y + rand(-6, 14), p.z + rand(-35, 35));
-      v.set(rand(-1, 1) * drift, rise * rand(0.5, 1.5), rand(-1, 1) * drift);
-      this.embers.spawn(spot, v, { life: rand(life * 0.6, life), size: [rand(size * 0.7, size), size * 0.3], color, drag: 0.1 });
+      spot.set(p.x + rand(-range, range) - wx * back, p.y + rand(-6, 14), p.z + rand(-range, range) - wz * back);
+      v.set(rand(-1, 1) * drift + wx, rise * rand(0.5, 1.5), rand(-1, 1) * drift + wz);
+      pool.spawn(spot, v, { life: rand(life * 0.6, life), size: solid ? [size, size * 0.8] : [rand(size * 0.7, size), size * 0.3], color, drag: wx || wz ? 0 : 0.1 });
     }
   }
 
