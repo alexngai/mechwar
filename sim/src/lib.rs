@@ -14,6 +14,7 @@ pub mod deploy;
 pub mod game;
 pub mod item;
 pub mod map;
+pub mod melee;
 pub mod net;
 pub mod objective;
 pub mod progress;
@@ -94,6 +95,15 @@ pub struct Tuning {
     pub shot_speed: f32,
     pub shot_gravity: f32,
     pub shot_radius: f32,
+    /// A bouncing projectile primary glances off the arena at `shot_bounce` of its speed and
+    /// bursts at `shot_fuse` s (0: on reaching `weapon_range`), or on a mech.
+    pub shot_bounce: f32,
+    pub shot_fuse: f32,
+    /// A seeking projectile primary (`shot_turn` > 0, degrees a second) turns toward whichever
+    /// enemy is nearest its owner's aim within `shot_seek_cone` degrees, as of each tick
+    /// (`projectile::seek`); with none there, it flies straight.
+    pub shot_turn: f32,
+    pub shot_seek_cone: f32,
     /// Spin-up primaries fire at `spin_start` of `fire_rate` from rest, reaching all of it after
     /// `spin_up` s of trigger (0: no spin-up), and spin down over `spin_down` s. They hold fire
     /// until spun for `spin_delay` s.
@@ -175,6 +185,9 @@ pub struct Tuning {
     pub alt_max: f32,
     /// `alt_release` 1: the secondary fires when its trigger is let go, not pressed.
     pub alt_release: f32,
+    /// `alt_pierce` 1: shells fly through domes and barriers, wearing each they cross by their
+    /// damage, rather than stopping on them.
+    pub alt_pierce: f32,
     /// A lock-on launcher (`alt_lock_time` > 0): pressing `aux` picks the enemy nearest its aim
     /// within `alt_lock_cone` degrees, which locks once kept there that long; the lock then holds
     /// `alt_lock_hold` seconds wherever the mech looks, and its shells home on it, turning up to
@@ -198,6 +211,15 @@ pub struct Tuning {
     /// burning an enemy `alt_damage` hp/s, for `alt_heat` heat/s.
     pub alt_beam: f32,
     pub alt_beam_heal: f32,
+    /// A melee secondary (`alt_melee` > 0, its reach in m) launches nothing: held, it winds up
+    /// over `alt_charge_time`; let go, it lunges at an enemy within `alt_lunge` ahead (at up to
+    /// `alt_lunge_speed`), and strikes, throwing what it hits with `alt_impulse` over its mass;
+    /// see `melee.rs`. Charge scales the blow by `alt_charge_damage`, as it does a heat-fed shell.
+    pub alt_melee: f32,
+    pub alt_charge_time: f32,
+    pub alt_lunge: f32,
+    pub alt_lunge_speed: f32,
+    pub alt_impulse: f32,
 
     /// Stop-to-repair: shut down for `repair_windup`, then heal at `repair_rate`; once it ends,
     /// still shut down for `repair_standup` while standing back up.
@@ -423,11 +445,22 @@ pub struct Mech {
     pub burst_left: u8,
     pub charge: f32,
     pub shot_charge: f32,
-    /// The charge the last secondary launched with (heat-fed launchers).
+    /// The charge the last secondary launched with (heat-fed launchers), or a melee secondary's
+    /// wind-up so far.
     pub alt_charge: f32,
+    /// Seconds left that a melee strike just let go can land (`melee::STRIKE`): the server's
+    /// to resolve and end. It lands as wound, and boosted by the ability, when it was let go.
+    pub strike: f32,
+    pub strike_charge: f32,
+    pub strike_boosted: bool,
+    /// How hard (m/s) the mech hit a wall this tick riding a pad's arc, as a thrown mech does.
+    pub slam: f32,
     /// Lock-on: the enemy being locked (its id + 1; 0 for none), and for how long.
     pub lock: u8,
     pub lock_time: f32,
+    /// A seeking primary's mark (`projectile::seek`): the enemy nearest the aim (its id + 1; 0
+    /// for none), which its shots in flight turn toward.
+    pub seek: u8,
     /// Where the aim ray from the eye lands (for the crosshair).
     pub aim_point: Vector,
     /// Set on ticks a shot fired.
@@ -608,10 +641,11 @@ impl Sim {
         self.seq += 1;
         let t = &self.tuning;
         step_mech(&self.arena, t, &mut self.mech, input);
+        melee::lunge(&self.arena, t, &mut self.mech, std::iter::empty());
         if self.mech.alt_pressed {
             projectile::detonate(0, &mut self.projectiles);
         }
-        if self.mech.launched {
+        if self.mech.launched && t.alt_melee <= 0.0 {
             projectile::cap(t, 0, &mut self.projectiles);
             self.projectiles.extend(projectile::volley(t, &self.mech, 0, self.seq));
         }
@@ -698,6 +732,7 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     m.pulsed = false;
     m.sprung = false;
     m.beaming = false;
+    m.slam = 0.0;
     if m.health <= 0.0 {
         return;
     }
@@ -736,6 +771,7 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
 
     m.dodge_cooldown = (m.dodge_cooldown - DT).max(0.0);
     m.dodge_time = (m.dodge_time - DT).max(0.0);
+    m.strike = (m.strike - DT).max(0.0);
 
     // The ability: Speed boost frees and speeds up boost, and Bulwark trades it for less damage
     // (applied by the server) and more speed on foot. What it does to firing comes after it.
@@ -850,7 +886,7 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     };
     let queries = arena.world.query_pipeline();
     let max_slope = controller.max_slope_climb_angle;
-    let vel = &mut m.vel;
+    let (vel, arcing, mut slam) = (&mut m.vel, m.pad_arc, 0.0f32);
     let moved = controller.move_shape(DT, &queries, &shape, &pose, *vel * DT, |hit| {
         // Drop velocity into walls and ceilings. Walkable slopes are left alone so speed
         // isn't bled off every tick on ramps. ponytail: this also fires for ledges autostep
@@ -862,8 +898,12 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
         let into = vel.dot(n);
         if into < 0.0 && Vector::Y.angle_between(n) > max_slope {
             *vel -= n * into;
+            if arcing {
+                slam = slam.max(-into);
+            }
         }
     });
+    m.slam = slam;
     m.pos += moved.translation;
     m.grounded = moved.grounded;
     if m.grounded && m.vel.y < 0.0 {
@@ -923,11 +963,24 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
         let wound = t.spin_up <= 0.0 || m.spin * t.spin_up >= t.spin_delay - 1e-4;
         m.shot = (input.fire || m.burst_left > 0) && ready && wound;
     }
-    // A heat-fed launcher fires even overheated: it spends heat rather than making it.
+    // A heat-fed launcher fires even overheated: it spends heat rather than making it. So does a
+    // melee secondary strike, the last resort of a mech whose guns are locked.
     // Most secondaries fire on the press; a release-fired one (a lock-on launcher) when let go.
+    // Shutting down to repair lets go of the trigger, but doesn't swing a melee secondary.
     let pulled = if t.alt_release > 0.5 { !input.alt_fire && m.alt_held } else { input.alt_fire };
+    let pulled = pulled && !(shutdown && t.alt_melee > 0.0);
     let beam = t.alt_beam > 0.0;
-    m.launched = !beam && pulled && (t.alt_heat_fed > 0.0 || !m.overheated) && m.alt_wait <= 0.0;
+    let hot_ok = t.alt_heat_fed > 0.0 || t.alt_melee > 0.0 || !m.overheated;
+    m.launched = !beam && pulled && hot_ok && m.alt_wait <= 0.0;
+    // A winding secondary winds up from a fresh press while it's held and ready; let go, its
+    // strike takes the wind-up.
+    if t.alt_charge_time > 0.0 {
+        if m.launched {
+            m.strike_charge = m.alt_charge;
+        }
+        let wound = if input.alt_fire && m.alt_held { m.alt_charge } else { 0.0 };
+        m.alt_charge = if input.alt_fire && m.alt_wait <= 0.0 { (wound + DT / t.alt_charge_time).min(1.0) } else { wound };
+    }
     m.beaming = beam && input.alt_fire && !m.overheated;
     // Mines go off by themselves: a press lays more, and the middle button bursts all those down.
     m.alt_pressed = if t.alt_stick > 0.5 { input.aux && !m.aux_held } else { input.alt_fire && !m.alt_held && t.alt_release < 0.5 && !beam };
@@ -954,8 +1007,14 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     if m.launched {
         m.alt_wait = t.alt_cooldown;
         let spent = m.heat * t.alt_heat_fed;
-        m.alt_charge = if t.alt_heat_fed > 0.0 { m.heat / t.heat_max.max(1.0) } else { 0.0 };
+        if t.alt_charge_time <= 0.0 {
+            m.alt_charge = if t.alt_heat_fed > 0.0 { m.heat / t.heat_max.max(1.0) } else { 0.0 };
+        }
         m.heat += t.alt_heat - spent;
+        if t.alt_melee > 0.0 {
+            m.strike = melee::STRIKE;
+            m.fire_wait = m.fire_wait.max(melee::RECOVERY);
+        }
     }
     if m.beaming {
         m.heat += t.alt_heat * DT;
@@ -982,6 +1041,9 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
         m.overheated = false;
     }
     ability::fired(m);
+    if m.launched && t.alt_melee > 0.0 {
+        m.strike_boosted = m.boosted;
+    }
 }
 
 /// Target vertical speed `time` seconds into a hover: eases from the rise speed down to a slow sink.
@@ -1130,6 +1192,54 @@ mod tests {
     /// The ticks, of the next `ticks`, that `input` fires the primary on.
     fn shots(sim: &mut Sim, input: Input, ticks: usize) -> Vec<usize> {
         (0..ticks).filter(|_| (sim.step(&input), sim.mech.shot).1).collect()
+    }
+
+    #[test]
+    fn pile_drivers_wind_up_then_strike_on_release_even_overheated_locking_the_guns() {
+        let mut sim = weapon_sim(|t| (t.alt_melee, t.alt_charge_time, t.alt_release) = (3.0, 0.8, 1.0));
+        let t = sim.tuning.clone();
+        (sim.mech.heat, sim.mech.overheated) = (t.heat_max, true);
+        for _ in 0..(0.4 * TICK_HZ) as usize {
+            sim.step(&Input { alt_fire: true, ..Input::default() });
+        }
+        assert!((sim.mech.alt_charge - 0.5).abs() < 0.05 && !sim.mech.launched, "wound {}", sim.mech.alt_charge);
+        sim.step(&Input::default());
+        assert!(sim.mech.launched && sim.projectiles.is_empty(), "no strike, or it launched something");
+        assert!(sim.mech.strike > 0.0 && sim.mech.fire_wait >= melee::RECOVERY - DT, "strike {}, guns {}", sim.mech.strike, sim.mech.fire_wait);
+        // The strike keeps the wind-up, which a press while it's out doesn't touch.
+        sim.step(&Input { alt_fire: true, ..Input::default() });
+        assert!((sim.mech.strike_charge - 0.5).abs() < 0.05 && sim.mech.alt_charge == 0.0, "struck {}, winding {}", sim.mech.strike_charge, sim.mech.alt_charge);
+        // Shutting down to repair lets go without a swing.
+        (sim.mech.alt_wait, sim.mech.health) = (0.0, 50.0);
+        sim.step(&Input { alt_fire: true, ..Input::default() });
+        sim.step(&Input { alt_fire: true, repair: true, ..Input::default() });
+        assert!(!sim.mech.launched, "swung on shutting down");
+    }
+
+    #[test]
+    fn a_wound_rocket_punch_carries_the_mech_along_its_aim() {
+        // How far (level, and up at most) a punch let go after `hold` s looking `pitch` up carries
+        // the mech down the clear run, with nothing to lunge at.
+        let punch = |hold: f32, pitch: f32| {
+            let mut sim = weapon_sim(|t| (t.alt_melee, t.alt_charge_time, t.alt_release) = (3.0, 0.8, 1.0));
+            let (start, mut top) = (sim.mech.pos, 0.0f32);
+            for _ in 0..(hold * TICK_HZ).round() as usize {
+                sim.step(&Input { alt_fire: true, pitch, ..Input::default() });
+            }
+            for _ in 0..(2.0 * TICK_HZ) as usize {
+                sim.step(&Input { pitch, ..Input::default() });
+                top = top.max(sim.mech.pos.y - start.y);
+            }
+            (Vector::new(sim.mech.pos.x - start.x, 0.0, sim.mech.pos.z - start.z).length(), top)
+        };
+        let t = weapon_sim(|_| {}).tuning;
+        let ((full, _), (half, _), (jab, _)) = (punch(1.0, 0.0), punch(0.4, 0.0), punch(1.0 / TICK_HZ, 0.0));
+        assert!((full - t.alt_lunge).abs() < 1.0, "a full wind-up went {full} m");
+        assert!((half - 0.5 * t.alt_lunge).abs() < 1.0, "half went {half} m");
+        assert!(jab < 1.0, "a tap went {jab} m");
+        // Looking up, it climbs that far along the aim.
+        let (level, rise) = punch(1.0, 0.6);
+        assert!((rise - t.alt_lunge * 0.6f32.sin()).abs() < 1.0 && (level - t.alt_lunge * 0.6f32.cos()).abs() < 1.5, "went {level} m and rose {rise} m");
     }
 
     #[test]

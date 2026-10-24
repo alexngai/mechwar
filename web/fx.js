@@ -457,7 +457,7 @@ export class Effects {
       }
       const shell = p.look === 'shell', dart = p.look === 'dart', slug = p.look === 'slug' || p.look === 'ember';
       const pellet = !slug && (p.primary || p.look === 'flak');
-      item.mesh.scale.setScalar(slug ? 1.1 + 0.8 * p.charge : pellet ? 0.6 : dart ? 0.6 : shell ? 1.6 : 1);
+      item.mesh.scale.setScalar(slug ? 1.1 + 0.8 * p.charge : pellet ? 0.6 : dart ? 0.6 : shell ? (p.primary ? 0.8 : 1.6) : 1);
       item.core.visible = !shell || (p.age * 6) % 1 < 0.5;
       item.core.material.color.setHex(slug ? 0xff9a40 : pellet ? 0xffe2a0 : shell ? 0xff4020 : 0xffb060);
       if (slug) {

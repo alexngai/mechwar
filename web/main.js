@@ -104,7 +104,7 @@ if (net) {
 }
 
 // Index layout of state(); keep in sync with mech_state in sim/src/wasm.rs.
-const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, SPIN: 31, CHARGE: 32, BLOOM: 33, FIRE_WAIT: 34, LOCK: 35, LOCK_T: 36, BEAM: 37, BEAM_END: 38, SHIELD: 41, LIMPET: 42, OFFSET: 43 };
+const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, SPIN: 31, CHARGE: 32, BLOOM: 33, FIRE_WAIT: 34, LOCK: 35, LOCK_T: 36, BEAM: 37, BEAM_END: 38, SHIELD: 41, LIMPET: 42, SEEK: 43, ALT_CHARGE: 44, BURN: 45, OFFSET: 46 };
 // The HUD marks our side in blue and the other side in red, whichever team we're on.
 const FRIEND = TEAMS[0], FOE = TEAMS[1];
 const DEATHMATCH = 1, MISSILE_ASSAULT = 2, SIEGE = 3; // their indices in the sim's Mode::ALL
@@ -729,6 +729,8 @@ function frame(now) {
     for (let k = 0; k < ends.length; k += 3) shots.push(Object.assign(new THREE.Vector3(ends[k], ends[k + 1], ends[k + 2]), { first: k === 0 }));
     if (curr[S.SHOT]) recoil(armament(loadout).primary, T('fire_rate'));
     if (curr[S.LAUNCHED]) recoil(armament(loadout).secondary, 1 / T('alt_cooldown'));
+    // A melee strike launches nothing: the release is the swing.
+    if (curr[S.LAUNCHED] && T('alt_melee') > 0) me.launch();
     // Own EMPs show as predicted; the server's Pulse for them only marks hits. A Salve's orb
     // comes with the snapshots.
     if (curr[S.PULSED] && armament(loadout).support.id === 'emp') {
@@ -816,13 +818,14 @@ function frame(now) {
     health: curr[S.HEALTH], heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     ability: curr[S.ABILITY_T] > 0, damage: 1 - curr[S.HEALTH] / T('health_max'), shielded: !!curr[S.SHIELD],
     repair: repairPhase(curr[S.REPAIR_T]), cloak: myCloak,
+    wind: T('alt_charge_time') > 0 ? curr[S.ALT_CHARGE] : 0, burn: curr[S.BURN],
   });
   if (curr[S.JAMMED] > 0) fx.jam(toChest(spark.copy(pos), classIdx), dt);
 
   if (net) {
     const r = net.remotes(now), live = new Set();
-    for (let i = 0; i < r.length; i += 21) {
-      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering, bot, abilityOn, repairing, primary, secondary, docked, shielded, ability, offensive, support] = r.subarray(i, i + 21);
+    for (let i = 0; i < r.length; i += 23) {
+      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering, bot, abilityOn, repairing, primary, secondary, docked, shielded, ability, offensive, support, wind, burn] = r.subarray(i, i + 23);
       if (docked) continue; // in the hangar: nothing to draw
       let e = remotes.get(id);
       if (e && (e.cls !== cls || e.mech.loadout.primary !== primary || e.mech.loadout.secondary !== secondary || e.mech.loadout.ability !== ability)) {
@@ -854,7 +857,7 @@ function frame(now) {
         grounded: !hovering && Math.abs(e.vel.y) < 1.5, boosting: !!boosting, hovering: !!hovering, health,
         ability: !!abilityOn, damage: 1 - health / classValue(cls, 'health_max'), shielded: !!shielded,
         repair: repairPhase(e.repairAt === null ? 0 : (now - e.repairAt) / 1000 + 1e-3, cls),
-        cloak: e.hidden ? CLOAK_HIDDEN : e.cloaked ? CLOAK_SEEN : 0, hidden: e.hidden,
+        cloak: e.hidden ? CLOAK_HIDDEN : e.cloaked ? CLOAK_SEEN : 0, hidden: e.hidden, wind, burn,
       });
       if (now - (e.beamAt ?? -Infinity) < BEAM_HOLD) fx.mend(id + 1, e.mech.launcher.getWorldPosition(beamFrom), e.beamTo, dt);
       if (now < (e.jammedUntil ?? 0) && !e.hidden) fx.jam(toChest(spark.copy(e.pos), cls), dt);
@@ -943,6 +946,19 @@ function frame(now) {
       if (b === myId) tookHit(a, now, from);
       else if (b >= 0) remotes.get(b)?.mech.hit();
     }
+    if (kind === 11) {
+      // A melee strike landing on b, or b slammed into a wall by the throw: a heavy, close impact.
+      blastAt.set(x, y, z);
+      fx.explosion(blastAt, 0.4);
+      fx.muzzleLight(blastAt);
+      sound.blast(3, blastAt, 0.5);
+      if (a === myId) {
+        hits.push({ at: now, kill: false });
+        sound.hitConfirm();
+      }
+      if (b === myId) tookHit(a, now);
+      else remotes.get(b)?.mech.hit();
+    }
     if (kind === 7 && a === myId) {
       // We hit a turret: a hit marker, and a kill's once it's wrecked.
       hits.push({ at: now, kill: b > 0 });
@@ -1000,7 +1016,7 @@ function frame(now) {
     if (look === 'rail') fx.beam(shot.from, new THREE.Vector3(x + vx * ahead, y + vy * ahead, z + vz * ahead));
     // A shell or grenade whose velocity jumps between frames has bounced: it clanks, as hard as the
     // jump (one that stops dead, a mine sticking, doesn't).
-    if (!primary && shot.vel) {
+    if ((!primary || look === 'shell') && shot.vel) {
       const jump = shot.vel.distanceTo(vel);
       if (jump > BOUNCE_JUMP && vel.length() > 1) sound.clank(p, jump, item);
     }
@@ -1013,6 +1029,8 @@ function frame(now) {
   debug.endShells(live);
   fx.projectiles(drawn, dt);
   jets.push(...objectives.exhausts());
+  // Pile drivers' boosters roar through a punch.
+  for (const m of [me, ...[...remotes.values()].map((e) => e.mech)]) if (m.jet) jets.push({ x: m.jet.x, y: m.jet.y, z: m.jet.z, big: true });
   sound.exhausts(jets);
   drawOrbs(now, dt, alive, myTeam);
   drawSmoke(dt);
@@ -1115,7 +1133,8 @@ function frame(now) {
   sound.cockpit({
     alive, heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     hull: curr[S.HEALTH] / T('health_max'), repairing: repairPhase(curr[S.REPAIR_T]), jammed: curr[S.JAMMED] > 0, beaming: !!curr[S.BEAM],
-    spin: curr[S.SPIN], charge: curr[S.CHARGE], incoming,
+    // A pile driver's booster spools up like the Gatling's barrels.
+    spin: Math.max(curr[S.SPIN], T('alt_charge_time') > 0 ? curr[S.ALT_CHARGE] : 0), charge: curr[S.CHARGE], incoming,
     lock: curr[S.LOCK] > 0 ? Math.min(curr[S.LOCK_T] / Math.max(T('alt_lock_time'), 1e-6), 1) : 0,
   }, dt);
   // A jump pad fires as a mech leaves it upward: a pulse on the pad and a thump.
@@ -1623,7 +1642,8 @@ function drawGlass(now, myTeam) {
       unit: curr[S.LOCK] - 1, progress: Math.min(curr[S.LOCK_T] / Math.max(T('alt_lock_time'), 1e-6), 1),
       left: T('alt_lock_time') + T('alt_lock_hold') - curr[S.LOCK_T], // s the lock holds once made
     } : null,
-    windup: T('charge_time') > 0 ? curr[S.CHARGE] : T('spin_up') > 0 ? curr[S.SPIN] : 0,
+    seek: curr[S.SEEK] > 0 ? curr[S.SEEK] - 1 : null,
+    windup: T('alt_charge_time') > 0 && curr[S.ALT_CHARGE] > 0 ? curr[S.ALT_CHARGE] : T('charge_time') > 0 ? curr[S.CHARGE] : T('spin_up') > 0 ? curr[S.SPIN] : 0,
     // The cone the next shot lands in (base spread plus bloom) as a fraction of the half-height,
     // and a slow primary's refire, 0 to 1 (null for fast guns and spinning ones).
     spread: Math.tan(THREE.MathUtils.degToRad(T('spread_deg') + curr[S.BLOOM])) / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)),

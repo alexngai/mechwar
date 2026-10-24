@@ -435,6 +435,48 @@ const KITS = {
     pod.userData.loaded = [put(pod, cyl(0, 0.15, 0.32, warheadMat), 0, 0.05, -1.6, -ALONG_Z)]; // warhead
     return put(pod, new THREE.Object3D(), 0, 0.05, -1.65);
   } },
+  // A grenade rifle: a revolving drum of chambers, hazard-striped rounds in each, under a short,
+  // wide barrel out of a receiver.
+  hail: { home: 'B', build(pod, m) {
+    pod.add(box(0.55, 0.6, 1.0, m.pods)); // receiver
+    put(pod, cyl(0.3, 0.3, 0.45, m.trim), 0, -0.25, -0.6, ALONG_Z); // drum
+    for (let k = 0; k < 6; k++) {
+      const a = (k / 6) * Math.PI * 2;
+      put(pod, cyl(0.07, 0.07, 0.47, m.hazard), Math.cos(a) * 0.2, -0.25 + Math.sin(a) * 0.2, -0.6, ALONG_Z); // a round in its chamber
+    }
+    put(pod, cyl(0.14, 0.16, 1.0, m.barrels), 0, 0.05, -1.2, ALONG_Z); // barrel
+    put(pod, cyl(0.19, 0.19, 0.12, m.trim), 0, 0.05, -1.7, ALONG_Z); // muzzle ring
+    return put(pod, new THREE.Object3D(), 0, 0.05, -1.8);
+  } },
+  // A homing rocket's single launch tube, banded, under the tracker whose eye marks what the rockets
+  // turn toward.
+  talon: { home: 'B', build(pod, m) {
+    pod.add(box(0.55, 0.6, 1.0, m.pods));
+    put(pod, cyl(0.15, 0.15, 1.3, m.barrels), 0, 0.05, -0.85, ALONG_Z); // launch tube
+    put(pod, cyl(0.19, 0.19, 0.12, m.hazard), 0, 0.05, -1.2, ALONG_Z); // band
+    put(pod, cyl(0.19, 0.19, 0.1, m.trim), 0, 0.05, -1.5, ALONG_Z); // muzzle collar
+    put(pod, box(0.18, 0.16, 0.3, m.trim), 0, 0.42, -0.45); // tracker
+    put(pod, box(0.1, 0.06, 0.04, m.accent), 0, 0.42, -0.61); // its eye
+    return put(pod, new THREE.Object3D(), 0, 0.05, -1.55);
+  } },
+  // A pile driver: a spike on a ram (`userData.ram`, driven out by `launch`) out of a housing,
+  // under the booster rocket that throws it, whose throat glows as it spools up
+  // (`userData.charge`) and whose bell (`userData.exhaust`) burns through a punch.
+  piston: { home: 'B', bore: [0, -0.05], build(pod, m) {
+    pod.add(box(0.6, 0.65, 1.3, m.pods)); // housing
+    put(pod, cyl(0.22, 0.22, 0.14, m.hazard), 0, -0.05, -0.68, ALONG_Z); // hazard collar at its mouth
+    const ram = put(pod, new THREE.Group(), 0, -0.05, -0.6);
+    put(ram, cyl(0.11, 0.11, 0.8, m.trim), 0, 0, -0.3, ALONG_Z); // ram rod
+    put(ram, cyl(0.24, 0.24, 0.18, m.barrels), 0, 0, -0.75, ALONG_Z); // ram head
+    put(ram, cyl(0, 0.2, 0.7, m.barrels), 0, 0, -1.2, -ALONG_Z); // spike
+    put(pod, cyl(0.2, 0.2, 1.1, m.trim), 0, 0.5, -0.1, ALONG_Z); // booster motor along the top
+    put(pod, cyl(0.23, 0.23, 0.12, m.hazard), 0, 0.5, -0.55, ALONG_Z); // its band
+    put(pod, cyl(0.3, 0.2, 0.3, m.barrels), 0, 0.5, 0.6, ALONG_Z); // bell, wide at the back
+    const glow = hot(new THREE.MeshBasicMaterial({ color: COILS_COLD }));
+    put(pod, cyl(0.18, 0.18, 0.05, glow), 0, 0.5, 0.74, ALONG_Z); // its throat
+    Object.assign(pod.userData, { ram, charge: glow, exhaust: put(pod, new THREE.Object3D(), 0, 0.5, 0.8) });
+    return put(ram, new THREE.Object3D(), 0, 0, -1.55);
+  } },
   // A long, slim barrel between two rails out of a pod, under a scope: a long-range shot.
   spindle: { home: 'B', build(pod, m) {
     pod.add(box(0.5, 0.55, 1.1, m.pods));
@@ -733,8 +775,9 @@ export class Mech {
    * Pose from sim state: { pos, yaw, pitch, scale, vel, grounded, boosting, hovering, health,
    * heat (0-1), overheated, ability (on), damage (0 full health to 1), repair (0 none, wind-up
    * fraction, 1 healing), cloak (how faint camouflage shows it, 0 for not hidden), hidden (an
-   * enemy's camouflage: a veil, not a ghost) }. Also emits
-   * thruster, footstep, smoke, spark and death effects.
+   * enemy's camouflage: a veil, not a ghost), wind and burn (a pile driver's wind-up, and its
+   * booster burning through a punch, 0-1) }. Also emits thruster, footstep, smoke, spark and death
+   * effects, and sets `jet` to where a punch's booster burns (null while it doesn't).
    */
   update(dt, s) {
     this.t += dt;
@@ -909,6 +952,22 @@ export class Mech {
       this.fx = look ? QUIET : this.realFx;
     }
     if (look) look.opacity = s.cloak * (0.75 + 0.25 * Math.sin(this.t * 6));
+
+    // A pile driver: its booster's throat glows as it spools up, white-hot through a punch, which
+    // burns flame out of the bell (others' punches start with their swing); the ram rides back in.
+    const kit = this.arms[1].userData, burn = alive ? s.burn ?? 0 : 0;
+    this.jet = null;
+    if (kit.ram) {
+      if (!this.own && burn > 0 && !(this.burnt > 0)) this.launch();
+      this.burnt = burn;
+      kit.charge.color.lerpColors(COILS_COLD, COILS_HOT, burn > 0 ? 1 : alive ? s.wind ?? 0 : 0);
+      this.ramOut = damp(this.ramOut ?? 0, 0, 5, dt);
+      kit.ram.position.z = -0.6 - 0.7 * this.ramOut;
+      if (burn > 0 && !look) {
+        this.jet = kit.exhaust.getWorldPosition(new THREE.Vector3());
+        this.fx.thrust(this.jet, flame.set(0, 0, 1).transformDirection(this.arms[1].matrixWorld), 1.2 + burn, dt);
+      }
+    }
   }
 
   /** Drone over the backpack: rises with the wind-up, then circles and beams while healing. */
@@ -953,10 +1012,13 @@ export class Mech {
 
   /** Secondary fire leaving the launcher (or `from`, as in `fire`): a flash and a puff of flame and smoke. */
   launch(from = null) {
-    const tip = from ?? this.launcher.getWorldPosition(world);
-    this.fx.burst(tip, flame.set(0, 0.3, -1).normalize().applyQuaternion(this.root.quaternion));
+    // A pile driver's booster lights from its bell, back, and drives the ram out.
+    const { exhaust } = this.arms[1].userData;
+    const tip = exhaust ? exhaust.getWorldPosition(world) : from ?? this.launcher.getWorldPosition(world);
+    this.fx.burst(tip, exhaust ? flame.set(0, 0, 1).transformDirection(this.arms[1].matrixWorld) : flame.set(0, 0.3, -1).normalize().applyQuaternion(this.root.quaternion));
     this.fx.muzzleLight(tip, this.own);
     Mech.audio?.launch(this.weapons.secondary.sound, this.own ? null : tip);
+    if (exhaust) this.ramOut = 1;
   }
 
   /**

@@ -22,7 +22,7 @@ use crate::siege::{self, Siege};
 use crate::progress::{self, Tally};
 use crate::projectile::{self, Projectile};
 use crate::weapon;
-use crate::{Arena, Arsenal, DT, Loadout, Map, Mech, MechClass, Slot, TICK_HZ, Tuning, Vector, aim_ray, hit_shape, spawn_mech, step_mech};
+use crate::{Arena, Arsenal, DT, Loadout, Map, Mech, MechClass, Slot, TICK_HZ, Tuning, Vector, aim_ray, hit_shape, melee, spawn_mech, step_mech};
 
 pub const TEAM_SIZE: usize = 4;
 pub const MAX_PLAYERS: usize = 2 * TEAM_SIZE;
@@ -185,6 +185,19 @@ struct Player {
     /// Tick the ability's on at the latest: its duration from the tick it was used, and
     /// ABILITY_SLACK.
     ability_until: u32,
+    /// The last throw by a melee strike it took.
+    knock: Option<Knock>,
+}
+
+/// A throw by a melee strike (`melee.rs`): who threw, with which secondary (for kill credit),
+/// until when another throw goes half as far and hitting a wall counts as a slam, and whether
+/// its slam is spent (it slammed, or came down first).
+#[derive(Clone, Copy, Debug)]
+struct Knock {
+    by: u8,
+    index: u8,
+    until: u32,
+    slammed: bool,
 }
 
 /// What dealt damage, for counting kills by weapon.
@@ -382,6 +395,7 @@ impl Game {
             level: 0,
             ledger: Vec::new(),
             ability_until: 0,
+            knock: None,
             bot,
         });
         self.roster_version += 1;
@@ -630,6 +644,15 @@ impl Game {
                 let t = self.arsenal.of(&p.mech);
                 let was = p.mech.ability_time;
                 step_mech(&self.arena, t, &mut p.mech, &msg.input);
+                if p.mech.launched && t.alt_melee > 0.0 {
+                    // At foes where its client saw them, its newest snapshot's, as it predicted the lunge.
+                    let (mut m, team) = (p.mech, p.team);
+                    let seen = (msg.view_tick + crate::client::INTERP_TICKS).min(self.tick as f32);
+                    let foes: Vec<Mech> = self.players.iter().filter(|q| q.team != team).filter_map(|q| Some(Mech { pos: rewind(&q.history, seen)?, ..q.mech })).collect();
+                    melee::lunge(&self.arena, t, &mut m, foes.iter().map(|q| (self.arsenal.of(q), q)));
+                    self.players[i].mech = m;
+                }
+                let p = &mut self.players[i];
                 if p.mech.ability_time > was {
                     p.ability_until = self.tick + secs(p.mech.ability_time + ABILITY_SLACK);
                 }
@@ -637,7 +660,7 @@ impl Game {
                     projectile::detonate(p.id, self.projectiles.iter_mut().map(|f| &mut f.p));
                 }
                 let mut shells = Vec::new();
-                if p.mech.launched {
+                if p.mech.launched && t.alt_melee <= 0.0 {
                     projectile::cap(t, p.id, self.projectiles.iter_mut().map(|f| &mut f.p));
                     shells = projectile::volley(t, &p.mech, p.id, msg.seq);
                 }
@@ -675,13 +698,19 @@ impl Game {
                 if self.players[i].mech.beaming {
                     self.beam(i);
                 }
-                if self.arsenal.of(&self.players[i].mech).alt_lock_time > 0.0 {
+                let t = self.arsenal.of(&self.players[i].mech);
+                if t.alt_lock_time > 0.0 || t.shot_turn > 0.0 {
                     let team = self.players[i].team;
                     let mut chests = self.chests(|q| q.team != team && !cloaked(q));
                     chests.extend(deploy::targets(&self.deployables, items(&self.arsenal), |d| d.team != team));
                     let t = self.arsenal.of(&self.players[i].mech).clone();
                     projectile::track(&self.arena, &t, &mut self.players[i].mech, &chests);
+                    projectile::seek(&self.arena, &t, &mut self.players[i].mech, &chests);
                 }
+                if self.players[i].mech.strike > 0.0 {
+                    self.strike(i, msg.view_tick);
+                }
+                self.slam(i);
             }
         }
 
@@ -710,7 +739,7 @@ impl Game {
         // ponytail: no rewind, so shooters lead by their ping; fast-forward new projectiles by
         // half the shooter's RTT if hits feel late.
         let mut flying = std::mem::take(&mut self.projectiles);
-        let mut bursts = Vec::new();
+        let (mut bursts, mut pierced) = (Vec::new(), Vec::new());
         let sizes = items(&self.arsenal);
         let mut chests = self.chests(|q| !cloaked(q));
         chests.extend(deploy::targets(&self.deployables, sizes, |_| true));
@@ -722,12 +751,24 @@ impl Game {
                     .map(|q| (self.arsenal.of(&q.mech), &q.mech))
             };
             let t = projectile::tuning_for(self.arsenal.get(f.p.class, f.p.loadout), &f.p);
+            // A seeking primary's shots go for whatever its owner marks now.
+            if f.p.primary && t.shot_turn > 0.0 {
+                f.p.target = self.players.iter().find(|q| q.id == f.p.owner).map_or(0, |q| q.mech.seek);
+            }
             if let Some(&(_, goal)) = chests.iter().find(|(id, _)| f.p.target == id + 1) {
                 projectile::home(&t, &mut f.p, goal);
             }
+            // A piercing shell passes the domes and barriers in its way, wearing each it goes into.
+            let (pierce, owner) = (!f.p.primary && t.alt_pierce > 0.5, f.p.owner);
             let burst = projectile::fly(&self.arena, &t, &mut f.p, |ray, max| {
                 let dome = deploy::stops(&self.deployables, sizes, ray, max);
-                let turret = deploy::first_turret(&self.deployables, sizes, f.team, ray, dome.unwrap_or(max)).map(|(_, toi)| toi);
+                let turret = deploy::first_turret(&self.deployables, sizes, f.team, ray, if pierce { max } else { dome.unwrap_or(max) }).map(|(_, toi)| toi);
+                if pierce {
+                    let reach = turret.unwrap_or(max);
+                    let mech = projectile::first_mech(ray, reach, enemies());
+                    pierced.extend(deploy::pierced(&self.deployables, sizes, f.team, ray, mech.unwrap_or(reach)).map(|k| (k, t.alt_damage, owner)));
+                    return mech.or(turret);
+                }
                 let max = turret.or(dome).unwrap_or(max);
                 projectile::first_mech(ray, max, enemies()).or(turret).or(dome)
             });
@@ -740,6 +781,9 @@ impl Game {
             }
         });
         self.projectiles = flying;
+        for (k, damage, owner) in pierced {
+            self.wear(k, damage, owner);
+        }
         for (p, team, at) in bursts {
             self.burst(p, team, at);
         }
@@ -1003,6 +1047,63 @@ impl Game {
         }
     }
 
+    /// Player `i`'s melee strike while it can land (`Mech::strike`): the nearest enemy it reaches,
+    /// as it saw them (rewound to `view_tick`, as for shots), takes the blow and is thrown along
+    /// its facing; a strike lands once.
+    fn strike(&mut self, i: usize, view_tick: f32) {
+        let (striker, team, striker_id) = (self.players[i].mech, self.players[i].team, self.players[i].id);
+        if striker.health <= 0.0 {
+            self.players[i].mech.strike = 0.0;
+            return;
+        }
+        let t = self.arsenal.of(&striker);
+        let view = view_tick.clamp(self.tick as f32 - MAX_REWIND_TICKS, self.tick as f32);
+        let nearest = self
+            .players
+            .iter()
+            .enumerate()
+            .filter(|(_, q)| q.team != team && q.mech.shield <= 0.0)
+            .filter_map(|(j, q)| {
+                let then = Mech { pos: rewind(&q.history, view)?, ..q.mech };
+                Some((j, melee::reaches(&self.arena, t, &striker, self.arsenal.of(&q.mech), &then)?))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        let Some((j, _)) = nearest.filter(|_| matches!(self.phase, Phase::Playing { .. })) else { return };
+        // As wound and boosted when it was let go.
+        let damage = t.alt_damage * melee::power(t, striker.strike_charge) * ability::damage_mult(t, &Mech { boosted: striker.strike_boosted, ..striker });
+        let tv = self.arsenal.of(&self.players[j].mech);
+        let (juggled, index) = (self.players[j].knock.is_some_and(|k| self.tick < k.until), striker.loadout.secondary);
+        let speed = melee::throw_speed(t, striker.strike_charge, tv.mech_mass) * if juggled { 0.5 } else { 1.0 };
+        let until = self.tick + secs(melee::KNOCK_SECONDS);
+        let chest = self.players[j].mech.pos + Vector::Y * (tv.mech_height * 0.5);
+        self.players[i].mech.strike = 0.0;
+        let victim = &mut self.players[j];
+        melee::throw(&mut victim.mech, melee::facing(&striker), speed);
+        victim.knock = Some(Knock { by: striker_id, index, until, slammed: false });
+        self.events.push(Event::Strike { owner: striker_id, hit: victim.id, pos: chest });
+        self.apply_damage_by(Some(i), j, damage, Cause::Weapon { slot: Slot::Secondary, index });
+    }
+
+    /// Player `i`, thrown by a strike lately, hitting a wall hard while still riding the throw:
+    /// the slam hurts it, as a blow from whoever threw it.
+    fn slam(&mut self, i: usize) {
+        let p = &self.players[i];
+        let Some(k) = p.knock.filter(|k| !k.slammed && self.tick < k.until) else { return };
+        if p.mech.slam <= melee::SLAM_SPEED {
+            // Down, or out of the throw's arc another way, with no wall: no slam from it later.
+            if !p.mech.pad_arc {
+                self.players[i].knock = Some(Knock { slammed: true, ..k });
+            }
+            return;
+        }
+        let damage = (p.mech.slam - melee::SLAM_SPEED) * melee::SLAM_DAMAGE;
+        let (id, pos) = (p.id, p.mech.pos + Vector::Y * (self.arsenal.of(&p.mech).mech_height * 0.5));
+        self.players[i].knock = Some(Knock { slammed: true, ..k });
+        self.events.push(Event::Strike { owner: k.by, hit: id, pos });
+        let by = self.players.iter().position(|q| q.id == k.by);
+        self.apply_damage_by(by, i, damage, Cause::Weapon { slot: Slot::Secondary, index: k.index });
+    }
+
     /// Splash from projectile `p` (fired by `team`) bursting at `at` (or smoke, from a Pall), and
     /// its Blast event.
     fn burst(&mut self, p: Projectile, team: u8, at: Vector) {
@@ -1031,8 +1132,10 @@ impl Game {
             let to = deploy::gun(sizes, d) - at;
             deploy::stops(&self.deployables, sizes, &Ray::new(at, to.normalize_or_zero()), to.length()).is_some()
         };
+        // A piercing shell wore the domes and barriers it went through already.
+        let pierce = !p.primary && t.alt_pierce > 0.5;
         let wrecks: Vec<(usize, f32)> = (self.deployables.iter().enumerate())
-            .filter(|(_, d)| d.team != team && d.hull > 0.0)
+            .filter(|(_, d)| d.team != team && d.hull > 0.0 && !(pierce && matches!(d.kind, Kind::Dome | Kind::Barrier)))
             .map(|(k, d)| {
                 let damage = if matches!(d.kind, Kind::Dome | Kind::Barrier) {
                     projectile::blast(&t, p.primary, deploy::gap(sizes, d, at))
@@ -2326,6 +2429,99 @@ mod tests {
             game.step();
         }
         assert!(game.deployables.is_empty(), "the dome outlived its time");
+    }
+
+    /// A Medium with the pile driver at `from` and an enemy of `class` at `to`, on blockout with
+    /// no bots and their shields down.
+    fn duel(class: MechClass, from: Vector, to: Vector) -> (Game, u8, u8) {
+        let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
+        game.bots = false;
+        let [striker, victim] = [0, 1];
+        for at in [from, to] {
+            let id = game.join().unwrap();
+            game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = at;
+        }
+        game.pick(striker, MechClass::B, Loadout::named("pike", "piston"));
+        game.pick(victim, class, Loadout::of(class));
+        unshield(&mut game);
+        (game, striker, victim)
+    }
+
+    /// Winds `striker`'s pile driver fully facing `yaw`, lets go, and steps on `after` s, the
+    /// victim stepping (idle) all along so it flies when thrown.
+    fn wind_and_strike(game: &mut Game, striker: u8, victim: u8, yaw: f32, after: f32) {
+        let aim = Input { yaw, ..Input::default() };
+        let wind = game.arsenal.of(&mech(game, striker)).alt_charge_time;
+        for k in 0..secs(wind) + 1 + secs(after) {
+            send(game, striker, Input { alt_fire: k <= secs(wind), ..aim });
+            send(game, victim, Input::default());
+            game.step();
+        }
+    }
+
+    #[test]
+    fn pile_drivers_lunge_strike_and_throw_lights_farther_than_heavies() {
+        let mut thrown = Vec::new();
+        for class in [MechClass::A, MechClass::C] {
+            // 14 m apart (about 11 m between hulls), the enemy dead ahead: the release lunges first.
+            let (mut game, striker, victim) = duel(class, Vector::new(0.0, 0.1, 40.0), Vector::new(0.0, 0.1, 26.0));
+            let (max, start) = (game.arsenal.of(&mech(&game, victim)).health_max, mech(&game, victim).pos);
+            wind_and_strike(&mut game, striker, victim, 0.0, 2.0);
+            let t = game.arsenal.of(&mech(&game, striker));
+            assert!(mech(&game, striker).pos.z < 32.0, "didn't lunge: at z {}", mech(&game, striker).pos.z);
+            let dealt = max - mech(&game, victim).health;
+            assert!((dealt - t.alt_damage * t.alt_charge_damage).abs() < 0.01, "a {class:?} took {dealt}");
+            thrown.push(start.z - mech(&game, victim).pos.z);
+        }
+        assert!(thrown[0] > 2.0 * thrown[1] && thrown[1] > 1.0, "a Light went {} m, a Heavy {} m", thrown[0], thrown[1]);
+    }
+
+    #[test]
+    fn a_mech_thrown_into_a_wall_takes_the_slam_too() {
+        // Facing +X, the enemy in reach between us and the east wall (its inner face at x = 50).
+        let (mut game, striker, victim) = duel(MechClass::B, Vector::new(41.0, 0.1, 0.0), Vector::new(45.5, 0.1, 0.0));
+        let max = game.arsenal.of(&mech(&game, victim)).health_max;
+        wind_and_strike(&mut game, striker, victim, -std::f32::consts::FRAC_PI_2, 1.0);
+        let t = game.arsenal.of(&mech(&game, striker));
+        let dealt = max - mech(&game, victim).health;
+        assert!(dealt > t.alt_damage * t.alt_charge_damage + 5.0, "took {dealt}, no more than the strike");
+    }
+
+    #[test]
+    fn rail_slugs_punch_through_domes_and_barriers_wearing_them() {
+        for support in ["dome", "barrier"] {
+            let (mut game, owner, enemy) = standoff(support);
+            game.pick(enemy, MechClass::B, Loadout::named("pike", "spindle"));
+            unshield(&mut game);
+            let aim = aim_at(&game, owner, enemy);
+            send(&mut game, owner, Input { emp: true, ..aim });
+            game.step();
+            let (hull, max) = (game.deployables[0].hull, game.arsenal.of(&mech(&game, owner)).health_max);
+            let slug = game.arsenal.of(&mech(&game, enemy)).alt_damage;
+            // Pulled and let go: the slug fires on the release.
+            let rail = |game: &mut Game| {
+                for alt_fire in [true, false, false, false] {
+                    let aim = aim_at(game, enemy, owner);
+                    send(game, enemy, Input { alt_fire, ..aim });
+                    game.step();
+                }
+            };
+            rail(&mut game);
+            assert!(mech(&game, owner).health < max, "the {support} stopped the slug");
+            assert!((game.deployables[0].hull - (hull - slug)).abs() < 1e-3, "the {support} took {} of {slug}", hull - game.deployables[0].hull);
+            // Through the whole dome, in one side and out the other, wears it once more.
+            if support == "dome" {
+                let (dome, hp) = (game.deployables[0].pos, mech(&game, owner).health);
+                for (id, x) in [(owner, 16.0), (enemy, -20.0)] {
+                    let p = game.players.iter_mut().find(|p| p.id == id).unwrap();
+                    (p.mech.pos, p.mech.alt_wait) = (dome + Vector::new(x, 0.0, 0.0), 0.0);
+                }
+                game.step();
+                rail(&mut game);
+                assert!(mech(&game, owner).health < hp, "missed the owner behind the dome");
+                assert!((game.deployables[0].hull - (hull - 2.0 * slug)).abs() < 1e-3, "the dome took {} of {slug} passing through", hull - slug - game.deployables[0].hull);
+            }
+        }
     }
 
     #[test]

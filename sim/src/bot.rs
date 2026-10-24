@@ -397,6 +397,8 @@ enum AltUse {
     Release,
     /// Fed by heat: fired once the mech runs hot (`alt_heat_fed`).
     HeatFed,
+    /// Wound up near the target, then let go to lunge and strike (`alt_melee`).
+    Melee,
 }
 
 fn alt_use(t: &Tuning) -> AltUse {
@@ -406,6 +408,8 @@ fn alt_use(t: &Tuning) -> AltUse {
         AltUse::Lock
     } else if t.alt_heat_fed > 0.0 {
         AltUse::HeatFed
+    } else if t.alt_melee > 0.0 {
+        AltUse::Melee
     } else if t.alt_release > 0.0 {
         AltUse::Release
     } else {
@@ -414,27 +418,35 @@ fn alt_use(t: &Tuning) -> AltUse {
 }
 
 /// The distance a bot carrying `t` likes to fight at: where its primary still hits hard (a
-/// projectile's, where its flight is still short enough to lead).
+/// projectile's, where its flight is still short enough to lead and well short of its fuse).
 fn preferred_range(t: &Tuning) -> f32 {
-    let reach = if t.shot_speed > 0.0 { t.weapon_range.min(0.6 * t.shot_speed) } else { t.falloff_start.min(t.weapon_range) };
+    let reach = if t.shot_speed > 0.0 {
+        let fused = if t.shot_fuse > 0.0 { 0.8 * t.shot_speed * t.shot_fuse } else { t.weapon_range };
+        t.weapon_range.min(0.6 * t.shot_speed).min(fused)
+    } else {
+        t.falloff_start.min(t.weapon_range)
+    };
     reach.clamp(10.0, 60.0)
 }
 
-/// Engagement band around the preferred range: close in beyond `.1`, back off inside `.0`.
+/// Engagement band around the preferred range: close in beyond `.1`, back off inside `.0`. A
+/// pile driver's carrier fights inside its lunge.
 fn band(t: &Tuning) -> (f32, f32) {
-    let r = preferred_range(t);
+    let r = if alt_use(t) == AltUse::Melee { preferred_range(t).min(t.alt_lunge) } else { preferred_range(t) };
     (0.6 * r, 1.4 * r)
 }
 
 /// Guardrails on a random build: a repair torch wants a gun that reaches well past its beam (it
-/// heals from behind the fight), a heat-fed launcher a gun that runs hot enough to feed it, and a
-/// rail gun more than a shotgun's reach to share its fight with.
+/// heals from behind the fight), a heat-fed launcher a gun that runs hot enough to feed it, a
+/// rail gun more than a shotgun's reach to share its fight with, and a pile driver a gun that
+/// fights close enough to get it in reach.
 fn sensible(t: &Tuning) -> bool {
     let heat_per_s = t.heat_per_shot * t.burst.max(1.0) * t.fire_rate;
     match alt_use(t) {
         AltUse::Beam => preferred_range(t) >= 30.0,
         AltUse::HeatFed => heat_per_s >= 20.0,
         AltUse::Release => preferred_range(t) >= 25.0,
+        AltUse::Melee => preferred_range(t) <= 30.0,
         _ => true,
     }
 }
@@ -873,9 +885,11 @@ impl Bot {
                 && match use_ {
                     AltUse::Beam => dist < t.alt_beam,
                     AltUse::HeatFed => me.heat >= 0.6 * t.heat_max && dist < 0.8 * t.alt_speed * t.alt_fuse,
+                    // A pile driver let go at 85% wound carries that far.
+                    AltUse::Melee => dist < 0.85 * t.alt_lunge + 2.0 * t.mech_radius,
                     _ => dist < if t.alt_gravity > 0.0 { MORTAR_RANGE } else { 0.8 * t.alt_speed * t.alt_fuse } && dist > t.alt_radius + 2.0,
                 };
-            let alt_cool = use_ == AltUse::HeatFed || (!me.overheated && me.heat + t.alt_heat < t.heat_max);
+            let alt_cool = matches!(use_, AltUse::HeatFed | AltUse::Melee) || (!me.overheated && me.heat + t.alt_heat < t.heat_max);
             // Otherwise a grenade takes the aim the same way, every few seconds while charges last.
             let grenade = t.thrown(Item::Grenade);
             let throw = !alt
@@ -886,17 +900,20 @@ impl Bot {
                 && dist > t.grenade_radius + 2.0;
             // A turret goes down as a fight starts (the first tick it's in view), or to help hold a perch.
             let turret = me.grenades > 0 && matches!(Item::of(me.loadout, true), Item::MgTurret | Item::RocketTurret) && (self.seen.len() == 1 || self.perched(nav, me));
-            let shell = if alt && use_ != AltUse::Beam { Some(t) } else if throw { Some(&grenade) } else { None };
+            let shell = if alt && !matches!(use_, AltUse::Beam | AltUse::Melee) { Some(t) } else if throw { Some(&grenade) } else { None };
             // Shells are led by their flight time, and so are projectile primaries.
             let primary_lead = if t.shot_speed > 0.0 { dist / t.shot_speed } else { 0.0 };
             let lead = shell.map_or(primary_lead, |s| dist / s.alt_speed);
             let (yaw, mut pitch) = look_at(eye, chest + target.vel * lead);
+            // Range d on flat ground: sin(2θ) = g d / v². A shell lobs along that arc; a dropping
+            // projectile primary aims that much over the target.
             if let Some(s) = shell
                 && s.alt_gravity > 0.0
             {
-                // Range d on flat ground: sin(2θ) = g d / v².
                 let r = (s.alt_gravity * flat(chest - eye).length() / (s.alt_speed * s.alt_speed)).min(1.0);
                 pitch = 0.5 * asinf(r) - s.alt_loft_deg.to_radians();
+            } else if shell.is_none() && t.shot_gravity > 0.0 && t.shot_speed > 0.0 {
+                pitch += 0.5 * asinf((t.shot_gravity * flat(chest - eye).length() / (t.shot_speed * t.shot_speed)).min(1.0));
             }
             let (want_yaw, want_pitch) = (yaw + self.wobble.0, pitch + self.wobble.1);
             let new_yaw = me.yaw + wrap(want_yaw - me.yaw).clamp(-max_turn, max_turn);
@@ -957,13 +974,14 @@ impl Bot {
             };
             // A charged gun charges while it holds (on target or not) and lets go once full and
             // on target; a rail gun is pressed one tick and let go the next; a lock-on launcher
-            // locks first, then fires once the lock holds.
+            // locks first, then fires once the lock holds; a pile driver winds up, then lets go.
             let fire = shell.is_none() && !self.cooling && if t.charge_time > 0.0 { !(on_target && me.charge >= 0.85) } else { on_target };
             let alt_fire = alt
                 && alt_cool
                 && match use_ {
                     AltUse::Lock => me.lock != 0 && me.lock_time >= t.alt_lock_time,
                     AltUse::Release => on_target && !me.alt_held,
+                    AltUse::Melee => !(on_target && me.alt_charge >= 0.85),
                     _ => on_target,
                 };
             return Input {
@@ -1656,7 +1674,7 @@ mod tests {
         let (primaries, secondaries) = arsenal.counts();
         // Every way of working a secondary is in play, each read off a weapon's stats.
         let uses: Vec<AltUse> = (0..secondaries as u8).map(|s| alt_use(build(&arsenal, 0, s))).collect();
-        for want in [AltUse::Shell, AltUse::Beam, AltUse::Lock, AltUse::Release, AltUse::HeatFed] {
+        for want in [AltUse::Shell, AltUse::Beam, AltUse::Lock, AltUse::Release, AltUse::HeatFed, AltUse::Melee] {
             assert!(uses.contains(&want), "no secondary works as {want:?}");
         }
         // Shotguns like it close; something likes it far off.

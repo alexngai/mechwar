@@ -11,7 +11,7 @@ use crate::objective::ZoneState;
 use crate::siege::SiegeNet;
 use crate::progress::MatchXp;
 use crate::projectile::{self, Id, Projectile};
-use crate::{Arena, Arsenal, DT, Input, Loadout, Map, Mech, MechClass, Slot, Tuning, Vector, collide, map, step_mech, weapon};
+use crate::{Arena, Arsenal, DT, Input, Loadout, Map, Mech, MechClass, Slot, Tuning, Vector, collide, map, melee, step_mech, weapon};
 
 /// Remote mechs are drawn this many ticks behind the newest snapshot, to ride out jitter.
 pub const INTERP_TICKS: f32 = 3.0;
@@ -155,7 +155,7 @@ impl NetClient {
         self.predict(&input);
         // Only the first prediction of an input fires; reconciliation replays never do.
         let (t, m) = (self.arsenal.of(&self.mech), &self.mech);
-        if let (true, Some(id)) = (m.launched, self.id) {
+        if let (true, Some(id)) = (m.launched && t.alt_melee <= 0.0, self.id) {
             projectile::cap(t, id, &mut self.projectiles);
             self.projectiles.extend(projectile::volley(t, m, id, self.seq));
         }
@@ -181,13 +181,14 @@ impl NetClient {
         if let (true, Some(id)) = (self.mech.alt_pressed, self.id) {
             projectile::detonate(id, &mut self.projectiles);
         }
-        // Lock-on, against enemies (and their turrets) where they were last seen.
+        // Lock-on and a seeking primary's mark, against enemies (and their turrets) where they were last seen.
         let t = self.arsenal.of(&self.mech);
-        if t.alt_lock_time > 0.0 {
+        if t.alt_lock_time > 0.0 || t.shot_turn > 0.0 {
             let mut chests: Vec<_> = self.obstacles.iter().filter(|(_, team, m)| *team != self.team && m.health > 0.0 && !ability::on(m, Ability::Cloak)).map(|(id, _, m)| (*id, m.pos + Vector::Y * (self.arsenal.of(m).mech_height * 0.5))).collect();
             chests.extend(deploy::targets(self.deployables(), t, |d| d.team != self.team));
             let t = t.clone();
             projectile::track(&self.arena, &t, &mut self.mech, &chests);
+            projectile::seek(&self.arena, &t, &mut self.mech, &chests);
         }
         if self.mech.beaming {
             let others = self.obstacles.iter().filter(|(_, _, m)| m.health > 0.0).map(|(id, _, m)| (*id, self.arsenal.of(m), m));
@@ -199,10 +200,13 @@ impl NetClient {
         net::encode(&ClientMsg::Input(InputMsg { seq: self.seq, input, view_tick: self.render_tick(now_ms) }))
     }
 
-    /// One predicted step: move, then get blocked by other mechs where we last saw them.
+    /// One predicted step: move (lunging at enemies where we last saw them), then get blocked by
+    /// other mechs there.
     fn predict(&mut self, input: &Input) {
         let t = self.arsenal.of(&self.mech);
         step_mech(&self.arena, t, &mut self.mech, input);
+        let foes = self.obstacles.iter().filter(|(_, team, _)| *team != self.team).map(|(_, _, m)| (self.arsenal.of(m), m));
+        melee::lunge(&self.arena, t, &mut self.mech, foes);
         for (_, _, other) in &self.obstacles {
             let mut other = *other;
             collide::separate(&self.arena, t, &mut self.mech, self.arsenal.of(&other), &mut other, 1.0);
@@ -212,17 +216,22 @@ impl NetClient {
     /// Flies own projectiles one tick against the arena, and enemies and their domes as last seen.
     fn fly_own(&mut self) {
         let domes = self.snapshots.back().map_or(&[][..], |s| &s.deployables);
-        let (arsenal, arena, obstacles, team) = (&self.arsenal, &self.arena, &self.obstacles, self.team);
+        let (arsenal, arena, obstacles, team, seek) = (&self.arsenal, &self.arena, &self.obstacles, self.team, self.mech.seek);
         let (burst, blasts, mut bomblets) = (&mut self.burst, &mut self.blasts, Vec::new());
         self.projectiles.retain_mut(|p| {
             let enemies = || obstacles.iter().filter(|(_, t, m)| *t != team && m.health > 0.0).map(|(_, _, m)| (arsenal.of(m), m));
             let t = projectile::tuning_for(arsenal.get(p.class, p.loadout), p);
+            // A seeking primary's shots go for whatever we mark now.
+            if p.primary && t.shot_turn > 0.0 {
+                p.target = seek;
+            }
             let mech = obstacles.iter().find(|(id, _, m)| p.target == id + 1 && !ability::on(m, Ability::Cloak)).map(|(_, _, m)| m.pos + Vector::Y * (arsenal.of(m).mech_height * 0.5));
             if let Some(goal) = mech.or_else(|| deploy::targets(domes, &t, |_| true).find(|(id, _)| p.target == id + 1).map(|(_, at)| at)) {
                 projectile::home(&t, p, goal);
             }
+            let pierce = !p.primary && t.alt_pierce > 0.5;
             let hit = projectile::fly(arena, &t, p, |ray, max| {
-                let dome = deploy::stops(domes, &t, ray, max);
+                let dome = if pierce { None } else { deploy::stops(domes, &t, ray, max) };
                 let turret = deploy::first_turret(domes, &t, team, ray, dome.unwrap_or(max)).map(|(_, toi)| toi);
                 projectile::first_mech(ray, turret.or(dome).unwrap_or(max), enemies()).or(turret).or(dome)
             });
@@ -405,7 +414,7 @@ impl NetClient {
                         }
                     }
                 }
-                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } | Event::TurretShot { .. } | Event::TurretHit { .. } | Event::Captured { .. } | Event::Missile { .. } | Event::Ship { .. } => self.events.push(*e),
+                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } | Event::TurretShot { .. } | Event::TurretHit { .. } | Event::Strike { .. } | Event::Captured { .. } | Event::Missile { .. } | Event::Ship { .. } => self.events.push(*e),
             }
         }
         self.snapshots.push_back(s);
@@ -449,6 +458,9 @@ impl NetClient {
             let t = projectile::tuning_for(self.arsenal.get(r.p.class, r.p.loadout), &r.p);
             // A homing shell turns toward its target as it last stood (or as we stand, if it's us),
             // unless camouflage hides it.
+            // ponytail: a seeking primary's replay keeps the mark it launched with, since the
+            // owner's later marks aren't sent; its Blast puts it right. Send `seek` in `MechView`
+            // if replays visibly curve the wrong way.
             let us = self.id.map(|id| (id, self.team, self.mech));
             let goal = self.obstacles.iter().chain(us.iter()).find(|(id, _, m)| r.p.target == id + 1 && !ability::on(m, Ability::Cloak)).map(|(_, _, m)| m.pos + Vector::Y * (self.arsenal.of(m).mech_height * 0.5));
             let turrets = self.snapshots.back().map_or(&[][..], |s| &s.deployables);

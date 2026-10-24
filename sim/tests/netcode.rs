@@ -788,9 +788,13 @@ fn bots_use_secondaries() {
     let mut launched = [false; 3];
     for _ in 0..(30.0 * TICK_HZ) as u32 {
         game.step();
-        for e in game.snapshot(human).events {
-            if let Event::Launch(p) = e {
-                launched[p.class.index()] = true;
+        let snap = game.snapshot(human);
+        for e in &snap.events {
+            // A pile driver launches nothing: its strikes count.
+            match *e {
+                Event::Launch(p) => launched[p.class.index()] = true,
+                Event::Strike { owner, .. } => snap.players.iter().filter(|q| q.id == owner).for_each(|q| launched[q.class.index()] = true),
+                _ => {}
             }
         }
     }

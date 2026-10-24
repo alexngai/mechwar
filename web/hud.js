@@ -122,9 +122,11 @@ export class Hud {
       g.fillText(name, t.x, t.y - s - 10 * u);
       g.textBaseline = 'top';
       g.fillText(`${Math.round(t.dist)} m${t.status ? ` · ${t.status}` : ''}`, t.x, t.y + s + 4 * u);
-      // Lock-on: a diamond closing in as the lock builds, white and labeled once it holds.
-      if (f.lock?.unit === t.unit) {
-        const locked = f.lock.progress >= 1, d = s * (1.3 + 1.6 * (1 - f.lock.progress));
+      // Lock-on: a diamond closing in as the lock builds, white and labeled once it holds. A
+      // seeking primary's mark, what its rockets turn toward, is the diamond closed, in amber.
+      const locking = f.lock?.unit === t.unit;
+      if (locking || f.seek === t.unit) {
+        const progress = locking ? f.lock.progress : 1, locked = locking && progress >= 1, d = s * (1.3 + 1.6 * (1 - progress));
         g.strokeStyle = g.fillStyle = locked ? '#ffffff' : AMBER;
         g.lineWidth = 1.5 * u;
         g.beginPath();

@@ -55,7 +55,7 @@ pub fn volley(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Vec<Projectile> {
         .enumerate()
         .map(|(n, ray)| Projectile {
             owner, seq, n: n as u8, primary: true, class: m.class, loadout: m.loadout, charge: m.shot_charge, boosted: m.boosted,
-            target: 0, pos: ray.origin, vel: ray.dir * speed, age: 0.0,
+            target: m.seek, pos: ray.origin, vel: ray.dir * speed, age: 0.0,
         })
         .collect()
 }

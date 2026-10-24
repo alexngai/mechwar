@@ -27,7 +27,7 @@ fn mech_state(m: &Mech) -> Vec<f32> {
         m.bloom, m.fire_wait,
         f32::from(m.lock), m.lock_time,
         b(m.beaming), m.beam_end.x, m.beam_end.y, m.beam_end.z,
-        b(m.shield > 0.0), b(m.limpet),
+        b(m.shield > 0.0), b(m.limpet), f32::from(m.seek), m.alt_charge, crate::melee::burn(m),
     ]
 }
 
@@ -320,9 +320,10 @@ impl WasmNetClient {
         ray_distance(self.0.arena(), [ox, oy, oz], [dx, dy, dz], max)
     }
 
-    /// Twenty-one floats per remote mech: id, team, class, feet xyz, yaw, pitch, health, boosting, hovering, bot,
+    /// Twenty-three floats per remote mech: id, team, class, feet xyz, yaw, pitch, health, boosting, hovering, bot,
     /// ability on, repairing, primary, secondary, docked (in the hangar: not drawn), shielded, ability (an
-    /// index into weapons.json's abilities), offensive and support item.
+    /// index into weapons.json's abilities), offensive and support item, and a pile driver's wind-up
+    /// and booster burn (0-1).
     pub fn remotes(&self, now: f64) -> Vec<f32> {
         let b = |v: bool| if v { 1.0 } else { 0.0 };
         self.0
@@ -330,7 +331,7 @@ impl WasmNetClient {
             .iter()
             .flat_map(|p| {
                 let v = &p.view;
-                [f32::from(p.id), f32::from(p.team), p.class.index() as f32, v.pos.x, v.pos.y, v.pos.z, v.yaw, v.pitch, v.health, b(v.boosting), b(v.hovering), b(p.bot), b(v.ability), b(v.repairing), f32::from(p.loadout.primary), f32::from(p.loadout.secondary), b(p.docked), b(v.shielded), f32::from(p.loadout.ability), f32::from(p.loadout.offensive), f32::from(p.loadout.support)]
+                [f32::from(p.id), f32::from(p.team), p.class.index() as f32, v.pos.x, v.pos.y, v.pos.z, v.yaw, v.pitch, v.health, b(v.boosting), b(v.hovering), b(p.bot), b(v.ability), b(v.repairing), f32::from(p.loadout.primary), f32::from(p.loadout.secondary), b(p.docked), b(v.shielded), f32::from(p.loadout.ability), f32::from(p.loadout.offensive), f32::from(p.loadout.support), v.wind, v.burn]
             })
             .collect()
     }
@@ -342,9 +343,9 @@ impl WasmNetClient {
     /// EMP (kind 4): a = owner, b = bitmask of the ids it jammed, xyz = where. Beam (kind 5): a =
     /// owner, b = id it's on or -1, xyz = where it stops. Captured (kind 8): a = zone, b = team.
     /// Missile (kind 9): a = silo, b = the team that fired it. Ship (kind 10): a = team, b = 1
-    /// launched, 0 down. Turret round (kind 6): a = the MG
-    /// turret's owner, b = hit id or -1, xyz = where it stopped. Turret hit (kind 7): a = who hit
-    /// it, b = 1 if that wrecked it.
+    /// launched, 0 down. Turret round (kind 6): a = the MG turret's owner, b = hit id or -1, xyz =
+    /// where it stopped. Turret hit (kind 7): a = who hit it, b = 1 if that wrecked it. Strike
+    /// (kind 11): a = striker, b = who it hit (or slammed), xyz = where.
     pub fn take_events(&mut self) -> Vec<f32> {
         let mut out = Vec::new();
         for e in std::mem::take(&mut self.0.events) {
@@ -360,6 +361,7 @@ impl WasmNetClient {
                 Event::Captured { zone, team } => out.extend([8.0, f32::from(zone), f32::from(team), 0.0, 0.0, 0.0]),
                 Event::Missile { silo, team } => out.extend([9.0, f32::from(silo), f32::from(team), 0.0, 0.0, 0.0]),
                 Event::Ship { team, up } => out.extend([10.0, f32::from(team), if up { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0]),
+                Event::Strike { owner, hit, pos } => out.extend([11.0, f32::from(owner), f32::from(hit), pos.x, pos.y, pos.z]),
                 // The client turns these into the blasts and hits below.
                 Event::Launch(_) | Event::Blast { .. } => {}
             }

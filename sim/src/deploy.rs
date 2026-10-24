@@ -20,7 +20,7 @@
 //! `sentry_owner`), manned like MG turrets, but part of the base: not shot, nor locked onto.
 
 use rapier3d::parry::query::RayCast;
-use rapier3d::prelude::{Capsule, Collider, ColliderBuilder, ColliderHandle, Pose, Ray, Rotation};
+use rapier3d::prelude::{Capsule, Collider, ColliderBuilder, ColliderHandle, Pose, QueryFilter, Ray, Rotation};
 use serde::{Deserialize, Serialize};
 
 use crate::bot::{look_at, wrap};
@@ -272,6 +272,37 @@ impl Arena {
             self.world.detect_collisions(&(), &());
         }
     }
+
+    /// Like `cast_ray_normal`, but through barriers: what a piercing shell meets.
+    pub fn cast_past_barriers(&self, ray: &Ray, max: f32) -> Option<(f32, Vector)> {
+        let past = |h: ColliderHandle, _: &Collider| !self.barriers.iter().any(|&(_, b)| b == h);
+        let hit = self.world.query_pipeline_with_filter(QueryFilter::default().predicate(&past)).cast_ray_and_get_normal(ray, max, true);
+        hit.map(|(_, hit)| (hit.time_of_impact, hit.normal))
+    }
+
+}
+
+/// The other side's (than `team`) standing domes and barriers that a piercing shell flying `ray`
+/// (a unit direction) for `max` goes into from outside: their indices in `list`. Only going in
+/// counts, so a shell wears each once, however its ticks straddle it.
+pub fn pierced<'a>(list: &'a [Deployable], t: &'a Tuning, team: u8, ray: &'a Ray, max: f32) -> impl Iterator<Item = usize> + 'a {
+    list.iter().enumerate().filter(move |(_, d)| d.team != team && d.hull > 0.0).filter_map(move |(k, d)| {
+        let entered = match d.kind {
+            Kind::Dome => {
+                let (to, r) = (ray.origin - d.pos, t.dome_radius);
+                let b = to.dot(ray.dir);
+                let disc = b * b - (to.length_squared() - r * r);
+                let toi = -b - disc.max(0.0).sqrt();
+                to.length_squared() > r * r && disc >= 0.0 && (0.0..=max).contains(&toi) && ray.point_at(toi).y >= d.pos.y
+            }
+            Kind::Barrier => {
+                let wall = d.wall(t);
+                !wall.shape().contains_point(wall.position(), ray.origin) && wall.shape().cast_ray(wall.position(), ray, max, true).is_some()
+            }
+            _ => false,
+        };
+        entered.then_some(k)
+    })
 }
 
 #[cfg(test)]
