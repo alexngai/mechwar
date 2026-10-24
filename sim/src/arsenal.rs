@@ -219,6 +219,12 @@ pub fn fits(class: MechClass, slot: Slot, index: u8) -> bool {
     slot.list(weapons_json()).get(usize::from(index)).is_some_and(|w| w["classes"].as_array().is_none_or(|c| c.iter().any(|k| k == class.key())))
 }
 
+/// Whether mech `key` (`A`, `B`, `C`) starts with `id` unlocked beyond its own (classes.json's
+/// `unlocked`).
+pub fn starts_unlocked(key: &str, id: &str) -> bool {
+    classes_json()[key]["unlocked"].as_array().is_some_and(|ids| ids.iter().any(|u| u == id))
+}
+
 /// The unlock price of the weapon, item or ability with id `id` (0 for none).
 pub fn price(id: &str) -> u32 {
     Slot::ALL.iter().flat_map(|s| s.list(weapons_json())).find(|w| w["id"] == id).and_then(|w| w["unlock"].as_u64()).map_or(0, |p| p as u32)

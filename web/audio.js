@@ -651,6 +651,29 @@ export class Sound {
     this.tone(out, 'sine', 300, 600, 0.05, 0.7, 0.08, 0.05);
   }
 
+  /** A dome or barrier powering down at its end: its hum sagging away under a soft fizz. */
+  fieldDown(pos) {
+    const out = this.voice(pos, 0.9, undefined, 0.3);
+    if (!out) return;
+    this.growl(out, 'sawtooth', 240, 45, 700, 0.01, 0.8, 0.12);
+    this.tone(out, 'sine', 600, 180, 0.01, 0.6, 0.08);
+    this.noise(out, 'white', 'highpass', 4000, 1500, 0.02, 0.5, 0.06);
+  }
+
+  /** A dome or barrier shot through: a glassy crash, its hum cut off in a zap, a thump, and tinkling. */
+  shatter(pos) {
+    const out = this.voice(pos, 1.2, undefined, 0.4);
+    if (!out) return;
+    this.noise(out, 'white', 'highpass', 2500, 6000, 0.002, 0.45, 0.45);
+    this.noise(out, 'white', 'bandpass', 3000, 1200, 0.002, 0.25, 0.3, 3);
+    this.tone(out, 'sawtooth', 900, 60, 0.002, 0.35, 0.16);
+    this.tone(out, 'sine', 140, 40, 0.003, 0.4, 0.5);
+    for (let k = 0; k < 6; k++) {
+      const f = 1800 + Math.random() * 2400;
+      this.tone(out, 'triangle', f, f * 0.97, 0.002, 0.15 + Math.random() * 0.25, 0.05, 0.03 + Math.random() * 0.5);
+    }
+  }
+
   /** A repair orb dropped: a soft rising chime. */
   salve(pos) {
     const out = this.voice(pos, 0.8);

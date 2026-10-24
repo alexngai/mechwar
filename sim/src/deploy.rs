@@ -1,16 +1,18 @@
 //! Deployables: what a mech puts down to stay a while. From its support slot, the shield dome
 //! and the barrier; from its offensive slot, the MG and rocket turrets. The server owns them: it
 //! places them when the item's used (`place`), carries them in snapshots, mans the turrets
-//! (game.rs), and clears them when they expire or, a turret, are shot down. A mech has at most
-//! one of each kind out.
+//! (game.rs), and clears them when they expire or are shot down. A mech has at most one of each
+//! kind out.
 //!
 //! A dome stops every shot crossing its surface, either way and whichever side fired it
 //! (`stops`): hitscan, projectiles, splash and beams alike. Shots inside it hit, so the way to get
 //! someone under one is to walk in after them; mechs walk through. A barrier is a wall in
 //! the arena itself (`Arena::set_barriers`), blocking movement and shots for everyone, so clients
-//! add it to their own arenas from snapshots and predict against it like any wall. A turret is a
-//! tripod gun that trains on the nearest enemy it can see (`train`) and fires at it; mechs walk
-//! through it, and the other side's shots hit it (`first_turret`).
+//! add it to their own arenas from snapshots and predict against it like any wall. Either one's
+//! hull wears down under the other side's shots that land on it (`struck`) and blasts near it
+//! (`gap`), till it breaks. A turret is a tripod gun that trains on the nearest enemy it can see
+//! (`train`) and fires at it; mechs walk through it, and the other side's shots hit it
+//! (`first_turret`).
 //!
 //! A Siege battleship is one too (`Kind::Ship`, owned by no player: see `ship_owner`), so it's
 //! shot, locked onto and fought like a turret, and guns mechs down like an MG turret; `siege.rs`
@@ -81,7 +83,7 @@ pub struct Deployable {
     /// points along it and `pitch`.
     pub yaw: f32,
     pub pitch: f32,
-    /// What's left to shoot off it: a turret's hull, infinite for the rest.
+    /// What's left to shoot off it.
     pub hull: f32,
     /// Ticks it went down at, and goes at.
     pub placed: u32,
@@ -126,8 +128,8 @@ pub fn place<'a>(arena: &Arena, t: &Tuning, m: &Mech, kind: Kind, team: u8, owne
         m.pos + dir * wall
     };
     let (at, seconds, hull) = match kind {
-        Kind::Dome => (m.pos, t.dome_seconds, f32::INFINITY),
-        Kind::Barrier => (ahead(t.barrier_distance, t.barrier_thickness * 0.5 + 0.1), t.barrier_seconds, f32::INFINITY),
+        Kind::Dome => (m.pos, t.dome_seconds, t.dome_hull),
+        Kind::Barrier => (ahead(t.barrier_distance, t.barrier_thickness * 0.5 + 0.1), t.barrier_seconds, t.barrier_hull),
         Kind::MgTurret | Kind::RocketTurret => (ahead(t.turret_distance, t.turret_radius + 0.1), t.turret_seconds, t.turret_hull),
         Kind::Ship | Kind::Sentry => unreachable!("ships are launched and base guns built, not put down"),
     };
@@ -205,6 +207,20 @@ pub fn train(t: &Tuning, d: &mut Deployable, goal: Vector) -> bool {
     wrap(yaw - d.yaw).abs() < ON_TARGET && (pitch - d.pitch).abs() < ON_TARGET
 }
 
+/// How far `at` is from dome or barrier `d`'s surface (0 inside a barrier).
+pub fn gap(t: &Tuning, d: &Deployable, at: Vector) -> f32 {
+    if d.kind == Kind::Dome {
+        return ((at - d.pos).length() - t.dome_radius).abs();
+    }
+    let wall = d.wall(t);
+    wall.shape().distance_to_point(wall.position(), at, true)
+}
+
+/// The standing dome or barrier of another side than `team` that a shot stopping at `at` landed on.
+pub fn struck(list: &[Deployable], t: &Tuning, team: u8, at: Vector) -> Option<usize> {
+    list.iter().position(|d| matches!(d.kind, Kind::Dome | Kind::Barrier) && d.team != team && d.hull > 0.0 && gap(t, d, at) < 0.01)
+}
+
 /// `list` with `d` added, in place of any of its owner's of the same kind.
 pub fn add(list: &mut Vec<Deployable>, d: Deployable) {
     list.retain(|e| (e.owner, e.kind) != (d.owner, d.kind));
@@ -231,12 +247,14 @@ pub fn stops(list: &[Deployable], t: &Tuning, ray: &Ray, max: f32) -> Option<f32
 }
 
 impl Arena {
-    /// Makes the barriers in `list` walls of the arena, and clears those that have gone.
+    /// Makes the barriers in `list` walls of the arena, and clears those that have gone (a
+    /// barrier is its owner's and placement tick: its hull wearing down doesn't change the wall).
     pub fn set_barriers(&mut self, t: &Tuning, list: &[Deployable]) {
         let walls: Vec<&Deployable> = list.iter().filter(|d| d.kind == Kind::Barrier).collect();
+        let same = |a: &Deployable, b: &Deployable| (a.owner, a.placed) == (b.owner, b.placed);
         let (world, before) = (&mut self.world, self.barriers.len());
         self.barriers.retain(|(had, handle)| {
-            let keep = walls.iter().any(|d| *d == had);
+            let keep = walls.iter().any(|d| same(d, had));
             if !keep {
                 world.remove_collider(*handle);
             }
@@ -244,7 +262,7 @@ impl Arena {
         });
         let mut changed = self.barriers.len() != before;
         for d in walls {
-            if !self.barriers.iter().any(|(had, _)| had == d) {
+            if !self.barriers.iter().any(|(had, _)| same(had, d)) {
                 let handle: ColliderHandle = self.world.insert_collider(d.wall(t), None);
                 self.barriers.push((*d, handle));
                 changed = true;

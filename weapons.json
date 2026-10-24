@@ -107,22 +107,22 @@
   ],
   "offensive": [
     { "id": "grenade", "name": "Tumbler", "unlock": 0, "desc": "A frag grenade, lobbed: it bounces about, then bursts" },
-    { "id": "limpet", "name": "Limpet", "unlock": 2, "desc": "A remote mine: thrown, it sticks where it lands, and G again sets it off; one down at a time" },
+    { "id": "limpet", "name": "Limpet", "unlock": 2, "desc": "A remote mine: thrown, it sticks where it lands, and Q again sets it off; one down at a time" },
     { "id": "smoke", "name": "Pall", "unlock": 1, "desc": "A smoke grenade: bursts into a cloud 16 m wide that hides whoever's in or behind it for 10 s" },
-    { "id": "mg_turret", "name": "MG turret", "unlock": 2, "desc": "A tripod gun set down ahead for 20 s: it fires short bursts at the nearest enemy it sees within 40 m, until its 25 hull is shot off" },
-    { "id": "rocket_turret", "name": "Rocket turret", "unlock": 3, "desc": "A tripod launcher set down ahead for 20 s: a rocket every 2 s at the nearest enemy it sees within 60 m, until its 25 hull is shot off" }
+    { "id": "mg_turret", "name": "MG turret", "unlock": 2, "desc": "A tripod gun set down ahead for 20 s: it fires short bursts at the nearest enemy it sees within 30 m, until its 25 hull is shot off" },
+    { "id": "rocket_turret", "name": "Rocket turret", "unlock": 3, "desc": "A tripod launcher set down ahead for 20 s: a rocket every 2 s at the nearest enemy it sees within 45 m, until its 25 hull is shot off" }
   ],
   "support": [
     { "id": "emp", "name": "Brownout", "unlock": 0, "desc": "An EMP around you: drains enemies' fuel and jams their boost" },
     { "id": "orb", "name": "Salve", "unlock": 2, "desc": "Drops a repair orb at your feet, like a wreck's, that only your side can heal from" },
-    { "id": "dome", "name": "Shield dome", "unlock": 2, "desc": "A half-sphere 21 m across around you for 6 s: no shot crosses it either way, whoever fires it, so to hit someone under it you have to walk in; mechs walk through" },
-    { "id": "barrier", "name": "Barrier", "unlock": 2, "desc": "Raises a wall 16 m wide and 8 m tall, 4 m ahead across your aim, for 8 s: nothing gets through, either way" }
+    { "id": "dome", "name": "Shield dome", "unlock": 2, "desc": "A half-sphere 21 m across around you for 4 s, or until enemy fire wears off its 150 hull: no shot crosses it either way, whoever fires it, so to hit someone under it you have to walk in or break it; mechs walk through" },
+    { "id": "barrier", "name": "Barrier", "unlock": 2, "desc": "Raises a wall 8 m wide and 8 m tall, 4 m ahead across your aim, for 5 s, or until enemy fire wears off its 200 hull: nothing gets through, either way" }
   ],
   "abilities": [
     { "id": "slipstream", "name": "Speed boost", "unlock": 0, "classes": ["A"], "desc": "Refills the fuel tank, then 4 s of boost that burns no fuel and runs 25% faster" },
     { "id": "vent", "name": "Vent", "unlock": 0, "classes": ["B"], "desc": "Dump all heat at once, even when overheated" },
     { "id": "brace", "name": "Bulwark", "unlock": 0, "classes": ["C"], "desc": "5 s of 40% less damage and 25% more speed on foot, but no boost" },
-    { "id": "cloak", "name": "Camouflage", "unlock": 2, "classes": ["A"], "desc": "Up to 10 s all but invisible: no tag, no radar contact, and turrets and bots can't see you. Firing or using an item drops it" },
+    { "id": "cloak", "name": "Camouflage", "unlock": 2, "classes": ["A"], "desc": "Up to 6 s all but invisible: no tag, no radar contact, and turrets and bots can't see you. Firing or using an item drops it" },
     { "id": "power", "name": "Power shot", "unlock": 2, "classes": ["A", "B"], "desc": "Your next shot or volley within 6 s deals 50% more damage (a burst, all of it)" },
     { "id": "barrage", "name": "Barrage", "unlock": 2, "classes": ["B", "C"], "desc": "5 s of 25% more damage from everything you fire or throw" },
     { "id": "artillery", "name": "Artillery", "unlock": 2, "classes": ["C"], "desc": "6 s of blasts 30% wider and 10% harder, from everything you fire or throw" }

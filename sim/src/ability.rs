@@ -1,6 +1,7 @@
 //! Abilities: one per mech on F, picked like a weapon from weapons.json's `abilities`, each
-//! fitting only the classes it lists. Using one starts its cooldown and, for most, a spell
-//! (`Mech::ability_time`) it stays on for. `step_mech` runs them, so the client predicts them like
+//! fitting only the classes it lists. Using one starts, for most, a spell (`Mech::ability_time`)
+//! it stays on for, and its cooldown counts down once that ends (by its time, or early: a Power
+//! shot spent, Camouflage dropped). A mech spawns with its ability ready. `step_mech` runs them, so the client predicts them like
 //! fuel; what they do to others (Bulwark's cut, boosted damage, a mech hidden) is the server's.
 //!
 //! - Speed boost refills fuel, then boost burns none and runs faster. Vent dumps all heat at once.
@@ -88,12 +89,17 @@ pub fn damage_mult(t: &Tuning, m: &Mech) -> f32 {
     if m.boosted { Ability::of(m.loadout).boost(t).0 } else { 1.0 }
 }
 
-/// One tick of `m`'s ability before it moves: the cooldown and spell run down, and `press` off
-/// cooldown uses it.
+/// One tick of `m`'s ability before it moves: the spell runs down, then the cooldown, and `press`
+/// off cooldown uses it.
 pub(crate) fn step(t: &Tuning, m: &mut Mech, press: bool) {
     let ability = Ability::of(m.loadout);
-    m.ability_time = (m.ability_time - DT).max(0.0);
-    m.ability_cooldown = (m.ability_cooldown - DT).max(0.0);
+    // Half a tick of slack, as items' charges have, so each ends on a whole tick despite float sums.
+    let down = |left: f32| if left - DT < DT * 0.5 { 0.0 } else { left - DT };
+    if m.ability_time > 0.0 {
+        m.ability_time = down(m.ability_time);
+    } else {
+        m.ability_cooldown = down(m.ability_cooldown);
+    }
     if press && m.ability_cooldown <= 0.0 {
         (m.ability_cooldown, m.ability_time) = ability.timing(t);
         match ability {
@@ -183,6 +189,37 @@ mod tests {
         assert!((ratio - t.artillery_radius_mult).abs() < 1e-4, "radius x{ratio}");
         let ratio = projectile::tuning_for(&t, &boosted).alt_damage / projectile::tuning_for(&t, &plain).alt_damage;
         assert!((ratio - t.artillery_damage_mult).abs() < 1e-4, "damage x{ratio}");
+    }
+
+    #[test]
+    fn cooldowns_count_from_when_the_spell_ends() {
+        let t = Tuning::default();
+        let ready = |sim: &Sim| sim.mech.ability_cooldown <= 0.0;
+        // Barrage runs its course, then its whole cooldown.
+        let mut sim = with(MechClass::C, "barrage", "squall");
+        sim.step(&Input { ability: true, ..Input::default() });
+        let mut ticks = 1;
+        while !ready(&sim) {
+            sim.step(&Input::default());
+            ticks += 1;
+        }
+        // The cooldown takes over the tick after the spell ends.
+        let secs = ticks as f32 * DT;
+        assert!((secs - (t.barrage_duration + t.barrage_cooldown + DT)).abs() < DT * 0.5, "ready after {secs} s");
+        // Camouflage dropped early by a shot counts from the shot.
+        let mut sim = with(MechClass::A, "cloak", "stitcher");
+        sim.step(&Input { ability: true, ..Input::default() });
+        for _ in 0..30 {
+            sim.step(&Input::default());
+        }
+        sim.step(&Input { fire: true, ..Input::default() });
+        assert!(!on(&sim.mech, Ability::Cloak));
+        let mut ticks = 0;
+        while !ready(&sim) {
+            sim.step(&Input::default());
+            ticks += 1;
+        }
+        assert!((ticks as f32 * DT - t.cloak_cooldown).abs() <= DT, "ready {} s after the shot", ticks as f32 * DT);
     }
 
     #[test]

@@ -85,8 +85,8 @@ callsign.addEventListener('input', saveCallsign);
 
 // The pilot: level, XP toward the next, and lifetime stats from the stored record.
 const weaponNames = Object.fromEntries(Object.values(weapons).flat().map((w) => [w.id, w.name]));
-// Everything that fits a mech but its own two weapons, two items and ability.
-const unlockable = (key) => Object.values(weapons).flat().filter((w) => fits(key, w)).length - 5;
+// Everything that fits a mech but its own two weapons, two items and ability, and those it starts with.
+const unlockable = (key) => Object.values(weapons).flat().filter((w) => fits(key, w)).length - 5 - (classes[key].unlocked?.length ?? 0);
 function showPilot() {
   const r = readRecord(stored(STORE) ?? '');
   if (!r) {
@@ -103,7 +103,7 @@ function showPilot() {
     <div class="bar"><div style="width: ${r.level < 99 ? (100 * (r.xp - from)) / (to - from) : 100}%"></div></div>
     <dl>${stat('MATCHES', `${s.matches} · ${s.wins} won`)}${stat('PILOTS DOWNED', s.kills)}${stat('DEATHS', s.deaths)}
       ${stat('ASSISTS', s.assists)}${stat('BOTS DOWNED', `${s.bot_kills} · ${s.bot_assists} assists`)}${stat('HEALING', s.healing)}
-      ${stat('UNLOCK POINTS', pointsLeft(r))}${stat('UNLOCKED', ['A', 'B', 'C'].map((k) => `${classes[k].name} ${r.unlocks?.[k]?.length ?? 0}/${unlockable(k)}`).join(' · '))}
+      ${stat('UNLOCK POINTS', pointsLeft(r))}${stat('UNLOCKED', ['A', 'B', 'C'].map((k) => `${classes[k].name} ${(r.unlocks?.[k] ?? []).filter((id) => !classes[k].unlocked?.includes(id)).length}/${unlockable(k)}`).join(' · '))}
       ${stat('TOP WEAPONS', weaponsUsed)}</dl>`;
 }
 showPilot();
