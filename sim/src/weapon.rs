@@ -49,7 +49,7 @@ pub fn in_cone(yaw: f32, pitch: f32, cone: f32, seq: u32, n: u32) -> Vector {
 /// Primary projectiles for this tick's shot, one per pellet ray, flying faster the more it was
 /// charged (and bursting harder and wider: `projectile::tuning_for`).
 pub fn volley(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Vec<Projectile> {
-    let speed = t.shot_speed * (1.0 + (t.charge_speed - 1.0) * m.shot_charge);
+    let speed = speed(t, m.shot_charge);
     pellets(t, m, seq)
         .iter()
         .enumerate()
@@ -58,6 +58,11 @@ pub fn volley(t: &Tuning, m: &Mech, owner: u8, seq: u32) -> Vec<Projectile> {
             target: 0, pos: ray.origin, vel: ray.dir * speed, age: 0.0,
         })
         .collect()
+}
+
+/// How fast a primary projectile fired with `charge` (0-1) flies.
+pub fn speed(t: &Tuning, charge: f32) -> f32 {
+    t.shot_speed * (1.0 + (t.charge_speed - 1.0) * charge)
 }
 
 /// Damage (and heat) multiplier of a shot fired with `charge` (0-1).
