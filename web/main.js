@@ -1244,11 +1244,40 @@ function drawSmoke(dt) {
   heard.clear();
   for (const key of live) heard.add(key);
 }
-// Deployables (sim/src/deploy.rs) in their side's color, fading over their last second: shield
-// domes, translucent half-spheres; barriers, glowing walls; and turrets, tripod guns trained as the
-// server has them. Each hums up as it goes down, and a turret shot down bursts.
+// Deployables (sim/src/deploy.rs) in their side's color: shield domes, translucent half-spheres;
+// barriers, glowing walls; and turrets, tripod guns trained as the server has them. Each hums up as
+// it goes down, and a turret shot down bursts. A dome swells out of a flash (a barrier rises), motes
+// lifting off its foot; it flares when hit, fades as it wears, and shatters when shot
+// through; at its end it flickers, then sinks into the ground with a sagging hum.
 const deployMeshes = { 0: [], 1: [], 2: [], 3: [] }; // by kind: dome, barrier, MG turret, rocket turret
-const deployed = new Map(); // key: [kind, where, seconds left, hull left]
+const deployed = new Map(); // by key: { kind, at, yaw, accent, left, hull, born, hitAt }
+const RISE = 0.35, FALL = 0.4; // s a dome or barrier takes to power up, and to power down at its end
+const easeOut = (t) => 1 - (1 - Math.min(Math.max(t, 0), 1)) ** 3;
+/** Deployable color `hex` as a particle's, from paler to itself. */
+const fieldColor = (hex) => {
+  const c = [(hex >> 16) & 255, (hex >> 8) & 255, hex & 255].map((v) => v / 255);
+  return [c.map((v) => 0.5 + 0.5 * v), c];
+};
+/** `n` random points on dome or barrier `d`'s surface, as { p, n: its outward normal }; `foot`, along its foot only. */
+function fieldPoints(d, n, foot = false) {
+  const points = [];
+  for (let k = 0; k < n; k++) {
+    const p = new THREE.Vector3(), normal = new THREE.Vector3();
+    if (d.kind === 0) {
+      // Uniform over the half-sphere: so is its height.
+      const h = foot ? 0 : Math.random(), a = Math.random() * Math.PI * 2, r = Math.sqrt(1 - h * h);
+      normal.set(Math.cos(a) * r, h, Math.sin(a) * r);
+      p.copy(normal).multiplyScalar(classValue(1, 'dome_radius'));
+    } else {
+      const side = Math.random() < 0.5 ? -1 : 1;
+      normal.set(0, 0, side).applyAxisAngle(THREE.Object3D.DEFAULT_UP, d.yaw);
+      const along = (Math.random() - 0.5) * classValue(1, 'barrier_width'), up = foot ? 0 : Math.random() * classValue(1, 'barrier_height');
+      p.set(along, up, (side * classValue(1, 'barrier_thickness')) / 2).applyAxisAngle(THREE.Object3D.DEFAULT_UP, d.yaw);
+    }
+    points.push({ p: p.add(d.at), n: normal });
+  }
+  return points;
+}
 /** Where each turret's gun is, by `${owner}:${kind}`: rounds and rockets leave from it. */
 const turretGuns = new Map();
 /** A tripod with a head that turns (yaw) holding a gun that tilts (pitch): `head.children[0]`. */
@@ -1276,8 +1305,8 @@ function drawDeployables(now, myTeam) {
   turretGuns.clear();
   for (let i = 0; i < list.length; i += 10) {
     const [kind, team, owner, x, y, z, yaw, pitch, left, hull] = list.subarray(i, i + 10);
-    const key = `${owner}:${kind}:${x},${z}`;
-    if (!deployed.has(key)) sound.deploy({ x, y, z });
+    const key = `${owner}:${kind}:${x},${z}`, was = deployed.get(key);
+    if (!was) sound.deploy({ x, y, z });
     let mesh = deployMeshes[kind][used[kind]++];
     if (!mesh) {
       const color = new THREE.Color(), material = new THREE.MeshBasicMaterial({ color, transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending });
@@ -1296,7 +1325,8 @@ function drawDeployables(now, myTeam) {
       scene.add(mesh);
       deployMeshes[kind].push(mesh);
     }
-    const accent = (team === myTeam || myTeam < 0 ? FRIEND : FOE).accent, fade = Math.min(left, 1);
+    const accent = (team === myTeam || myTeam < 0 ? FRIEND : FOE).accent;
+    const d = { kind, at: new THREE.Vector3(x, y, z), yaw, accent, left, hull, born: was?.born ?? now, hitAt: was && hull < was.hull ? now : (was?.hitAt ?? -1e9) };
     mesh.visible = true;
     mesh.position.set(x, y + (kind === 1 ? classValue(1, 'barrier_height') / 2 : 0), z);
     if (kind >= 2) {
@@ -1307,20 +1337,44 @@ function drawDeployables(now, myTeam) {
       const at = head.getWorldPosition(new THREE.Vector3());
       turretGuns.set(`${owner}:${kind}`, at.add(heading.set(0, Math.sin(pitch), -Math.cos(pitch)).applyAxisAngle(THREE.Object3D.DEFAULT_UP, yaw).multiplyScalar(1.1)));
     } else {
+      if (!was) fx.field(fieldPoints(d, 60, true), fieldColor(accent), false);
+      if (was && was.left >= FALL && left < FALL) sound.fieldDown(d.at);
+      const up = Math.min((now - d.born) / 1000, classValue(1, kind === 0 ? 'dome_seconds' : 'barrier_seconds') - left) / RISE;
+      const rise = Math.max(easeOut(up), 1e-3), sink = Math.max(easeOut(left / FALL), 1e-3);
+      if (kind === 0) {
+        mesh.scale.set(rise, rise * sink, rise);
+      } else {
+        mesh.scale.set(1, rise * sink, 1);
+        mesh.position.y = y + (classValue(1, 'barrier_height') * rise * sink) / 2;
+      }
+      // Bright as it powers up, its lattice flaring when hit (the shell barely, so those inside can
+      // still see out), flickering over its last second, and fainter as fire wears its hull down.
+      const rising = Math.max(1 - up, 0), hit = Math.max(1 - (now - d.hitAt) / 150, 0);
+      const flicker = left < 1 && Math.random() < 0.3 ? 0.4 : 1;
+      const glow = flicker * (0.35 + (0.65 * Math.max(hull, 0)) / classValue(1, kind === 0 ? 'dome_hull' : 'barrier_hull'));
       mesh.rotation.y = yaw;
       mesh.material.color.setHex(accent);
-      mesh.material.opacity = (kind === 0 ? 0.16 : 0.3) * fade * (0.9 + 0.1 * Math.sin(now / 90));
+      mesh.material.opacity = (kind === 0 ? 0.16 : 0.3) * glow * (1 + 1.5 * rising + 0.3 * hit) * (0.9 + 0.1 * Math.sin(now / 90));
       mesh.children[0].material.color.setHex(accent);
-      mesh.children[0].material.opacity = 0.6 * fade;
+      mesh.children[0].material.opacity = 0.6 * glow * (1 + 1.5 * rising + 1.2 * hit);
     }
-    live.set(key, [kind, mesh.position.clone().setY(y + 1), left, hull]);
+    live.set(key, d);
   }
-  // A damaged turret gone before its time was shot down.
-  for (const [key, [kind, at, left, hull]] of deployed) {
-    if (kind >= 2 && left > 0.5 && hull < classValue(1, 'turret_hull') && !live.has(key)) {
-      fx.explosion(at, 0.6);
-      sound.blast(3, at);
+  for (const [key, d] of deployed) {
+    if (live.has(key)) continue;
+    const wreck = d.at.clone().setY(d.at.y + 1);
+    if (d.kind >= 2) {
+      // A damaged turret gone before its time was shot down.
+      if (d.left > 0.5 && d.hull < classValue(1, 'turret_hull')) {
+        fx.explosion(wreck, 0.6);
+        sound.blast(3, wreck);
+      }
+      continue;
     }
+    // A damaged dome or barrier gone before its time was shot through; else it's sunk away.
+    const broke = d.left > 0.2 && d.hull < classValue(1, d.kind === 0 ? 'dome_hull' : 'barrier_hull');
+    fx.field(broke ? fieldPoints(d, 160) : fieldPoints(d, 70, true), fieldColor(d.accent), broke);
+    if (broke) sound.shatter(wreck);
   }
   for (const kind of [0, 1, 2, 3]) for (let k = used[kind]; k < deployMeshes[kind].length; k++) deployMeshes[kind][k].visible = false;
   deployed.clear();

@@ -356,6 +356,20 @@ export class Effects {
     }
   }
 
+  /**
+   * A dome or barrier's field at `points` ({ p, n }: on its surface, `n` outward), in `color` (as
+   * a spawn's): `shatter`ed, shards flung out and falling; else motes drifting up off it.
+   */
+  field(points, color, shatter) {
+    for (const { p, n } of points) {
+      if (shatter) {
+        this.glow.spawn(p, scatter(n, rand(4, 10), 3), { life: rand(0.5, 1), size: [rand(0.5, 0.9), 0.1], color, gravity: 14, drag: 0.8 });
+      } else {
+        this.glow.spawn(p, scatter(UP, rand(0.5, 2), 1), { life: rand(0.5, 1), size: [0.5, 0.1], color, drag: 1.5 });
+      }
+    }
+  }
+
   /** A mech's death at scale 1; secondary-fire blasts pass their radius over 5. */
   explosion(p, scale = 1) {
     for (let i = 0; i < 40 * scale; i++) {
