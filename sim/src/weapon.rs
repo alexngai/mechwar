@@ -9,16 +9,18 @@ use crate::ability::{self, Ability};
 use crate::projectile::Projectile;
 use crate::{Arena, Mech, Tuning, Vector, aim_ray, hit_shape};
 
-/// A held beam that misses snaps to a mech this far off the aim (the cosine of the cone's half-angle).
-const BEAM_SNAP_COS: f32 = 0.990_268; // 8 degrees
+/// A held beam bends to a mech this far off the aim (the cosine of the cone's half-angle): wide
+/// enough to keep a teammate mending while the gun's on an enemy.
+const BEAM_SNAP_COS: f32 = 0.866_025; // 30 degrees
 
-/// Where a held beam (`alt_beam`) stops, from the eye along the aim: the first wall, or the
-/// first of `mechs` (id, tuning, mech) in its way, whose id comes back too. Missing them all, it
-/// bends to the one nearest the aim within `BEAM_SNAP_COS`, in reach and clear view, unless cloaked.
+/// Where a held beam (`alt_beam`) stops, and on which of `mechs` (id, tuning, mech), if any. It
+/// holds on the mech it's on (`m.beam_on`) while that's within `BEAM_SNAP_COS` of the aim, in
+/// reach and clear view, and not cloaked. Otherwise it runs from the eye along the aim to the first
+/// wall or mech, or, missing them all, bends to the mech nearest the aim that's in the cone so.
 pub fn beam<'a>(arena: &Arena, t: &Tuning, m: &Mech, mechs: impl IntoIterator<Item = (u8, &'a Tuning, &'a Mech)>) -> (Vector, Option<u8>) {
     let ray = aim_ray(t, m);
     let (mut best, mut hit) = (arena.cast_ray(&ray, t.alt_beam).unwrap_or(t.alt_beam), None);
-    let mut snap: Option<(f32, Vector, u8)> = None; // (cosine off the aim, end, id)
+    let mut snap: Option<((bool, f32), Vector, u8)> = None; // ((held, cosine off the aim), end, id)
     for (id, tq, q) in mechs {
         let (shape, center) = hit_shape(tq, q);
         let pose = Pose::from_translation(center);
@@ -26,18 +28,18 @@ pub fn beam<'a>(arena: &Arena, t: &Tuning, m: &Mech, mechs: impl IntoIterator<It
             (best, hit) = (toi, Some(id));
         }
         let to = (center - ray.origin).normalize_or_zero();
-        let cos = to.dot(ray.dir);
-        if cos > BEAM_SNAP_COS && snap.is_none_or(|s| cos > s.0) && !ability::on(q, Ability::Cloak) {
+        let rank = (m.beam_on == Some(id), to.dot(ray.dir));
+        if rank.1 > BEAM_SNAP_COS && snap.is_none_or(|s| rank > s.0) && !ability::on(q, Ability::Cloak) {
             let bent = Ray::new(ray.origin, to);
             if let Some(toi) = shape.cast_ray(&pose, &bent, t.alt_beam, true)
                 && arena.cast_ray(&bent, toi).is_none()
             {
-                snap = Some((cos, bent.point_at(toi), id));
+                snap = Some((rank, bent.point_at(toi), id));
             }
         }
     }
     match snap {
-        Some((_, end, id)) if hit.is_none() => (end, Some(id)),
+        Some(((held, _), end, id)) if hit.is_none() || held && hit != Some(id) => (end, Some(id)),
         _ => (ray.point_at(best), hit),
     }
 }
@@ -123,11 +125,31 @@ mod tests {
         let mut other = spawn_mech(&t, Vector::new(0.0, 0.1, 20.0));
         let (yaw, pitch) = crate::bot::look_at(me.pos + Vector::Y * t.eye_height, hit_shape(&t, &other).1);
         let at = |other: &Mech, off: f32| beam(&arena, &t, &Mech { yaw: yaw + off.to_radians(), pitch, ..me }, [(1, &t, other)]).1;
-        assert_eq!((at(&other, 0.0), at(&other, 6.0), at(&other, 12.0)), (Some(1), Some(1), None));
+        assert_eq!((at(&other, 0.0), at(&other, 6.0), at(&other, 25.0), at(&other, 35.0)), (Some(1), Some(1), Some(1), None));
         // Not to one cloaked.
         let cloak = (0u8..).find(|&ability| Ability::of(Loadout { ability, ..Loadout::default() }) == Ability::Cloak).unwrap();
         (other.loadout.ability, other.ability_time) = (cloak, 1.0);
         assert_eq!(at(&other, 6.0), None, "found a cloaked mech");
+    }
+
+    #[test]
+    fn beams_hold_on_the_mech_they_are_on() {
+        let arena = Arena::new(&Map::load(Map::index("blockout").unwrap()));
+        let t = Tuning { alt_beam: 28.0, ..Tuning::default() };
+        // A mate 20 m ahead, and an enemy 15 m off 20 degrees to the right of it.
+        let me = spawn_mech(&t, Vector::new(0.0, 0.1, 40.0));
+        let mate = spawn_mech(&t, Vector::new(0.0, 0.1, 20.0));
+        let eye = me.pos + Vector::Y * t.eye_height;
+        let (yaw, pitch) = crate::bot::look_at(eye, hit_shape(&t, &mate).1);
+        let enemy = spawn_mech(&t, me.pos + Vector::new(-(yaw - 20f32.to_radians()).sin(), 0.0, -(yaw - 20f32.to_radians()).cos()) * 15.0);
+        let (eyaw, epitch) = crate::bot::look_at(eye, hit_shape(&t, &enemy).1);
+        let on = |beam_on, yaw, pitch| beam(&arena, &t, &Mech { yaw, pitch, beam_on, ..me }, [(1, &t, &mate), (2, &t, &enemy)]).1;
+        // Aimed at the enemy, the beam's on it, unless it's on the mate already: then it stays.
+        assert_eq!(on(None, yaw, pitch), Some(1));
+        assert_eq!(on(None, eyaw, epitch), Some(2));
+        assert_eq!(on(Some(1), eyaw, epitch), Some(1), "let go of the mate");
+        // Until the mate's out of the cone.
+        assert_eq!(on(Some(1), yaw + 40f32.to_radians(), pitch), None);
     }
 
     #[test]

@@ -1387,7 +1387,7 @@ impl Game {
             (end, hit) = (eye + (end - eye).normalize_or_zero() * toi, None);
         }
         let (owner, team, heal, burn) = (u.id, u.team, t.alt_beam_heal * DT, t.alt_damage * DT * ability::damage_mult(t, &u.mech));
-        self.players[user].mech.beam_end = end;
+        (self.players[user].mech.beam_end, self.players[user].mech.beam_on) = (end, hit);
         self.events.push(Event::Beam { owner, end, hit });
         if let Some(k) = worn(&self.deployables, t, team, None, hit.is_some(), end) {
             self.wear(k, burn, owner);
@@ -2187,7 +2187,9 @@ mod tests {
         assert!((mech(&game, enemy).health - (t.health_max - t.alt_damage * DT)).abs() < 1e-4, "enemy health {}", mech(&game, enemy).health);
         assert!(mech(&game, user).heat > 0.0, "beaming ran cold");
 
-        // Put the teammate there, hurt: it mends, capped at full.
+        // Let go, and put the teammate in the way, hurt: it mends, capped at full.
+        send(&mut game, user, Input { alt_fire: false, ..beam });
+        game.step();
         let p = game.players.iter_mut().find(|p| p.id == mate).unwrap();
         (p.mech.pos, p.mech.health) = (Vector::new(-15.0, 0.1, 24.0), t.health_max - 1.0);
         for _ in 0..secs(1.0) {

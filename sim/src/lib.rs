@@ -207,8 +207,8 @@ pub struct Tuning {
     pub alt_split_radius: f32,
     pub alt_split_speed: f32,
     /// A beam secondary (`alt_beam` > 0, its reach in m) launches nothing: held, it runs from the
-    /// eye along the aim to the first mech or wall (or bends to a mech just off the aim:
-    /// `weapon::beam`), mending a teammate `alt_beam_heal` hp/s or burning an enemy `alt_damage`
+    /// eye along the aim to the first mech or wall (or bends to a mech off the aim, holding on
+    /// one it's on: `weapon::beam`), mending a teammate `alt_beam_heal` hp/s or burning an enemy `alt_damage`
     /// hp/s, for `alt_heat` heat/s.
     pub alt_beam: f32,
     pub alt_beam_heal: f32,
@@ -494,10 +494,11 @@ pub struct Mech {
     /// A limpet of ours is down (or flying), so G sets it off; set on the tick it did.
     pub limpet: bool,
     pub sprung: bool,
-    /// Holding a beam secondary on, and where the beam stopped (set by whoever knows the mechs:
-    /// `weapon::beam`).
+    /// Holding a beam secondary on, where the beam stopped and on whom (set by whoever knows the
+    /// mechs: `weapon::beam`, which holds on that mech while it can).
     pub beaming: bool,
     pub beam_end: Vector,
+    pub beam_on: Option<u8>,
     /// Seconds of shield left, fresh from launching (`spawn_shield`): no damage or jam until it
     /// runs out or the pilot does anything but look around, so a mech can't be spawn camped.
     pub shield: f32,
@@ -677,7 +678,7 @@ impl Sim {
         self.deployables.retain(|d| seq < d.expires);
         self.arena.set_barriers(t, &self.deployables);
         if self.mech.beaming {
-            self.mech.beam_end = weapon::beam(&self.arena, t, &self.mech, []).0;
+            (self.mech.beam_end, self.mech.beam_on) = weapon::beam(&self.arena, t, &self.mech, []);
         }
         if self.mech.shot && t.shot_speed > 0.0 {
             self.projectiles.extend(weapon::volley(t, &self.mech, 0, self.seq));
@@ -983,6 +984,9 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
         m.alt_charge = if input.alt_fire && m.alt_wait <= 0.0 { (wound + DT / t.alt_charge_time).min(1.0) } else { wound };
     }
     m.beaming = beam && input.alt_fire && !m.overheated;
+    if !m.beaming {
+        m.beam_on = None;
+    }
     // Mines go off by themselves: a press lays more, and the middle button bursts all those down.
     m.alt_pressed = if t.alt_stick > 0.5 { input.aux && !m.aux_held } else { input.alt_fire && !m.alt_held && t.alt_release < 0.5 && !beam };
     m.alt_held = input.alt_fire;
