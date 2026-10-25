@@ -219,6 +219,7 @@ def main():
     ap.add_argument('--ideal', action='store_true', help='no aim error, reaction lag or turn cap')
     ap.add_argument('--tweaks', type=json.loads, default={}, help='stat changes, as the arena job takes them (`tuning`, `classes`, `weapons`)')
     ap.add_argument('--z', type=float, default=1.0, help='margin, in standard errors, a child must win its cell by')
+    ap.add_argument('--drills', type=int, default=0, help='seeds per drill: a child plays full matches only if it beats its cell\'s elite at drills (0: no drills)')
     ap.add_argument('--seed', type=int, default=1)
     ap.add_argument('--out', type=Path, default=ROOT / 'balance' / 'out' / 'poc')
     args = ap.parse_args()
@@ -241,6 +242,11 @@ def main():
     for gen in range(args.gens + 1):
         t = time.time()
         children = [mutate(rng.choice(list(archive.values()))['genome'], rng, archive) for _ in range(args.children if gen else 0)]
+        if args.drills and children:
+            # Drills first (cheap): only children ahead of their cell's elite go on to full matches.
+            import drills
+            scores = drills.score({f'c{k}': g for k, g in enumerate(children)} | {f'e:{cell(g)}': archive[cell(g)]['genome'] for g in children}, args.drills, args)
+            children = [g for k, g in enumerate(children) if scores[f'c{k}'][0] > scores[f'e:{cell(g)}'][0]]
         pool = {f'e:{c}': e['genome'] for c, e in archive.items()} | {f'p:{c}': g for c, (g, _) in pending.items()} | {f'c{gen}.{k}': g for k, g in enumerate(children)}
         rows = play(pool, args.appear, gen * 1_000_000, rng, args)
         ratings, _ = rate(rows, list(pool))
@@ -256,7 +262,7 @@ def main():
             if beats(cell(g), m, se) and m > pending.get(cell(g), (None, -math.inf))[1]:
                 pending[cell(g)] = (g, m)
         best = max(archive.items(), key=lambda kv: pooled(kv[1]['history'])[0])
-        say(f'gen {gen:2d}: {len(rows) // 8} matches in {time.time() - t:.0f}s, {len(taken)} cells taken, {len(pending)} challengers, best {best[0]} {pooled(best[1]["history"])[0]:+.2f}')
+        say(f'gen {gen:2d}: {len(rows) // 8} matches in {time.time() - t:.0f}s, {len(children)} children played, {len(taken)} cells taken, {len(pending)} challengers, best {best[0]} {pooled(best[1]["history"])[0]:+.2f}')
         (args.out / 'archive.json').write_text(json.dumps(archive, indent=1))
 
     # Final run, fresh seeds: every champion beside today's bot in its cell.

@@ -416,6 +416,15 @@ impl Game {
         self.add_player(team, Some(bot), class)
     }
 
+    /// Puts player `id` at `pos` facing `toward`, with `hull` of its health and no spawn shield: a
+    /// drill's set-up.
+    pub fn place(&mut self, id: u8, pos: Vector, toward: Vector, hull: f32) {
+        let Some(p) = self.players.iter_mut().find(|p| p.id == id) else { return };
+        let max = self.arsenal.of(&p.mech).health_max;
+        let d = toward - pos;
+        (p.mech.pos, p.mech.yaw, p.mech.pitch, p.mech.health, p.mech.shield) = (pos, libm::atan2f(-d.x, -d.z), 0.0, hull * max, 0.0);
+    }
+
     pub fn leave(&mut self, id: u8) {
         self.players.retain(|p| p.id != id);
         self.roster_version += 1;

@@ -8,7 +8,8 @@
 //! A job: `{"mode": "tdm", "seconds": 120, "skill": 0.5, "ideal": false,
 //!   "genomes": {"base": {}, "x": {"class": "A", "build": {"primary": "pike", ...}, "policy": {...}}},
 //!   "matches": [{"map": "foundry", "seed": 1, "teams": [["x", "base", ...], [...]]}]}`.
-//! A genome without a class takes one at random per seat; without a build, one per life.
+//! A genome without a class takes one at random per seat; without a build, one per life. A
+//! match may set where each seat starts and its hull (`at`, `hull`): a drill.
 //!
 //! Stat tweaks, all optional: `"tuning": {"grenade_radius": 5}` sets tuning.json values (items,
 //! abilities, movement; a class or weapon that sets the same value keeps its own),
@@ -82,6 +83,12 @@ struct Match {
     map: String,
     seed: u64,
     teams: [Vec<String>; 2],
+    /// A drill's set-up, seat by seat (team 0's, then team 1's): where each starts, and with what
+    /// share of its hull (full when left out).
+    #[serde(default)]
+    at: Vec<[f32; 3]>,
+    #[serde(default)]
+    hull: Vec<f32>,
 }
 
 fn main() {
@@ -171,6 +178,15 @@ fn play(job: &Job, mode: Mode, arsenal: &Arsenal, i: usize, m: &Match) -> String
             let id_in_game = game.add_bot(team as u8, bot, class).unwrap_or_else(|| fail("more than four a team"));
             seated.push((id_in_game, team, id.as_str(), class, g.build.clone()));
         }
+    }
+    // Each faces the middle of the other side's spots.
+    let side = |team: usize| {
+        let spots: Vec<sim::Vector> = m.at.iter().zip(&seated).filter(|(_, s)| s.1 == team).map(|(a, _)| sim::Vector::from_array(*a)).collect();
+        spots.iter().copied().sum::<sim::Vector>() / spots.len().max(1) as f32
+    };
+    for (k, spot) in m.at.iter().enumerate() {
+        let (id, team, ..) = *seated.get(k).unwrap_or_else(|| fail("more spots than seats"));
+        game.place(id, sim::Vector::from_array(*spot), side(1 - team), m.hull.get(k).copied().unwrap_or(1.0));
     }
     let limit = (job.seconds * TICK_HZ) as u32 + 1;
     while !game.match_state().ended && game.tick < limit {
