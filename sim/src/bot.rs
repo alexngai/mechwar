@@ -277,6 +277,10 @@ pub const MATES_NEAR: f32 = 20.0;
 const SMOKE_THROW: f32 = 8.0;
 /// Faster than any mech moves (m/s): a jump in what a bot sees is a switch of target.
 const MOTION_MAX: f32 = 60.0;
+/// Longest a bot leads a target's motion (s): about half the time a mech crossing its sights
+/// keeps going before it turns about, so a long flight is led to where it's as likely to be as
+/// anywhere, not past it.
+const LEAD_MAX: f32 = 0.7;
 /// How far off a pile driver's facing its target can be for it to let go: inside the lunge's cone.
 const STRIKE_CONE: f32 = 10.0 * PI / 180.0;
 /// Farthest a Heavy lobs its grenade launcher's shells.
@@ -1083,8 +1087,10 @@ impl Bot {
             let primary_lead = if t.shot_speed > 0.0 && t.shot_turn <= 0.0 { dist / speed } else { 0.0 };
             let lead = shell.map_or(primary_lead, |s| dist / s.alt_speed);
             // Led by the motion it read, as fast as it judges it: on over its reaction time from
-            // where it saw the target (so it lags only when the target turns), and over the flight.
-            let (yaw, mut pitch) = look_at(eye, chest + self.seen_vel * (1.0 + self.misjudge.0) * (self.reaction(t) + lead));
+            // where it saw the target (so it lags only when the target turns), and over the flight;
+            // but never so far that the target has likely turned (`LEAD_MAX`).
+            let ahead = (self.reaction(t) + lead).min(LEAD_MAX);
+            let (yaw, mut pitch) = look_at(eye, chest + self.seen_vel * (1.0 + self.misjudge.0) * ahead);
             // Range d (as it judges it) on flat ground: sin(2θ) = g d / v².
             let judged = flat(chest - eye).length() * (1.0 + self.misjudge.1);
             let arc = |g: f32, v: f32| 0.5 * asinf((g * judged / (v * v)).min(1.0));

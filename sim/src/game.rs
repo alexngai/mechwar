@@ -3104,6 +3104,15 @@ mod tests {
     }
 
     #[test]
+    fn bots_lead_long_lobs_no_further_than_a_strafer_goes() {
+        // A grenade rifle's lob 60 m out flies 1.3 s, longer than a strafer keeps going one way:
+        // led the whole way, its grenades landed past where the target turned back.
+        let (game, bot, rounds, _) = duel_strafer("hail", 0.5, 60.0, 15.0);
+        let dealt = game.tally(bot).unwrap().0.dealt_by[0];
+        assert!(rounds > 20 && dealt > 90.0, "dealt {dealt:.0} from {rounds} grenades");
+    }
+
+    #[test]
     fn homing_bots_keep_the_target_marked() {
         // A homing rocket homes on what's in the crosshair as it flies: a bot leading the target
         // took it out of the 3° seek cone. (A sharp bot's: a raw one's aim wanders that far.)
