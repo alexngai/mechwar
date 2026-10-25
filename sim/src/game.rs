@@ -618,8 +618,10 @@ impl Game {
                 && self.projectiles.iter().filter(|f| f.p.owner == me.id && projectile::item(&f.p) == Some(Item::Limpet)).any(|f| {
                     self.players.iter().any(|q| q.team != me.team && q.mech.health > 0.0 && (q.mech.pos + Vector::Y * (self.arsenal.of(&q.mech).mech_height * 0.5)).distance(f.p.pos) < reach)
                 });
+            let mates_near = self.players.iter().filter(|q| q.team == me.team && q.id != me.id && alive(q) && q.mech.pos.distance(me.mech.pos) < bot::MATES_NEAR).count() as u8;
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
+            bot.mates_near = mates_near;
             for &(from, enemy, at) in &radio[team] {
                 if from != p.id {
                     bot.told(enemy, at, self.tick);

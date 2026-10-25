@@ -59,10 +59,13 @@ pub enum Feature {
     /// The target in its sight (a clear line), and how far off it is (m).
     TargetInSight,
     TargetDist,
+    /// Enemies it has in view, and teammates alive within 20 m: how a fight stands.
+    EnemiesInView,
+    MatesNear,
 }
 
 /// How many features there are.
-const FEATURES: usize = Feature::TargetDist as usize + 1;
+const FEATURES: usize = Feature::MatesNear as usize + 1;
 
 /// What a bot can do that a rule decides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -131,8 +134,14 @@ pub type Rule = Vec<Consideration>;
 pub struct Brain(pub BTreeMap<Action, Vec<Rule>>);
 
 /// The values of every feature at one moment.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct Features([f32; FEATURES]);
+
+impl Default for Features {
+    fn default() -> Self {
+        Features([0.0; FEATURES])
+    }
+}
 
 impl Features {
     pub fn set(&mut self, f: Feature, value: f32) -> &mut Self {

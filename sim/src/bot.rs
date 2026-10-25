@@ -271,6 +271,8 @@ const ARRIVE: f32 = 2.5;
 const BOOST_LEG: f32 = 15.0;
 /// Fire only when aim is this close to where the bot wants it.
 const AIM_TOLERANCE: f32 = 2.0 * PI / 180.0;
+/// Teammates within this of a bot count as near it (m), for its brain.
+pub const MATES_NEAR: f32 = 20.0;
 /// How far toward the threat a bot falling back lobs its smoke (m).
 const SMOKE_THROW: f32 = 8.0;
 /// Faster than any mech moves (m/s): a jump in what a bot sees is a switch of target.
@@ -586,8 +588,10 @@ pub struct Bot {
     /// Falling back to cover or an orb, and the health orbs about (they glow: always known).
     retreat: Option<Retreat>,
     pub orbs: Vec<Vector>,
-    /// Set by the server each tick: an enemy stands in the blast of its limpet (if one's down).
+    /// Set by the server each tick: an enemy stands in the blast of its limpet (if one's down),
+    /// and how many teammates are alive within `MATES_NEAR`.
     pub limpet_hits: bool,
+    pub mates_near: u8,
     /// Smoke about, set by the server each tick: no seeing through it.
     pub smoke: Vec<Cloud>,
     /// Shield domes about, set by the server each tick: no shot crosses one's surface, so an enemy
@@ -647,6 +651,7 @@ impl Bot {
             retreat: None,
             orbs: Vec::new(),
             limpet_hits: false,
+            mates_near: 0,
             smoke: Vec::new(),
             domes: Vec::new(),
             lead: None,
@@ -964,6 +969,7 @@ impl Bot {
             if let Some(m) = target.filter(|m| m.health > 0.0) {
                 at.flag(Feature::TargetInSight, sees(arena, t, me, m)).set(Feature::TargetDist, m.pos.distance(me.pos));
             }
+            at.set(Feature::EnemiesInView, self.contacts.iter().filter(|c| c.seen).count() as f32).set(Feature::MatesNear, f32::from(self.mates_near));
             if self.brain.wants(Action::StopFallingBack, &at) || tick >= r.until {
                 self.retreat = None;
             } else {
@@ -1064,6 +1070,7 @@ impl Bot {
             at.flag(Feature::GrenadeReady, tick >= self.grenade_at && dist < self.policy.grenade_range && dist > t.grenade_radius + 2.0);
             at.flag(Feature::FirstSight, self.seen.len() == 1).flag(Feature::Melee, use_ == AltUse::Melee).flag(Feature::LimpetOut, me.limpet);
             at.flag(Feature::OrbNear, self.orbs.iter().any(|o| o.distance(me.pos) < self.policy.orb_range));
+            at.set(Feature::EnemiesInView, self.contacts.iter().filter(|c| c.seen).count() as f32).set(Feature::MatesNear, f32::from(self.mates_near));
             let throw = match offensive {
                 Item::Grenade => self.brain.wants(Action::Grenade, &at),
                 Item::Limpet => self.brain.wants(Action::Limpet, &at),
