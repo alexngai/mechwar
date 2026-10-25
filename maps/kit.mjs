@@ -223,7 +223,10 @@ export function convoy(north, south = north.map(flip)) {
   objectives.convoy = { points, start: north.length - 1 };
 }
 
-/** A Convoy route's points with no waypoint within this (m) become waypoints (see `write`). */
+/**
+ * A Convoy route's points with no waypoint within this (m, counting height triple as bots' pathing
+ * does, so a deck over another counts apart) become waypoints (see `write`).
+ */
 const ROUTE_GAP = 8;
 
 /**
@@ -257,7 +260,7 @@ export function write(file, meta, north, south) {
   // covers would draw patrols onto it in every mode.
   const graph = [...nav];
   for (const p of objectives.convoy?.points ?? []) {
-    if (!graph.some((w) => Math.hypot(w[0] - p[0], w[1] - p[1], w[2] - p[2]) < ROUTE_GAP)) nav.push(p);
+    if (!graph.some((w) => Math.hypot(w[0] - p[0], 3 * (w[1] - p[1]), w[2] - p[2]) < ROUTE_GAP)) nav.push(p);
   }
   // Ramps and turned boxes keep a yaw; the twin's is 180 more. Untilted boxes need no yaw at all.
   for (const s of solids) if (s.yaw === 0 || s.yaw === undefined) delete s.yaw;

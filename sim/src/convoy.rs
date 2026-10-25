@@ -14,7 +14,7 @@ use crate::{DT, Vector};
 /// ESCORT_SPEEDS[0] of that, each more at the next, the full team unopposed at the last: 12 m/s,
 /// a Medium's walk, so escorts on foot keep up. (Raised from 6.5 when routes took the long way
 /// through each map's features.)
-pub const SPEED: f32 = 8.0;
+pub const SPEED: f32 = 10.0;
 const ESCORT_SPEEDS: [f32; 4] = [0.75, 1.0, 1.25, 1.5];
 /// Mechs this near (across, and up or down within ESCORT_BAND) escort it, or hold it back.
 pub const ESCORT_RANGE: f32 = 30.0;
@@ -156,8 +156,9 @@ impl Convoy {
 
     /// Where each of `mechs` (team, feet, whether it's a bot, whether it's alive) should head
     /// with the hauler at `hauler`: each living bot to a spot in cover behind it, on its own
-    /// base's side, nearest first into the middle lane; but while its side has SPARE more mechs
-    /// at the hauler than the other, the one furthest from it scouts ahead. Humans get None.
+    /// base's side (nearer on a steep stretch, to stay level with it), nearest first into the
+    /// middle lane; but while its side has SPARE more mechs at the hauler than the other, the one
+    /// furthest from it scouts ahead. Humans get None.
     pub fn orders(&self, mechs: &[(u8, Vector, bool, bool)], hauler: Vector) -> Vec<Option<Vector>> {
         let near = |m: &&(u8, Vector, bool, bool)| m.3 && (m.1 - hauler).with_y(0.0).length() <= ESCORT_RANGE && (m.1.y - hauler.y).abs() <= ESCORT_BAND;
         let count = [0, 1].map(|t| mechs.iter().filter(|m| m.0 == t).filter(near).count());
@@ -175,7 +176,13 @@ impl Convoy {
                 let scout = bots.pop().expect("more than one");
                 out[scout] = Some(self.at(self.along - home * SCOUT).0);
             }
-            let behind = self.at(self.along + home * COVER).0;
+            // On a steep stretch (a ramp, a breach) the spot comes in closer, so it stays level
+            // enough with the hauler to count as escorting it.
+            let behind = [COVER, 0.5 * COVER, 0.25 * COVER]
+                .map(|d| self.at(self.along + home * d).0)
+                .into_iter()
+                .find(|p| (p.y - hauler.y).abs() <= 0.5 * ESCORT_BAND)
+                .unwrap_or(hauler);
             for (k, &i) in bots.iter().enumerate() {
                 out[i] = Some(behind + across * LANES[k % LANES.len()]);
             }
