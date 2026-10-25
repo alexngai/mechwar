@@ -21,9 +21,8 @@ const DEPTH = 1; // canopy pillars sit this far ahead of the eye
 const RECOIL = 0.12; // m
 const RECOIL_RECOVER = 10; // 1/s
 // The cockpit's guns are drawn at SHRINK of their size about their arm mounts, so they take less of
-// the view's width and reach less far into it; the Heavy's, whose shoulder turrets ride at eye
-// height, also sit SETBACK (model m) further back.
-const SHRINK = 0.6, SETBACK = { C: 0.3 };
+// the view's width and reach less far into it.
+const SHRINK = 0.6;
 const TAU = Math.PI * 2;
 // The console, in its own flat space (x along its face, y up it from its foot, z toward the pilot):
 // it reaches SPAN either side, stands HUMP tall over the middle screen and WING over the sides, and
@@ -334,7 +333,7 @@ export class Cockpit {
   /**
    * `mech`'s weapons on class `cls`'s arms, painted with its materials (so damage scorch and
    * barrel heat glow match), at the mech's `scale`, placed where they sit relative to an eye
-   * `eyeHeight` above the feet, shrunk and set back (see SHRINK).
+   * `eyeHeight` above the feet, shrunk (see SHRINK).
    */
   setWeapons(cls, mech, eyeHeight, scale = 1) {
     this.cls = cls;
@@ -351,7 +350,6 @@ export class Cockpit {
       group.add(pod);
       const tip = mountWeapon(pod, cls, side, weapon.id, mech);
       pod.scale.multiplyScalar(SHRINK);
-      pod.position.z += SETBACK[cls] ?? 0;
       clearDash(group, pod);
       return { pod, tip, rest: pod.position.clone(), kick: 0 };
     };
