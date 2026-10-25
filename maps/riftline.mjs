@@ -170,7 +170,7 @@ const palette = {
   tint: '#c3bad8',
   // Wisps rising out of the rift: born low in the chasm (anywhere else that low is inside rock).
   motes: { color: [[0.85, 0.55, 1], [0.5, 0.25, 0.9]], rate: 70, size: 0.2, drift: 0.3, rise: 1.6, life: 6, band: [-24, -17], range: 45 },
-  aurora: { strength: 0.9, colors: ['#4dffb0', '#b066ff'] }, // curtains over the canyon, green going violet
+  aurora: { strength: 0.45, colors: ['#4dffb0', '#b066ff'] }, // curtains over the canyon, green going violet
   ambience: 'canyon', // its sound bed and accents (web/audio.js)
 };
 write(new URL('./riftline.json', import.meta.url), { name: 'Riftline', size: [240, 240], night: true, palette }, north);
