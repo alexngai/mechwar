@@ -17,6 +17,27 @@ const COCKPIT_CUTOFF = 2400; // Hz
 // Under camouflage everything, our own mech and cockpit too, sounds muffled (`stealth`).
 const STEALTH_CUTOFF = 800; // Hz
 const OPEN_CUTOFF = 20000; // Hz: the filter's off
+// Ambience is heard through the hull too, but less dulled than the action (crickets, rain hiss).
+const AMBIENCE_CUTOFF = 5500; // Hz
+const AMBIENCE_LEVEL = 0.45; // all of it, against the action
+/**
+ * Each map's ambience (its palette's `ambience`): a quiet bed under everything, and sparse accents
+ * at random intervals, each panned somewhere random. Beds are [kind, level, ...shape]; accents are
+ * [kind, every [lo, hi] s, level]; `gain` trims the whole (measured: storms and machinery about
+ * -39 dB, quiet places about -45, a blast 12 m off -22). See `bed` and `accent` for the kinds.
+ */
+const AMBIENCE = {
+  reactor: { gain: 1.3, beds: [['hum', 0.035, [60, 120.3, 180]], ['wind', 0.03, 500, 0.6]], accents: [['geiger', [2, 7], 0.05], ['steam', [9, 20], 0.05], ['clank', [10, 22], 0.035], ['siren', [45, 90], 0.02]] },
+  foundry: { gain: 1.2, beds: [['roar', 0.06], ['hum', 0.035, [48, 96.4, 144]]], accents: [['clank', [3, 8], 0.06], ['steam', [6, 14], 0.05], ['rumble', [15, 30], 0.07]] },
+  acidrain: { gain: 1.15, beds: [['rain', 0.05, 2500], ['hum', 0.02, [62, 124.6]]], accents: [['patter', [0.3, 1.2], 0.03], ['siren', [25, 50], 0.025]] },
+  canyon: { gain: 1.5, beds: [['wind', 0.06, 320, 2.5], ['hum', 0.025, [73.4, 74.1, 110]]], accents: [['rumble', [12, 25], 0.06], ['moan', [18, 35], 0.03]] },
+  undercity: { beds: [['water', 0.05], ['hum', 0.03, [50, 100.3]]], accents: [['drip', [0.4, 1.6], 0.06], ['creak', [14, 28], 0.04]] },
+  jungle: { gain: 1.3, beds: [['buzz', 0.07, 4200], ['water', 0.06]], accents: [['bird', [3, 9], 0.04], ['croak', [5, 12], 0.04]] },
+  twilight: { gain: 1.5, beds: [['wind', 0.035, 1800, 0.5], ['cricket', 0.02, 4600]], accents: [['hoot', [14, 30], 0.035], ['bird', [10, 25], 0.025]] },
+  storm: { gain: 1.2, beds: [['rain', 0.07, 1800], ['wind', 0.05, 450, 1]], accents: [['croak', [3, 8], 0.035], ['creak', [8, 18], 0.05]] },
+  desert: { gain: 1.2, beds: [['wind', 0.1, 900, 0.8], ['wind', 0.06, 3200, 1.2]], accents: [['whistle', [15, 35], 0.025]] },
+  blizzard: { gain: 1.9, beds: [['howl', 0.12, 600], ['wind', 0.07, 2400, 0.7]], accents: [['creak', [12, 24], 0.035]] },
+};
 
 export class Sound {
   constructor() {
@@ -29,6 +50,8 @@ export class Sound {
     this.overheated = false;
     this.lockStep = -1;
     this.lockMade = false;
+    // A storm's sky (web/sky.js) says when its lightning strikes.
+    addEventListener('thunder', (e) => this.thunder(e.detail.delay, e.detail.close));
   }
 
   /** Starts audio; browsers only allow it from a user gesture, so call this from one. */
@@ -77,6 +100,14 @@ export class Sound {
     let last = 0;
     this.brown = buffer(ctx, () => (last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02) * 3.5);
     this.applyVolume();
+    this.ambienceOut = ctx.createGain();
+    this.ambienceOut.gain.value = AMBIENCE_LEVEL;
+    const dull = ctx.createBiquadFilter();
+    dull.type = 'lowpass';
+    dull.frequency.value = AMBIENCE_CUTOFF;
+    this.ambienceOut.connect(dull).connect(this.master);
+    this.long = buffer(ctx, () => Math.random() * 2 - 1, 4); // a long noise loop for beds: no audible repeat
+    this.setAmbience(this.ambienceName);
     this.loops = { own: this.loop(null), remote: Array.from({ length: THRUST_SLOTS }, () => this.loop(ctx.createPanner())) };
     this.jets = Array.from({ length: EXHAUST_SLOTS }, () => this.jet(ctx.createPanner()));
     this.hulls = [0, 1].map(() => this.drone(ctx.createPanner()));
@@ -233,9 +264,11 @@ export class Sound {
    * A primary shot with weapons.json `sound` at `pos` (null: ours, clear on the cockpit bus;
    * others are heard through the hull). Each is a broadband report, a low punch, a body, and the
    * weapon's mechanical action; no high ringing, which is what reads as a plink. A charged shot
-   * (`charge` 0-1) goes off louder, up to 30% at full.
+   * (`charge` 0-1) goes off louder, up to 30% at full. A grenade or rocket primary launches like
+   * the secondary that sounds the same.
    */
   shot(sound, pos, charge = 0) {
+    if (sound === 'mortar' || sound === 'rocket') return this.launch(sound, pos);
     const mix = SHOT_MIX[sound] ?? {};
     const out = this.voice(pos, mix.life ?? 0.6, undefined, mix.send ?? 0);
     if (!out) return;
@@ -348,6 +381,19 @@ export class Sound {
       this.noise(out, 'white', 'bandpass', 700, 250, 0.01, 0.25, 0.45, 1.2);
       return;
     }
+    if (sound === 'piston') {
+      // Pile driver: its booster lighting, a hard crack and a deep whump into a falling roar (the
+      // exhaust carries the burn on), as the ram thumps out and its latch clacks behind.
+      const out = this.voice(pos, 0.7, undefined, 0.15);
+      if (!out) return;
+      out.gain.value = pos ? 1.6 : 1.1;
+      this.noise(out, 'white', 'highpass', 2200, 1200, 0.0005, 0.03, 0.7);
+      this.tone(out, 'sine', 110, 45, 0.003, 0.3, 1.0);
+      this.noise(out, 'brown', 'lowpass', 1600, 300, 0.01, 0.45, 0.8);
+      this.noise(out, 'white', 'bandpass', 1400, 500, 0.02, 0.4, 0.4, 0.8);
+      this.tone(out, 'square', 900, 600, 0.001, 0.05, 0.1, 0.1);
+      return;
+    }
     const out = this.voice(pos, 0.5);
     if (!out) return;
     out.gain.value = pos ? 1 : 0.6;
@@ -382,6 +428,191 @@ export class Sound {
     this.noise(out, 'brown', 'lowpass', 900, 90, 0.005, life, Math.min(0.7 + 0.3 * size, 1.3));
     this.tone(out, 'sine', 56, 19, 0.005, life + 0.2, Math.min(0.6 + 0.35 * size, 1.2));
     this.noise(out, 'white', 'lowpass', 2200, 600, 0.002, 0.1, 0.3 * size);
+  }
+
+  /**
+   * Plays the ambience named `name` (see AMBIENCE; none for an unknown or missing one), fading out
+   * whatever played before. Before audio starts it's only remembered.
+   */
+  setAmbience(name) {
+    this.ambienceName = name;
+    if (!this.ctx) return;
+    const { ctx } = this, t = ctx.currentTime;
+    if (this.ambience) {
+      const old = this.ambience;
+      clearInterval(old.timer);
+      old.bus.gain.setTargetAtTime(0, t, 0.4);
+      setTimeout(() => {
+        for (const src of old.sources) src.stop();
+        old.bus.disconnect();
+      }, 2500);
+    }
+    const spec = AMBIENCE[name];
+    this.ambience = null;
+    if (!spec) return;
+    const bus = ctx.createGain();
+    bus.gain.value = 0;
+    bus.gain.setTargetAtTime(spec.gain ?? 1, t, 0.8);
+    bus.connect(this.ambienceOut);
+    const amb = (this.ambience = { bus, sources: [], gusts: [], accents: spec.accents.map(([kind, every, level]) => ({ kind, every, level, next: t + every[0] * Math.random() })) });
+    for (const [kind, ...shape] of spec.beds) this.bed(amb, kind, ...shape);
+    amb.timer = setInterval(() => this.ambienceTick(amb), 250);
+  }
+
+  /** A gain node at `value`. */
+  amp(value) {
+    const g = this.ctx.createGain();
+    g.gain.value = value;
+    return g;
+  }
+
+  /** A looping bed of `kind` at `level` into `amb`'s bus. */
+  bed(amb, kind, level, a, b) {
+    const { ctx } = this;
+    const out = ctx.createGain();
+    out.gain.value = level;
+    out.connect(amb.bus);
+    const loop = (buf) => {
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.loop = true;
+      src.start(ctx.currentTime, Math.random() * buf.duration);
+      amb.sources.push(src);
+      return src;
+    };
+    const osc = (type, f) => {
+      const o = ctx.createOscillator();
+      o.type = type;
+      o.frequency.value = f;
+      o.start();
+      amb.sources.push(o);
+      return o;
+    };
+    const filter = (type, f, q = 1) => {
+      const node = ctx.createBiquadFilter();
+      node.type = type;
+      node.frequency.value = f;
+      node.Q.value = q;
+      return node;
+    };
+    // An oscillator at `rate` Hz wobbling `param` by `depth` either side of what it's set to.
+    const wobble = (param, rate, depth, type = 'sine') => osc(type, rate).connect(this.amp(depth)).connect(param);
+    if (kind === 'wind' || kind === 'howl') {
+      // Noise through a band that gusts: louder and higher on a slow random walk (see `ambienceTick`).
+      // A howl is a narrow, sweeping band: wind whistling.
+      const band = filter('bandpass', a, kind === 'howl' ? 6 : b);
+      loop(this.long).connect(band).connect(out);
+      amb.gusts.push({ gain: out.gain, freq: band.frequency, level, f: a, sweep: kind === 'howl' ? 0.6 : 0.3, g: Math.random() });
+    } else if (kind === 'rain') {
+      loop(this.long).connect(filter('highpass', a)).connect(out);
+    } else if (kind === 'roar') {
+      loop(this.brown).connect(filter('lowpass', 400)).connect(out); // a furnace's draw
+      wobble(out.gain, 0.13, level * 0.3);
+    } else if (kind === 'water') {
+      loop(this.brown).connect(filter('bandpass', 600, 0.7)).connect(out); // lapping, slow swells
+      wobble(out.gain, 0.08, level * 0.5);
+    } else if (kind === 'hum') {
+      // Machinery or something stranger: tones, the close pairs beating, through a low-pass.
+      const lp = filter('lowpass', 400);
+      lp.connect(out);
+      for (const f of a) osc('sine', f).connect(this.amp(1 / a.length)).connect(lp);
+      wobble(out.gain, 0.05, level * 0.25);
+    } else if (kind === 'buzz') {
+      // Cicadas: a narrow band of noise trembling fast, the chorus swelling and fading.
+      const am = ctx.createGain();
+      am.gain.value = 0.5;
+      loop(this.long).connect(filter('bandpass', a, 10)).connect(am).connect(out);
+      wobble(am.gain, 28, 0.5);
+      wobble(out.gain, 0.06, level * 0.8);
+    } else if (kind === 'cricket') {
+      // A tone pulsed fast, in bursts: chirp, chirp.
+      const pulse = ctx.createGain(), burst = ctx.createGain();
+      pulse.gain.value = burst.gain.value = 0.5;
+      osc('sine', a).connect(pulse).connect(burst).connect(out);
+      wobble(pulse.gain, 30, 0.5, 'square');
+      wobble(burst.gain, 2.2, 0.5, 'square');
+    }
+  }
+
+  /** Every quarter second: the wind's gusts drift, and accents come due. */
+  ambienceTick(amb) {
+    if (!this.running) return;
+    const t = this.ctx.currentTime;
+    for (const w of amb.gusts) {
+      w.g = Math.min(Math.max(w.g + (Math.random() - 0.5) * 0.25, 0), 1);
+      w.gain.setTargetAtTime(w.level * (0.45 + 0.8 * w.g), t, 1.2);
+      w.freq.setTargetAtTime(w.f * (1 - w.sweep / 2 + w.sweep * w.g), t, 1.2);
+    }
+    for (const a of amb.accents) {
+      if (t < a.next) continue;
+      a.next = t + a.every[0] + Math.random() * (a.every[1] - a.every[0]);
+      const out = this.ctx.createGain(), pan = this.ctx.createStereoPanner();
+      out.gain.value = a.level;
+      pan.pan.value = Math.random() * 1.6 - 0.8;
+      out.connect(pan).connect(amb.bus);
+      if (a.kind === 'drip') out.connect(this.amp(1.5)).connect(this.reverb); // underground: it rings
+      this.accent(out, a.kind);
+      setTimeout(() => out.disconnect(), 6000);
+    }
+  }
+
+  /** A one-off of `kind` into `out`. */
+  accent(out, kind) {
+    const r = (lo, hi) => lo + Math.random() * (hi - lo);
+    if (kind === 'clank') {
+      // Metal on metal: inharmonic partials, struck.
+      const f = r(300, 520);
+      this.tone(out, 'square', f, f * 0.95, 0.002, 0.22, 0.5);
+      this.tone(out, 'triangle', f * 2.71, f * 2.6, 0.002, 0.35, 0.4);
+      this.noise(out, 'white', 'highpass', 3000, 2000, 0.001, 0.05, 0.4);
+    } else if (kind === 'steam') {
+      this.noise(out, 'white', 'bandpass', r(2500, 3500), 2000, 0.15, r(0.8, 1.6), 0.8);
+    } else if (kind === 'rumble') {
+      this.noise(out, 'brown', 'lowpass', 160, 60, 0.6, r(2.5, 4), 1);
+      this.tone(out, 'sine', 40, 28, 0.5, 3, 0.5);
+    } else if (kind === 'siren') {
+      // Far off: up, and down again.
+      this.tone(out, 'sine', 620, 880, 1, 1.3, 0.6);
+      this.tone(out, 'sine', 880, 620, 1, 1.3, 0.6, 2.1);
+    } else if (kind === 'patter') {
+      // Rain on metal: a few ticks.
+      for (let k = 0; k < 3; k++) this.noise(out, 'white', 'bandpass', r(3000, 5000), 3000, 0.001, 0.03, r(0.4, 1), 4, r(0, 0.3));
+    } else if (kind === 'drip') {
+      const f = r(700, 1100);
+      this.tone(out, 'sine', f, f * 2, 0.002, 0.07, 0.8);
+    } else if (kind === 'creak') {
+      // Metal under strain: a slow, low groan.
+      this.growl(out, 'sawtooth', r(85, 110), r(60, 75), 500, 0.4, r(1.2, 2), 0.7);
+    } else if (kind === 'moan') {
+      this.growl(out, 'triangle', r(170, 200), r(130, 150), 600, 1.5, 2.5, 0.7);
+    } else if (kind === 'bird') {
+      for (let k = 0, n = 2 + Math.floor(r(0, 3)); k < n; k++) {
+        const f = r(2600, 3800);
+        this.tone(out, 'sine', f, f * r(1.1, 1.35), 0.01, 0.07, 0.6, k * r(0.1, 0.16));
+      }
+    } else if (kind === 'croak') {
+      for (const d of [0, 0.3]) this.growl(out, 'square', r(150, 175), 135, 700, 0.01, 0.2, 0.6, d);
+    } else if (kind === 'hoot') {
+      for (const d of [0, 0.7]) this.tone(out, 'sine', 420, 380, 0.08, 0.45, 0.6, d);
+    } else if (kind === 'whistle') {
+      // Wind through the arch's gap: a long, rising note.
+      this.tone(out, 'sine', r(1100, 1300), r(1400, 1600), 1.5, 2, 0.4);
+      this.noise(out, 'white', 'bandpass', 1400, 1500, 1.5, 2, 0.3, 8);
+    } else if (kind === 'geiger') {
+      // A counter near something hot: a crackle of clicks at random, a few or a burst.
+      for (let k = 0, n = 3 + Math.floor(r(0, 14)), d = 0; k < n; k++, d -= Math.log(1 - Math.random()) * 0.09) {
+        this.noise(out, 'white', 'highpass', 3500, 3000, 0.0005, 0.004, r(0.5, 1), 1, d);
+      }
+    }
+  }
+
+  /** Thunder `delay` s after its flash: a crack if the strike was close, then a long low rumble. */
+  thunder(delay, close) {
+    const out = this.voice(null, delay + 6, this.world, 0.5);
+    if (!out) return;
+    if (close) this.noise(out, 'white', 'lowpass', 3000, 400, 0.005, 0.5, 0.45, 1, delay);
+    this.noise(out, 'brown', 'lowpass', 420, 60, 0.35, 4.8, 1.0, 1, delay + 0.05);
+    this.tone(out, 'sine', 46, 22, 0.4, 4.2, 0.45, delay + 0.1);
   }
 
   /**
@@ -1068,8 +1299,8 @@ export class Sound {
 }
 
 /** A one-second mono buffer filled by `sample()`. */
-function buffer(ctx, sample) {
-  const b = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+function buffer(ctx, sample, seconds = 1) {
+  const b = ctx.createBuffer(1, ctx.sampleRate * seconds, ctx.sampleRate);
   const d = b.getChannelData(0);
   for (let i = 0; i < d.length; i++) d[i] = sample();
   return b;

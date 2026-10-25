@@ -1,4 +1,5 @@
-// Foundry: a 240 m industrial yard on four levels (channel -5, ground 0, decks 7, gantries 14).
+// Foundry: a 240 m industrial yard on four levels (channel -5, ground 0, decks 7, gantries 14), on
+// the night shift: slag glowing in the cooling channel's gutters, smoke lying orange.
 // Writes foundry.json next to this file; rerun `node maps/foundry.mjs` after editing.
 //
 // Only the north half (z > 0), plus pieces straddling z = 0 on the east side, is authored here;
@@ -6,7 +7,9 @@
 // tall and 3.6 m wide, so lanes and doors are 9+ m wide and clearances 6+ m; ramps stay near 23
 // degrees (walkable is 40); hover tops out at 3.5 m, so 3 m ledges are hover shortcuts and the 7 m
 // and 14 m tiers need ramps.
-import { bases, box, convoy, flagStand, flags, furnace, growth, lamp, once, pad, pipe, point, railing, ramp, sentries, siege, silos, stack, turned, write } from './kit.mjs';
+import { bases, box, convoy, flagStand, flags, furnace, growth, lamp, once, pad, pipe, point, railing, ramp, sentries, siege, sign, silos, stack, turned, write } from './kit.mjs';
+
+const SLAG = '#ff6a14';
 
 // --- Floor and edges -------------------------------------------------------------------------
 box([-120, -1, 7], [120, 0, 120], 'ground'); // north floor
@@ -29,6 +32,11 @@ box([78, -5, 4.5], [92, 0, 7], 'concrete');
 box([78, -5, -7], [92, 0, -4.5], 'concrete');
 pipe([24, -3.6, 6.4], [78, -3.6, 6.4], 0.5);
 lamp([44, -5, -6.2]);
+// Slag running in gutters along both walls of the open channel between its ramps, lighting it
+// orange (props: the lane down the middle stays clear).
+for (let x = 38; x < 78; x += 10) {
+  for (const z of [6.6, -6.6]) sign([x, -5, z - 0.4], [x + 10, -4.94, z + 0.4], [x + 5, -3.5, z * 0.7], SLAG);
+}
 point([42, -5, 0], [60, -5, 0], [74, -5, 0], [96, 0, 0], [108, 0, 0]);
 
 // --- Smelter: core (roof 14), ring deck (7) over an arcade, hover steps up to the roof ---------
@@ -181,4 +189,15 @@ convoy(
 
 // --- Spawns, twin, write ---------------------------------------------------------------------
 const north = [[-4, 0.1, 96], [-14, 0.1, 96], [-24, 0.1, 96], [-24, 0.1, 106]];
-write(new URL('./foundry.json', import.meta.url), { name: 'Foundry', size: [240, 240], night: true }, north);
+// The night shift: a sky gone rust-brown with the works' own glow, smoke lying low and orange in
+// the channel, the lamps and furnaces the light to see by.
+const palette = {
+  sky: { horizon: '#4a2414', zenith: '#0b0605', sun: '#ffb07a', stars: 0.08 },
+  fog: [40, 220],
+  haze: ['#7a3a18', 0.05, 5],
+  light: { sky: '#a06a4a', ground: '#2a160c', ambient: 1.7, sun: '#ff9a62', direct: 1.0 },
+  lamp: '#ffa850',
+  tint: '#f2d6c4',
+  ambience: 'foundry', // its sound bed and accents (web/audio.js)
+};
+write(new URL('./foundry.json', import.meta.url), { name: 'Foundry', size: [240, 240], night: true, palette }, north);

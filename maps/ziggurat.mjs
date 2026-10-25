@@ -208,17 +208,21 @@ silos({ at: [33, H1, DRIFT_Z], radius: 7, band: 3 }, { at: [0, 0, 0], radius: 12
 
 // --- Spawns, write ---------------------------------------------------------------------------------
 const north = [[70, 0.1, 72], [78, 0.1, 66], [86, 0.1, 74], [74, 0.1, 78]];
-// A clear cold noon: pale blue overhead over a white horizon, snow blowing.
+// A blizzard: an overcast white-out, the sun a pale smear, fog closing in past 25 m and gone by
+// 170 (the pyramid a grey shape from the yards), blowing snow thick near the ground, and flakes
+// driven hard from the west-north-west. The red beacons are what you steer by.
 const palette = {
   sunDir: [0.4, 0.62, -0.68],
-  sky: { horizon: '#e4ecf3', zenith: '#7d9ec4', sun: '#fff6e6', stars: 0 },
-  fog: [70, 280],
-  haze: ['#eef3f8', 0.015, 6],
-  light: { sky: '#dce7f2', ground: '#7d8a99', ambient: 1.4, sun: '#fff2e2', direct: 2.1 },
+  sky: { horizon: '#d4dce3', zenith: '#a3b0bd', sun: '#eef2f5', stars: 0 },
+  fog: [25, 170],
+  haze: ['#e4eaef', 0.045, 9],
+  light: { sky: '#d2dce6', ground: '#8c98a6', ambient: 1.7, sun: '#eef3f8', direct: 1.1 },
   lamp: '#ffb070',
-  tint: '#f2f6fb',
+  tint: '#eef3f9',
   terrain: ['#e8edf2', '#a7b6c4', '#dde4ea'],
   skyline: 'snow',
-  motes: { color: [[1, 1, 1], [0.86, 0.9, 0.96]], rate: 70, size: 0.16, drift: 1.4, rise: -1.6, life: 6 },
+  // Flakes under the bloom threshold (0.7), so they read as snow, not sparks.
+  motes: { color: [[0.86, 0.88, 0.9], [0.8, 0.83, 0.87]], rate: 900, size: 0.2, drift: 1.5, rise: -2.2, life: 2.5, wind: [9, -4], range: 20, solid: true },
+  ambience: 'blizzard', // its sound bed and accents (web/audio.js)
 };
 write(new URL('./ziggurat.json', import.meta.url), { name: 'Ziggurat', size: SIZE, night: false, palette }, north);

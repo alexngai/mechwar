@@ -10,7 +10,7 @@ import { heightAt } from '../maps/ground.js';
 export const LOW_ONLY = 1, HIGH_ONLY = 2;
 
 const COLORS = {
-  ground: 0x9a9384, concrete: 0xa8a08e, metal: 0x6f7880, panel: 0x8f969a, salt: 0xe8e4d8, tank: 0xb9ac8e,
+  ground: 0x9a9384, concrete: 0xa8a08e, metal: 0x6f7880, panel: 0x8f969a, tank: 0xb9ac8e, hazard: 0xc9a032,
   trim: 0x55585b, rail: 0xd3a23a, pipe: 0x7d7262, pole: 0x3a3c3f, rust: 0x8a5634, soot: 0x4f4c49, stack: 0x6e5a4c,
   tower: 0x6c7470, rock: 0x7f7c8c, bark: 0x5b4a3a, moss: 0x6b7a4f, stone: 0x8f8b7b, hull: 0x7b7e74, deadwood: 0x6e675a,
   snow: 0xe8edf1, ice: 0xa9c6d8, sand: 0xdcbf86, sandstone: 0xc49a5c,
@@ -160,7 +160,7 @@ function kitbash(s, parts) {
     g.translate(x, y, z);
     parts.push(paint(g, hex));
   };
-  const tall = hy > 1.2 && s.mat !== 'salt' && s.mat !== 'ground';
+  const tall = hy > 1.2 && s.mat !== 'ground';
   if (tall) {
     // Cap trim along the top edges.
     add(2 * hx + 0.2, 0.25, 0.2, 0, hy - 0.12, hz);
@@ -232,8 +232,17 @@ function decorParts(d, parts, glow, lamp) {
     glow.lamps.push(new THREE.Vector3(x, y + 3.1, z));
     // Its light shaft, down to the deck it stands on.
     glow.shafts.push(paint(new THREE.CylinderGeometry(0.3, 2.6, 3.1, 16, 1, true).translate(x, y + 1.55, z), lamp.light, 0.25, true));
+  } else if (d.kind === 'slab') {
+    // A flat box of `mat` from corner `from` to `to` that nothing collides with: paint on a floor
+    // (a pool's rim, the racks in it) that mustn't trip anyone.
+    const a = new THREE.Vector3(...d.from), b = new THREE.Vector3(...d.to);
+    const g = new THREE.BoxGeometry(...new THREE.Vector3().subVectors(b, a).toArray().map(Math.abs));
+    g.translate(...a.add(b).multiplyScalar(0.5).toArray());
+    parts.push(paint(g, COLORS[d.mat] ?? COLORS.concrete));
   } else if (d.kind === 'sparks') {
     glow.sparkers.push(new THREE.Vector3(...d.at)); // a broken cable or fitting spitting sparks: only fx
+  } else if (d.kind === 'steam') {
+    glow.steam.push(new THREE.Vector3(...d.at)); // a cooling tower's lip, steaming: only fx
   } else if (d.kind === 'canopy') {
     // A crown `r` m round: a core of leaves and squat, faceted clumps around it, shaped by where it is.
     const [x, y, z] = d.at, n = d.r > 12 ? 7 : 4;
@@ -524,6 +533,7 @@ export function buildArena(scene, map) {
   glow.signs = [];
   glow.shafts = [];
   glow.sparkers = [];
+  glow.steam = [];
   map.solids.forEach((s, i) => {
     const g = paint((s.shape === 'cylinder' ? cylinderGeometry : boxGeometry)(s.half), COLORS[s.mat] ?? COLORS.concrete, jitter(i));
     g.applyMatrix4(boxes[i].matrix);
@@ -618,6 +628,7 @@ export function buildArena(scene, map) {
   meshes.vents = map.solids.filter((s) => s.mat === 'stack' && !s.yaw).map((s) => new THREE.Vector3(s.box[0], s.box[1] + s.half[1] + 0.5, s.box[2]));
   meshes.furnaces = glow.furnaces;
   meshes.sparkers = glow.sparkers;
+  meshes.steam = glow.steam;
   meshes.motes = palette.motes;
   meshes.pads = map.pads ?? [];
   meshes.lights = lights; // night lights, for the cockpit

@@ -250,17 +250,24 @@ silos({ at: onMesa(0), radius: 10, band: 3 }, { at: [0, 0, 0], radius: 18, band:
 
 // --- Spawns, write ---------------------------------------------------------------------------------
 const north = [[112, 0.1, 120], [120, 0.1, 112], [128, 0.1, 128], [108, 0.1, 132]];
-// High noon from the south-west, so the arch throws its shadow north-east across the middle.
+// A white-hot noon on another world: the sun high in the south-west (the arch throws its shadow
+// north-east across the middle) in a sky gone gold to burnt orange overhead, with no blue left in
+// it; the air thick and warm low down, dust blowing, mirages on the far sand and the horizon
+// shimmering. Overexposed a touch, as the eye is in a glare.
 const palette = {
   sunDir: [-0.5, 0.68, -0.53],
-  sky: { horizon: '#f2d898', zenith: '#6f9ccb', sun: '#fff4d0', stars: 0 },
-  fog: [100, 360],
-  haze: ['#efcf86', 0.01, 8],
-  light: { sky: '#f6e3b0', ground: '#7a5a30', ambient: 1.4, sun: '#fff0c8', direct: 2.6 },
-  lamp: '#ffd08a',
-  tint: '#fff0cc',
-  terrain: ['#e4c070', '#c48e4c', '#dab060'],
+  sky: { horizon: '#f6cf86', zenith: '#c9732e', sun: '#fff3c8', stars: 0 },
+  fog: [120, 380],
+  haze: ['#f0b862', 0.016, 7],
+  light: { sky: '#ffd49a', ground: '#8a5428', ambient: 1.5, sun: '#ffe4a8', direct: 2.7 },
+  lamp: '#ffc070',
+  tint: '#ffe6bc',
+  terrain: ['#eab65c', '#c2763c', '#dfaa5e'],
   skyline: 'desert',
-  motes: { color: [[0.96, 0.84, 0.56], [0.82, 0.66, 0.4]], rate: 25, size: 0.14, drift: 2.5, rise: 0.05, life: 5 },
+  motes: { color: [[1, 0.84, 0.52], [0.86, 0.6, 0.32]], rate: 45, size: 0.14, drift: 3, rise: 0.05, life: 5 },
+  mirage: 0.85,
+  heat: 1,
+  exposure: 1.12,
+  ambience: 'desert', // its sound bed and accents (web/audio.js)
 };
 write(new URL('./span.json', import.meta.url), { name: 'Span', size: SIZE, night: false, palette }, north);

@@ -516,7 +516,7 @@ for (const [x, z, angle, len, r] of [[-20, -104, 0.3, 18, 1.4], [26, -96, -0.5, 
 // --- Spawns, write ---------------------------------------------------------------------------------
 const spawns = (b, s) => [[-6, -10], [4, -16], [10, -2], [-12, -4]].map(([dx, dz]) => at(b[0] + s * dx, b[1] + dz, 0.1));
 // Twilight: the sun low in the north-west behind the mother tree, an orange sky going violet
-// overhead, warm mist in the Gorge, lanterns lit, fireflies out.
+// overhead, warm mist in the Gorge, lanterns lit, fireflies out, leaves coming down.
 const palette = {
   sunDir: [-0.5, 0.25, 0.83],
   sky: { horizon: '#f08a50', zenith: '#2a2150', sun: '#ffb070', stars: 0.25 },
@@ -530,7 +530,12 @@ const palette = {
   undergrowth: 1,
   cover: 0.7,
   skyline: 'forest',
-  motes: { color: [[1, 0.86, 0.45], [1, 0.42, 0.1]], rate: 50, size: 0.22, drift: 0.5, rise: 0.15, life: 6 },
+  motes: [
+    { color: [[1, 0.86, 0.45], [1, 0.42, 0.1]], rate: 50, size: 0.22, drift: 0.5, rise: 0.15, life: 6 }, // fireflies
+    // Leaves coming down on a light breeze out of the north-west.
+    { color: [[0.55, 0.32, 0.14], [0.4, 0.24, 0.1]], rate: 25, size: 0.22, drift: 0.8, rise: -0.7, life: 9, wind: [1.2, -0.5], range: 30, solid: true },
+  ],
+  ambience: 'twilight', // its sound bed and accents (web/audio.js)
 };
 // Diagnostics: how steep the walkable slabs run, and where the key pieces stand.
 for (const s of solids.filter((s) => s.half[1] === 0.25 && s.tilt)) if (Math.abs(s.tilt) > 26) console.warn(`steep ramp ${s.mat} at ${s.box}: ${s.tilt} degrees`);

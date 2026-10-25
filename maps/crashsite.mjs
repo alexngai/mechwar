@@ -506,7 +506,13 @@ const palette = {
   water: { level: 0, color: '#1e3448', opacity: 0.8 },
   cover: 0.65,
   skyline: 'swamp',
-  motes: { color: [[0.6, 0.95, 1], [0.15, 0.45, 1]], rate: 70, size: 0.22, drift: 0.4, rise: 0.25, life: 6 },
+  motes: [
+    { color: [[0.6, 0.95, 1], [0.15, 0.45, 1]], rate: 70, size: 0.22, drift: 0.4, rise: 0.25, life: 6 },
+    // A storm: rain driven on the wind, and lightning every few seconds lighting up the wreck.
+    { color: [[0.62, 0.7, 0.82]], alpha: 0.35, streak: 0.04, rate: 1800, drift: 0.5, rise: -26, life: 1.1, wind: [7, 3], range: 26 },
+  ],
+  lightning: { every: [6, 15], strength: 1 },
+  ambience: 'storm', // its sound bed and accents (web/audio.js)
 };
 // Four each, on the base islands, clear of their props.
 const spawns = (points) => points.map(([x, z]) => [x, 1.6, z]);

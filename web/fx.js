@@ -124,6 +124,55 @@ class Pool {
   }
 }
 
+/** Falling streaks (rain): each a line from where it is back along its velocity, fading to its tail. */
+class Streaks {
+  constructor(scene, max) {
+    this.max = max;
+    this.next = 0;
+    this.pos = new Float32Array(max * 3);
+    this.vel = new Float32Array(max * 3);
+    this.life = new Float32Array(max);
+    this.tail = new Float32Array(max); // seconds of travel each streak trails
+    this.line = new Float32Array(max * 6);
+    this.rgba = new Float32Array(max * 8);
+    this.geo = new THREE.BufferGeometry();
+    this.geo.setAttribute('position', new THREE.BufferAttribute(this.line, 3));
+    this.geo.setAttribute('color', new THREE.BufferAttribute(this.rgba, 4));
+    const lines = new THREE.LineSegments(this.geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false }));
+    lines.frustumCulled = false;
+    scene.add(lines);
+  }
+
+  spawn(p, v, { life, color, alpha, length }) {
+    const i = this.next;
+    this.next = (i + 1) % this.max;
+    this.pos.set([p.x, p.y, p.z], i * 3);
+    this.vel.set([v.x, v.y, v.z], i * 3);
+    this.life[i] = life;
+    this.tail[i] = length;
+    this.rgba.set([...color, alpha, ...color, 0], i * 8);
+  }
+
+  clear() {
+    this.life.fill(0);
+  }
+
+  update(dt) {
+    for (let i = 0; i < this.max; i++) {
+      const i3 = i * 3, i6 = i * 6, alive = this.life[i] > 0;
+      if (alive) this.life[i] -= dt;
+      for (let j = 0; j < 3; j++) {
+        if (alive) this.pos[i3 + j] += this.vel[i3 + j] * dt;
+        // A dead one collapses to a point, which draws nothing.
+        this.line[i6 + j] = this.pos[i3 + j];
+        this.line[i6 + 3 + j] = this.pos[i3 + j] - (alive ? this.vel[i3 + j] * this.tail[i] : 0);
+      }
+    }
+    this.geo.attributes.position.needsUpdate = true;
+    this.geo.attributes.color.needsUpdate = true;
+  }
+}
+
 const UP = new THREE.Vector3(0, 1, 0);
 const WIND = new THREE.Vector3(0.45, 0.85, 0.25).normalize(); // plumes rise and lean downwind
 const v = new THREE.Vector3(), jitter = new THREE.Vector3();
@@ -260,6 +309,9 @@ export class Effects {
     this.soft = new Pool(scene, 1200, THREE.NormalBlending); // room for a few smoke clouds
     // Sparks and cinders: tiny, many, and never bigger than a few pixels however close.
     this.embers = new Pool(scene, 800, THREE.AdditiveBlending, 0.012);
+    // Weather: solid flakes (snow), not glowing, so they show against a white sky.
+    this.flakes = new Pool(scene, 2400, THREE.NormalBlending, 0.02);
+    this.rain = new Streaks(scene, 3000);
     this.beams = new Beams(scene);
     // Held beams: one slot per mech (0 for our own, id + 1 for others), refreshed while on.
     this.mends = new Beams(scene, 17, 0x60ffb0, 0.5);
@@ -279,7 +331,7 @@ export class Effects {
 
   /** Drops every particle in flight (a map change: last map's smoke shouldn't hang in the new sky). */
   clear() {
-    for (const pool of [this.glow, this.soft, this.embers]) pool.clear();
+    for (const pool of [this.glow, this.soft, this.embers, this.flakes, this.rain]) pool.clear();
   }
 
   /** Smoke and dust are lit by the scene, so they darken at night; fire and sparks glow regardless. */
@@ -293,6 +345,8 @@ export class Effects {
     this.glow.update(dt, scale);
     this.soft.update(dt, scale);
     this.embers.update(dt, scale);
+    this.flakes.update(dt, scale);
+    this.rain.update(dt);
     this.beams.update(dt, camera);
     this.mends.update(dt, camera);
     for (const l of this.lights) {
@@ -457,7 +511,7 @@ export class Effects {
       }
       const shell = p.look === 'shell', dart = p.look === 'dart', slug = p.look === 'slug' || p.look === 'ember';
       const pellet = !slug && (p.primary || p.look === 'flak');
-      item.mesh.scale.setScalar(slug ? 1.1 + 0.8 * p.charge : pellet ? 0.6 : dart ? 0.6 : shell ? 1.6 : 1);
+      item.mesh.scale.setScalar(slug ? 1.1 + 0.8 * p.charge : pellet ? 0.6 : dart ? 0.6 : shell ? (p.primary ? 0.8 : 1.6) : 1);
       item.core.visible = !shell || (p.age * 6) % 1 < 0.5;
       item.core.material.color.setHex(slug ? 0xff9a40 : pellet ? 0xffe2a0 : shell ? 0xff4020 : 0xffb060);
       if (slug) {
@@ -521,6 +575,16 @@ export class Effects {
     }
   }
 
+  /** A cooling tower's steam at `p`, over its 20 m lip: huge, pale billows rising and leaning downwind. */
+  steam(p, dt) {
+    for (let i = count(4, dt); i > 0; i--) {
+      spot.set(p.x + rand(-7, 7), p.y, p.z + rand(-7, 7));
+      this.soft.spawn(spot, scatter(WIND, rand(3, 4.5), 0.5), {
+        life: rand(8, 11), size: [rand(10, 14), rand(30, 40)], color: [[1, 1, 0.96], [0.86, 0.88, 0.86]], alpha: 0.45, drag: 0.08,
+      });
+    }
+  }
+
   /** Sparks rising from a stack or furnace at `p`, `rate` a second, drifting downwind as they cool. */
   sparks(p, dt, rate) {
     for (let i = count(rate, dt); i > 0; i--) {
@@ -539,13 +603,21 @@ export class Effects {
 
   /**
    * A map's own motes adrift around `p` (the camera), as its palette's `motes` describes them:
-   * pollen, fireflies, spores. `color` is [start, end]; they drift `drift` m/s, rise `rise` m/s.
+   * pollen, fireflies, spores, snow. `color` is [start, end]; they drift `drift` m/s, rise `rise`
+   * m/s, and blow along `wind` ([x, z] m/s, steady), born within `range` m across of `p` (upwind of
+   * it, so they blow through) and `band` heights (world [y0, y1]; else round `p`'s); `solid` ones
+   * are flakes, not glowing specks; with `streak` (s of travel trailing each, `alpha` its head's),
+   * rain. A list of these is each in turn.
    */
-  motes(p, dt, { color, rate = 60, size = 0.22, drift = 0.5, rise = 0.2, life = 6 }) {
+  motes(p, dt, spec) {
+    if (Array.isArray(spec)) return spec.forEach((s) => this.motes(p, dt, s));
+    const { color, rate = 60, size = 0.22, drift = 0.5, rise = 0.2, life = 6, wind = [0, 0], range = 35, band = null, solid = false, streak = 0, alpha = 0.5 } = spec;
+    const [wx, wz] = wind, back = life * 0.4, pool = solid ? this.flakes : this.embers;
     for (let i = count(rate, dt); i > 0; i--) {
-      spot.set(p.x + rand(-35, 35), p.y + rand(-6, 14), p.z + rand(-35, 35));
-      v.set(rand(-1, 1) * drift, rise * rand(0.5, 1.5), rand(-1, 1) * drift);
-      this.embers.spawn(spot, v, { life: rand(life * 0.6, life), size: [rand(size * 0.7, size), size * 0.3], color, drag: 0.1 });
+      spot.set(p.x + rand(-range, range) - wx * back, band ? rand(band[0], band[1]) : p.y + rand(-6, 14), p.z + rand(-range, range) - wz * back);
+      v.set(rand(-1, 1) * drift + wx, rise * rand(0.5, 1.5), rand(-1, 1) * drift + wz);
+      if (streak) this.rain.spawn(spot, v, { life: rand(life * 0.6, life), color: color[0], alpha, length: streak });
+      else pool.spawn(spot, v, { life: rand(life * 0.6, life), size: solid ? [size, size * 0.8] : [rand(size * 0.7, size), size * 0.3], color, drag: wx || wz ? 0 : 0.1 });
     }
   }
 
