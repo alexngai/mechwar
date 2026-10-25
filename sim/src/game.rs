@@ -3406,4 +3406,60 @@ mod tests {
         assert!(landed >= 30, "only {landed} strikes landed (of {released})");
         assert!(landed * 10 >= released * 9, "only {landed} of {released} strikes landed");
     }
+
+    #[test]
+    fn bots_aim_at_the_middle_of_each_size_of_mech() {
+        // A bot with the Rifle 40 m from a human standing in the open, each class against each:
+        // its shots that hit, (hits, shots) by its class and the target's.
+        let t = Tuning::default();
+        let loadout = Loadout::named("pike", "rocket");
+        let mut tally = [[(0u32, 0u32); 3]; 3];
+        for (class, target) in MechClass::ALL.into_iter().flat_map(|a| MechClass::ALL.map(|b| (a, b))) {
+            let (hits, shots) = &mut tally[class.index()][target.index()];
+            for seed in 1..=4 {
+                let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+                game.bots = false;
+                let human = game.join().unwrap();
+                let bot = game.add_player(1, Some(Bot::new(seed)), class).unwrap();
+                let at = Vector::new(-36.0, 0.1, -2.0);
+                for (id, pos, c) in [(human, Vector::new(-36.0, 0.1, -42.0), target), (bot, at, class)] {
+                    let p = game.players.iter_mut().find(|p| p.id == id).unwrap();
+                    let l = Loadout { ability: if c == MechClass::C { 2 } else { 1 }, ..loadout };
+                    (p.class, p.loadout, p.next_loadout) = (c, l, l);
+                    p.mech = Mech { class: c, ..spawn(&game.arsenal, c, l, pos) };
+                }
+                unshield(&mut game);
+                for _ in 0..secs(10.0) {
+                    send(&mut game, human, Input::default());
+                    game.step();
+                    for e in &game.events {
+                        if let Event::Shot { shooter, hit, .. } = *e
+                            && shooter == bot
+                        {
+                            (*hits, *shots) = (*hits + u32::from(hit == Some(human)), *shots + 1);
+                        }
+                    }
+                    for p in &mut game.players {
+                        // The bot holds its spot, with its gun alone; the human never dies.
+                        if p.id == bot {
+                            (p.mech.pos, p.mech.vel, p.mech.alt_wait, p.mech.grenades, p.mech.emps, p.mech.ability_cooldown) = (at, Vector::ZERO, 99.0, 0, 0, 99.0);
+                        } else {
+                            p.mech.health = 1.0e3;
+                        }
+                    }
+                }
+            }
+        }
+        // Its own size costs it nothing: on each target it hits about as often as one the
+        // target's size does. Aimed at its own middle's height, a Light hit a Heavy 150 of 204
+        // shots (a Heavy, 214 of 240).
+        let rate = |c: MechClass, t: MechClass| {
+            let (hits, shots) = tally[c.index()][t.index()];
+            assert!(shots >= 100, "{c:?} fired {shots} shots at {t:?}");
+            hits as f32 / shots as f32
+        };
+        for (class, target) in MechClass::ALL.into_iter().flat_map(|a| MechClass::ALL.map(|b| (a, b))) {
+            assert!(rate(class, target) >= 0.9 * rate(target, target), "{class:?} on {target:?}: {:?}", tally);
+        }
+    }
 }

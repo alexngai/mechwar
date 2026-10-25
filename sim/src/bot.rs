@@ -297,6 +297,12 @@ const POST_HOLD: f32 = 3.0;
 /// keeps going before it turns about, so a long flight is led to where it's as likely to be as
 /// anywhere, not past it.
 const LEAD_MAX: f32 = 0.7;
+/// A charged shot, ready, waits for the bot's read of its target's motion to settle: until the
+/// lead would be off by no more than `SETTLE` m as far as what it saw shows, or it has held full
+/// charge `SETTLE_WAIT` s. Its read lags a turn by about half a second, and a round a second let
+/// go then misses: a gun firing on spreads its misses over the fight instead.
+const SETTLE: f32 = 1.0;
+const SETTLE_WAIT: f32 = 1.0;
 /// How far off a pile driver's facing its target can be for it to let go: inside the lunge's cone.
 const STRIKE_CONE: f32 = 10.0 * PI / 180.0;
 /// Farthest a bot lobs shells that land and wait to burst: a grenade launcher's (they bounce), mines.
@@ -639,6 +645,10 @@ pub struct Bot {
     seen_vel: Vector,
     seen_last: Option<Vector>,
     misjudge: (f32, f32),
+    /// The motion it saw over the last tick, unsmoothed, and the last tick its gun wasn't fully
+    /// charged: when to let a charged shot go (`SETTLE`).
+    seen_step: Vector,
+    charged_at: u32,
     /// Mending a teammate this tick.
     mending: bool,
     /// Target chest positions, oldest first, so aim lags by the reaction time.
@@ -714,6 +724,8 @@ impl Bot {
             seen_vel: Vector::ZERO,
             seen_last: None,
             misjudge: (0.0, 0.0),
+            seen_step: Vector::ZERO,
+            charged_at: 0,
             mending: false,
             seen: VecDeque::new(),
             last_health: 0.0,
@@ -812,13 +824,14 @@ impl Bot {
         self.orbs.iter().any(|o| flat(*o - me.pos).length() < AT_ORB)
     }
 
-    /// Aims a grenade's arc at `spot` and throws once on it.
+    /// Aims a grenade's arc at `spot` and throws once on it: the low arc through it, however far
+    /// below the eye (as a shell's, in `decide`), so it comes down there.
     fn lob(&mut self, t: &Tuning, me: &Mech, item: Item, spot: Vector, tick: u32) -> Input {
         let g = t.thrown(item);
         let eye = me.pos + Vector::Y * t.eye_height;
         let (yaw, _) = look_at(eye, spot);
-        let r = (g.alt_gravity * flat(spot - eye).length() * (1.0 + self.misjudge.1) / (g.alt_speed * g.alt_speed)).min(1.0);
-        let pitch = 0.5 * asinf(r) - g.alt_loft_deg.to_radians();
+        let judged = flat(spot - eye).length() * (1.0 + self.misjudge.1);
+        let pitch = lob_pitch(g.alt_gravity, g.alt_speed, judged, spot.y - eye.y) - g.alt_loft_deg.to_radians();
         let max_turn = self.max_turn(t);
         let new_yaw = me.yaw + wrap(yaw - me.yaw).clamp(-max_turn, max_turn);
         let new_pitch = me.pitch + (pitch - me.pitch).clamp(-max_turn, max_turn);
@@ -834,6 +847,13 @@ impl Bot {
         let mut bot = Self::new(seed);
         bot.skill = (around + (bot.rand() - 0.5) * SKILL_SPREAD).clamp(0.0, 1.0);
         bot
+    }
+
+    /// The middle of enemy `id` (a mech, or a turret's stand-in) standing at `pos`: what the bot
+    /// looks for and aims at. As high as its kit has it (`FoeKit`); with none, as the bot's own (a
+    /// turret's stand-in is set below its body by that).
+    fn chest(&self, t: &Tuning, id: Option<u8>, pos: Vector) -> Vector {
+        pos + Vector::Y * id.and_then(|id| self.foes.iter().find(|f| f.id == id)).map_or(t.mech_height * 0.5, |f| f.mid)
     }
 
     /// Its reaction time, aim wander (radians) and turn per tick (radians), by skill: each
@@ -905,9 +925,9 @@ impl Bot {
         for &(id, ref m, hull) in enemies {
             let known = self.contacts.iter().position(|c| c.id == id);
             let recently = known.and_then(|k| self.contacts[k].seen_at).is_some_and(|at| tick.saturating_sub(at) < secs(TRACK));
-            let (eye, chest) = (me.pos + Vector::Y * t.eye_height, m.pos + Vector::Y * (t.mech_height * 0.5));
+            let (eye, chest) = (me.pos + Vector::Y * t.eye_height, self.chest(t, Some(id), m.pos));
             let domed = || deploy::stops(&self.domes, t, &Ray::new(eye, (chest - eye).normalize_or_zero()), chest.distance(eye)).is_some();
-            let seen = in_view(arena, t, me, m, recently) && !item::hidden(&self.smoke, eye, chest) && !domed();
+            let seen = in_view(arena, t, me, chest, recently) && !item::hidden(&self.smoke, eye, chest) && !domed();
             let heard = m.pos.distance(me.pos) < noise(m);
             if let Some(k) = known {
                 self.contacts[k].seen = seen;
@@ -1074,7 +1094,7 @@ impl Bot {
             at.flag(Feature::FallingBack, true).flag(Feature::Mending, r.why == Why::Mend).set(Feature::Hull, me.health / t.health_max);
             at.flag(Feature::Overheated, me.overheated).set(Feature::Heat, me.heat / t.heat_max);
             if let Some(m) = target.filter(|m| m.health > 0.0) {
-                at.flag(Feature::TargetInSight, sees(arena, t, me, m)).set(Feature::TargetDist, m.pos.distance(me.pos));
+                at.flag(Feature::TargetInSight, sees_at(arena, t, me, self.chest(t, self.focus, m.pos))).set(Feature::TargetDist, m.pos.distance(me.pos));
             }
             at.set(Feature::EnemiesInView, self.contacts.iter().filter(|c| c.seen).count() as f32).set(Feature::MatesNear, f32::from(self.mates_near));
             if self.brain.wants(Action::StopFallingBack, &at) || tick >= r.until {
@@ -1096,7 +1116,7 @@ impl Bot {
                 }
             }
         }
-        if let Some(mate) = heal.filter(|_| alt_use(t) == AltUse::Beam && !target.is_some_and(|m| m.health > 0.0 && sees(arena, t, me, m))) {
+        if let Some(mate) = heal.filter(|_| alt_use(t) == AltUse::Beam && !target.is_some_and(|m| m.health > 0.0 && sees_at(arena, t, me, self.chest(t, self.focus, m.pos)))) {
             self.mending = true;
             return mend(t, me, mate, max_turn);
         }
@@ -1104,7 +1124,7 @@ impl Bot {
             // Nothing to fight in view. One that just ducked out of view nearby gets a grenade at
             // its last spot; otherwise go where an enemy was last known to be, watching that spot
             // when it's near, or patrol.
-            (self.seen_vel, self.seen_last) = (Vector::ZERO, None);
+            (self.seen_vel, self.seen_last, self.seen_step) = (Vector::ZERO, None, Vector::ZERO);
             self.seen.clear();
             if let Some(input) = self.keep_post(nav, t, me, tick) {
                 return input;
@@ -1132,7 +1152,8 @@ impl Bot {
             return self.walk(arena, nav, t, me, &spot, watch, tick);
         };
 
-        self.seen.push_back(target.pos + Vector::Y * (t.mech_height * 0.5));
+        let chest = self.chest(t, self.focus, target.pos);
+        self.seen.push_back(chest);
         let reaction_ticks = (self.reaction(t) * TICK_HZ).round() as usize;
         while self.seen.len() > reaction_ticks + 1 {
             self.seen.pop_front();
@@ -1142,11 +1163,15 @@ impl Bot {
         let step = self.seen_last.map(|last| (self.seen[0] - last) / DT).filter(|v| v.length() < MOTION_MAX);
         let k = DT / (DT + self.reaction(t));
         self.seen_vel = step.map_or(Vector::ZERO, |v| self.seen_vel + (v - self.seen_vel) * k);
+        // How far that read is behind what it saw (the target turned), and how fast what it saw is
+        // changing (turning, or speeding up), across: what a lead on it may miss by.
+        let (lag, swerve) = step.map_or((0.0, 0.0), |v| (flat(v - self.seen_vel).length(), flat(v - self.seen_step).length() / DT));
+        self.seen_step = step.unwrap_or(Vector::ZERO);
         self.seen_last = Some(self.seen[0]);
         let range = flat(target.pos - me.pos).length();
         let (near, far) = band(t, &self.policy);
 
-        if sees(arena, t, me, target) {
+        if sees_at(arena, t, me, chest) {
             let err = self.aim_error(t);
             self.wobble.0 = (self.wobble.0 + (self.rand() - 0.5) * err * 0.3).clamp(-err, err);
             self.wobble.1 = (self.wobble.1 + (self.rand() - 0.5) * err * 0.3).clamp(-err, err);
@@ -1308,10 +1333,15 @@ impl Bot {
             } else {
                 (self.strafe, if self.brain.wants(Action::BackOff, &at) { -1.0 } else { 0.0 })
             };
-            // A charged gun charges while it holds (on target or not) and lets go once full and
-            // on target; a rail gun is pressed one tick and let go the next; a lock-on launcher
-            // locks first, then fires once the lock holds; a pile driver winds up, then lets go.
-            let fire = shell.is_none() && !self.cooling && reaches && !hidden && if t.charge_time > 0.0 { !(on_target && me.charge >= 0.85) } else { on_target };
+            // A charged gun charges while it holds (on target or not) and lets go once full, on
+            // target, and sure of its lead (`SETTLE`); a rail gun is pressed one tick and let go
+            // the next; a lock-on launcher locks first, then fires once the lock holds; a pile
+            // driver winds up, then lets go.
+            if me.charge < 1.0 {
+                self.charged_at = tick;
+            }
+            let sure = lag * ahead + 0.5 * swerve * ahead * ahead <= SETTLE || tick >= self.charged_at + secs(SETTLE_WAIT);
+            let fire = shell.is_none() && !self.cooling && reaches && !hidden && if t.charge_time > 0.0 { !(on_target && me.charge >= 0.85 && sure) } else { on_target };
             let alt_fire = alt
                 && alt_cool
                 && !hidden
@@ -1421,7 +1451,7 @@ impl Bot {
             _ => spots.spots[post.spot].pos,
         };
         let max_turn = self.max_turn(t);
-        let (yaw, pitch) = look_at(me.pos + Vector::Y * t.eye_height, c.pos + Vector::Y * (t.mech_height * 0.5));
+        let (yaw, pitch) = look_at(me.pos + Vector::Y * t.eye_height, self.chest(t, Some(id), c.pos));
         let new_yaw = me.yaw + wrap(yaw - me.yaw).clamp(-max_turn, max_turn);
         let new_pitch = me.pitch + (pitch - me.pitch).clamp(-max_turn, max_turn);
         let off = flat(at - me.pos);
@@ -1590,19 +1620,24 @@ impl Bot {
     }
 }
 
-/// Clear line from `me`'s eye to `target`'s chest, within weapon range.
+/// Clear line from `me`'s eye to `target`'s chest (taking it for `me`'s size), within weapon range.
 pub fn sees(arena: &Arena, t: &Tuning, me: &Mech, target: &Mech) -> bool {
+    sees_at(arena, t, me, target.pos + Vector::Y * (t.mech_height * 0.5))
+}
+
+/// `me` has `chest` in clear sight within its gun's range.
+fn sees_at(arena: &Arena, t: &Tuning, me: &Mech, chest: Vector) -> bool {
     let eye = me.pos + Vector::Y * t.eye_height;
-    let d = target.pos + Vector::Y * (t.mech_height * 0.5) - eye;
+    let d = chest - eye;
     let len = d.length();
     len <= t.weapon_range && arena.cast_ray(&Ray::new(eye, d / len), len).is_none()
 }
 
 /// `target` is in `me`'s view: in clear sight within VISION, and in its field of view, or close,
 /// or `recently` in view (so one strafing past the edge isn't lost).
-fn in_view(arena: &Arena, t: &Tuning, me: &Mech, target: &Mech, recently: bool) -> bool {
+fn in_view(arena: &Arena, t: &Tuning, me: &Mech, chest: Vector, recently: bool) -> bool {
     let eye = me.pos + Vector::Y * t.eye_height;
-    let d = target.pos + Vector::Y * (t.mech_height * 0.5) - eye;
+    let d = chest - eye;
     let len = d.length();
     let facing = Rotation::from_rotation_y(me.yaw) * Vector::NEG_Z;
     let ahead = flat(d).normalize_or_zero().dot(facing) >= HALF_FOV.cos();
@@ -2302,6 +2337,83 @@ mod tests {
         // The misses: volleys let go just as it turned.
         assert!(volleys >= 10 && hits * 4 >= volleys * 3, "{hits} of {volleys} volleys hit");
         assert!(low / (hits as f32) < 0.15, "hits struck {} m below the chest on average", low / hits as f32);
+    }
+
+    #[test]
+    fn bots_let_charged_slugs_go_once_sure_of_the_lead() {
+        let (arena, nav, _) = blockout();
+        let loadout = Loadout::named("kiln", "darts");
+        let t = Arsenal::new(&Tuning::default()).get(MechClass::B, loadout).clone();
+        // A target 30 m off in the open strafing to and fro, turning about every 0.8 to 2 s as bots do.
+        let legs = [0.9, 0.9, 1.6, 1.6, 1.2, 1.2, 2.0, 2.0, 0.8, 0.8, 1.4, 1.4];
+        let (mut volleys, mut hits) = (0, 0);
+        for seed in 1..=4 {
+            let mut me = Mech { loadout, grenades: 0, ..spawn_mech(&t, Vector::new(-36.0, 0.1, -12.0)) };
+            let mut target = spawn_mech(&t, Vector::new(-36.0, 0.1, -42.0));
+            let (mut leg, mut side, mut turn_at) = (0, 1.0, secs(legs[0]));
+            let (mut bot, mut shells) = (Bot::new(seed), Vec::new());
+            for tick in 0..secs(30.0) {
+                if tick == turn_at {
+                    (leg, side) = ((leg + 1) % legs.len(), -side);
+                    turn_at += secs(legs[leg]);
+                }
+                // Only the gun: the secondary stays on cooldown, and the heat never builds.
+                (me.alt_wait, me.heat) = (1.0, 0.0);
+                let input = bot.think(&arena, nav, &t, &me, Some(&target), tick);
+                step_mech(&arena, &t, &mut me, &Input { yaw: input.yaw, pitch: input.pitch, fire: input.fire, ..Input::default() });
+                step_mech(&arena, &t, &mut target, &Input { move_x: side, ..Input::default() });
+                if me.shot {
+                    shells.extend(weapon::volley(&t, &me, 0, tick));
+                }
+                shells.retain_mut(|p| {
+                    let mut struck = false;
+                    let burst = projectile::fly(&arena, &t, p, |ray, max| {
+                        let toi = projectile::first_mech(ray, max, [(&t, &target)]);
+                        struck |= toi.is_some();
+                        toi
+                    });
+                    if burst.is_some() {
+                        (volleys, hits) = (volleys + 1, hits + u32::from(struck));
+                    }
+                    burst.is_none()
+                });
+            }
+        }
+        // Let go as soon as charged, a third hit (33 of 108): most went mid-turn, past its back.
+        assert!(hits * 5 >= volleys * 2 && hits >= 40, "{hits} of {volleys} slugs hit");
+    }
+
+    #[test]
+    fn bots_lob_grenades_and_smoke_onto_the_spot() {
+        let (arena, _, t) = blockout();
+        for item in [Item::Grenade, Item::Smoke] {
+            let g = t.thrown(item);
+            // Spots on the open ground ahead: smoke's throw (SMOKE_THROW), out to a grenade's reach.
+            for range in [SMOKE_THROW, 15.0, 20.0, 25.0] {
+                let mut me = spawn_mech(&t, Vector::new(-36.0, 0.0, 30.0));
+                let spot = me.pos - Vector::Z * range;
+                let mut bot = Bot::new(1);
+                // It turns onto the arc, then throws.
+                let thrown = (0..secs(3.0)).find_map(|tick| {
+                    let input = bot.lob(&t, &me, item, spot, tick);
+                    (me.yaw, me.pitch) = (input.yaw, input.pitch);
+                    input.grenade.then_some(me)
+                });
+                let mut p = projectile::volley(&g, &thrown.expect("never threw"), 0, 0)[0];
+                // Where it first comes down.
+                let mut down = None;
+                for _ in 0..secs(3.0) {
+                    let falling = p.vel.y < 0.0;
+                    let burst = projectile::fly(&arena, &g, &mut p, |_, _| None);
+                    if let Some(at) = burst.filter(|_| down.is_none()).or(Some(p.pos).filter(|_| falling && p.vel.y > 0.0)) {
+                        down = down.or(Some(at));
+                    }
+                }
+                // Thrown along the flat-ground arc from the eye, they came down 7 to 13 m past.
+                let off = flat(down.expect("never came down") - spot).length();
+                assert!(off < 2.0, "{item:?} lobbed {range} m came down {off} m off the spot");
+            }
+        }
     }
 
     #[test]
