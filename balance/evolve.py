@@ -18,6 +18,7 @@ import csv
 import io
 import json
 import math
+import os
 import random
 import re
 import subprocess
@@ -27,13 +28,24 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
-ARENA = ROOT / 'target' / 'release' / 'arena'
+# The arena binary: the release build, or another (BALANCE_ARENA) to compare builds.
+ARENA = Path(os.environ.get('BALANCE_ARENA', ROOT / 'target' / 'release' / 'arena'))
 # The server's rotation, as sim/src/map.rs lists it.
 MAPS = re.findall(r'"(\w+)"', re.search(r'ROTATION: \[&str; \d+\] = \[(.*?)\]', (ROOT / 'sim' / 'src' / 'map.rs').read_text()).group(1))
 WEAPONS = json.loads((ROOT / 'weapons.json').read_text())
 CLASSES = json.loads((ROOT / 'classes.json').read_text())
 LISTS = {'primary': 'primaries', 'secondary': 'secondaries', 'offensive': 'offensive', 'support': 'support', 'ability': 'abilities'}
 DEFAULT = json.loads(subprocess.run([ARENA, '--policy'], capture_output=True, text=True, check=True).stdout)
+# Genome 0's brain: per action, rules of (feature, curve) considerations (sim/src/brain.rs).
+# (An older arena has none: genomes then go without one, and play its fixed rules.)
+_brain = subprocess.run([ARENA, '--brain'], capture_output=True, text=True)
+BRAIN = json.loads(_brain.stdout) if _brain.returncode == 0 else None
+# Each measured feature's span, for the thresholds evolution draws; every other feature is a flag.
+SPAN = {'hull': (0.0, 1.0), 'heat': (0.0, 1.0), 'range': (0.0, 2.0), 'throws': (0.0, 3.0), 'charges': (0.0, 3.0), 'target_dist': (0.0, 60.0), 'enemies_in_view': (0.0, 4.0), 'mates_near': (0.0, 3.0)}
+FLAGS = ['mending', 'in_cover', 'overheated', 'hit', 'fire', 'alt_fire', 'striking', 'melee', 'target_jammed', 'target_thrusters', 'emp_reaches', 'alt_ready',
+         'grenade_ready', 'first_sight', 'perched', 'barrier_room', 'orb_near', 'exposed', 'limpet_out', 'limpet_hits', 'cooling', 'vent_ready', 'target_in_sight']
+# Which moment a rule is about: rules keep these.
+CONTEXT = {'engaged', 'falling_back', 'starting_fall_back'}
 # Genes that are shares (of hull, heat, range, or a chance): nudged by adding, kept in (0, 1).
 SHARES = {'cool_high', 'cool_low', 'band_near', 'dodge_chance', 'heat_fed'}
 ORDERED = [('cool_low', 'cool_high'), ('band_near', 'band_far')]
@@ -47,7 +59,60 @@ def cell(g):
 
 def stock(cls, primary):
     """Today's bot in a cell: default policy, the class's own kit with this primary."""
-    return {'class': cls, 'build': {**CLASSES[cls]['weapons'], 'primary': primary}, 'policy': dict(DEFAULT)}
+    g = {'class': cls, 'build': {**CLASSES[cls]['weapons'], 'primary': primary}, 'policy': dict(DEFAULT)}
+    if BRAIN:
+        g['brain'] = json.loads(json.dumps(BRAIN))
+    return g
+
+
+def threshold(curve):
+    """A curve's threshold (a step's, or a smooth one's middle), and a setter for it."""
+    (kind, value), = curve.items()
+    if isinstance(value, dict):
+        return value['mid'], lambda x: value.update(mid=x)
+    return value, lambda x: curve.update({kind: x})
+
+
+def mutate_brain(brain, rng):
+    """One change to one block of rules: a threshold nudged, a step softened, a consideration
+    added or dropped, a rule added or dropped."""
+    action = rng.choice(list(brain))
+    rules = brain[action]
+    op = rng.choices(['nudge', 'soften', 'add', 'drop', 'add_rule', 'drop_rule'], [35, 15, 20, 15, 10, 5])[0]
+    measured = [(r, c) for r in rules for c in r if c[0] in SPAN]
+    if op == 'nudge' and measured:
+        _, (feature, curve) = rng.choice(measured)
+        lo, hi = SPAN[feature]
+        x, put = threshold(curve)
+        put(round(min(hi, max(lo, x + rng.gauss(0, 0.1 * (hi - lo)))), 3))
+    elif op == 'soften' and measured:
+        rule, (feature, curve) = rng.choice(measured)
+        (kind, x), = curve.items()
+        if not isinstance(x, dict):
+            lo, hi = SPAN[feature]
+            smooth = 'falling' if kind in ('below', 'at_most') else 'rising'
+            rule[rule.index([feature, curve])] = [feature, {smooth: {'mid': x, 'steep': round(8 / (hi - lo), 3)}}]
+    elif op == 'add' and rules:
+        rng.choice(rules).append(fresh(rng))
+    elif op == 'drop' and rules:
+        rule = rng.choice(rules)
+        loose = [c for c in rule if c[0] not in CONTEXT]
+        if len(loose) > 1:
+            rule.remove(rng.choice(loose))
+    elif op == 'add_rule':
+        base = json.loads(json.dumps(rng.choice(rules))) if rules else [['engaged', {'above': 0.5}]]
+        rules.append([c for c in base if c[0] in CONTEXT] + [fresh(rng)] + ([fresh(rng)] if rng.random() < 0.5 else []))
+    elif op == 'drop_rule' and len(rules) > 1:
+        rules.remove(rng.choice(rules))
+
+
+def fresh(rng):
+    """A new consideration: a flag on or off, or a measured feature above or below a threshold."""
+    if rng.random() < 0.5:
+        return [rng.choice(FLAGS), {rng.choice(['above', 'at_most']): 0.5}]
+    feature = rng.choice(list(SPAN))
+    lo, hi = SPAN[feature]
+    return [feature, {rng.choice(['below', 'above']): round(rng.uniform(lo, hi), 3)}]
 
 
 def mutate(g, rng, archive, rate=0.2):
@@ -57,6 +122,14 @@ def mutate(g, rng, archive, rate=0.2):
     if rng.random() < 0.3 and mates:
         other = rng.choice(mates)['policy']
         g['policy'] = {k: (v if rng.random() < 0.5 else other[k]) for k, v in g['policy'].items()}
+    if BRAIN:
+        if rng.random() < 0.3 and mates:
+            other = rng.choice(mates).get('brain', BRAIN)
+            g['brain'] = {a: json.loads(json.dumps(rules if rng.random() < 0.5 else other.get(a, rules))) for a, rules in g.get('brain', BRAIN).items()}
+        # Rules change about as often as the numbers do.
+        g.setdefault('brain', json.loads(json.dumps(BRAIN)))
+        for _ in range(1 + int(rng.random() < 0.3)):
+            mutate_brain(g['brain'], rng)
     p = g['policy']
     for k in [k for k in p if rng.random() < rate] or [rng.choice(list(p))]:
         if k == 'role_cuts':
@@ -230,6 +303,12 @@ def report(args, archive, rows, ratings, cov, ids, log):
         up = sum(v > 1.1 * d for v in vals)
         down = sum(v < 0.9 * d for v in vals)
         lines.append(f'| {k} | {d:g} | {vals[len(vals) // 2]:g} | {up} / {down} |')
+    if BRAIN:
+        changed = {}
+        for e in archive.values():
+            for a, rules in e['genome'].get('brain', {}).items() if e['born'] > 0 else ():
+                changed[a] = changed.get(a, 0) + (rules != BRAIN.get(a))
+        lines += ['', '## Rules: blocks the evolved champions changed', '', ', '.join(f'{a} ({n})' for a, n in sorted(changed.items(), key=lambda kv: -kv[1]) if n) or 'None.']
     lines += ['', '## Log', '', '```', *log, '```', '']
     (args.out / 'report.md').write_text('\n'.join(lines))
     print('\n'.join(lines))
