@@ -7,3 +7,4 @@ sim/pkg/
 .claude/worktrees/
 .claude/launch.json
 */.DS_Store
+.DS_Store
