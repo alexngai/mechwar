@@ -190,7 +190,7 @@ function table(x, z, t, r, top, { roots = 4, turn = 0, long = false, lit = false
     const a = turn + k * 2.4 + rand(-0.3, 0.3), h = y + 12 + k * 4, u = [Math.cos(a), Math.sin(a)], len = Math.min(rand(2.5, 4.5), r - t - 1);
     beam([r3(x + u[0] * t * 0.5), r3(h), r3(z + u[1] * t * 0.5)], [r3(x + u[0] * (t * 0.78 + len)), r3(h + len * 0.6), r3(z + u[1] * (t * 0.78 + len))], 0.7, 0.7, 'bark');
   }
-  decor.push({ kind: 'pool', at: [x, r3(top + 0.04), z], r: r3(r * 0.82) });
+  decor.push({ kind: 'pool', at: [x, r3(top + 0.04), z], r: r3(r - 1.1) }); // to just inside the rim
   decor.push({ kind: 'fringe', at: [x, under, z], r, ...(long && { long }) });
   fungus(...offset([x, z], [Math.cos(turn + Math.PI / Math.max(roots, 1)), Math.sin(turn + Math.PI / Math.max(roots, 1))], t + 3), 2.5); // between its roots
   if (lit) {
@@ -417,7 +417,7 @@ function shelf([x, z], r, top, owner) {
   const u = unit(owner.at, [x, z]);
   beam([r3(owner.at[0] + u[0] * owner.t * 0.5), top - 9, r3(owner.at[1] + u[1] * owner.t * 0.5)], [r3(x), top - 1.2, r3(z)], 1.4, 1.4, 'bark');
   decor.push({ kind: 'fringe', at: [r3(x), top - 1.2, r3(z)], r });
-  decor.push({ kind: 'pool', at: [r3(x), r3(top + 0.05), r3(z)], r: r3(r * 0.78) });
+  decor.push({ kind: 'pool', at: [r3(x), r3(top + 0.05), r3(z)], r: r3(r - 1) });
   point([r3(x), top, r3(z)]);
   const disc = { at: [x, z], r, top, t: 1, links: [] };
   discs.push(disc);

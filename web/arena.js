@@ -254,11 +254,35 @@ function decorParts(d, parts, glow, lamp) {
   } else if (d.kind === 'fringe') {
     // What hangs from under a table tree's crown `r` m round (its underside at `at`): moss dripping
     // off the rim, or with `long`, veils too, from the rim and further in (into `glow.veils`).
-    const [x, y, z] = d.at, rings = d.long ? [[0.97, 1.3, 0.75], [0.6, 1.7, 0.45]] : [[0.98, 1.1, 2.6 / d.r]];
-    glow.veils.push(veils(x, y, z, d.r, seeded(x, z), glow.floor, rings));
+    const [x, y, z] = d.at, rnd = seeded(x, z), rings = d.long ? [[0.97, 1.3, 0.75], [0.6, 1.7, 0.45]] : [[0.98, 1.1, 2.6 / d.r]];
+    glow.veils.push(veils(x, y, z, d.r, rnd, glow.floor, rings));
+    // Mossy lumps round the rim, so it isn't a turned edge (props: nothing stands on them).
+    for (let k = 0, n = Math.round((2 * Math.PI * d.r) / 2.2); k < n; k++) {
+      const a = ((k + rnd(k + 400) * 0.5) / n) * 2 * Math.PI, s = 0.7 + 0.6 * rnd(k + 450), out = d.r - 0.2 + 0.3 * rnd(k + 500);
+      const g = new THREE.SphereGeometry(1, 5, 2).scale(s, s * 0.6, s).translate(x + Math.cos(a) * out, y + 0.7, z + Math.sin(a) * out);
+      parts.push(paint(g, leaves[k % leaves.length], 0.6 + 0.25 * rnd(k + 550)));
+    }
   } else if (d.kind === 'pool') {
-    // Water standing on a crown, `r` m round at `at`.
-    glow.pools.push(new THREE.CircleGeometry(d.r, 28).rotateX(-Math.PI / 2).translate(...d.at));
+    // Water standing on a crown, about `r` m round at `at`: an uneven shore (`shore` runs 0 mid-pool
+    // to 1 at it, for `poolMaterial`), mossy stones along it too low to trip on (props, as it is).
+    const [x, y, z] = d.at, rnd = seeded(x, z), n = Math.max(16, Math.round(d.r * 2.6));
+    const pos = [x, y, z], shore = [0], index = [];
+    for (let k = 0; k < n; k++) {
+      const a = (k / n) * 2 * Math.PI, rr = d.r * (1 + 0.035 * (rnd(k) * 2 - 1) + 0.02 * Math.sin(k * 0.9 + rnd(99) * 6)), c = Math.cos(a), s = Math.sin(a);
+      pos.push(x + c * rr, y, z + s * rr);
+      shore.push(1);
+      index.push(0, 1 + ((k + 1) % n), 1 + k);
+      for (let j = 0, m = rnd(k + 200) < 0.5 ? 1 : 2; j < m; j++) {
+        const t = a + (j - 0.5) * 0.08, size = 0.25 + 0.3 * rnd(k * 2 + j + 250), o = rr + 0.05 + 0.2 * rnd(k * 2 + j + 300);
+        const hex = rnd(k + 360) < 0.5 ? COLORS.stone : leaves[(k + j) % leaves.length];
+        parts.push(paint(new THREE.SphereGeometry(1, 5, 2).scale(size, size * 0.45, size).translate(x + Math.cos(t) * o, y - 0.08, z + Math.sin(t) * o), hex, 0.8 + 0.3 * rnd(k + 350)));
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('shore', new THREE.Float32BufferAttribute(shore, 1));
+    g.setIndex(index);
+    glow.pools.push(g);
   } else if (d.kind === 'falls') {
     // Water pouring off a crown's rim at `from` down to `to`, `w` m across, and mist where it lands.
     const [a, b] = [new THREE.Vector3(...d.from), new THREE.Vector3(...d.to)], h = a.y - b.y;
@@ -409,6 +433,45 @@ function fallsMaterial(uniforms) {
         float streak = fract(sin(floor(vFallen.y * 2.2) * 91.7) * 43758.5);
         float run = fract(vFallen.x * 0.08 - fallTime * (0.9 + 0.6 * streak));
         diffuseColor.a = (0.22 + 0.3 * smoothstep(0.6, 1.0, run)) * smoothstep(0.0, 1.5, vFallen.x) * (0.55 + 0.45 * streak);`,
+      );
+  };
+  return material;
+}
+
+/**
+ * Glowing pools (the palette's `pool` color): deeper toward the middle and bright in the shallows,
+ * a web of caustic light swimming over them, the sky in them at a glance (the fog's color, nearer
+ * the horizon) and the sun's glint off their ripples (`sun`, toward it). `uniforms.poolTime` is the
+ * caller's to advance.
+ */
+function poolMaterial(color, sun, uniforms) {
+  const material = hot(new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.94, depthWrite: false, side: THREE.DoubleSide }));
+  const glowing = material.onBeforeCompile;
+  Object.assign(uniforms, { poolSun: { value: new THREE.Vector3(...sun).normalize() } });
+  material.onBeforeCompile = (shader, renderer) => {
+    glowing(shader, renderer);
+    Object.assign(shader.uniforms, uniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float shore;\nvarying float vShore;\nvarying vec3 vWorld;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n  vShore = shore;\n  vWorld = position;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float poolTime;\nuniform vec3 poolSun;\nvarying float vShore;\nvarying vec3 vWorld;')
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        diffuseColor.rgb *= mix(0.6, 1.15, smoothstep(0.15, 1.0, vShore));
+        // Two webs of light, one turned on the other, brightest where their threads cross.
+        vec2 p = vWorld.xz * 1.1 + vec2(sin(vWorld.z * 0.5 + poolTime * 0.5), cos(vWorld.x * 0.45 - poolTime * 0.4)) * 0.7;
+        vec2 p2 = mat2(0.8, -0.6, 0.6, 0.8) * p * 1.37 + 3.1;
+        float web = min(abs(sin(p.x + poolTime * 0.9) + sin(p.y * 1.13 - poolTime * 0.7) + sin((p.x + p.y) * 0.77 + poolTime * 0.5)),
+          abs(sin(p2.x - poolTime * 0.8) + sin(p2.y * 1.21 + poolTime * 0.6) + sin((p2.x - p2.y) * 0.83 - poolTime * 0.45)));
+        diffuseColor.rgb += vec3(0.75, 1.0, 0.92) * pow(max(0.0, 1.0 - web * 0.55), 6.0) * 0.5;
+        vec3 eye = normalize(cameraPosition - vWorld);
+        vec3 ripple = normalize(vec3(sin(p.x * 2.0 + poolTime * 1.3) * 0.05, 1.0, cos(p.y * 2.2 - poolTime * 1.1) * 0.05));
+        #ifdef USE_FOG
+          diffuseColor.rgb = mix(diffuseColor.rgb, fogColor * 1.25, pow(1.0 - clamp(eye.y, 0.0, 1.0), 5.0) * 0.55);
+        #endif
+        diffuseColor.rgb += vec3(1.0, 0.94, 0.82) * pow(max(dot(reflect(-eye, ripple), poolSun), 0.0), 140.0) * 0.9;`,
       );
   };
   return material;
@@ -751,8 +814,11 @@ export function buildArena(scene, map) {
     meshes.push(veiled);
   }
   if (glow.pools.length) {
-    // Water standing on the crowns, glowing a pale mint (the palette's `pool`) from within.
-    meshes.push(new THREE.Mesh(mergeGeometries(glow.pools), hot(new THREE.MeshBasicMaterial({ color: palette.pool ?? '#58c4a8', transparent: true, opacity: 0.92, depthWrite: false }))));
+    // Water standing on the crowns, glowing from within.
+    const uniforms = { poolTime: { value: 0 } };
+    const pools = new THREE.Mesh(mergeGeometries(glow.pools), poolMaterial(palette.pool ?? '#58c4a8', palette.sunDir ?? [0.45, 0.8, 0.35], uniforms));
+    pools.onBeforeRender = () => (uniforms.poolTime.value = (performance.now() / 1000) % 1000);
+    meshes.push(pools);
   }
   if (glow.falls.length) {
     const uniforms = { fallTime: { value: 0 } };
