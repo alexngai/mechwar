@@ -312,8 +312,11 @@ const STICKY_M: f32 = 5.0;
 const FOCUS_M: f32 = 10.0;
 /// A bot following its lead with nothing to do holds within this distance of it.
 const FOLLOW: f32 = 10.0;
-/// A bot this far or more from its order's spot is on its way there: it fights on the move.
+/// A bot this far or more from its order's spot (across, or this far up or down: on another deck
+/// or level) is on its way there: it fights on the move, and farther than CATCH_UP it boosts.
 const ERRAND: f32 = 6.0;
+const ERRAND_RISE: f32 = 3.0;
+const CATCH_UP: f32 = 20.0;
 /// Farther than this from its lead, a bot rejoins it before going after a vague contact: one it
 /// was only told of, or only heard from farther than `URGENT` (one it saw, felt, or heard close
 /// it goes after at once).
@@ -975,7 +978,15 @@ impl Bot {
                 let rot = Rotation::from_rotation_y(new_yaw);
                 (dir.dot(rot * Vector::X), dir.dot(rot * Vector::NEG_Z))
             } else {
-                (self.strafe, if range < near { -1.0 } else { 0.0 })
+                // Not off a ledge, strafing or backing off: a drop ahead turns the strafe round,
+                // and it holds its ground rather than back over one.
+                let rot = Rotation::from_rotation_y(new_yaw);
+                let ground = |x: f32, z: f32| ledge_free(arena, me.pos, rot * Vector::new(x, 0.0, -z));
+                if !ground(self.strafe, 0.0) {
+                    self.strafe = -self.strafe;
+                }
+                let back = if range < near && ground(0.0, -1.0) { -1.0 } else { 0.0 };
+                (if ground(self.strafe, 0.0) { self.strafe } else { 0.0 }, back)
             };
             // A charged gun charges while it holds (on target or not) and lets go once full and
             // on target; a rail gun is pressed one tick and let go the next; a lock-on launcher
@@ -1024,6 +1035,9 @@ impl Bot {
                     Ability::Barrage | Ability::Artillery => fire && range <= far,
                     Ability::Cloak => false,
                 },
+                // Fallen behind its order (an objective on the move, as Convoy's hauler is): boost
+                // to catch up, firing as it goes, while the fuel lasts.
+                boost: errand.as_ref().is_some_and(|o| flat(o.pos - me.pos).length() > CATCH_UP) && me.fuel > 0.3 * t.fuel_max,
                 ..Input::default()
             };
         }
@@ -1033,9 +1047,10 @@ impl Bot {
         self.walk(arena, nav, t, me, errand.as_ref().unwrap_or(target), false, tick)
     }
 
-    /// Its order's spot while it's still on its way there.
+    /// Its order's spot while it's still on its way there: off across, or on another level.
+    /// (See `ledge_free` for the strafe's footing.)
     fn errand(&self, me: &Mech) -> Option<Mech> {
-        self.order.filter(|o| flat(*o - me.pos).length() > ERRAND).map(|pos| Mech { pos, ..Mech::default() })
+        self.order.filter(|o| flat(*o - me.pos).length() > ERRAND || (o.y - me.pos.y).abs() > ERRAND_RISE).map(|pos| Mech { pos, ..Mech::default() })
     }
 
     /// Walking the waypoint graph toward `target` (a mech, or just a spot), out of the fight:
@@ -1239,6 +1254,17 @@ fn mend(t: &Tuning, me: &Mech, mate: &Mech, max_turn: f32) -> Input {
         alt_fire: on && to.length() < t.alt_beam && !me.overheated && me.heat < 0.85 * t.heat_max,
         ..Input::default()
     }
+}
+
+/// How far a strafe looks ahead for footing (m), and the drop (m) that counts as a ledge.
+const LEDGE_LOOK: f32 = 2.5;
+const LEDGE_DROP: f32 = 4.0;
+
+/// Whether a mech at `feet` moving along `dir` has ground ahead: something within LEDGE_DROP
+/// under the spot LEDGE_LOOK on (a deck's edge over a chasm doesn't).
+fn ledge_free(arena: &Arena, feet: Vector, dir: Vector) -> bool {
+    let ahead = feet + flat(dir).normalize_or_zero() * LEDGE_LOOK + Vector::Y;
+    arena.cast_ray(&Ray::new(ahead, Vector::NEG_Y), 1.0 + LEDGE_DROP).is_some()
 }
 
 fn flat(v: Vector) -> Vector {

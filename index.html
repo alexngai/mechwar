@@ -21,6 +21,10 @@
     #score .bar i { display: block; height: 100%; background: currentColor; }
     #score .pip { display: inline-block; min-width: 20px; padding: 0 5px; border: 2px solid currentColor; border-radius: 3px; font-size: 15px; line-height: 20px; }
     #score .pip.contested { animation: blink 0.5s steps(2) infinite; }
+    #score .track { position: relative; display: inline-block; width: 240px; height: 6px; background: #ffffff24; }
+    #score .track i { position: absolute; top: -5px; width: 2px; height: 16px; margin-left: -1px; background: #ffffff70; }
+    #score .track b { position: absolute; top: 50%; transform: translate(-50%, -52%); font-size: 18px; line-height: 1; }
+    #score .track b.contested { animation: blink 0.5s steps(2) infinite; }
     @keyframes blink { 50% { opacity: 0.35; } }
     #score .state { margin-top: 4px; font-size: 13px; letter-spacing: 1px; color: #e9f1ea; }
     #banner { position: fixed; top: 30%; left: 0; right: 0; text-align: center; font-size: 28px; letter-spacing: 2px; text-shadow: 0 2px 6px #000; pointer-events: none; }
