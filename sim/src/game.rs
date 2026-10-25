@@ -608,13 +608,14 @@ impl Game {
             let t = self.arsenal.of(&me.mech);
             let hurt = |q: &&Player| q.mech.health / self.arsenal.of(&q.mech).health_max;
             let mates = || self.players.iter().filter(|q| q.team == me.team && q.id != me.id && alive(q));
+            let mid = |q: &Player| self.arsenal.of(&q.mech).mech_height * 0.5;
             let heal = (t.alt_beam > 0.0)
                 .then(|| {
                     mates()
                         .filter(|q| hurt(q) < 0.97)
-                        .filter(|q| q.mech.pos.distance(me.mech.pos) < 2.0 * t.alt_beam && bot::sees(&self.arena, t, &me.mech, &q.mech))
+                        .filter(|q| q.mech.pos.distance(me.mech.pos) < 2.0 * t.alt_beam && bot::sees_at(&self.arena, t, &me.mech, q.mech.pos + Vector::Y * mid(q)))
                         .min_by(|a, b| hurt(a).total_cmp(&hurt(b)))
-                        .map(|q| q.mech)
+                        .map(|q| (q.mech, mid(q)))
                 })
                 .flatten();
             // A torch follows the nearest teammate without one (so two torches don't hold on each
@@ -665,7 +666,7 @@ impl Game {
             bot.orbs.extend(self.orbs.iter().filter(|o| o.dropped.is_none_or(|(_, side)| usize::from(side) == team)).map(|o| o.pos));
             let (focus, enemies) = &seen[i];
             let target = focus.and_then(|id| enemies.iter().find(|e| e.0 == id)).map(|e| e.1);
-            let mut input = bot.think_with(&self.arena, self.nav, t, &p.mech, target.as_ref(), heal.as_ref(), self.tick);
+            let mut input = bot.think_with(&self.arena, self.nav, t, &p.mech, target.as_ref(), heal.as_ref().map(|(m, mid)| (m, *mid)), self.tick);
             if p.mech.health > 0.0 {
                 p.tally.doing[bot.doing() as usize] += 1;
             }
