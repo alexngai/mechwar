@@ -7,7 +7,7 @@
 // tall and 3.6 m wide, so lanes and doors are 9+ m wide and clearances 6+ m; ramps stay near 23
 // degrees (walkable is 40); hover tops out at 3.5 m, so 3 m ledges are hover shortcuts and the 7 m
 // and 14 m tiers need ramps.
-import { bases, box, furnace, growth, lamp, once, pad, pipe, point, railing, ramp, sentries, siege, sign, silos, stack, turned, write } from './kit.mjs';
+import { bases, box, convoy, flagStand, flags, furnace, growth, lamp, once, pad, pipe, point, railing, ramp, sentries, siege, sign, silos, stack, turned, write } from './kit.mjs';
 
 const SLAG = '#ff6a14';
 
@@ -124,7 +124,7 @@ box([38, 0, 31], [41, 3, 35], 'rust');
 lamp([-9, 0, 30]);
 lamp([40, 0, 47]);
 lamp([-20, 0, 62]);
-point([-24, 0, 18], [28, 0, 22], [-32, 0, 38], [30, 0, 44], [0, 0, 44], [-22, 0, 56], [20, 0, 62], [-45, 0, 62], [45, 0, 62], [-40, 0, 76], [40, 0, 76]);
+point([-24, 0, 18], [28, 0, 22], [-32, 0, 38], [30, 0, 44], [0, 0, 44], [-22, 0, 56], [20, 0, 62], [-45, 0, 62], [45, 0, 62], [-40, 0, 76]);
 
 // --- East lane: pipe-rack catwalk (7) over container yards -----------------------------------
 // The whole rack is authored (it straddles z = 0); the twin is the west lane's.
@@ -170,11 +170,22 @@ point([-80, 0, 16], [-110, 0, 41], [-84, 0, 41], [-84, 0, 62], [-58, 0, 22], [-5
 bases([0, 0, 100]);
 // Base guns: one up on the gantry over the yard, one on the hangar roof.
 sentries([[22, 7, 110], [-9.5, 14, 86.5]]);
+// Capture the Flag: the stand outside the yard's east wall, by its east gate, its back to the base
+// guns and its doorways to the courtyard and the east lane.
+flags(flagStand([40, 0, 82], 0));
 // B's launch pad is on the smelter's roof, over the arcade.
 silos({ at: [-62, 0, 45], radius: 10, band: 4, pad: [-57.5, 0, 45] }, { at: [0, 0, 0], radius: 16, band: 4, pad: [0, 14, 0] });
 // Siege: the station in the smelter's arcade, round its core, the AA gun on its roof (up the
 // skybridges from the bases, or the hover steps), the ships over the skybridge line.
 siege({ at: [0, 0, 0], radius: 16, band: 4 }, { at: [0, 14, 0], radius: 9, band: 3, pad: [-5, 14, 0] }, 55);
+// Convoy: the hauler starts beside the smelter's east doorway (the arcade under the ring deck is too
+// low for it, the core solid), so the middle is off the twin's center and both legs are authored: up
+// the east side of each courtyard, round its cover, in through the east gate. It starts a few meters
+// south of the doorway's middle, which evens the two legs (the south one winds more).
+convoy(
+  [[22.5, 0, -4.5], [22.5, 0, 6], [22.5, 0, 12], [25, 0, 18], [27.5, 0, 22], [30.5, 0, 27], [31, 0, 34], [31, 0, 44], [36, 0, 50], [38, 0, 56], [38, 0, 62], [33, 0, 67], [27, 0, 70], [22, 0, 72], [20, 0, 76], [20, 0, 82], [20, 0, 88], [13, 0, 95], [4, 0, 98]],
+  [[22.5, 0, -4.5], [22.5, 0, -10], [29, 0, -21], [31, 0, -28], [31, 0, -35], [20, 0, -44], [16, 0, -50], [20.5, 0, -56], [26, 0, -59.5], [31.5, 0, -62], [32, 0, -67], [27, 0, -71], [22, 0, -72.5], [20, 0, -76], [20, 0, -82], [20, 0, -88], [13, 0, -95], [4, 0, -98]],
+);
 
 // --- Spawns, twin, write ---------------------------------------------------------------------
 const north = [[-4, 0.1, 96], [-14, 0.1, 96], [-24, 0.1, 96], [-24, 0.1, 106]];

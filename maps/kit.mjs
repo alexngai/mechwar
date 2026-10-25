@@ -176,6 +176,53 @@ export function sentries(north, south = north.map(flip)) {
 }
 
 /**
+ * A Capture the Flag stand: a shelter 16 m square, walls 1 m thick up to a roof slab 7 m over its
+ * floor (`at`, the middle), with two 7 m doorways, full height, in the sides that face -Z and +X
+ * before it's turned `yaw` degrees. The walls hide the flag from its own base guns, so turn the
+ * doorways away from them, toward the enemy's approach. Waypoints in its middle and either side of
+ * each doorway let bots in and out. Returns the zone spot for `flags`.
+ */
+export function flagStand(at, yaw, { wall = 'concrete', roof = 'metal' } = {}) {
+  const [x, y, z] = at, r = (yaw * Math.PI) / 180, [s, c] = [Math.sin(r), Math.cos(r)];
+  // Local (lx, lz) to world, turned as the sim turns a box's yaw.
+  const place = (lx, lz) => [r3(x + lx * c + lz * s), r3(z - lx * s + lz * c)];
+  const piece = ([lx, lz], [hx, hz], y0, y1, mat) => {
+    const [px, pz] = place(lx, lz);
+    turned([px, r3((y0 + y1) / 2), pz], [hx, r3((y1 - y0) / 2), hz], yaw, mat);
+  };
+  const D = 3.5; // half a doorway
+  piece([0, 0], [8, 8], y + 7, y + 8, roof);
+  for (const [p, h] of [
+    [[0, 7.5], [8, 0.5]], // back, +Z
+    [[-7.5, 0], [0.5, 7]], // side, -X
+    [[-(8 + D) / 2, -7.5], [(8 - D) / 2, 0.5]], // front, -Z, either side of its doorway
+    [[(8 + D) / 2, -7.5], [(8 - D) / 2, 0.5]],
+    [[7.5, -(7 + D) / 2], [0.5, (7 - D) / 2]], // side, +X, either side of its doorway
+    [[7.5, (7 + D) / 2], [0.5, (7 - D) / 2]],
+  ]) piece(p, h, y - 0.5, y + 7, wall);
+  const floor = (lx, lz) => {
+    const [px, pz] = place(lx, lz);
+    return [px, terrain ? r3(heightAt(px, pz)) : y, pz];
+  };
+  point(at, floor(0, -5), floor(0, -12), floor(5, 0), floor(12, 0));
+  return { at, radius: 5, band: 3 };
+}
+
+/** Capture the Flag: each team's flag stand (`flagStand`'s spot): `south` defaults to `north`'s twin. */
+export function flags(north, south = { ...north, at: flip(north.at) }) {
+  objectives.flags = [north, south];
+}
+
+/**
+ * Convoy: the hauler's route, points on walkable ground at feet height: `north` from the middle (where
+ * it starts) to team 0's base, `south` from the same middle point to team 1's, defaulting to `north`'s
+ * twins.
+ */
+export function convoy(north, south = north.map(flip)) {
+  objectives.convoy = { points: [...north].reverse().concat(south.slice(1)), start: north.length - 1 };
+}
+
+/**
  * Siege: the energy station's zone `station` (`{ at, radius, band }`: one, mid-map, for the teams
  * to fight over), the anti-air gun's capture zone `aa` (the same shape, plus `pad`: where the gun
  * stands, on a surface under open sky), and `sky`, how high the battleships cruise.

@@ -8,7 +8,7 @@
 // (maps/kit.mjs) adds the 180-degree twin. Metrics as the other maps': 9-10 m lanes and gates,
 // 6.5 m+ under decks, ramps near 24 degrees, 3 m hover ledges. Hover lasts about 5 s and a dash is
 // 8.5 m, so a 12 m gap takes a hover; there's no fall damage, so the chasm is a slow road, not a pit.
-import { bases, box, growth, lamp, once, pad, point, r3, railing, ramp, sentries, siege, sign, silos, turned, write } from './kit.mjs';
+import { bases, box, convoy, flagStand, flags, growth, lamp, once, pad, point, r3, railing, ramp, sentries, siege, sign, silos, turned, write } from './kit.mjs';
 
 const BASE = -25; // bottom of every rock mass
 const MAGENTA = '#ff6be0', LILAC = '#c9a2ff', RIFT = '#b45cff';
@@ -153,11 +153,17 @@ point([52, 0, 84], [52, 7, 57], [-15, 0, 80], [15, 0, 80], [-15, 0, 96], [15, 0,
 bases([-16, 0, 105]);
 // Base guns: one at the back of the yard, one up on the hangar roof.
 sentries([[-14, 0, 117.5], [12, 7, 107.5]]);
+// Capture the Flag: the stand outside the yard's west wall, its back to the base guns, its doorways
+// to the rim and the west gate.
+flags(flagStand([-47, 0, 90], 0));
 // B's launch pad is on the rail deck, over the road.
 silos({ at: [-84, 0, 46], radius: 10, band: 4, pad: [-84, 0, 42] }, { at: [0, 0, 0], radius: 10, band: 4, pad: [0, 10, 0] });
 // Siege: the station on the bridge's road deck, the AA gun up on the rail deck over it (the top of
 // the bridge, by the ramps at the bridgeheads), the ships over the bridge.
 siege({ at: [0, 0, 0], radius: 10, band: 4 }, { at: [0, 10, 0], radius: 8, band: 3, pad: [0, 10, 5] }, 50);
+// Convoy: the hauler crosses on the road deck, under the rail deck, then up the rim west of the rail
+// deck's pillars and in through the west gate.
+convoy([[0, 0, 0], [0, 0, 12], [0, 0, 24], [0, 0, 36], [-3, 0, 44], [-6, 0, 52], [-6, 0, 64], [-9, 0, 72], [-15, 0, 79], [-15, 0, 88], [-15, 0, 96], [-16, 0, 103]]);
 
 // --- Spawns, twin, write -------------------------------------------------------------------------
 const north = [[-20, 0.1, 102], [-12, 0.1, 108], [12, 0.1, 100], [20, 0.1, 96]];

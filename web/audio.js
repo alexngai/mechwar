@@ -7,7 +7,7 @@ const MAX_DISTANCE = 150; // m: farther world sounds aren't started
 const THRUST_SLOTS = 3; // remote thruster loops, for the nearest boosting or hovering mechs
 const EXHAUST_SLOTS = 4; // exhaust loops, for the nearest rockets and darts in flight
 const WEIGHT = { A: 0.65, B: 1, C: 1.5 }; // shot and landing heft by class
-const STEP_DEPTH = { A: 1, B: 1.5, C: 2.1 }; // footsteps: even the Light stomps; the Heavy shakes the ground
+const STEP_DEPTH = { A: 1, B: 1.5, C: 2.1, hauler: 3 }; // footsteps: even the Light stomps; the Heavy shakes the ground, Convoy's hauler more
 // Primary shots past the usual level, reverb and length (0.6 s). Fast guns stay dry: at their
 // fire rate reverb smears into a wash. The slow, heavy ones ring out, and hit about as hard as
 // the rail gun; the HEAT cannon's boom rolls on longest.
@@ -700,6 +700,16 @@ export class Sound {
     this.tone(out, 'sine', 220, 880, 0.02, 0.3, 0.18, 0.06);
     this.noise(out, 'white', 'bandpass', 900, 4200, 0.02, 0.3, 0.08, 2, 0.06);
     this.tone(out, 'sine', 523, 523, 0.01, 0.4, 0.16, 0.34);
+  }
+
+  /** Our flag taken: a two-tone klaxon, twice. */
+  flagAlarm() {
+    const out = this.voice(null, 1.1, this.ui);
+    if (!out) return;
+    for (let k = 0; k < 2; k++) {
+      this.tone(out, 'square', 392, 392, 0.01, 0.22, 0.1, 0.5 * k);
+      this.tone(out, 'square', 311, 311, 0.01, 0.22, 0.1, 0.5 * k + 0.25);
+    }
   }
 
   /** Our hold just filled with energy: one soft, plain tone. */
