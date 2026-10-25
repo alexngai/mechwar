@@ -286,12 +286,11 @@ pub const MATES_NEAR: f32 = 20.0;
 const SMOKE_THROW: f32 = 8.0;
 /// Faster than any mech moves (m/s): a jump in what a bot sees is a switch of target.
 const MOTION_MAX: f32 = 60.0;
-/// How often a bot in a fight weighs its post again (s), how close to it counts as there (m), how
-/// far it strafes off an open one (m), and how long it keeps to it after its target drops out of
-/// sight (s): long enough to cool in cover and step out again.
+/// How often a bot in a fight weighs its post again (s), how close to it counts as there (m), and
+/// how long it keeps to it after its target drops out of sight (s): long enough to cool in cover
+/// and step out again.
 const POST_EVERY: f32 = 1.0;
 const POST_NEAR: f32 = 1.0;
-const POST_DRIFT: f32 = 4.0;
 const POST_HOLD: f32 = 3.0;
 /// Longest a bot leads a target's motion (s): about half the time a mech crossing its sights
 /// keeps going before it turns about, so a long flight is led to where it's as likely to be as
@@ -599,6 +598,8 @@ pub struct Policy {
     pub post_moving: f32,
     pub post_stay: f32,
     pub post_reach: f32,
+    /// How far it strafes about a post out in the open (m).
+    pub post_leash: f32,
 }
 
 impl Default for Policy {
@@ -633,6 +634,7 @@ impl Default for Policy {
             post_moving: 0.5,
             post_stay: 0.05,
             post_reach: 24.0,
+            post_leash: 4.0,
         }
     }
 }
@@ -1375,7 +1377,7 @@ impl Bot {
                 // about it.
                 let off = flat(stand.at - me.pos);
                 let rot = Rotation::from_rotation_y(new_yaw);
-                if off.length() > if stand.open { POST_DRIFT } else { POST_NEAR } {
+                if off.length() > if stand.open { self.policy.post_leash } else { POST_NEAR } {
                     let dir = off.normalize_or_zero();
                     (dir.dot(rot * Vector::X), dir.dot(rot * Vector::NEG_Z))
                 } else if stand.open {
