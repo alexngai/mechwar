@@ -1082,8 +1082,9 @@ impl Bot {
     }
 
     /// Follows the waypoint route toward `target` (by way of a vantage, for perches, flankers and
-    /// sneaks), replanning when the target moves to another waypoint out of the vantage's view;
-    /// returns the flat offset to the next waypoint (or the vantage, or the target, past the last).
+    /// sneaks without an order), replanning when the target moves to another waypoint out of the
+    /// vantage's view; returns the flat offset to the next waypoint (or the vantage, or the target,
+    /// past the last).
     fn route(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: &Mech, tick: u32) -> Vector {
         if tick < self.escape_until {
             return self.escape;
@@ -1092,13 +1093,16 @@ impl Bot {
         let moved = self.path_goal != Some(goal) && !self.vantage.is_some_and(|v| nav.overlooks(arena, t, v, target));
         // Perched where it can't see the target after all: go straight at it instead.
         let blind = self.perched(nav, me) && !sees(arena, t, me, target);
-        if self.path_goal.is_none() || moved || blind {
+        // An order is a spot to stand on, not one to overlook from a perch or come at side-on: no
+        // vantage on the way to it (nor one kept from before it came).
+        let ordered = self.order.is_some();
+        if self.path_goal.is_none() || moved || blind || (ordered && self.vantage.is_some()) {
             let (role, lane, far) = (self.role, nav.lane_x(), me.pos.distance(target.pos) > DETOUR_MIN);
             let (at, from_target) = (|i| nav.node(i), |i| nav.node(i).distance(target.pos));
             let mut vantage = None;
             self.path = nav.path(nav.nearest(arena, me.pos), |cost| {
                 vantage = match role {
-                    _ if blind => None,
+                    _ if blind || ordered => None,
                     // A perch in view of the target, near both, each metre up worth 4 of walking;
                     // the spot out in the side lane level with it, to come at it side-on; the
                     // channel spot nearest it.
@@ -1386,6 +1390,22 @@ mod tests {
     }
 
     #[test]
+    fn a_perch_goes_to_its_order_not_up_over_it() {
+        // An order is a spot to stand on (Convoy's hauler, a silo). On Canopy's crest a perch sent
+        // to the hauler had climbed to a crown overlooking it instead, and held there.
+        let canopy = Map::index("canopy").unwrap();
+        let (arena, nav, t) = (Arena::new(&Map::load(canopy)), Nav::for_map(canopy), Tuning::default());
+        let (mut me, order) = (spawn_mech(&t, Vector::new(25.0, 0.0, 30.0)), Vector::new(71.7, 13.6, 28.9));
+        let mut bot = Bot { role: Role::Perch, order: Some(order), ..Bot::new(1) };
+        let there = (0..secs(30.0)).any(|tick| {
+            let input = bot.think(&arena, nav, &t, &me, None, tick);
+            step_mech(&arena, &t, &mut me, &input);
+            bot.errand(&me).is_none()
+        });
+        assert!(there, "at {} after 30 s, not at its order", me.pos);
+    }
+
+    #[test]
     fn bots_use_items() {
         let blockout = Map::index("blockout").unwrap();
         let (arena, nav, t) = (Arena::new(&Map::load(blockout)), Nav::for_map(blockout), Tuning::default());
@@ -1419,6 +1439,34 @@ mod tests {
 
         let (_, pulsed, _) = engage(9.0);
         assert!(pulsed, "never pulsed a target 9 m away");
+    }
+
+    #[test]
+    fn bots_follow_every_convoy_route_either_way() {
+        // Waypoint to waypoint along each map's Convoy route, nav's way is no more than twice as
+        // far as the straight line, both ways: escorts walk alongside the hauler, not round. (Canopy's
+        // crest had a joint that stopped a Heavy walking up it, so nav sent escorts 250 m round by the
+        // canopy to get 14 m up the crest.)
+        for (index, (name, _)) in MAPS.iter().enumerate() {
+            let map = Map::load(index);
+            let Some(route) = &map.objectives.convoy else { continue };
+            let (arena, nav) = (Arena::new(&map), Nav::for_map(index));
+            let cost = |a: usize, b: usize| {
+                let mut c = f32::MAX;
+                nav.path(a, |d| {
+                    c = d[b];
+                    b
+                });
+                c
+            };
+            for w in route.points.windows(2) {
+                let (a, b) = (nav.nearest(&arena, Vector::from_array(w[0])), nav.nearest(&arena, Vector::from_array(w[1])));
+                let straight = nav.node(a).distance(nav.node(b));
+                for (from, to) in [(a, b), (b, a)] {
+                    assert!(cost(from, to) <= 2.0 * straight + 1.0, "{name}: {} to {} is {:.0} m by nav, {straight:.0} m straight", nav.node(from), nav.node(to), cost(from, to));
+                }
+            }
+        }
     }
 
     fn blockout() -> (Arena, &'static Nav, Tuning) {
