@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ability::Ability;
 use crate::brain::{Action, Brain, Feature, Features};
+use crate::tactics::{Foe, Post, Spots, Weighing};
+use crate::threat::Curve;
 use crate::arsenal;
 use crate::deploy::{self, Deployable};
 use crate::item::{self, Item};
@@ -35,6 +37,8 @@ const HOVER_FUEL: f32 = 30.0;
 /// hovers up to (see `HOVER_RISE`). Edges are one-way, so a ledge gives a drop where there's no
 /// climb back.
 pub struct Nav {
+    /// The compiled-in map it's for, if any (its tactical spots).
+    index: Option<usize>,
     nodes: Vec<Vector>,
     /// (from, to).
     edges: Vec<(usize, usize)>,
@@ -67,8 +71,8 @@ impl Nav {
     pub fn for_map(index: usize) -> &'static Nav {
         static CACHE: [OnceLock<Nav>; MAPS.len()] = [const { OnceLock::new() }; MAPS.len()];
         CACHE[index].get_or_init(|| match Nav::baked(BAKED, index) {
-            Some((edges, hover)) => Nav { nodes: Map::load(index).nav.iter().map(|p| Vector::from_array(*p)).collect(), edges, hover },
-            None => Nav::walk_map(index),
+            Some((edges, hover)) => Nav { index: Some(index), nodes: Map::load(index).nav.iter().map(|p| Vector::from_array(*p)).collect(), edges, hover },
+            None => Nav { index: Some(index), ..Nav::walk_map(index) },
         })
     }
 
@@ -105,12 +109,17 @@ impl Nav {
                 }
             }
         }
-        Nav { nodes, edges, hover }
+        Nav { index: None, nodes, edges, hover }
     }
 
     /// Whether the edge from waypoint `a` to `b` is climbed by hovering.
     fn hovers(&self, a: usize, b: usize) -> bool {
         self.hover.contains(&(a, b))
+    }
+
+    /// Its map's tactical spots (made on first use).
+    pub fn spots(&self) -> Option<&'static Spots> {
+        self.index.map(Spots::for_map)
     }
 
     /// Every waypoint.
@@ -277,6 +286,13 @@ pub const MATES_NEAR: f32 = 20.0;
 const SMOKE_THROW: f32 = 8.0;
 /// Faster than any mech moves (m/s): a jump in what a bot sees is a switch of target.
 const MOTION_MAX: f32 = 60.0;
+/// How often a bot in a fight weighs its post again (s), how close to it counts as there (m), how
+/// far it strafes off an open one (m), and how long it keeps to it after its target drops out of
+/// sight (s): long enough to cool in cover and step out again.
+const POST_EVERY: f32 = 1.0;
+const POST_NEAR: f32 = 1.0;
+const POST_DRIFT: f32 = 4.0;
+const POST_HOLD: f32 = 3.0;
 /// Longest a bot leads a target's motion (s): about half the time a mech crossing its sights
 /// keeps going before it turns about, so a long flight is led to where it's as likely to be as
 /// anywhere, not past it.
@@ -352,6 +368,18 @@ impl Retreat {
     }
 }
 
+/// An enemy's kit as a bot weighs fights against it, set by the server each tick: its damage a
+/// second on the bot and the bot's on it, by range; its full hull; and its eye and middle heights.
+#[derive(Clone, Copy, Debug)]
+pub struct FoeKit {
+    pub id: u8,
+    pub on_me: Curve,
+    pub mine: Curve,
+    pub hull: f32,
+    pub eye: f32,
+    pub mid: f32,
+}
+
 /// What a bot knows of one enemy: where it was last perceived and when, whether it's in view
 /// now, its hull fraction then, and when it last hit us.
 #[derive(Clone, Copy, Debug)]
@@ -365,6 +393,16 @@ struct Contact {
     hit_at: Option<u32>,
     /// Only heard of from a teammate.
     told: bool,
+}
+
+/// Where a bot stands at its post now (`Bot::post_point`): the spot, or its peek; whether the
+/// post has cover from the target; and whether it's out where the target sees it (strafe about
+/// it).
+#[derive(Clone, Copy, Debug)]
+struct Stand {
+    at: Vector,
+    covered: bool,
+    open: bool,
 }
 
 /// What a bot with no enemy in view is heading for.
@@ -517,6 +555,14 @@ pub struct Policy {
     pub grenade_range: f32,
     /// Heat it fires a heat-fed launcher at. (When to use items and abilities is `Bot::brain`'s.)
     pub heat_fed: f32,
+    /// How it weighs where to fight from (`tactics::Weighing`): a share of its own hull lost
+    /// against one of the target's dealt, how far ahead it looks (s), what share of its damage it
+    /// deals on the move, what staying put is worth, and how far it looks for a spot (m).
+    pub post_take: f32,
+    pub post_horizon: f32,
+    pub post_moving: f32,
+    pub post_stay: f32,
+    pub post_reach: f32,
 }
 
 impl Default for Policy {
@@ -537,6 +583,11 @@ impl Default for Policy {
             follow: 10.0,
             grenade_range: 28.0,
             heat_fed: 0.6,
+            post_take: 1.0,
+            post_horizon: 6.0,
+            post_moving: 0.5,
+            post_stay: 0.05,
+            post_reach: 24.0,
         }
     }
 }
@@ -593,6 +644,11 @@ pub struct Bot {
     /// and how many teammates are alive within `MATES_NEAR`.
     pub limpet_hits: bool,
     pub mates_near: u8,
+    /// Set by the server each tick: the kits of the enemies it knows of.
+    pub foes: Vec<FoeKit>,
+    /// Where it fights its target from (with the target's id), and when it weighs that again.
+    post: Option<(Post, u8)>,
+    post_at: u32,
     /// Smoke about, set by the server each tick: no seeing through it.
     pub smoke: Vec<Cloud>,
     /// Shield domes about, set by the server each tick: no shot crosses one's surface, so an enemy
@@ -653,6 +709,9 @@ impl Bot {
             orbs: Vec::new(),
             limpet_hits: false,
             mates_near: 0,
+            foes: Vec::new(),
+            post: None,
+            post_at: 0,
             smoke: Vec::new(),
             domes: Vec::new(),
             lead: None,
@@ -685,7 +744,7 @@ impl Bot {
         };
         (self.path_goal, self.vantage, self.reached) = (None, None, None);
         self.cooling = false;
-        (self.focus, self.patrol, self.retreat) = (None, None, None);
+        (self.focus, self.patrol, self.retreat, self.post) = (None, None, None, None);
         self.contacts.clear();
     }
 
@@ -773,6 +832,12 @@ impl Bot {
     }
     fn max_turn(&self, t: &Tuning) -> f32 {
         t.bot_turn_rate_deg.to_radians() * DT * 2f32.powf(self.skill - 0.5)
+    }
+
+    /// Its post, if it has one, for probes: whether it hides from its target there (and so steps
+    /// out to fire), and whether it's in its cover now (cooling).
+    pub fn post_state(&self) -> Option<(bool, bool)> {
+        self.post.map(|(p, _)| (p.peek.is_some(), p.peek.is_some() && self.cooling))
     }
 
     /// What it did on its last `think`.
@@ -999,6 +1064,9 @@ impl Bot {
             // when it's near, or patrol.
             (self.seen_vel, self.seen_last) = (Vector::ZERO, None);
             self.seen.clear();
+            if let Some(input) = self.keep_post(nav, t, me, tick) {
+                return input;
+            }
             let ducked = self.contacts.iter().find(|c| !c.seen && c.seen_at.is_some_and(|at| tick.saturating_sub(at) < secs(FLUSH_AFTER))).map(|c| c.pos);
             if let Some(spot) = ducked.filter(|s| (t.grenade_radius + 2.0..self.policy.grenade_range).contains(&s.distance(me.pos)))
                 && me.grenades > 0
@@ -1129,6 +1197,8 @@ impl Bot {
             }
             // Badly hurt, or too hot with no vent to hand: fall back, to an orb or out of sight.
             at.flag(Feature::Cooling, self.cooling).flag(Feature::VentReady, Ability::of(me.loadout) == Ability::Vent && me.ability_cooldown <= 0.0);
+            let post = self.post_point(arena, nav, t, me, target, tick);
+            at.flag(Feature::PostCovered, post.is_some_and(|p| p.covered));
             let why = if self.brain.wants(Action::FallBackToMend, &at) {
                 Some(Why::Mend)
             } else if self.brain.wants(Action::FallBackToCool, &at) {
@@ -1139,7 +1209,7 @@ impl Bot {
             if let Some(why) = why
                 && let Some(r) = self.shelter(arena, nav, t, me, target.pos + Vector::Y * t.eye_height, why, tick)
             {
-                self.retreat = Some(r);
+                (self.retreat, self.post) = (Some(r), None);
                 let mut input = self.hold(arena, nav, t, me, r, Some(target), took_damage, tick);
                 // A barrier raised toward the threat (turning to it for the tick) covers the fall
                 // back, if the threat's not where the barrier would go up.
@@ -1176,6 +1246,19 @@ impl Bot {
             let (move_x, move_z) = if (wound && range <= far) || lunging {
                 let (dir, rot) = (to.normalize_or_zero(), Rotation::from_rotation_y(new_yaw));
                 (dir.dot(rot * Vector::X), dir.dot(rot * Vector::NEG_Z))
+            } else if let Some(stand) = post.filter(|_| !perch && errand.is_none()) {
+                // At its post: there, in its cover or stepped out of it; on an open one, strafing
+                // about it.
+                let off = flat(stand.at - me.pos);
+                let rot = Rotation::from_rotation_y(new_yaw);
+                if off.length() > if stand.open { POST_DRIFT } else { POST_NEAR } {
+                    let dir = off.normalize_or_zero();
+                    (dir.dot(rot * Vector::X), dir.dot(rot * Vector::NEG_Z))
+                } else if stand.open {
+                    (self.strafe, 0.0)
+                } else {
+                    (0.0, 0.0)
+                }
             } else if self.brain.wants(Action::Push, &at) {
                 let dir = self.route(arena, nav, t, me, errand.as_ref().unwrap_or(target), tick).normalize_or_zero();
                 let rot = Rotation::from_rotation_y(new_yaw);
@@ -1224,9 +1307,90 @@ impl Bot {
             };
         }
 
-        // No line of sight: walk the waypoint graph toward the target (or on with its order).
+        // No line of sight: keep to its post if it has one (cooling in its cover), else walk the
+        // waypoint graph toward the target (or on with its order).
+        if let Some(input) = self.keep_post(nav, t, me, tick) {
+            return input;
+        }
         let errand = self.errand(me);
         self.walk(arena, nav, t, me, errand.as_ref().unwrap_or(target), false, tick)
+    }
+
+    /// Its post against `target` (weighed again every POST_EVERY, or for a new target), and where
+    /// to stand on it now: in its cover while it cools, stepped out to fire otherwise. None where
+    /// there are no spots to weigh, or no kit known for the target; and for a pile driver's
+    /// carrier, which fights by going in.
+    fn post_point(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: &Mech, tick: u32) -> Option<Stand> {
+        if alt_use(t) == AltUse::Melee {
+            return None;
+        }
+        let spots = nav.spots()?;
+        let id = self.focus?;
+        if tick >= self.post_at || self.post.is_none_or(|(_, of)| of != id) {
+            let current = self.post.filter(|&(_, of)| of == id).map(|(p, _)| p.spot);
+            let seen: Vec<(Vector, FoeKit)> = self
+                .foes
+                .iter()
+                .filter_map(|k| {
+                    let c = self.contacts.iter().find(|c| c.id == k.id && (c.seen || c.id == id))?;
+                    Some((if c.id == id { target.pos } else { c.pos }, *k))
+                })
+                .collect();
+            let foes: Vec<Foe> = seen.iter().map(|(pos, k)| Foe { pos: *pos, eye: *pos + Vector::Y * k.eye, chest: *pos + Vector::Y * k.mid, on_me: &k.on_me, mine: &k.mine, hull: k.hull }).collect();
+            let at = seen.iter().position(|(_, k)| k.id == id)?;
+            let p = &self.policy;
+            let w = Weighing { take: p.post_take, horizon: p.post_horizon, moving: p.post_moving, stay: p.post_stay, reach: p.post_reach };
+            let duty = crate::threat::dps(t, t, flat(target.pos - me.pos).length()).duty;
+            self.post = crate::tactics::choose(spots, arena, t, me.pos, &foes, at, duty, current, &w).map(|p| (p, id));
+            self.post_at = tick + secs(POST_EVERY);
+        }
+        let (post, _) = self.post?;
+        let spot = &spots.spots[post.spot];
+        let class = if t.mech_height < 4.0 { MechClass::A } else if t.mech_height > 5.5 { MechClass::C } else { MechClass::B };
+        let low = post.peek.is_none() && spot.covered(class, target.pos - spot.pos);
+        let (at, out) = match post.peek {
+            Some(p) if !self.cooling => (spots.spots[p].pos, true),
+            Some(_) => (spot.pos, false),
+            None => (spot.pos, !low),
+        };
+        // Out where the target sees it, it strafes about the spot; hidden in cover, or firing over
+        // low cover, it stands.
+        Some(Stand { at, covered: post.peek.is_some() || low, open: out })
+    }
+
+    /// With its target out of sight but seen within POST_HOLD (cooling in its cover, say): keeps
+    /// to its post, facing where the target was, holding fire.
+    fn keep_post(&mut self, nav: &Nav, t: &Tuning, me: &Mech, tick: u32) -> Option<Input> {
+        let (post, id) = self.post?;
+        let spots = nav.spots()?;
+        let c = self.contacts.iter().find(|c| c.id == id && c.seen_at.is_some_and(|at| tick.saturating_sub(at) < secs(POST_HOLD)));
+        let Some(c) = c else {
+            self.post = None;
+            return None;
+        };
+        let p = &self.policy;
+        if me.overheated || me.heat >= p.cool_high * t.heat_max {
+            self.cooling = true;
+        } else if me.heat <= p.cool_low * t.heat_max {
+            self.cooling = false;
+        }
+        let at = match post.peek {
+            Some(p) if !self.cooling => spots.spots[p].pos,
+            _ => spots.spots[post.spot].pos,
+        };
+        let max_turn = self.max_turn(t);
+        let (yaw, pitch) = look_at(me.pos + Vector::Y * t.eye_height, c.pos + Vector::Y * (t.mech_height * 0.5));
+        let new_yaw = me.yaw + wrap(yaw - me.yaw).clamp(-max_turn, max_turn);
+        let new_pitch = me.pitch + (pitch - me.pitch).clamp(-max_turn, max_turn);
+        let off = flat(at - me.pos);
+        let rot = Rotation::from_rotation_y(new_yaw);
+        let (move_x, move_z) = if off.length() > POST_NEAR {
+            let dir = off.normalize_or_zero();
+            (dir.dot(rot * Vector::X), dir.dot(rot * Vector::NEG_Z))
+        } else {
+            (0.0, 0.0)
+        };
+        Some(Input { move_x, move_z, yaw: new_yaw, pitch: new_pitch, ..Input::default() })
     }
 
     /// Its order's spot while it's still on its way there.

@@ -30,11 +30,12 @@ const SPLASH_SHARE: f32 = 0.6;
 /// Ranges `best_range` weighs (m).
 pub const RANGES: [f32; 20] = [5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 90.0, 100.0, 110.0, 120.0];
 
-/// Damage a second, by weapon.
+/// Damage a second, by weapon, and the share of the time the gun fires (the rest it cools).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Dps {
     pub primary: f32,
     pub secondary: f32,
+    pub duty: f32,
 }
 
 impl Dps {
@@ -66,7 +67,32 @@ pub fn dps(t: &Tuning, target: &Tuning, range: f32) -> Dps {
     // The secondary fires whenever it's ready (the gun holds to let it), its heat counted against
     // the gun; and while it takes the aim, the gun waits.
     let lent = if secondary > 0.0 { (1.0 - ALT_AIM / t.alt_cooldown.max(ALT_AIM)).max(0.0) } else { 1.0 };
-    Dps { primary: primary * duty * lent * spun(t, fire) * bloomed(t, target, range, aim, interval, fire), secondary }
+    Dps { primary: primary * duty * lent * spun(t, fire) * bloomed(t, target, range, aim, interval, fire), secondary, duty }
+}
+
+/// Damage a second at each of RANGES, to read off at any range (`at`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Curve(pub [f32; RANGES.len()]);
+
+impl Curve {
+    /// `t`'s total damage a second on `target` by range.
+    pub fn of(t: &Tuning, target: &Tuning) -> Curve {
+        Curve(RANGES.map(|r| dps(t, target, r).total()))
+    }
+
+    /// At `range`, between the ranges either side (the nearest's, short of the first or past the
+    /// last).
+    pub fn at(&self, range: f32) -> f32 {
+        let k = RANGES.iter().position(|&r| r >= range).unwrap_or(RANGES.len());
+        if k == 0 {
+            self.0[0]
+        } else if k == RANGES.len() {
+            self.0[k - 1]
+        } else {
+            let (r0, r1) = (RANGES[k - 1], RANGES[k]);
+            self.0[k - 1] + (self.0[k] - self.0[k - 1]) * (range - r0) / (r1 - r0)
+        }
+    }
 }
 
 /// A skill 0.5 bot's aim error, per axis (radians): its aim wanders within ±`bot_aim_error_deg`.
@@ -262,6 +288,11 @@ mod tests {
         assert_eq!(dps(&hail, &rifle, 150.0).primary, 0.0);
         // Even matchups are even.
         assert!((edge(&rifle, &rifle, 40.0) - 0.5).abs() < 1e-4);
+        // A curve reads its ranges back, and between them in between.
+        let curve = Curve::of(&rifle, &flak);
+        assert_eq!(curve.at(40.0), dps(&rifle, &flak, 40.0).total());
+        let mid = curve.at(42.5);
+        assert!((mid - 0.5 * (curve.at(40.0) + curve.at(45.0))).abs() < 1e-4);
         // A big Heavy is easier to hit than a small Light.
         let (light, heavy) = (kit(MechClass::A, "pike", "rocket"), kit(MechClass::C, "pike", "rocket"));
         assert!(dps(&rifle, &heavy, 60.0).primary > dps(&rifle, &light, 60.0).primary);

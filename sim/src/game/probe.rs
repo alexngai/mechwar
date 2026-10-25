@@ -996,3 +996,40 @@ fn alt_match_probe() {
     println!("   launches by range <20/20-40/40-60/60-90/90+ {:?}", by_range.map(|n| format!("{:.0}%", 100.0 * n as f32 / launches.max(1) as f32)));
     println!("   share of those with a hit                {:?}", std::array::from_fn::<_, 5, _>(|k| format!("{:.0}%", 100.0 * dealt_by_range[k] / by_range[k].max(1) as f32)));
 }
+
+/// Post probe: bot-only Team Deathmatch on the rotation maps (PROBE_SECS each), sampling every
+/// bot every tick: of its time fighting (an enemy in view), how much at a post, in the open or
+/// with cover to step out of, and hidden in that cover; and how far it stood from its post.
+/// A diagnostic (`--ignored`):
+/// cargo test -p sim --release --lib post_probe -- --ignored --nocapture
+#[test]
+#[ignore = "probe"]
+fn post_probe() {
+    let run: f32 = std::env::var("PROBE_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(120.0);
+    for name in crate::map::ROTATION {
+        let mut game = Game::new(Tuning::default(), crate::map::Map::index(name).unwrap());
+        (game.score_limit, game.match_seconds) = (u16::MAX, 1e7);
+        let human = game.join().unwrap();
+        game.dock(human);
+        let (mut fighting, mut posted, mut covered, mut hidden) = (0u32, 0u32, 0u32, 0u32);
+        for _ in 0..secs(run) {
+            game.step();
+            for p in game.players.iter().filter(|p| p.mech.health > 0.0) {
+                let Some(b) = p.bot.as_ref() else { continue };
+                // Fighting, or hidden at its post.
+                let post = b.post_state();
+                if b.doing() != crate::bot::Doing::Fight && post.is_none() {
+                    continue;
+                }
+                fighting += 1;
+                if let Some((cover, cooling)) = post {
+                    posted += 1;
+                    covered += u32::from(cover);
+                    hidden += u32::from(cooling);
+                }
+            }
+        }
+        let pct = |n: u32| 100.0 * n as f32 / fighting.max(1) as f32;
+        println!("{name:10} fighting {:5.0} bot-s: at a post {:3.0}%, with cover to step out of {:3.0}%, hidden in it {:3.0}%", fighting as f32 / TICK_HZ, pct(posted), pct(covered), pct(hidden));
+    }
+}

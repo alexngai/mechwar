@@ -410,8 +410,9 @@ fn bots_spread_over_foundry() {
     let me = game.join().unwrap();
     // Bot samples in the channel, on the ground, decks and gantries; in the west and east lanes.
     let (mut levels, mut lanes, mut n) = ([0; 4], [0; 2], 0);
-    // Six minutes: shorter runs swing too much as bots group up early on.
-    for _ in 0..(360.0 * TICK_HZ) as u32 {
+    // Twelve minutes: shorter runs swing too much as bots group up early on (bots holding posts
+    // in a fight left the east lane all but empty for this seed's first ten).
+    for _ in 0..(720.0 * TICK_HZ) as u32 {
         game.step();
         // Relaunch from the hangar once destroyed, as a pilot would.
         game.pick(me, MechClass::B, Loadout::of(MechClass::B));

@@ -69,6 +69,8 @@ pub enum Feature {
     Errand,
     /// The target's hull, as a share.
     TargetHull,
+    /// Its post in this fight has cover from the target (it can cool there, out of sight).
+    PostCovered,
     /// With no enemy in view: it has an order, an urgent contact (seen, felt, or heard close), any
     /// contact, a lead; and how far off its lead is (m; a long way with none).
     HasOrder,
@@ -243,9 +245,10 @@ impl Default for Brain {
                 vec![with(engaged(), &[(Range, Above(1.0))]), with(engaged(), &[yes(PerchRole)]), with(engaged(), &[yes(Cooling)]), with(engaged(), &[yes(Errand)])],
             ),
             (Action::BackOff, vec![with(engaged(), &[(RangeNear, Below(1.0))])]),
-            // Badly hurt, or too hot with no vent to hand: fall back, to an orb or out of sight.
+            // Badly hurt, or too hot with no vent to hand and no cover at its post: fall back, to
+            // an orb or out of sight.
             (Action::FallBackToMend, vec![with(engaged(), &[(Hull, Below(0.35))])]),
-            (Action::FallBackToCool, vec![with(engaged(), &[yes(Cooling), no(VentReady)])]),
+            (Action::FallBackToCool, vec![with(engaged(), &[yes(Cooling), no(VentReady), no(PostCovered)])]),
             // Mended, or cooled; or cornered: an enemy in sight this close.
             (
                 Action::StopFallingBack,

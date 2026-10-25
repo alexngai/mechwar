@@ -15,6 +15,7 @@ use rapier3d::prelude::Ray;
 
 use crate::bot::Nav;
 use crate::map::{MAPS, Map};
+use crate::threat::Curve;
 use crate::{Arena, MechClass, Tuning, Vector};
 
 /// Spot spacing where there's cover close by, and in the open (a multiple of it).
@@ -228,7 +229,7 @@ fn stands(arena: &Arena, t: &Tuning, feet: Vector) -> bool {
 
 /// A straight walk from `from` to `to` (feet): nothing in the way at the knees, and ground under
 /// it all the way, never a ledge's drop below the line.
-fn walk(arena: &Arena, t: &Tuning, from: Vector, to: Vector) -> bool {
+pub(crate) fn walk(arena: &Arena, t: &Tuning, from: Vector, to: Vector) -> bool {
     let knee = Vector::Y * 1.0;
     if !clear(arena, from + knee, to + knee) {
         return false;
@@ -254,6 +255,101 @@ fn cover_bits(arena: &Arena, t: &Tuning, feet: Vector) -> (u16, u16) {
         }
     }
     (cover, over)
+}
+
+/// An enemy as a bot weighs where to fight it from.
+pub struct Foe<'a> {
+    /// Its feet, eye and middle.
+    pub pos: Vector,
+    pub eye: Vector,
+    pub chest: Vector,
+    /// Its damage a second on the bot, and the bot's on it, by range; its hull, full.
+    pub on_me: &'a Curve,
+    pub mine: &'a Curve,
+    pub hull: f32,
+}
+
+/// Where a bot fights from: a spot, and the step out of it to fire from if it hides there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Post {
+    pub spot: usize,
+    pub peek: Option<usize>,
+    /// What it's worth (`choose`).
+    pub score: f32,
+}
+
+/// How a bot weighs where to fight from (`Policy`'s post_ numbers).
+#[derive(Clone, Copy, Debug)]
+pub struct Weighing {
+    /// A share of its own hull lost, against a share of the target's dealt.
+    pub take: f32,
+    /// How far ahead it looks (s): a spot's worth is what it deals and takes there over this
+    /// long, less the walk there.
+    pub horizon: f32,
+    /// Share of its damage it deals on the move.
+    pub moving: f32,
+    /// What staying put is worth over moving to as good a spot.
+    pub stay: f32,
+    /// Farthest it looks for a spot.
+    pub reach: f32,
+}
+
+/// Most spots weighed at a time, nearest first, covered or not.
+const WEIGHED: usize = 48;
+/// Of the best few, the first it can walk straight to is the one.
+const WALKS: usize = 6;
+
+/// The best post near `me` (feet) for a mech of `t` fighting `foes[target]`, the rest in sight
+/// too: at each spot what it deals the target and takes from every foe that sees it, a second,
+/// as shares of hull, over the horizon less the walk there. A spot hidden from the target that
+/// it can step out of to fire (`peek`) is out only while firing (`duty`), hidden while it cools.
+#[allow(clippy::too_many_arguments)]
+pub fn choose(spots: &Spots, arena: &Arena, t: &Tuning, me: Vector, foes: &[Foe], target: usize, duty: f32, current: Option<usize>, w: &Weighing) -> Option<Post> {
+    let foe = foes.get(target)?;
+    let taken_at = |at: Vector| -> f32 { foes.iter().filter(|f| exposed(arena, t, at, f.eye)).map(|f| f.on_me.at(f.pos.distance(at))).sum::<f32>() / t.health_max };
+    let dealt_at = |at: Vector| foe.mine.at(foe.pos.distance(at)) / foe.hull;
+    let (here_dealt, here_taken) = (if sees_from(arena, t, me, foe.chest) { dealt_at(me) } else { 0.0 }, taken_at(me));
+    // Nearest first; spots with cover from the target's side, and the current post, always.
+    let mut near: Vec<usize> = spots.near(me, w.reach).filter(|&i| (spots.spots[i].pos.y - me.y).abs() < 4.0).collect();
+    near.sort_by(|&a, &b| spots.spots[a].pos.distance(me).total_cmp(&spots.spots[b].pos.distance(me)));
+    let class = class_of(t);
+    let mut picked: Vec<usize> = near.iter().copied().filter(|&i| spots.spots[i].covered(class, foe.pos - spots.spots[i].pos)).take(WEIGHED / 2).collect();
+    let open: Vec<usize> = near.iter().copied().filter(|i| !picked.contains(i)).take(WEIGHED - picked.len()).collect();
+    picked.extend(open);
+    if let Some(c) = current.filter(|c| !picked.contains(c)) {
+        picked.push(c);
+    }
+    let mut scored: Vec<Post> = picked
+        .into_iter()
+        .map(|i| {
+            let at = spots.spots[i].pos;
+            let (peek, dealt, taken) = if sees_from(arena, t, at, foe.chest) {
+                (None, dealt_at(at), taken_at(at))
+            } else if let Some(p) = spots.peek(arena, t, i, foe.chest) {
+                let out = spots.spots[p].pos;
+                (Some(p), dealt_at(out), duty * taken_at(out) + (1.0 - duty) * taken_at(at))
+            } else {
+                (None, 0.0, taken_at(at))
+            };
+            let walk = at.distance(me) / t.walk_speed;
+            let stay = if current == Some(i) { w.stay } else { 0.0 };
+            let score = (dealt - w.take * taken) * (w.horizon - walk).max(0.0) + walk * (w.moving * here_dealt - w.take * here_taken) + stay;
+            Post { spot: i, peek, score }
+        })
+        .collect();
+    scored.sort_by(|a, b| b.score.total_cmp(&a.score));
+    scored.into_iter().take(WALKS).find(|p| current == Some(p.spot) || walk(arena, t, me, spots.spots[p.spot].pos))
+}
+
+/// The class whose cover bits fit `t`'s size.
+fn class_of(t: &Tuning) -> MechClass {
+    if t.mech_height < 4.0 {
+        MechClass::A
+    } else if t.mech_height > 5.5 {
+        MechClass::C
+    } else {
+        MechClass::B
+    }
 }
 
 #[cfg(test)]

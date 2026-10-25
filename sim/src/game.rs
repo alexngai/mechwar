@@ -229,6 +229,9 @@ enum Phase {
 }
 
 pub struct Game {
+    /// Damage curves of one kit on another (class, primary, secondary each), for bots weighing
+    /// fights: made as matchups come up, and kept.
+    matchups: std::collections::HashMap<[u8; 6], crate::threat::Curve>,
     /// Tuning per class and loadout.
     arsenal: Arsenal,
     pub tick: u32,
@@ -286,6 +289,7 @@ impl Game {
         let data = Map::load(map);
         assert!(data.spawns.iter().all(|s| s.len() >= TEAM_SIZE), "map needs {TEAM_SIZE} spawns per team");
         Self {
+            matchups: std::collections::HashMap::new(),
             map,
             mode: Mode::default(),
             rotation: Vec::new(),
@@ -595,6 +599,7 @@ impl Game {
             seen.push((focus, enemies));
         }
         // ...then hears its team's radio, and acts.
+        let mut matchups = std::mem::take(&mut self.matchups);
         for i in 0..self.players.len() {
             let me = &self.players[i];
             if me.bot.is_none() {
@@ -628,9 +633,26 @@ impl Game {
                     self.players.iter().any(|q| q.team != me.team && q.mech.health > 0.0 && (q.mech.pos + Vector::Y * (self.arsenal.of(&q.mech).mech_height * 0.5)).distance(f.p.pos) < reach)
                 });
             let mates_near = self.players.iter().filter(|q| q.team == me.team && q.id != me.id && alive(q) && q.mech.pos.distance(me.mech.pos) < bot::MATES_NEAR).count() as u8;
+            // The kits of the enemies about (players, not turrets): each one's damage on it, and
+            // its on them, by range.
+            let kit = |m: &Mech| [m.class.index() as u8, m.loadout.primary, m.loadout.secondary];
+            let mut curve = |a: &Mech, b: &Mech| {
+                let key = [kit(a), kit(b)].concat().try_into().expect("six");
+                *matchups.entry(key).or_insert_with(|| crate::threat::Curve::of(self.arsenal.of(a), self.arsenal.of(b)))
+            };
+            let foes: Vec<bot::FoeKit> = seen[i]
+                .1
+                .iter()
+                .filter_map(|&(id, _, _)| self.players.iter().find(|q| q.id == id))
+                .map(|q| {
+                    let theirs = self.arsenal.of(&q.mech);
+                    bot::FoeKit { id: q.id, on_me: curve(&q.mech, &me.mech), mine: curve(&me.mech, &q.mech), hull: theirs.health_max, eye: theirs.eye_height, mid: theirs.mech_height * 0.5 }
+                })
+                .collect();
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
             bot.mates_near = mates_near;
+            bot.foes = foes;
             for &(from, enemy, at) in &radio[team] {
                 if from != p.id {
                     bot.told(enemy, at, self.tick);
@@ -667,6 +689,7 @@ impl Game {
             bot.seq += 1;
             p.inputs.push_back(InputMsg { seq: bot.seq, input, view_tick: self.tick as f32 });
         }
+        self.matchups = matchups;
 
         // Inputs are applied exactly as the client predicted them, never guessed or repeated,
         // so reconciliation corrections stay at zero over a reliable transport.
@@ -3101,6 +3124,49 @@ mod tests {
         let t = game.arsenal.of(&mech(&game, bot)).clone();
         let landed = game.tally(bot).unwrap().0.dealt_by[0] / (rounds as f32 * t.shot_damage);
         assert!(rounds > 50 && landed > 0.4, "landed {landed:.2} of {rounds} rounds");
+    }
+
+    #[test]
+    fn bots_fight_from_cover_and_cool_in_it() {
+        // A rifle bot north-west of the 6 m block at (-5, -30), in sight of a human 20 m south of the
+        // block. The bot takes the block as its post: out from behind it to fire, back in to cool.
+        let t = Tuning::default();
+        let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+        game.bots = false;
+        let human = game.join().unwrap();
+        let bot = game.add_player(1, Some(Bot::new(4)), MechClass::B).unwrap();
+        for (id, pos) in [(human, Vector::new(-5.0, 0.1, -48.0)), (bot, Vector::new(-12.0, 0.1, -22.0))] {
+            let p = game.players.iter_mut().find(|p| p.id == id).unwrap();
+            p.mech.pos = pos;
+            if id == bot {
+                p.mech.loadout = Loadout::named("pike", "rocket");
+            }
+        }
+        unshield(&mut game);
+        let (mut covered, mut cooling, mut hidden, mut ticks) = (0, 0, 0, 0);
+        for _ in 0..secs(20.0) {
+            game.step();
+            for p in &mut game.players {
+                if p.id == bot {
+                    // Its gun alone.
+                    (p.mech.alt_wait, p.mech.grenades, p.mech.emps, p.mech.ability_cooldown) = (99.0, 0, 0, 99.0);
+                } else {
+                    p.mech.health = t.health_max;
+                }
+            }
+            let (b, h) = (mech(&game, bot), mech(&game, human));
+            let state = game.players.iter().find(|p| p.id == bot).unwrap().bot.as_ref().unwrap().post_state();
+            ticks += 1;
+            covered += u32::from(state.is_some_and(|(cover, _)| cover));
+            if let Some((true, true)) = state {
+                cooling += 1;
+                hidden += u32::from(!crate::tactics::exposed(&game.arena, &t, b.pos, h.pos + Vector::Y * t.eye_height));
+            }
+        }
+        let dealt = game.tally(bot).unwrap().0.dealt;
+        assert!(covered * 2 > ticks, "a post with cover only {covered} of {ticks} ticks");
+        assert!(cooling > 30 && hidden * 10 > cooling * 7, "hidden {hidden} of {cooling} ticks cooling");
+        assert!(dealt > 100.0, "dealt only {dealt:.0}");
     }
 
     #[test]
