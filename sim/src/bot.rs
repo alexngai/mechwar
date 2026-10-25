@@ -806,13 +806,14 @@ impl Bot {
         self.orbs.iter().any(|o| flat(*o - me.pos).length() < AT_ORB)
     }
 
-    /// Aims a grenade's arc at `spot` and throws once on it.
+    /// Aims a grenade's arc at `spot` and throws once on it: the low arc through it, however far
+    /// below the eye (as a shell's, in `decide`), so it comes down there.
     fn lob(&mut self, t: &Tuning, me: &Mech, item: Item, spot: Vector, tick: u32) -> Input {
         let g = t.thrown(item);
         let eye = me.pos + Vector::Y * t.eye_height;
         let (yaw, _) = look_at(eye, spot);
-        let r = (g.alt_gravity * flat(spot - eye).length() * (1.0 + self.misjudge.1) / (g.alt_speed * g.alt_speed)).min(1.0);
-        let pitch = 0.5 * asinf(r) - g.alt_loft_deg.to_radians();
+        let judged = flat(spot - eye).length() * (1.0 + self.misjudge.1);
+        let pitch = lob_pitch(g.alt_gravity, g.alt_speed, judged, spot.y - eye.y) - g.alt_loft_deg.to_radians();
         let max_turn = self.max_turn(t);
         let new_yaw = me.yaw + wrap(yaw - me.yaw).clamp(-max_turn, max_turn);
         let new_pitch = me.pitch + (pitch - me.pitch).clamp(-max_turn, max_turn);
@@ -2319,6 +2320,39 @@ mod tests {
         }
         // Let go as soon as charged, a third hit (33 of 108): most went mid-turn, past its back.
         assert!(hits * 5 >= volleys * 2 && hits >= 40, "{hits} of {volleys} slugs hit");
+    }
+
+    #[test]
+    fn bots_lob_grenades_and_smoke_onto_the_spot() {
+        let (arena, _, t) = blockout();
+        for item in [Item::Grenade, Item::Smoke] {
+            let g = t.thrown(item);
+            // Spots on the open ground ahead: smoke's throw (SMOKE_THROW), out to a grenade's reach.
+            for range in [SMOKE_THROW, 15.0, 20.0, 25.0] {
+                let mut me = spawn_mech(&t, Vector::new(-36.0, 0.0, 30.0));
+                let spot = me.pos - Vector::Z * range;
+                let mut bot = Bot::new(1);
+                // It turns onto the arc, then throws.
+                let thrown = (0..secs(3.0)).find_map(|tick| {
+                    let input = bot.lob(&t, &me, item, spot, tick);
+                    (me.yaw, me.pitch) = (input.yaw, input.pitch);
+                    input.grenade.then_some(me)
+                });
+                let mut p = projectile::volley(&g, &thrown.expect("never threw"), 0, 0)[0];
+                // Where it first comes down.
+                let mut down = None;
+                for _ in 0..secs(3.0) {
+                    let falling = p.vel.y < 0.0;
+                    let burst = projectile::fly(&arena, &g, &mut p, |_, _| None);
+                    if let Some(at) = burst.filter(|_| down.is_none()).or(Some(p.pos).filter(|_| falling && p.vel.y > 0.0)) {
+                        down = down.or(Some(at));
+                    }
+                }
+                // Thrown along the flat-ground arc from the eye, they came down 7 to 13 m past.
+                let off = flat(down.expect("never came down") - spot).length();
+                assert!(off < 2.0, "{item:?} lobbed {range} m came down {off} m off the spot");
+            }
+        }
     }
 
     #[test]
