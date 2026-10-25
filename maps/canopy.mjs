@@ -1,4 +1,6 @@
-// Canopy: a 360 m forest. A rounded triangle of rolling ground walled by
+// Canopy: a 360 m forest, the last living one, and not quite right: pale trunks, crowns trailing veils
+// that sway and breathe all together, and an orange-glowing fungus spreading through the dark
+// places, something not of the forest taking it over. A rounded triangle of rolling ground walled by
 // cliffs. The two bases, eco-stations, hold its south corners; the north corner, the Crown, is a
 // rise under the mother tree, ringed by the station's old deck 9 m up. Between them:
 // - the Knoll, a hill mid-map under a rock table, an overlook two sides can hold against each other;
@@ -27,6 +29,9 @@ const GORGE_FLOOR = -13, BREACH = 88; // the breach: this far along the Gorge, u
 const TUNNEL = 92; // this far along the Spine
 const GREEN = '#7dffb0', AMBER = '#ffc46b', LANTERN = '#ffa040';
 
+/** A patch of glowing fungus `r` m round on the ground at (x, z) (props: it lights, nothing more). */
+const fungus = (x, z, r, y = heightAt(x, z)) => decor.push({ kind: 'fungus', at: [r3(x), r3(y), r3(z)], r: r3(r) });
+
 // --- Shapes ------------------------------------------------------------------------------------------
 const clamp01 = (t) => Math.min(Math.max(t, 0), 1);
 const smoothstep = (e0, e1, x) => {
@@ -37,7 +42,7 @@ const dist = ([ax, az], [bx, bz]) => Math.hypot(ax - bx, az - bz);
 const deg = (rad) => r3((rad * 180) / Math.PI);
 /** Distance from `p` to the segment `a`-`b`. */
 function segment([px, pz], [ax, az], [bx, bz]) {
-  const [ex, ez] = [bx - ax, bz - az], t = clamp01(((px - ax) * ex + (pz - az) * ez) / (ex * ex + ez * ez));
+  const [ex, ez] = [bx - ax, bz - az], e2 = ex * ex + ez * ez, t = e2 ? clamp01(((px - ax) * ex + (pz - az) * ez) / e2) : 0;
   return Math.hypot(px - ax - ex * t, pz - az - ez * t);
 }
 const length = (pts) => pts.slice(1).reduce((sum, b, i) => sum + dist(pts[i], b), 0);
@@ -162,53 +167,58 @@ function walkLog(a, b, r, { run = 8, ends = [true, true] } = {}) {
 }
 
 /**
- * A giant at (x, z): a trunk `r` m round narrowing in three sections to `h` m, buttress roots
- * fanning out from its foot (clear of anything to keep clear), boughs up into a crown `crown` round.
+ * A table tree at (x, z): a pale trunk `t` m round, narrowing, from `foot` (the ground) up to a flat
+ * crown `r` m round, its top at `top`: a terrace to walk. Buttress roots fan from its foot (clear of
+ * anything to keep clear), branch stubs spike up the trunk under the crown, water stands on it,
+ * moss drips off its rim (veils too, with `long`); with `lit`, lanterns the eco-station hung on it.
+ * Returns its crown (`at`, `r`, `top`, `t`, and `links`, the ways off its rim) for the canopy.
  */
-function giant(x, z, r, h, crown, { roots = 5, turn = 0 } = {}) {
-  const rand = random(Math.round(Math.abs(x * 31 + z * 17)) + 7), y = heightAt(x, z) - 2;
-  let y0 = y;
-  for (const [f, top] of [[1, 0.32], [0.78, 0.66], [0.58, 1]]) {
-    cylinder([x, y0, z], [x, y + top * h, z], r * f);
-    y0 = y + top * h - 0.5;
-  }
+function table(x, z, t, r, top, { roots = 4, turn = 0, long = false, lit = false, foot = heightAt(x, z) - 2 } = {}) {
+  const rand = random(Math.round(Math.abs(x * 31 + z * 17)) + 7), y = foot, under = top - 2, waist = y + (under - y) * 0.45;
+  cylinder([x, y, z], [x, waist, z], t);
+  cylinder([x, waist - 0.5, z], [x, under, z], t * 0.78);
+  cylinder([x, under, z], [x, top, z], r, 'moss');
   for (let k = 0; k < roots; k++) {
     // A fin from the trunk down into the ground 2 radii out: thin and steep, so it's cover, not a ramp.
     const a = turn + (k / roots) * 2 * Math.PI + rand(-0.25, 0.25), u = [Math.cos(a), Math.sin(a)];
-    const foot = offset([x, z], u, r + r * rand(2, 2.6));
-    if (keep.some(([p, q, gap]) => segment(foot, p, q) < gap - 2 || segment(offset([x, z], u, r * 1.5), p, q) < gap - 2)) continue;
-    beam([x + u[0] * r * 0.7, y + 2 + r * 0.6, z + u[1] * r * 0.7], at(...foot, -0.8), 1.3, 3.2, 'bark');
+    const fin = offset([x, z], u, t + t * rand(2, 2.6));
+    if (keep.some(([p, q, gap]) => segment(fin, p, q) < gap - 2 || segment(offset([x, z], u, t * 1.5), p, q) < gap - 2)) continue;
+    beam([x + u[0] * t * 0.7, y + 2 + t * 0.6, z + u[1] * t * 0.7], at(...fin, -0.8), 1.3, 3.2, 'bark');
   }
-  for (let k = 0; k < 4; k++) {
-    const a = turn + 0.6 + (k / 4) * 2 * Math.PI + rand(-0.3, 0.3);
-    cylinder([x, y + 0.72 * h, z], [x + Math.cos(a) * crown * 0.6, y + h + rand(0, 4), z + Math.sin(a) * crown * 0.6], r * 0.22);
+  // Stubs of branches up the trunk, pointing up and out, under the crown and over a mech's head.
+  for (let k = 0, n = Math.floor((under - y - 16) / 4); k < n; k++) {
+    const a = turn + k * 2.4 + rand(-0.3, 0.3), h = y + 12 + k * 4, u = [Math.cos(a), Math.sin(a)], len = Math.min(rand(2.5, 4.5), r - t - 1);
+    beam([r3(x + u[0] * t * 0.5), r3(h), r3(z + u[1] * t * 0.5)], [r3(x + u[0] * (t * 0.78 + len)), r3(h + len * 0.6), r3(z + u[1] * (t * 0.78 + len))], 0.7, 0.7, 'bark');
   }
-  decor.push({ kind: 'canopy', at: [x, Math.round(y + h + 2), z], r: crown });
-  // Lanterns the eco-station hung on it, over a mech's head: warm pools at dusk.
-  for (const k of [0, 1]) {
-    const a = turn + 1.3 + k * Math.PI, [lx, lz] = [x + Math.cos(a) * (r * 0.75 + 0.4), z + Math.sin(a) * (r * 0.75 + 0.4)], ly = y + 2 + 9 + k * 3;
-    sign([r3(lx - 0.35), r3(ly), r3(lz - 0.35)], [r3(lx + 0.35), r3(ly + 0.7), r3(lz + 0.35)], [r3(x + Math.cos(a) * (r + 2)), r3(ly), r3(z + Math.sin(a) * (r + 2))], LANTERN);
+  decor.push({ kind: 'pool', at: [x, r3(top + 0.04), z], r: r3(r * 0.82) });
+  decor.push({ kind: 'fringe', at: [x, under, z], r, ...(long && { long }) });
+  fungus(...offset([x, z], [Math.cos(turn + Math.PI / Math.max(roots, 1)), Math.sin(turn + Math.PI / Math.max(roots, 1))], t + 3), 2.5); // between its roots
+  if (lit) {
+    // Lanterns hung on it, over a mech's head: warm pools at dusk.
+    for (const k of [0, 1]) {
+      const a = turn + 1.3 + k * Math.PI, [lx, lz] = [x + Math.cos(a) * (t * 0.75 + 0.4), z + Math.sin(a) * (t * 0.75 + 0.4)], ly = heightAt(x, z) + 9 + k * 3;
+      sign([r3(lx - 0.35), r3(ly), r3(lz - 0.35)], [r3(lx + 0.35), r3(ly + 0.7), r3(lz + 0.35)], [r3(x + Math.cos(a) * (t + 2)), r3(ly), r3(z + Math.sin(a) * (t + 2))], LANTERN);
+    }
   }
-  clear([x, z], [x, z], r * 3.6 + 6);
+  clear([x, z], [x, z], t * 3.6 + 6);
+  point([x, top, z]);
+  return { at: [x, z], r, top, t, links: [] };
 }
 
-/** A giant leaning `lean` degrees off upright toward `toward` ([dx, dz], unit): too steep to climb, a slant to hide under. */
+/** A small table tree at (x, z) under the canopy, crown `r` m round topped at `top`: cover and shade, not a terrace. */
+function copse(x, z, r, top) {
+  cylinder(at(x, z, -1), [x, top - 1, z], r3(r * 0.2));
+  cylinder([x, top - 1.2, z], [x, top, z], r3(r), 'moss');
+  decor.push({ kind: 'fringe', at: [x, top - 1.2, z], r: r3(r) });
+  clear([x, z], [x, z], r * 0.2 + 5);
+}
+
+/** A dead giant at (x, z) leaning `lean` degrees off upright toward `toward` ([dx, dz], unit): too steep to climb, a slant to hide under. */
 function leaner(x, z, toward, lean, len, r) {
   const t = (lean * Math.PI) / 180, y = heightAt(x, z) - 2;
   const top = [x + toward[0] * Math.sin(t) * len, y + Math.cos(t) * len, z + toward[1] * Math.sin(t) * len];
   cylinder([x, y, z], top, r);
-  decor.push({ kind: 'canopy', at: top.map(Math.round), r: Math.round(r * 5) });
   clear([x, z], [top[0], top[2]], r + 6);
-}
-
-/** A forest tree: a leaning trunk and a crown, some with a second, lower tier. */
-function tree(x, z, r, h, rand) {
-  const y = heightAt(x, z) - 1, lean = [rand(-1.5, 1.5), rand(-1.5, 1.5)];
-  cylinder([x, y, z], [x + lean[0], y + h, z + lean[1]], r);
-  const crown = (f, size) => decor.push({ kind: 'canopy', at: [Math.round(x + lean[0] * f), Math.round(y + h * f + 1), Math.round(z + lean[1] * f)], r: Math.round(size) });
-  crown(1, r * 4 + rand(1, 4));
-  if (rand() < 0.4) crown(0.72, r * 3 + rand(0, 2));
-  clear([x, z], [x, z], r + 12);
 }
 
 /** Up to `count` spots from `tries` random ones that `fits` takes, each handed to `place`. */
@@ -342,6 +352,8 @@ for (const [from, to] of [[0, TUNNEL - 5], [TUNNEL + 5, LS]]) {
   stone(ridgePoint(TUNNEL - 6), ridgePoint(TUNNEL + 6), 12, crestY(TUNNEL) - floor - 8);
   point(at(...offset(c, right, -11)), at(...c), at(...offset(c, right, 11)));
   for (const k of [-1, 1]) lamp(at(...offset(offset(c, right, k * 8), station(SPINE, TUNNEL).dir, 6)));
+  fungus(...offset(offset(c, right, 3), station(SPINE, TUNNEL).dir, -4), 1.6); // and in the dark of it
+  fungus(...offset(offset(c, right, -2), station(SPINE, TUNNEL).dir, 4), 1.2);
 }
 {
   // Shards along the crest's edges: cover up top, and a jagged line against the sky.
@@ -368,24 +380,186 @@ clear(SPINE[2], SPINE[3], 14);
   clear(KNOLL, KNOLL, 26);
 }
 
-// --- The Gate: a giant standing on four roots over the south road, 9 m clear under it -----------------
-{
+// --- The Gate: a table tree standing on four roots over the south road, 9 m clear under it ---------------
+const gate = (() => {
   const [x, z] = GATE, y0 = heightAt(x, z) + 9.5;
   for (let k = 0; k < 4; k++) {
     const a = Math.PI / 4 + (k * Math.PI) / 2, u = [Math.cos(a), Math.sin(a)];
     cylinder([x + u[0] * 2.5, y0 + 1, z + u[1] * 2.5], at(...offset(GATE, u, 11), -1), 2.2, 'bark');
   }
-  cylinder([x, y0, z], [x, y0 + 18, z], 4.2);
-  cylinder([x, y0 + 17.5, z], [x + 1, y0 + 38, z - 1], 3.2);
-  decor.push({ kind: 'canopy', at: [x + 1, Math.round(y0 + 40), z - 1], r: 18 });
   point(at(x, z), at(x - 16, z), at(x + 16, z), at(x, z - 16), at(x, z + 16));
   clear(GATE, GATE, 20);
+  return table(x, z, 4.2, 12, 30, { roots: 0, foot: y0 });
+})();
+
+// --- The canopy: table trees whose crowns are terraces, linked across the map ----------------------
+// Crowns stand 27-36 m up, linked to their neighbors so all of the map can be crossed up here: crowns
+// level with each other through branch crowns overlapping both (one terrace), crowns 3 m apart by a
+// bough climbing from one rim to the other, its top worn flat, no steeper than 24 degrees. Spurs (a
+// pad 3 m under a crown, off its rim: a drop down, a hover back up) and shelf stairs (pads up a slim
+// trunk, 3 m a step, a hover each) fill out the tiers; each base has a jump pad up. Discs stacked in
+// plan stand 7.5 m+ apart, so nothing walks under a low ceiling.
+const SLOPE = Math.tan((24 * Math.PI) / 180), LAP = 2.5; // branch crowns overlap the crowns they join by this much
+// Launch pads and the AA gun need open sky (the silos and the Siege gun, below): no crown over them.
+const OPEN = [[-68, 13], [2.5, -17.5], [70.5, 12.5], [12, -22]];
+const open = (c, r) => OPEN.every((o) => dist(c, o) > r + 3);
+const discs = []; // every walkable disc ({ at, r, top }), for spacing what comes after
+const walks = []; // every bough ([p, q, y0, y1]), likewise
+const unit = (a, b) => {
+  const d = dist(a, b);
+  return [(b[0] - a[0]) / d, (b[1] - a[1]) / d];
+};
+
+/** A branch crown `r` m round at (x, z), its top at `top`, on a branch from `owner`'s trunk. */
+function shelf([x, z], r, top, owner) {
+  r = r3(Math.min(r, 10));
+  cylinder([r3(x), top - 1.2, r3(z)], [r3(x), top, r3(z)], r, 'moss');
+  const u = unit(owner.at, [x, z]);
+  beam([r3(owner.at[0] + u[0] * owner.t * 0.5), top - 9, r3(owner.at[1] + u[1] * owner.t * 0.5)], [r3(x), top - 1.2, r3(z)], 1.4, 1.4, 'bark');
+  decor.push({ kind: 'fringe', at: [r3(x), top - 1.2, r3(z)], r });
+  decor.push({ kind: 'pool', at: [r3(x), r3(top + 0.05), r3(z)], r: r3(r * 0.78) });
+  point([r3(x), top, r3(z)]);
+  const disc = { at: [x, z], r, top, t: 1, links: [] };
+  discs.push(disc);
+  return disc;
 }
 
-// --- Giants, standing, leaning and fallen --------------------------------------------------------------
-giant(...CROWN, 8, 58, 26, { roots: 0, turn: 0.4 }); // no roots: the way round under the deck stays open
+/** A bough from crown `a`'s rim up or down to `b`'s: 5 m thick, its top worn flat 3.8 m across, no steeper than 24 degrees. */
+function bough(a, b) {
+  const u = unit(a.at, b.at), p = offset(a.at, u, a.r - 0.6), q = offset(b.at, u, -(b.r - 0.6));
+  const [lo, hi] = a.top <= b.top ? [lift(p, a.top), lift(q, b.top)] : [lift(q, b.top), lift(p, a.top)];
+  ramp(lo.map(r3), hi.map(r3), 3.8, 'bark', false);
+  // The bough itself, its top along the worn path, running on down into the lower crown.
+  const k = 2 / dist([lo[0], lo[2]], [hi[0], hi[2]]), root = [0, 1, 2].map((i) => lo[i] - (hi[i] - lo[i]) * k);
+  cylinder(root.map((v, i) => r3(v - (i === 1 ? 2.6 : 0))), hi.map((v, i) => r3(v - (i === 1 ? 2.6 : 0))), 2.6, 'bark');
+  if (Math.abs(b.top - a.top) > dist(p, q) * SLOPE + 0.01) console.warn(`steep bough ${a.at} -> ${b.at}`);
+  if (dist(a.at, b.at) > 33) point([r3((p[0] + q[0]) / 2), (a.top + b.top) / 2 + 0.2, r3((p[1] + q[1]) / 2)]);
+  a.links.push(u);
+  b.links.push([-u[0], -u[1]]);
+  walks.push([p, q, a.top, b.top]);
+}
+
+/**
+ * Links crowns `a` and `b`. Level: branch crowns between them, one or two, overlapping each other
+ * and both ends (`side` m off the line, for a less even look). A step of 3 m: a bough from one to
+ * the other, from a branch crown level with the lower one if it's a long way.
+ */
+function link(a, b, side = 2) {
+  const gap = dist(a.at, b.at) - a.r - b.r, u = unit(a.at, b.at), n = [-u[1], u[0]];
+  const around = (along, sway) => offset(offset(a.at, u, along), n, sway);
+  const reach = (c, ...to) => Math.max(...to.map((d) => dist(c, d.at) - d.r)) + LAP;
+  a.links.push(u);
+  b.links.push([-u[0], -u[1]]);
+  if (a.top === b.top) {
+    if (gap <= 16) {
+      const c = around(a.r + gap / 2, side), r = reach(c, a, b);
+      return open(c, r) ? shelf(c, r, a.top, gap / 2 < 8 ? a : b) : bough(a, b);
+    }
+    const [c1, c2] = [around(a.r + gap * 0.28, side), around(a.r + gap * 0.72, -side)], mid = dist(c1, c2) / 2 + LAP;
+    const [r1, r2] = [Math.max(reach(c1, a), mid), Math.max(reach(c2, b), mid)];
+    if (!open(c1, r1) || !open(c2, r2)) return bough(a, b);
+    shelf(c1, r1, a.top, a);
+    return shelf(c2, r2, a.top, b);
+  }
+  const [lo, hi] = a.top < b.top ? [a, b] : [b, a], run = Math.abs(b.top - a.top) / SLOPE + 1.4;
+  // A branch crown off the lower one, reaching toward the higher, if it's a long way, leaving the bough its run.
+  const w = unit(lo.at, hi.at), r = Math.min((gap - run - 1 + LAP) / 2, 10), c = offset(offset(lo.at, w, lo.r - LAP + r), [-w[1], w[0]], side);
+  if (gap < run + 9 || !open(c, r)) return bough(lo, hi);
+  bough(shelf(c, r, lo.top, lo), hi);
+}
+
+/** Whether a disc `r` m round at (x, z), top at `top`, clears every walkable disc (but `own`) and walk within 7.5 m of its height. */
+function clearOf([x, z], r, top, margin = 1, own = null) {
+  return (
+    discs.every((d) => d === own || Math.abs(d.top - top) >= 7.5 || dist(d.at, [x, z]) > d.r + r + margin) &&
+    walks.every(([p, q, y0, y1]) => Math.abs((y0 + y1) / 2 - top) >= 7.5 || segment([x, z], p, q) > r + 2.5 + margin)
+  );
+}
+
+/** The direction off crown `a`'s rim furthest from its links that `ok` takes: [dx, dz], after turning `skew` radians. */
+function free(a, skew = 0, ok = () => true) {
+  let best = null, score = -Infinity;
+  for (let k = 0; k < 72; k++) {
+    const t = (k / 72) * 2 * Math.PI + skew, u = [Math.cos(t), Math.sin(t)];
+    if (!ok(u)) continue;
+    const s = Math.min(...a.links.map((l) => 1 - (u[0] * l[0] + u[1] * l[1])), 2);
+    if (s > score) [best, score] = [u, s];
+  }
+  return best;
+}
+
+/** A spur: a pad `r` m round off crown `a`'s rim toward `u`, 3 m under it, if it's clear. */
+function spur(a, u, r = 5) {
+  const c = offset(a.at, u, a.r + 0.6 + r);
+  if (!clearOf(c, r, a.top - 3, 1, a) || edge(c) > -10) return;
+  a.links.push(u);
+  shelf(c, r, a.top - 3, a);
+}
+
+/**
+ * Shelf stairs up to crown `a` from the ground toward `u`: pads 4 m round spiraling up a slim trunk
+ * 3 m a step (a hover each), the top one level with the crown and just off its rim, the low ones
+ * on stumps (nothing to wedge under).
+ */
+function stairs(a, u) {
+  const c = offset(a.at, u, a.r + 9.6), floor = heightAt(...c);
+  cylinder(lift(c, floor - 1), lift(c, a.top - 0.5), 1.6, 'bark');
+  let turn = Math.atan2(-u[1], -u[0]), last;
+  for (let y = a.top; y - floor > 0.5; y -= 3, turn += 1.53) {
+    const p = [r3(c[0] + Math.cos(turn) * 5.2), r3(c[1] + Math.sin(turn) * 5.2)];
+    cylinder(lift(p, y - floor < 8 ? heightAt(...p) - 1 : y - 1), lift(p, y), 4, 'moss');
+    point([p[0], y, p[1]]);
+    discs.push({ at: p, r: 4, top: y, t: 1, links: [] });
+    last = p;
+  }
+  point(at(...offset(last, unit(c, last), 7.5)));
+  a.links.push(u);
+  clear(c, c, 14);
+}
+
+/** Water pouring off crown `a`'s rim toward `u` to the ground, if nothing's under it; mist where it lands. */
+function falls(a, u, w = 1.6) {
+  const [x, z] = offset(a.at, u, a.r + 0.4);
+  if (!discs.every((d) => d === a || d.top > a.top || dist(d.at, [x, z]) > d.r + 1.5)) return;
+  if (!walks.every(([p, q, y0, y1]) => Math.max(y0, y1) > a.top || segment([x, z], p, q) > 4)) return;
+  decor.push({ kind: 'falls', from: [r3(x), a.top - 0.3, r3(z)], to: [r3(x), r3(heightAt(x, z)), r3(z)], w });
+}
+
+const CANOPY = {
+  S1: table(-78, -76, 3, 11, 27, { roots: 0, turn: 0.3 }),
+  S2: gate,
+  S3: table(-14, -74, 3, 10, 27, { roots: 0, turn: 1.4 }),
+  S4: table(22, -76, 3, 10, 30, { roots: 0, turn: 2.6 }),
+  S6: table(78, -76, 3, 11, 27, { roots: 0, turn: 0.8 }),
+  W1: table(-68, -38, 3, 11, 30, { roots: 0, turn: 2.0 }),
+  M2: table(-38, -52, 4.5, 12, 33, { turn: 2.2, long: true, lit: true }),
+  M3: table(48, -40, 4, 12, 33, { turn: 0.9, long: true, lit: true }),
+  E1: table(80, -30, 3, 10, 30, { roots: 0, turn: 1.1 }),
+  K1: table(-40, -14, 3, 11, 30, { roots: 0, turn: 0.5 }),
+  K2: table(46, -8, 3, 11, 30, { roots: 0, turn: 2.9 }),
+  N1: table(-30, 34, 5, 13, 33, { turn: 1.1, long: true, lit: true }),
+  N2: table(8, 34, 3, 10, 30, { roots: 0, turn: 0.2 }),
+  N3: table(44, 24, 5, 13, 33, { turn: 0.2, long: true, lit: true }),
+  N4: table(-56, 52, 3, 10, 30, { roots: 0, turn: 1.7 }),
+  E2: table(92, 16, 3, 10, 30, { roots: 0, turn: 2.4 }),
+  U1: table(-12, 70, 4, 13, 33, { turn: 2.8, long: true, lit: true }),
+  U2: table(30, 62, 3, 11, 33, { roots: 0, turn: 0.6 }),
+  U3: table(-44, 92, 3, 9, 33, { roots: 0, turn: 1.9 }),
+  U4: table(34, 92, 3, 9, 33, { roots: 0, turn: 0.4 }),
+  // The mother tree: the highest crown, over the station's old deck (no roots: the way round under the deck stays open).
+  MO: table(...CROWN, 7, 18, 36, { roots: 0, turn: 0.4, long: true, lit: true }),
+};
+discs.push(...Object.values(CANOPY));
+for (const [a, b, side] of [
+  ['S1', 'S2'], ['S2', 'S3', -3], ['S3', 'S4'], ['S4', 'S6', -3], // the south row
+  ['S1', 'W1'], ['S2', 'M2'], ['S4', 'M3'], ['S6', 'E1'],
+  ['W1', 'M2'], ['M3', 'E1'], ['W1', 'K1'], ['M2', 'K1'], ['M3', 'K2'], ['E1', 'K2'],
+  ['K1', 'N1', -3], ['K2', 'N3'], ['E1', 'E2', -4], ['N3', 'E2'], // round the Knoll, and up
+  ['N1', 'N4'], ['N1', 'N2'], ['N2', 'N3'], ['N1', 'U1'], ['N2', 'U1'], ['N3', 'U2'], ['N4', 'U3'],
+  ['U3', 'U1'], ['U1', 'U2'], ['U2', 'U4'], ['U1', 'MO'], ['U3', 'MO'], ['U4', 'MO', -4], // and on up to the mother tree
+]) link(CANOPY[a], CANOPY[b], side);
+// The flank giants' old decks, a root up from the floor, now under their crowns.
 {
-  // The flank giants, each with a deck up a root.
   const deck = (x, z, r, dir, out) => {
     const c = offset([x, z], dir, r + 3.5), y = Math.round(heightAt(x, z) + 7.5);
     turned([c[0], y - 0.25, c[1]], [4.5, 0.25, 4.5], deg(Math.atan2(dir[0], dir[1])), 'bark');
@@ -393,20 +567,33 @@ giant(...CROWN, 8, 58, 26, { roots: 0, turn: 0.4 }); // no roots: the way round 
     point([c[0], y, c[1]]);
   };
   deck(-30, 34, 5, [0.6, -0.8], [0.8, 0.6]);
-  giant(-30, 34, 5, 46, 18, { turn: 1.1 });
   deck(44, 24, 5, [-0.7, -0.7], [-0.7, 0.7]);
-  giant(44, 24, 5, 48, 18, { turn: 0.2 });
 }
-giant(-38, -52, 4.5, 40, 16, { turn: 2.2 });
-giant(48, -40, 4, 38, 15, { turn: 0.9 });
-giant(-12, 70, 4, 40, 16, { turn: 2.8 });
-leaner(30, 58, [-0.9, 0.44], 35, 50, 3);
-leaner(-20, 4, [-0.34, -0.94], 30, 44, 2.6);
-{
-  // One leaning out over the Gorge from its east rim, a slant across the sky above the floor.
-  const { at: c, right } = station(GORGE, 30), base = offset(c, right, 20);
-  leaner(...base, [-right[0], -right[1]], 52, 40, 2.4);
+// Stairs stand on open floor: inside the cliffs' lip, off their crowns' links, clear of what else keeps ground clear.
+for (const k of ['S3', 'K1', 'K2', 'N2', 'U3', 'N4']) {
+  const a = CANOPY[k], others = keep.filter(([p, q]) => dist(p, a.at) > 1 || dist(q, a.at) > 1);
+  const u = free(a, 0, (u) => {
+    const c = offset(a.at, u, a.r + 9.6);
+    return (
+      edge(offset(c, u, 8)) < -10 &&
+      others.every(([p, q, gap]) => segment(c, p, q) > gap + 2) &&
+      discs.every((d) => d === a || dist(d.at, c) > d.r + 10) &&
+      walks.every(([p, q]) => segment(c, p, q) > 12)
+    );
+  });
+  if (u) stairs(a, u);
+  else console.warn(`no room for stairs at ${k}`);
 }
+// Jump pads from each base's clearing up onto its nearest crown, landing 4 m inside the rim.
+for (const [b, a] of [[BASES[0], CANOPY.S1], [BASES[1], CANOPY.S6]]) {
+  const u = unit(b, a.at), [x, z] = offset(b, u, 22);
+  slabPad(r3(x), r3(z), lift(offset(a.at, u, -(a.r - 4)).map(r3), a.top), a.top + 4);
+  a.links.push([-u[0], -u[1]]);
+}
+for (const k of Object.keys(CANOPY)) spur(CANOPY[k], free(CANOPY[k], 0.4), CANOPY[k].r > 11 ? 6 : 5);
+for (const k of ['M2', 'M3', 'N1', 'N3', 'U1', 'MO']) spur(CANOPY[k], free(CANOPY[k], 2.2), 5);
+for (const k of Object.keys(CANOPY)) for (const s of [0.9, 3.4]) falls(CANOPY[k], free(CANOPY[k], s), CANOPY[k].r > 12 ? 2.4 : 1.6);
+leaner(...offset(station(GORGE, 30).at, station(GORGE, 30).right, 20), [-station(GORGE, 30).right[0], -station(GORGE, 30).right[1]], 52, 40, 2.4); // a dead giant leaning out over the Gorge
 {
   // One fallen across the field south-east of the Knoll: a wall of cover 6 m high.
   const [a, b] = [[16, -60], [52, -68]];
@@ -454,17 +641,18 @@ slabPad(...station(GORGE, 40).at, [PULPIT[0], pTop, PULPIT[1]], pTop + 8);
   slabPad(96, -96, ridgePoint(s), crestY(s) + 8);
 }
 
-// --- The forest, and more forest beyond the cliffs -----------------------------------------------------
+// --- The understory: small table trees under the canopy, clear of its terraces; more past the cliffs ------
 scatter(
-  20261023, 46, 6000,
-  (p) => edge(p) < -12 && dist(p, HOLLOW) > 26 && keep.every(([a, b, gap]) => segment(p, a, b) > gap),
-  ([x, z], rand) => tree(x, z, rand(1.4, 2.4), rand(20, 32), rand),
+  20261023, 26, 8000,
+  (p) => edge(p) < -12 && dist(p, HOLLOW) > 26 && dist(p, KNOLL) > 24 && BASES.every((b) => dist(p, b) > 40) && keep.every(([a, b, gap]) => segment(p, a, b) > gap) && clearOf(p, 7, 18, 4),
+  ([x, z], rand) => copse(x, z, rand(4, 6.5), Math.min(r3(heightAt(x, z) + rand(10, 14)), 18)),
 );
 {
   const rim = [];
-  scatter(77, 400, 20000, (p) => edge(p) > 13 && edge(p) < 36 && rim.every((q) => dist(p, q) > 12), (p, rand) => {
+  scatter(77, 300, 20000, (p) => edge(p) > 13 && edge(p) < 36 && rim.every((q) => dist(p, q) > 14), (p, rand) => {
     rim.push(p);
-    decor.push({ kind: 'canopy', at: at(p[0], p[1], rand(2, 9)).map(Math.round), r: Math.round(rand(8, 13)) });
+    const base = heightAt(...p);
+    decor.push({ kind: 'table', at: [Math.round(p[0]), Math.round(base + rand(14, 26)), Math.round(p[1])], r: Math.round(rand(6, 12)), base: Math.round(base - 1) });
   });
 }
 // Fallen logs and boulders for cover in the open.
@@ -474,11 +662,25 @@ for (const [x, z, angle, len, r] of [[-20, -104, 0.3, 18, 1.4], [26, -96, -0.5, 
 }
 {
   const rand = random(4242);
-  for (const [x, z, n] of [[-14, -36, 2], [30, -10, 2], [-30, 86, 2], [40, 96, 2], [120, -60, 2], [-60, -66, 2], [92, -30, 2], [-8, 16, 2]]) {
+  for (const [x, z, n] of [[-14, -36, 2], [30, -10, 2], [-30, 86, 2], [120, -60, 2], [-60, -66, 2], [-8, 16, 2]]) {
     for (let k = 0; k < n; k++) {
       const p = [x + rand(-8, 8), z + rand(-8, 8)], half = [rand(1.5, 3.5), rand(1, 2.4), rand(1.5, 3)];
       turned(at(p[0], p[1], half[1] * 0.4), half.map((v) => Math.round(v * 10) / 10), Math.round(rand(0, 180)), 'moss', Math.round(rand(-12, 12)));
     }
+  }
+}
+
+// --- Fungus: patches in the dark places — the cliffs' feet, the Gorge's floor (the giants' roots and
+// the tunnel have theirs) — and none in the bases' clearings.
+{
+  const spots = [];
+  scatter(1031, 18, 20000, (p) => edge(p) > -15 && edge(p) < -7 && spots.every((q) => dist(p, q) > 28) && BASES.every((b) => dist(p, b) > 40), (p, rand) => {
+    spots.push(p);
+    fungus(...p, rand(1.5, 3.5));
+  });
+  for (let s = 22, k = 0; s < LG - 12; s += 24, k++) {
+    const { at: c, right } = station(GORGE, s);
+    fungus(...offset(c, right, k % 2 ? 4.5 : -4.5), 1.5 + (k % 3) * 0.6);
   }
 }
 
@@ -509,28 +711,31 @@ for (const [x, z, angle, len, r] of [[-20, -104, 0.3, 18, 1.4], [26, -96, -0.5, 
 
 // --- Spawns, write ---------------------------------------------------------------------------------
 const spawns = (b, s) => [[-6, -10], [4, -16], [10, -2], [-12, -4]].map(([dx, dz]) => at(b[0] + s * dx, b[1] + dz, 0.1));
-// Twilight: the sun low in the north-west behind the mother tree, an orange sky going violet
-// overhead, warm mist in the Gorge, lanterns lit, fireflies out, leaves coming down.
+// Late dusk, muted: the sun low in the north-west behind the mother tree, a dusty rose horizon under
+// slate, grey mist in the Gorge, leaves grey-green, lanterns lit, the fungus's spores adrift, leaves
+// coming down.
 const palette = {
   sunDir: [-0.5, 0.25, 0.83],
-  sky: { horizon: '#f08a50', zenith: '#2a2150', sun: '#ffb070', stars: 0.25 },
+  sky: { horizon: '#a8938a', zenith: '#262a38', sun: '#e6c8a4', stars: 0.2 },
   fog: [45, 260],
-  haze: ['#d98a5a', 0.02, 6],
-  light: { sky: '#e0a884', ground: '#5c3c30', ambient: 2.1, sun: '#ff9a50', direct: 2.3 },
+  haze: ['#8e8c84', 0.022, 6],
+  light: { sky: '#aeb0a6', ground: '#45463c', ambient: 2, sun: '#dcb894', direct: 1.9 },
   lamp: '#ffb35c',
-  tint: '#f2d8c2',
-  terrain: ['#6a7840', '#7a685c', '#8a7444'],
-  leaf: ['#4a6a2e', '#6a7a32', '#3e5a2a', '#80783a'],
+  tint: '#e2ddd2',
+  terrain: ['#5d6650', '#6e665c', '#6a6a52'],
+  leaf: ['#6f7d6a', '#5e6c5a', '#7c8874', '#55614f'],
   undergrowth: 1,
   cover: 0.7,
   skyline: 'forest',
   motes: [
-    { color: [[1, 0.86, 0.45], [1, 0.42, 0.1]], rate: 50, size: 0.22, drift: 0.5, rise: 0.15, life: 6 }, // fireflies
+    { color: [[1, 0.62, 0.25], [1, 0.4, 0.08]], rate: 45, size: 0.2, drift: 0.5, rise: 0.15, life: 6 }, // spores
     // Leaves coming down on a light breeze out of the north-west.
-    { color: [[0.55, 0.32, 0.14], [0.4, 0.24, 0.1]], rate: 25, size: 0.22, drift: 0.8, rise: -0.7, life: 9, wind: [1.2, -0.5], range: 30, solid: true },
+    { color: [[0.44, 0.48, 0.4], [0.34, 0.37, 0.31]], rate: 25, size: 0.22, drift: 0.8, rise: -0.7, life: 9, wind: [1.2, -0.5], range: 30, solid: true },
   ],
-  ambience: 'twilight', // its sound bed and accents (web/audio.js)
+  pool: '#58c4a8', // the water standing on the crowns, glowing
+  ambience: 'grove', // its sound bed and accents (web/audio.js)
 };
+for (const s of solids) if (s.mat === 'bark') s.mat = 'pale'; // the forest's wood is bone-pale
 // Diagnostics: how steep the walkable slabs run, and where the key pieces stand.
 for (const s of solids.filter((s) => s.half[1] === 0.25 && s.tilt)) if (Math.abs(s.tilt) > 26) console.warn(`steep ramp ${s.mat} at ${s.box}: ${s.tilt} degrees`);
 console.log(`Pulpit top ${pTop} (ground ${heightAt(...PULPIT).toFixed(1)}, edge ${edge(PULPIT).toFixed(1)}), crest ${crestY(36)}-${crestY(LS / 2)}, tunnel floor ${heightAt(...station(SPINE, TUNNEL).at).toFixed(1)}`);

@@ -339,6 +339,21 @@ fn sinkhole_has_six_levels() {
     has_levels("sinkhole", &[-28.0, -21.0, -14.0, -7.0, 0.0, 8.0]);
 }
 
+/// Canopy can be crossed without touching the floor: from the crown over each base, its crowns
+/// across the map and up to the mother tree's, over waypoints 20 m+ up only.
+#[test]
+fn canopy_crosses_by_its_crowns() {
+    let nav = Nav::for_map(Map::index("canopy").unwrap());
+    let crown = |x: f32, y: f32, z: f32| nav.points().iter().position(|p| p.distance(Vector::new(x, y, z)) < 0.5).expect("no waypoint on that crown");
+    let (west, east) = (crown(-78.0, 27.0, -76.0), crown(78.0, 27.0, -76.0));
+    for (from, to) in [(west, east), (east, west)] {
+        let reached = nav.reachable_over(from, |p| p.y > 20.0);
+        for goal in [to, crown(0.0, 36.0, 112.0), crown(-56.0, 30.0, 52.0), crown(92.0, 30.0, 16.0)] {
+            assert!(reached[goal], "canopy: the crown at {} can't be reached over the canopy from {}", nav.points()[goal], nav.points()[from]);
+        }
+    }
+}
+
 #[test]
 fn bot_crosses_sinkhole() {
     let map = Map::load(Map::index("sinkhole").unwrap());

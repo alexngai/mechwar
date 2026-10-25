@@ -16,9 +16,10 @@ const COLORS = {
   snow: 0xe8edf1, ice: 0xa9c6d8, sand: 0xdcbf86, sandstone: 0xc49a5c,
   // A mine's strata and the gravel on its benches.
   gravel: 0x8b8274, shale: 0x5e5955, ore: 0x9b5a37, clay: 0xb38a5b,
+  pale: 0xd2cdc0, // bone-pale wood
 };
 // Ground, rock and wood: no trim, ribs or beams on these.
-const NATURAL = new Set(['ground', 'rock', 'stone', 'moss', 'bark', 'deadwood', 'snow', 'ice', 'sand', 'sandstone', 'gravel', 'shale', 'ore', 'clay']);
+const NATURAL = new Set(['ground', 'rock', 'stone', 'moss', 'bark', 'deadwood', 'snow', 'ice', 'sand', 'sandstone', 'gravel', 'shale', 'ore', 'clay', 'pale']);
 // Tree crowns and undergrowth, unless the palette's `leaf` names its own.
 const LEAVES = ['#4d7834', '#5d8a3b', '#3e6a2f', '#6c9844'];
 const REEDS = ['#7a7a48', '#6a6e40', '#8a7e50', '#5e6238'];
@@ -33,6 +34,11 @@ const TILE = 8; // ground texture repeat, meters
 const LAMP = { color: 0xffc98a, radius: 16, power: 1.4 };
 const FURNACE = { color: 0xff8a3a, radius: 15, power: 4 };
 const SIGN = { radius: 12, power: 2 };
+const FUNGUS = { color: 0xff7a1a, radius: 9, power: 1.8 }; // glowing fungus: small orange pools
+const FUNGUS_BLOBS = ['#ff7a1a', '#ffa040'];
+// Crowns' veils: ribbons in this many segments, ending at least this far over the ground, all
+// breathing once every BREATH s.
+const VEIL_SEGMENTS = 4, VEIL_CLEAR = 7, BREATH = 6;
 const PAD = '#a8ffc4'; // jump pads: a light green on every map
 const PAD_RADIUS = 2.5; // the sim's
 const AO_STEPS = [0.4, 0.9, 1.6, 2.5, 3.6]; // sample distances along the normal, meters
@@ -245,18 +251,44 @@ function decorParts(d, parts, glow, lamp) {
     glow.sparkers.push(new THREE.Vector3(...d.at)); // a broken cable or fitting spitting sparks: only fx
   } else if (d.kind === 'steam') {
     glow.steam.push(new THREE.Vector3(...d.at)); // a cooling tower's lip, steaming: only fx
-  } else if (d.kind === 'canopy') {
-    // A crown `r` m round: a core of leaves and squat, faceted clumps around it, shaped by where it is.
-    const [x, y, z] = d.at, n = d.r > 12 ? 7 : 4;
-    const rnd = (k) => {
-      const h = Math.sin((x * 7 + z * 13 + k) * 12.9898) * 43758.5453;
-      return h - Math.floor(h);
-    };
-    for (let k = 0; k < n; k++) {
-      const a = (k / n) * 2 * Math.PI + rnd(k), out = k && d.r * (0.4 + 0.3 * rnd(k + 9)), size = d.r * (k ? 0.45 + 0.25 * rnd(k + 5) : 0.7);
-      const g = new THREE.SphereGeometry(1, 7, 5).scale(size, size * 0.55, size).translate(x + Math.cos(a) * out, y + (rnd(k + 3) - 0.4) * d.r * 0.3, z + Math.sin(a) * out);
-      parts.push(paint(g, leaves[k % leaves.length], 0.9 + 0.2 * rnd(k + 7)));
+  } else if (d.kind === 'fringe') {
+    // What hangs from under a table tree's crown `r` m round (its underside at `at`): moss dripping
+    // off the rim, or with `long`, veils too, from the rim and further in (into `glow.veils`).
+    const [x, y, z] = d.at, rings = d.long ? [[0.97, 1.3, 0.75], [0.6, 1.7, 0.45]] : [[0.98, 1.1, 2.6 / d.r]];
+    glow.veils.push(veils(x, y, z, d.r, seeded(x, z), glow.floor, rings));
+  } else if (d.kind === 'pool') {
+    // Water standing on a crown, `r` m round at `at`.
+    glow.pools.push(new THREE.CircleGeometry(d.r, 28).rotateX(-Math.PI / 2).translate(...d.at));
+  } else if (d.kind === 'falls') {
+    // Water pouring off a crown's rim at `from` down to `to`, `w` m across, and mist where it lands.
+    const [a, b] = [new THREE.Vector3(...d.from), new THREE.Vector3(...d.to)], h = a.y - b.y;
+    const g = new THREE.CylinderGeometry(d.w / 2, d.w * 0.8, h, 7, Math.max(1, Math.round(h / 4)), true).translate(a.x, (a.y + b.y) / 2, a.z);
+    const pos = g.attributes.position, fallen = new Float32Array(pos.count * 2);
+    for (let i = 0; i < pos.count; i++) fallen.set([a.y - pos.getY(i), Math.atan2(pos.getZ(i) - a.z, pos.getX(i) - a.x)], i * 2);
+    g.setAttribute('fallen', new THREE.BufferAttribute(fallen, 2)); // meters fallen, and which way round
+    g.deleteAttribute('uv');
+    g.deleteAttribute('normal');
+    glow.falls.push(g);
+    glow.steam.push(Object.assign(b.clone().setY(b.y + 1), { size: 0.22 }));
+  } else if (d.kind === 'table') {
+    // A table tree out past the map, for the skyline: a trunk up from `base` to its crown `r` m
+    // round at `at`, drips under it. Nothing collides with it.
+    const [x, y, z] = d.at, rnd = seeded(x, z), t = d.r * 0.16;
+    parts.push(paint(new THREE.CylinderGeometry(t * 0.8, t, y - d.base, 7).translate(x, (y + d.base) / 2, z), COLORS.pale, 0.9));
+    parts.push(paint(new THREE.CylinderGeometry(d.r, d.r * 0.96, 1.6, 16).translate(x, y + 0.8, z), leaves[Math.floor(rnd(1) * leaves.length)], 0.9 + 0.2 * rnd(2)));
+    glow.veils.push(veils(x, y, z, d.r, rnd, glow.floor, [[0.98, 1.6, 2.6 / d.r]]));
+  } else if (d.kind === 'fungus') {
+    // A patch of glowing fungus `r` m round at `at`: blobs, the biggest mid-patch, on the level
+    // ground round it (not up a steep bank), with a light of its own at night.
+    const [x, y, z] = d.at, rnd = seeded(x, z);
+    for (let k = 0, n = Math.round(5 + d.r * 3); k < n; k++) {
+      const a = rnd(k) * 2 * Math.PI, out = d.r * Math.sqrt(rnd(k + 50)), px = x + Math.cos(a) * out, pz = z + Math.sin(a) * out;
+      const under = glow.floor?.(px, pz) ?? y;
+      if (Math.abs(under - y) > 1.2) continue;
+      const s = (0.2 + 0.5 * rnd(k + 100)) * (1 - (0.5 * out) / d.r);
+      glow.push(paint(new THREE.SphereGeometry(1, 6, 4).scale(s, s * 0.55, s).translate(px, under + s * 0.1, pz), FUNGUS_BLOBS[k % 2], 0.6 + 0.5 * rnd(k + 150), true));
     }
+    glow.fungi.push(new THREE.Vector3(x, y + 1, z));
   } else if (d.kind === 'sign') {
     // A neon panel set on a wall (`from`/`to` corners), lighting the street from `at`.
     const a = new THREE.Vector3(...d.from), b = new THREE.Vector3(...d.to);
@@ -281,6 +313,105 @@ function decorParts(d, parts, glow, lamp) {
     shaft.applyMatrix4(new THREE.Matrix4().makeBasis(across, out.clone().multiplyScalar(-5), UP.clone().multiplyScalar(size[1] / 2)).setPosition(center.addScaledVector(out, 2.5)));
     glow.shafts.push(paint(shaft, FURNACE.color, 0.3, true));
   }
+}
+
+/** A stable random in [0, 1) for the `k`th thing about whatever stands at (x, z). */
+const seeded = (x, z) => (k) => {
+  const h = Math.sin((x * 7 + z * 13 + k) * 12.9898) * 43758.5453;
+  return h - Math.floor(h);
+};
+
+/**
+ * Veils hanging from under a crown `r` m round, its underside at `y`: a ring of ribbons for each of
+ * `rings` ([fraction of r out, spacing m, length as a fraction of r]), each half a meter wide
+ * narrowing to a thread, ending VEIL_CLEAR m or more over the ground (`floor(x, z)`, if any).
+ * `veil` (the crown's x and z, meters down from the top, a seed) and `tip` (0 at the top, 1 at the
+ * end) drive their sway and breath (`veilMaterial`).
+ */
+function veils(x, y, z, r, rnd, floor, rings) {
+  const pos = [], nor = [], col = [], veil = [], tip = [], index = [];
+  let k = 0;
+  for (const [ring, spacing, long] of rings) {
+    const rho = r * ring, top = y, n = Math.round((2 * Math.PI * rho) / spacing);
+    for (let i = 0; i < n; i++, k++) {
+      const a = ((i + rnd(k + 10) * 0.6) / n) * 2 * Math.PI, c = Math.cos(a), s = Math.sin(a), px = x + c * rho, pz = z + s * rho;
+      const len = Math.min(r * long * (0.7 + 0.6 * rnd(k + 100)), floor ? top - floor(px, pz) - VEIL_CLEAR : Infinity);
+      if (len < 1.5) continue;
+      color.set(leaves[k % leaves.length]).multiplyScalar(0.8 + 0.3 * rnd(k + 200)).multiply(tint);
+      const base = pos.length / 3, seed = rnd(k + 300);
+      for (let j = 0; j <= VEIL_SEGMENTS; j++) {
+        const t = j / VEIL_SEGMENTS, w = 0.25 * (1 - t) + 0.03 * t;
+        for (const side of [-w, w]) {
+          pos.push(px - s * side, top - len * t, pz + c * side); // across the ring, facing out
+          nor.push(c, 0, s);
+          col.push(color.r, color.g, color.b);
+          veil.push(x, z, len * t, seed);
+          tip.push(t);
+        }
+        if (j) index.push(base + 2 * j - 2, base + 2 * j - 1, base + 2 * j, base + 2 * j - 1, base + 2 * j + 1, base + 2 * j);
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  for (const [name, data, n] of [['position', pos, 3], ['normal', nor, 3], ['color', col, 3], ['veil', veil, 4], ['tip', tip, 1]]) {
+    g.setAttribute(name, new THREE.Float32BufferAttribute(data, n));
+  }
+  g.setIndex(index);
+  return g;
+}
+
+/**
+ * Veils sway on a breeze, each its own way, and breathe all together: out and back in, their tips
+ * brightening, once every BREATH s. The swing grows with the square of the drop. `uniforms` (time,
+ * breath) are the caller's to advance.
+ */
+function veilMaterial(uniforms) {
+  const material = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec4 veil;\nattribute float tip;\nuniform float veilTime, breath;\nvarying float vTip;')
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        vTip = tip;
+        float swing = veil.z * veil.z * 0.01;
+        vec2 out2 = normalize(transformed.xz - veil.xy + vec2(1e-3));
+        float sway = sin(veilTime * 0.7 + veil.w * 6.28) + 0.4 * sin(veilTime * 1.9 + veil.w * 19.0);
+        transformed.xz += (vec2(0.8, -0.35) * sway * 0.25 + out2 * breath * 0.35) * swing;`,
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float breath;\nvarying float vTip;')
+      .replace(
+        '#include <emissivemap_fragment>',
+        '#include <emissivemap_fragment>\n  totalEmissiveRadiance += vec3(0.55, 0.75, 0.6) * smoothstep(0.6, 1.0, vTip) * (0.1 + 0.3 * (0.5 + 0.5 * breath));',
+      );
+  };
+  return material;
+}
+
+/**
+ * Falling water: pale, streaked, the streaks running down faster the further they've fallen, thin
+ * at the lip and fading out into the mist at the foot. `uniforms.fallTime` is the caller's to advance.
+ */
+function fallsMaterial(uniforms) {
+  const material = new THREE.MeshBasicMaterial({ color: 0xd8e2e0, transparent: true, depthWrite: false, side: THREE.DoubleSide });
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec2 fallen;\nvarying vec2 vFallen;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n  vFallen = fallen;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float fallTime;\nvarying vec2 vFallen;')
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        float streak = fract(sin(floor(vFallen.y * 2.2) * 91.7) * 43758.5);
+        float run = fract(vFallen.x * 0.08 - fallTime * (0.9 + 0.6 * streak));
+        diffuseColor.a = (0.22 + 0.3 * smoothstep(0.6, 1.0, run)) * smoothstep(0.0, 1.5, vFallen.x) * (0.55 + 0.45 * streak);`,
+      );
+  };
+  return material;
 }
 
 /** Concatenates indexed geometries that share the first one's attributes. */
@@ -524,11 +655,6 @@ export function buildArena(scene, map) {
     return { matrix, inv: matrix.clone().invert(), half: s.half, center: new THREE.Vector3(...s.box), radius: Math.hypot(hx, hy, hz) };
   });
 
-  // Crowns shade what's under them like a roof would, for the baked light: a squat box each.
-  const crowns = (map.decor ?? []).filter((d) => d.kind === 'canopy').map(({ at, r }) => {
-    const matrix = new THREE.Matrix4().makeTranslation(...at), half = [r * 0.8, r * 0.3, r * 0.8];
-    return { matrix, inv: matrix.clone().invert(), half, center: new THREE.Vector3(...at), radius: Math.hypot(...half) };
-  });
   const ground = [], solid = [], glow = [];
   glow.lamps = [];
   glow.furnaces = [];
@@ -536,6 +662,11 @@ export function buildArena(scene, map) {
   glow.shafts = [];
   glow.sparkers = [];
   glow.steam = [];
+  glow.veils = [];
+  glow.pools = [];
+  glow.falls = [];
+  glow.fungi = [];
+  glow.floor = map.terrain && ((x, z) => heightAt(map.terrain, map.size, x, z));
   map.solids.forEach((s, i) => {
     const g = paint((s.shape === 'cylinder' ? cylinderGeometry : boxGeometry)(s.half), COLORS[s.mat] ?? COLORS.concrete, jitter(i));
     g.applyMatrix4(boxes[i].matrix);
@@ -559,7 +690,7 @@ export function buildArena(scene, map) {
   });
   if (map.terrain) {
     const g = terrainGeometry(map.terrain, map.size, palette.terrain ?? TERRAIN);
-    bakeAO(g, [...boxes, ...crowns], palette.cover);
+    bakeAO(g, boxes, palette.cover);
     solid.push(g);
     if (palette.undergrowth) undergrowth(map, boxes, solid, palette.undergrowth, palette.water?.level);
     if (palette.reeds && palette.water) reeds(map, boxes, solid, palette.reeds, palette.water.level);
@@ -574,6 +705,7 @@ export function buildArena(scene, map) {
         ...glow.lamps.map((p) => light(p, { ...LAMP, color: lamp.light })),
         ...glow.furnaces.map((p) => light(p, FURNACE)),
         ...glow.signs.map(({ at, color }) => light(at, { ...SIGN, color })),
+        ...glow.fungi.map((p) => light(p, FUNGUS)),
       ]
     : [];
   if (map.night) for (const g of [...ground, ...solid]) bakeLights(g, lights, boxes);
@@ -603,6 +735,33 @@ export function buildArena(scene, map) {
   }
   for (const p of glow.lamps) {
     const h = halo(palette.lamp ?? 0xffd29a, map.night ? 4 : 2.6);
+    h.position.copy(p);
+    h.layers.set(LOW_ONLY);
+    meshes.push(h);
+  }
+  if (glow.veils.length) {
+    const uniforms = { veilTime: { value: 0 }, breath: { value: 0 } };
+    const veiled = new THREE.Mesh(mergeGeometries(glow.veils), veilMaterial(uniforms));
+    veiled.receiveShadow = true; // they don't cast: a shadow that sways would need its own pass
+    veiled.onBeforeRender = () => {
+      const t = performance.now() / 1000;
+      uniforms.veilTime.value = t % 1000;
+      uniforms.breath.value = Math.sin((t * 2 * Math.PI) / BREATH);
+    };
+    meshes.push(veiled);
+  }
+  if (glow.pools.length) {
+    // Water standing on the crowns, glowing a pale mint (the palette's `pool`) from within.
+    meshes.push(new THREE.Mesh(mergeGeometries(glow.pools), hot(new THREE.MeshBasicMaterial({ color: palette.pool ?? '#58c4a8', transparent: true, opacity: 0.92, depthWrite: false }))));
+  }
+  if (glow.falls.length) {
+    const uniforms = { fallTime: { value: 0 } };
+    const falls = new THREE.Mesh(mergeGeometries(glow.falls), fallsMaterial(uniforms));
+    falls.onBeforeRender = () => (uniforms.fallTime.value = (performance.now() / 1000) % 1000);
+    meshes.push(falls);
+  }
+  for (const p of glow.fungi) {
+    const h = halo(FUNGUS.color, 3);
     h.position.copy(p);
     h.layers.set(LOW_ONLY);
     meshes.push(h);

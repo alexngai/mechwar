@@ -33,7 +33,7 @@ const AMBIENCE = {
   canyon: { gain: 1.5, beds: [['wind', 0.06, 320, 2.5], ['hum', 0.025, [73.4, 74.1, 110]]], accents: [['rumble', [12, 25], 0.06], ['moan', [18, 35], 0.03]] },
   undercity: { beds: [['water', 0.05], ['hum', 0.03, [50, 100.3]]], accents: [['drip', [0.4, 1.6], 0.06], ['creak', [14, 28], 0.04]] },
   quarry: { gain: 1.3, beds: [['wind', 0.07, 650, 0.9], ['hum', 0.025, [41, 82.3]]], accents: [['rumble', [16, 34], 0.08], ['clank', [6, 14], 0.04], ['creak', [12, 24], 0.035], ['siren', [50, 90], 0.02]] },
-  twilight: { gain: 1.5, beds: [['wind', 0.035, 1800, 0.5], ['cricket', 0.02, 4600]], accents: [['hoot', [14, 30], 0.035], ['bird', [10, 25], 0.025]] },
+  grove: { gain: 1.2, beds: [['wind', 0.03, 900, 0.6], ['hum', 0.012, [55, 55.35, 82.4]]], accents: [['moan', [25, 50], 0.018], ['creak', [16, 32], 0.025], ['hoot', [30, 60], 0.02]] },
   storm: { gain: 1.2, beds: [['rain', 0.07, 1800], ['wind', 0.05, 450, 1]], accents: [['croak', [3, 8], 0.035], ['creak', [8, 18], 0.05]] },
   desert: { gain: 1.2, beds: [['wind', 0.1, 900, 0.8], ['wind', 0.06, 3200, 1.2]], accents: [['whistle', [15, 35], 0.025]] },
   blizzard: { gain: 1.9, beds: [['howl', 0.12, 600], ['wind', 0.07, 2400, 0.7]], accents: [['creak', [12, 24], 0.035]] },
@@ -517,13 +517,6 @@ export class Sound {
       lp.connect(out);
       for (const f of a) osc('sine', f).connect(this.amp(1 / a.length)).connect(lp);
       wobble(out.gain, 0.05, level * 0.25);
-    } else if (kind === 'cricket') {
-      // A tone pulsed fast, in bursts: chirp, chirp.
-      const pulse = ctx.createGain(), burst = ctx.createGain();
-      pulse.gain.value = burst.gain.value = 0.5;
-      osc('sine', a).connect(pulse).connect(burst).connect(out);
-      wobble(pulse.gain, 30, 0.5, 'square');
-      wobble(burst.gain, 2.2, 0.5, 'square');
     }
   }
 
@@ -578,11 +571,6 @@ export class Sound {
       this.growl(out, 'sawtooth', r(85, 110), r(60, 75), 500, 0.4, r(1.2, 2), 0.7);
     } else if (kind === 'moan') {
       this.growl(out, 'triangle', r(170, 200), r(130, 150), 600, 1.5, 2.5, 0.7);
-    } else if (kind === 'bird') {
-      for (let k = 0, n = 2 + Math.floor(r(0, 3)); k < n; k++) {
-        const f = r(2600, 3800);
-        this.tone(out, 'sine', f, f * r(1.1, 1.35), 0.01, 0.07, 0.6, k * r(0.1, 0.16));
-      }
     } else if (kind === 'croak') {
       for (const d of [0, 0.3]) this.growl(out, 'square', r(150, 175), 135, 700, 0.01, 0.2, 0.6, d);
     } else if (kind === 'hoot') {

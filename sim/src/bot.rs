@@ -143,13 +143,18 @@ impl Nav {
 
     /// Which waypoints can be reached from `from`.
     pub fn reachable(&self, from: usize) -> Vec<bool> {
+        self.reachable_over(from, |_| true)
+    }
+
+    /// Which waypoints can be reached from `from` passing only through waypoints `over` takes.
+    pub fn reachable_over(&self, from: usize, over: impl Fn(Vector) -> bool) -> Vec<bool> {
         let mut seen = vec![false; self.nodes.len()];
         let mut stack = vec![from];
         while let Some(u) = stack.pop() {
             if std::mem::replace(&mut seen[u], true) {
                 continue;
             }
-            stack.extend(self.edges.iter().filter(|&&(a, _)| a == u).map(|&(_, b)| b));
+            stack.extend(self.edges.iter().filter(|&&(a, b)| a == u && over(self.nodes[b])).map(|&(_, b)| b));
         }
         seen
     }

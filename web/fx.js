@@ -575,12 +575,16 @@ export class Effects {
     }
   }
 
-  /** A cooling tower's steam at `p`, over its 20 m lip: huge, pale billows rising and leaning downwind. */
+  /**
+   * Steam at `p`: by default a cooling tower's, over its 20 m lip, huge, pale billows rising and
+   * leaning downwind; `p.size` scales it (0.2 or so: the mist where a waterfall lands).
+   */
   steam(p, dt) {
+    const k = p.size ?? 1;
     for (let i = count(4, dt); i > 0; i--) {
-      spot.set(p.x + rand(-7, 7), p.y, p.z + rand(-7, 7));
-      this.soft.spawn(spot, scatter(WIND, rand(3, 4.5), 0.5), {
-        life: rand(8, 11), size: [rand(10, 14), rand(30, 40)], color: [[1, 1, 0.96], [0.86, 0.88, 0.86]], alpha: 0.45, drag: 0.08,
+      spot.set(p.x + rand(-7, 7) * k, p.y, p.z + rand(-7, 7) * k);
+      this.soft.spawn(spot, scatter(WIND, rand(3, 4.5) * Math.sqrt(k), 0.5 * k), {
+        life: rand(8, 11) * Math.sqrt(k), size: [rand(10, 14) * k, rand(30, 40) * k], color: [[1, 1, 0.96], [0.86, 0.88, 0.86]], alpha: 0.45 * Math.sqrt(k), drag: 0.08,
       });
     }
   }
