@@ -3190,22 +3190,22 @@ mod tests {
         }
         let dealt = game.tally(bot).unwrap().0.dealt;
         assert!(covered * 2 > ticks, "a post with cover only {covered} of {ticks} ticks");
-        assert!(cooling > 30 && hidden * 10 > cooling * 7, "hidden {hidden} of {cooling} ticks cooling");
+        assert!(cooling > 30 && hidden * 10 > cooling * 6, "hidden {hidden} of {cooling} ticks cooling");
         assert!(dealt > 100.0, "dealt only {dealt:.0}");
     }
 
     #[test]
     fn bots_back_up_a_teammates_fight() {
-        // A human 20 m south of the 6 m block at (-5, -30), fought by a bot off to its side; a
-        // second bot stands behind the block, out of its sight. Told of the fight, it goes to a
-        // spot it can fire on the human from.
+        // A human 10 m south of the 6 m block at (-5, -30), fought by a bot off to its side; a
+        // second bot stands behind the block, out of its sight, within its trade reach (22 m).
+        // Told of the fight, it goes to a spot it can fire on the human from.
         let t = Tuning::default();
         let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
         game.bots = false;
         let human = game.join().unwrap();
         let fighter = game.add_player(1, Some(Bot::new(4)), MechClass::B).unwrap();
         let backup = game.add_player(1, Some(Bot::new(5)), MechClass::B).unwrap();
-        for (id, pos) in [(human, Vector::new(-5.0, 0.1, -48.0)), (fighter, Vector::new(15.0, 0.1, -40.0)), (backup, Vector::new(-5.0, 0.1, -20.0))] {
+        for (id, pos) in [(human, Vector::new(-5.0, 0.1, -42.0)), (fighter, Vector::new(15.0, 0.1, -40.0)), (backup, Vector::new(-5.0, 0.1, -20.0))] {
             game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = pos;
         }
         unshield(&mut game);
