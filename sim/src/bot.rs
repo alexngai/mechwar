@@ -1076,12 +1076,15 @@ impl Bot {
             let turret = matches!(offensive, Item::MgTurret | Item::RocketTurret) && self.brain.wants(Action::Turret, at.flag(Feature::Perched, self.perched(nav, me)));
             let shell = if alt && !matches!(use_, AltUse::Beam | AltUse::Melee) { Some(t) } else if throw { Some(&grenade) } else { None };
             // Shells are led by their flight time, and so are projectile primaries: at the speed
-            // the charge held now (what it lets go with) sends them, raised for their drop.
+            // the charge held now (what it lets go with) sends them, raised for their drop. A
+            // seeking primary's aim stays on the target instead: its rockets home on what's in
+            // the crosshair as they fly, which a lead would take off it.
             let speed = weapon::speed(t, me.charge);
-            let primary_lead = if t.shot_speed > 0.0 { dist / speed } else { 0.0 };
+            let primary_lead = if t.shot_speed > 0.0 && t.shot_turn <= 0.0 { dist / speed } else { 0.0 };
             let lead = shell.map_or(primary_lead, |s| dist / s.alt_speed);
-            // Led by the motion it read, as fast as it judges it.
-            let (yaw, mut pitch) = look_at(eye, chest + self.seen_vel * (1.0 + self.misjudge.0) * lead);
+            // Led by the motion it read, as fast as it judges it: on over its reaction time from
+            // where it saw the target (so it lags only when the target turns), and over the flight.
+            let (yaw, mut pitch) = look_at(eye, chest + self.seen_vel * (1.0 + self.misjudge.0) * (self.reaction(t) + lead));
             // Range d (as it judges it) on flat ground: sin(2θ) = g d / v².
             let judged = flat(chest - eye).length() * (1.0 + self.misjudge.1);
             let arc = |g: f32, v: f32| 0.5 * asinf((g * judged / (v * v)).min(1.0));

@@ -3052,6 +3052,66 @@ mod tests {
         assert_eq!(hits, Some((bot, 1 << human)));
     }
 
+    /// A bot of `skill` carrying `primary`, its secondary, items and ability held back, `range` from a human
+    /// strafing across its line in the open (turning every 1.2 s) for `seconds`: the game after,
+    /// the bot's id, its rounds fired, and its seeking mark (0 for none) every tick from 1 s on.
+    fn duel_strafer(primary: &str, skill: f32, range: f32, seconds: f32) -> (Game, u8, u32, Vec<u8>) {
+        let t = Tuning::default();
+        let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+        game.bots = false;
+        let human = game.join().unwrap();
+        let mut brain = Bot::new(3);
+        brain.skill = skill;
+        let bot = game.add_player(1, Some(brain), MechClass::B).unwrap();
+        let (from, spot) = (Vector::new(-36.0, 0.1, -42.0), Vector::new(-36.0, 0.1, -42.0 + range));
+        for (id, pos) in [(human, from), (bot, spot)] {
+            let p = game.players.iter_mut().find(|p| p.id == id).unwrap();
+            p.mech.pos = pos;
+            if id == bot {
+                p.mech.loadout = Loadout::named(primary, "rocket");
+            }
+        }
+        unshield(&mut game);
+        let (mut rounds, mut marks) = (0, Vec::new());
+        for k in 0..secs(seconds) {
+            let side = if (k / secs(1.2)) % 2 == 0 { -1.0 } else { 1.0 };
+            send(&mut game, human, Input { move_x: side, yaw: std::f32::consts::PI, ..Input::default() });
+            game.step();
+            for p in &mut game.players {
+                if p.id == bot {
+                    // Held to its spot, its gun alone.
+                    (p.mech.pos, p.mech.vel, p.mech.alt_wait, p.mech.grenades, p.mech.emps, p.mech.ability_cooldown) = (spot, Vector::ZERO, 99.0, 0, 0, 99.0);
+                    rounds += u32::from(p.mech.shot);
+                    if k >= secs(1.0) {
+                        marks.push(p.mech.seek);
+                    }
+                } else {
+                    p.mech.health = t.health_max; // so it never dies
+                }
+            }
+        }
+        (game, bot, rounds, marks)
+    }
+
+    #[test]
+    fn bots_track_a_strafing_target() {
+        // Up close a strafer crosses the sights fast: a bot that aimed where it saw it a reaction
+        // ago (0.25 s, 3 m behind) landed a quarter of its SMG rounds.
+        let (game, bot, rounds, _) = duel_strafer("stitcher", 0.5, 12.0, 12.0);
+        let t = game.arsenal.of(&mech(&game, bot)).clone();
+        let landed = game.tally(bot).unwrap().0.dealt_by[0] / (rounds as f32 * t.shot_damage);
+        assert!(rounds > 50 && landed > 0.4, "landed {landed:.2} of {rounds} rounds");
+    }
+
+    #[test]
+    fn homing_bots_keep_the_target_marked() {
+        // A homing rocket homes on what's in the crosshair as it flies: a bot leading the target
+        // took it out of the 3° seek cone. (A sharp bot's: a raw one's aim wanders that far.)
+        let (_, _, rounds, marks) = duel_strafer("talon", 1.0, 45.0, 12.0);
+        let marked = marks.iter().filter(|&&m| m != 0).count() as f32 / marks.len() as f32;
+        assert!(rounds > 8 && marked > 0.7, "marked {marked:.2} of the time, {rounds} rockets");
+    }
+
     #[test]
     fn bots_use_salve_pall_and_limpet() {
         let t = Tuning::default();
