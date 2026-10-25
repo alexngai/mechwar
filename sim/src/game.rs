@@ -560,7 +560,11 @@ impl Game {
         let mut radio: Vec<Vec<(u8, u8, Vector)>> = vec![Vec::new(); MAX_PLAYERS]; // (from, enemy, where)
         // Objectives to take or hold, in Missile Assault and Siege.
         let orders = match (&self.assault, &self.siege) {
-            (Some(a), _) => Some(a.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.mech.health > 0.0)).collect::<Vec<_>>())),
+            (Some(a), _) => {
+                // Each team's bots go after as many silos at once as its first bot's policy says.
+                let spread = [0, 1].map(|team| self.players.iter().filter(|p| p.team == team).find_map(|p| p.bot.as_ref()).map_or(usize::MAX, |b| b.policy.assault_spread.round().max(1.0) as usize));
+                Some(a.orders_spread(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.mech.health > 0.0)).collect::<Vec<_>>(), spread))
+            }
             (_, Some(s)) => {
                 let ships = [0, 1].map(|t| self.deployables.iter().any(|d| d.kind == Kind::Ship && d.team == t));
                 Some(s.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.eu)).collect::<Vec<_>>(), ships))

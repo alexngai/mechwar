@@ -581,6 +581,9 @@ pub struct Policy {
     pub post_split: f32,
     pub post_cross: f32,
     pub trade_reach: f32,
+    /// Missile Assault: how many of the silos its team doesn't hold securely the team goes after
+    /// at once (its first bot's says, for all), the nearest first.
+    pub assault_spread: f32,
     /// With nothing to do it holds within this of its lead.
     pub follow: f32,
     /// Farthest it lobs a grenade (short of its flat-ground reach).
@@ -621,6 +624,7 @@ impl Default for Policy {
             post_split: 1.0,
             post_cross: 0.3,
             trade_reach: 40.0,
+            assault_spread: 3.0,
             follow: 10.0,
             grenade_range: 28.0,
             heat_fed: 0.1,
