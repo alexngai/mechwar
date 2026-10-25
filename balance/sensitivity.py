@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Stat sensitivity: how far each weapon, item and ability's rating moves when its key stat gets 20%
-better, per 10%. Near zero means bots can't use it: a behaviour task, not a balance one.
+"""Stat sensitivity: how far each weapon, item and ability's rating moves when its key stat gets
+better (by --better, 50% by default), per 10%. Near zero means bots can't use it: a behaviour task,
+not a balance one.
 
 Each runs as two small sweeps (balance/sweep.py --only) of the builds carrying it: as it is, and
 with the stat changed.
@@ -17,8 +18,8 @@ from pathlib import Path
 import evolve as ev
 
 TUNING = json.loads((ev.ROOT / 'tuning.json').read_text())
-# Each one's key stat, and which way is better: a factor applied for "20% better".
-BETTER, FASTER = 1.2, 1 / 1.2
+# Each one's key stat, and which way is better: up, or down (a recharge or cooldown).
+BETTER, FASTER = 'up', 'down'
 ITEMS = {
     'grenade': ('grenade_damage', BETTER), 'limpet': ('limpet_damage', BETTER), 'smoke': ('smoke_seconds', BETTER),
     'mg_turret': ('mg_turret_damage', BETTER), 'rocket_turret': ('rocket_turret_damage', BETTER),
@@ -30,23 +31,25 @@ ITEMS = {
 WEAPON_KEY = {'mender': 'alt_beam_heal', 'splitter': 'alt_split_damage'}
 
 
-def checks():
-    """(slot, id, tweaks, the stat it changes) for everything there is."""
+def checks(better):
+    """(slot, id, tweaks, the stat it changes) for everything there is, each `better` times better."""
     for slot in ('primary', 'secondary'):
         for w in ev.WEAPONS[ev.LISTS[slot]]:
             key = WEAPON_KEY.get(w['id'], 'shot_damage' if slot == 'primary' else 'alt_damage')
             base = w.get('stats', {}).get(key, TUNING[key]['value'])
-            yield slot, w['id'], {'weapons': {w['id']: {key: round(base * BETTER, 3)}}}, key
+            yield slot, w['id'], {'weapons': {w['id']: {key: round(base * better, 3)}}}, key
     for slot in ('offensive', 'support', 'ability'):
         for w in ev.WEAPONS[ev.LISTS[slot]]:
-            key, factor = ITEMS[w['id']]
-            yield slot, w['id'], {'tuning': {key: round(TUNING[key]['value'] * factor, 3)}}, key
+            key, way = ITEMS[w['id']]
+            value = TUNING[key]['value']
+            yield slot, w['id'], {'tuning': {key: round(value * better if way == BETTER else value / better, 3)}}, key
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--skill', type=float, default=1.0)
-    ap.add_argument('--appear', type=int, default=60)
+    ap.add_argument('--appear', type=int, default=120)
+    ap.add_argument('--better', type=float, default=1.5, help='how much better the key stat gets (1.5: 50%%)')
     ap.add_argument('--just', help='comma-separated ids to check (default: all)')
     ap.add_argument('--seed', type=int, default=41)
     ap.add_argument('--out', type=Path, default=ev.ROOT / 'balance' / 'out' / 'sensitivity')
@@ -55,10 +58,10 @@ def main():
     just = set(args.just.split(',')) if args.just else None
     names = {w['id']: w['name'] for lst in ev.WEAPONS.values() for w in lst}
     lines = [f'# Stat sensitivity, skill {args.skill}', '',
-             f'Rating change for its key stat 20% better, per 10% (team-margin plus-minus per match), ± one standard error; {args.appear} matches per build. Flagged insensitive: under 0.1 per 10% even at two standard errors up; unclear: within two standard errors of nothing, but not surely under 0.1.', '',
+             f'Rating change for its key stat {args.better - 1:.0%} better, per 10% (team-margin plus-minus per match), ± one standard error; {args.appear} matches per build. Flagged insensitive: under 0.1 per 10% even at two standard errors up; unclear: within two standard errors of nothing, but not surely under 0.1.', '',
              '| Slot | What | Key stat | Rating | Per 10% better | Uses / match | Flag |', '| --- | --- | --- | --- | --- | --- | --- |']
     results = []
-    for slot, w, tweaks, key in checks():
+    for slot, w, tweaks, key in checks(args.better):
         if just and w not in just:
             continue
         family = ['--items'] if slot in ('offensive', 'support', 'ability') else []
@@ -68,7 +71,8 @@ def main():
         subprocess.run([*base, '--tweaks', json.dumps(tweaks), '--out', str(tweaked)], check=True, capture_output=True)
         c, t = (json.loads((d / 'ratings.json').read_text()) for d in (control, tweaked))
         (cm, cse), (tm, tse) = c['table'][f'{slot}/{w}/all'], t['table'][f'{slot}/{w}/all']
-        per10, se = (tm - cm) / 2, math.hypot(cse, tse) / 2
+        steps = (args.better - 1) * 10
+        per10, se = (tm - cm) / steps, math.hypot(cse, tse) / steps
         uses = c['use'][f'{slot}/{w}'][0]
         flag = 'bots can\'t use it' if uses < 0.1 else 'insensitive' if per10 + 2 * se < 0.1 else 'unclear: more matches' if abs(per10) < 2 * se else ''
         results.append((slot, w, key, cm, per10, se, uses, flag))
