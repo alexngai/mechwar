@@ -904,7 +904,7 @@ impl Bot {
     }
 
     /// A build for this life, as a player would pick in the hangar: any primary and secondary,
-    /// rolled again until the guardrails (`sensible`) pass, and items it knows how to use and an
+    /// rolled again until the guardrails (`sensible`) pass, any items, and an
     /// ability that fits the class.
     pub fn pick_loadout(&mut self, arsenal: &Arsenal, class: MechClass) -> Loadout {
         if let Some(build) = self.build {
@@ -916,8 +916,8 @@ impl Bot {
             let loadout = Loadout { primary: roll(primaries, self.rand()), secondary: roll(secondaries, self.rand()), ..Loadout::of(class) };
             if sensible(arsenal.get(class, loadout)) {
                 // Off the state without drawing from it, so the rest of a life rolls as before.
-                let offensive = [Item::Grenade, Item::MgTurret, Item::RocketTurret][(self.rng >> 20) as usize % 3];
-                let support = [Item::Emp, Item::Dome, Item::Barrier][(self.rng >> 40) as usize % 3];
+                let offensive = [Item::Grenade, Item::Limpet, Item::Smoke, Item::MgTurret, Item::RocketTurret][(self.rng >> 20) as usize % 5];
+                let support = [Item::Emp, Item::Orb, Item::Dome, Item::Barrier][(self.rng >> 40) as usize % 4];
                 let fitting: Vec<u8> = (0..).map_while(|i| arsenal::weapon(Slot::Ability, i).map(|_| i)).filter(|&i| arsenal::fits(class, Slot::Ability, i)).collect();
                 let ability = fitting[(self.rng >> 30) as usize % fitting.len()];
                 return Loadout { offensive: offensive.index(), support: support.index(), ability, ..loadout };

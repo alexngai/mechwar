@@ -37,13 +37,8 @@ DEFAULT = json.loads(subprocess.run([ARENA, '--policy'], capture_output=True, te
 # Genes that are shares (of hull, heat, range, or a chance): nudged by adding, kept in (0, 1).
 SHARES = {'retreat_hull', 'mended_hull', 'cool_high', 'cool_low', 'band_near', 'dodge_chance', 'heat_fed'}
 ORDERED = [('cool_low', 'cool_high'), ('retreat_hull', 'mended_hull'), ('band_near', 'band_far')]
-# Items bots know how to use (`Bot::pick_loadout`); any other would be a dead slot.
-BOT_ITEMS = {'offensive': {'grenade', 'mg_turret', 'rocket_turret'}, 'support': {'emp', 'dome', 'barrier'}}
-
-
 def options(slot, cls):
-    ids = [w['id'] for w in WEAPONS[LISTS[slot]] if cls in w.get('classes', [cls])]
-    return [i for i in ids if i in BOT_ITEMS.get(slot, ids)]
+    return [w['id'] for w in WEAPONS[LISTS[slot]] if cls in w.get('classes', [cls])]
 
 
 def cell(g):
