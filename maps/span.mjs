@@ -11,7 +11,7 @@
 // (maps/kit.mjs) adds the 180-degree twin. Much of it is laid out along the arch: `s` m from the
 // middle toward the NW town, `v` m across it toward the NE yard. Heavy is 5.8 m: streets and slots
 // 10 m+, 6.5 m+ under the arms.
-import { bases, box, cylinder, ground, heightAt, lamp, once, point, r3, sentries, siege, sign, silos, slope, solids, turned, write } from './kit.mjs';
+import { bases, box, convoy, cylinder, ground, heightAt, lamp, once, point, r3, sentries, siege, sign, silos, slope, solids, turned, write } from './kit.mjs';
 
 const SIZE = [300, 300], CELL = 4;
 const RISE = 36, REACH = 112, GAP = 12; // the arch's crest, its feet's distance out, its tips'
@@ -230,6 +230,23 @@ siege({ at: [0, 0, 0], radius: 18, band: 4 }, { at: [0, 6, 0], radius: 8, band: 
 // mesa.
 const [px, pz] = uv(10, 13);
 silos({ at: onMesa(0), radius: 10, band: 3 }, { at: [0, 0, 0], radius: 18, band: 4, pad: [px, 0, pz] });
+// Convoy: the Keystone and its AA pad hold the middle, so the hauler starts on the sand off its
+// north-west end, under the arm's tip, and each leg runs out across the arch's line (v) through the
+// slot canyon off its mesa's north-west end and in by its yard's gate on that side, swinging wide of
+// the base gun just inside it. The halves aren't twins of each other here, so both are authored.
+{
+  const leg = (sv, world) => [...sv.map(([s, v]) => atUV(s, v)), ...world.map(([x, z]) => at(x, z))];
+  // In through the NE yard's west gate (world x, z); off the terrain cells' edges, where a ray down can miss.
+  const yard = [[75, 112], [82.5, 118.5], [86.5, 121.7], [93, 121.7], [95.6, 123], [99.5, 127.5], [106.5, 129.5], [114.5, 128.5], [120, 126.5]];
+  const north = leg([[20, 0], [23, 15], [24.5, 22.5], [26, 30], [26, 45], [26, 60], [26, 72], [26, 82], [26, 92], [23, 100], [20, 108], [20, 118]], yard);
+  // The SW yard's gate on that side is the NE's west gate mirrored across the arch's line: (s, v) -> (s, -v),
+  // which is the world's (x, z) -> (-z, -x).
+  const south = leg(
+    [[20, 0], [28, -9], [28, -24], [27, -38], [26, -52], [26, -59], [26, -66], [26, -76], [25.5, -83], [24.5, -90], [23, -98], [21, -105], [20, -112], [20, -118]],
+    yard.map(([x, z]) => [-z, -x]),
+  );
+  convoy(north, south);
+}
 
 // --- Spawns, write ---------------------------------------------------------------------------------
 const north = [[112, 0.1, 120], [120, 0.1, 112], [128, 0.1, 128], [108, 0.1, 132]];
