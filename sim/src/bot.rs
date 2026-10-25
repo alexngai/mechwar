@@ -375,7 +375,7 @@ enum Goal {
 
 /// How a bot works its secondary, read off the weapon's stats so it follows any retuning.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum AltUse {
+pub(crate) enum AltUse {
     /// Shells at the target, led by their flight and lobbed when they drop (mines too).
     Shell,
     /// A beam held on the target (`alt_beam`).
@@ -390,7 +390,7 @@ enum AltUse {
     Melee,
 }
 
-fn alt_use(t: &Tuning) -> AltUse {
+pub(crate) fn alt_use(t: &Tuning) -> AltUse {
     if t.alt_beam > 0.0 {
         AltUse::Beam
     } else if t.alt_lock_time > 0.0 {

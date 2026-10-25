@@ -21,6 +21,7 @@ pub mod objective;
 pub mod progress;
 pub mod projectile;
 pub mod siege;
+pub mod threat;
 pub mod weapon;
 #[cfg(feature = "wasm")]
 mod wasm;

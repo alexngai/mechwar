@@ -532,3 +532,102 @@ fn piston_match_probe() {
         100.0 * scores[0] as f32 / (scores[0] + scores[1]).max(1) as f32,
     );
 }
+
+/// Threat probe: a Medium bot holding still at a set range from a Medium human strafing in the
+/// open, its items and ability held back, against `threat::dps`: the damage a second each weapon
+/// landed, played out and modelled. A check on the model, not a test (`--ignored`):
+/// PROBE_SECS=<s> PROBE_SEEDS=<n> cargo test -p sim --release --lib threat_probe -- --ignored --nocapture
+#[test]
+#[ignore = "probe"]
+fn threat_probe() {
+    let run: f32 = std::env::var("PROBE_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(20.0);
+    let seeds: u64 = std::env::var("PROBE_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(4);
+    let t0 = Tuning::default();
+    let arsenal = crate::Arsenal::new(&t0);
+    let ranges = [10.0, 20.0, 30.0, 45.0, 60.0, 80.0];
+    let debug = std::env::var("PROBE_DEBUG").is_ok();
+    // PROBE_STILL: the human stands still, to tell aim from leading.
+    let still = std::env::var("PROBE_STILL").is_ok();
+    let only = std::env::var("PROBE_KIT").ok();
+    let kits: Vec<(&str, &str)> = ["stitcher", "triplet", "pike", "gyre", "squall", "kiln", "hail", "talon"].map(|p| (p, "-")).into_iter()
+        .chain(["darts", "hornet", "rocket", "spindle", "furnace", "mortar", "splitter", "warren"].map(|s| ("pike", s)))
+        .collect();
+    println!("{:9} {:9} {}", "primary", "secondary", ranges.map(|r| format!("{r:>13.0} m")).join(""));
+    for (primary, secondary) in kits {
+        if only.as_deref().is_some_and(|k| k != primary && k != secondary) {
+            continue;
+        }
+        let loadout = crate::Loadout::named(primary, if secondary == "-" { "rocket" } else { secondary });
+        let (mine, theirs) = (arsenal.get(MechClass::B, loadout), arsenal.get(MechClass::B, crate::Loadout::default()));
+        let mut cells = Vec::new();
+        for range in ranges {
+            let (mut gun, mut alt) = (0.0f32, 0.0f32);
+            let (mut fires, mut shots, mut hot, mut focused) = (0u32, 0u32, 0.0f32, 0u32);
+            let mut doing: BTreeMap<String, u32> = BTreeMap::new();
+            for seed in 1..=seeds {
+                let mut game = Game::new(t0.clone(), crate::map::Map::index("blockout").unwrap());
+                game.bots = false;
+                let human = game.join().unwrap();
+                // It holds its fire to cool rather than falling back (pinned, it would only turn away).
+                let mut brain = Bot::new(seed);
+                for a in [crate::brain::Action::FallBackToCool, crate::brain::Action::FallBackToMend] {
+                    brain.brain.0.remove(&a);
+                }
+                let bot = game.add_player(1, Some(brain), MechClass::B).unwrap();
+                // Down the open west side, the human strafing across the line (east first, clear of the wall).
+                let (from, spot) = (Vector::new(-36.0, 0.1, -42.0), Vector::new(-36.0, 0.1, -42.0 + range));
+                for (id, pos) in [(human, from), (bot, spot)] {
+                    let p = game.players.iter_mut().find(|p| p.id == id).unwrap();
+                    p.mech.pos = pos;
+                    if id == bot {
+                        p.mech.loadout = loadout;
+                    }
+                }
+                for p in &mut game.players {
+                    p.mech.shield = 0.0;
+                }
+                let face = { let d = spot - from; libm::atan2f(-d.x, -d.z) };
+                for k in 0..secs(run) {
+                    let side = if still { 0.0 } else if (k / secs(1.2)) % 2 == 0 { -1.0 } else { 1.0 };
+                    let tick = game.tick;
+                    game.push_input(human, InputMsg { seq: tick + 1, input: crate::Input { move_x: side, yaw: face, ..crate::Input::default() }, view_tick: tick as f32 });
+                    game.step();
+                    if debug {
+                        let b = game.players.iter().find(|p| p.id == bot).unwrap();
+                        let bt = b.bot.as_ref().unwrap();
+                        (fires, shots, hot) = (fires + u32::from(bt.last.fire), shots + u32::from(b.mech.shot), hot + b.mech.heat / game.arsenal.of(&b.mech).heat_max);
+                        *doing.entry(format!("{:?}", bt.doing())).or_insert(0u32) += 1;
+                        focused += u32::from(bt.focus().is_some());
+                    }
+                    for p in &mut game.players {
+                        if p.id == bot {
+                            (p.mech.pos, p.mech.vel, p.mech.grenades, p.mech.emps, p.mech.ability_cooldown) = (spot, Vector::ZERO, 0, 0, 99.0);
+                            // The gun alone, in the primaries' rows.
+                            if secondary == "-" {
+                                p.mech.alt_wait = 99.0;
+                            }
+                        } else {
+                            p.mech.health = p.mech.health.max(1.0e3);
+                        }
+                    }
+                }
+                let tally = &game.players.iter().find(|p| p.id == bot).unwrap().tally;
+                (gun, alt) = (gun + tally.dealt_by[0], alt + tally.dealt_by[1]);
+            }
+            let played = run * seeds as f32;
+            if debug {
+                let n = secs(run) as f32 * seeds as f32;
+                println!("{primary} {secondary} {range} m: fire held {:.0}%, shot {:.1}/s, heat {:.0}%, focused {:.0}%, {doing:?}", 100.0 * fires as f32 / n, shots as f32 / played, 100.0 * hot / n, 100.0 * focused as f32 / n);
+            }
+            let mut model = crate::threat::dps(mine, theirs, range);
+            if secondary == "-" {
+                let mut gun = mine.clone();
+                (gun.alt_heat, gun.alt_damage) = (0.0, 0.0);
+                model = crate::threat::dps(&gun, theirs, range);
+            }
+            cells.push(format!("  {:>4.1}/{:<4.1}{:>4.1}/{:<4.1}", gun / played, model.primary, alt / played, model.secondary));
+        }
+        println!("{primary:9} {secondary:9} {}", cells.join(""));
+    }
+    println!("each cell: primary played/modelled, secondary played/modelled (damage a second)");
+}
