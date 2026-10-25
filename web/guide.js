@@ -18,13 +18,15 @@ const SIM = {
   TEAM_SIZE: 4, MAX_PLAYERS: 8, POST_MATCH_SECONDS: 10, MATCH_SECONDS: 600, SCORE_LIMIT: 25, DM_MAX_SIZE: 200,
   POINTS_PER_KILL: 100, KILLER_BONUS: 0.25, ASSIST_WINDOW: 15, CAPTURE_POINTS: 50, EU_POINTS: 0.5, SHIP_POINTS: 0.05,
   ORB_HEALTH: 25, ORB_RADIUS: 6, ORB_RATE: 10, ORB_SECONDS: 30, EDGE_DAMAGE: 0.3,
-  SENTRY_RANGE: 50, SENTRY_SHIP_RANGE: 90, SENTRY_BURST: 8, SENTRY_ROUND: 7,
+  SENTRY_RANGE: 50, SENTRY_SHIP_RANGE: 90, SENTRY_BURST: 8, SENTRY_ROUND: 4, SENTRY_ACQUIRE: 0.6, SENTRY_SHIELD: 400, SENTRY_REGEN: 25, SENTRY_OFFLINE: 25, SENTRY_IMMUNE: 15,
   CAPTURE_SECONDS: 8, CAPTURE_SPEEDUP: 0.5, CAPTURE_CREW: 3, DRIFT_SECONDS: 16,
   BASE_HULL: 1000, MISSILE_SECONDS: 10, MISSILE_FLIGHT: 10, MISSILE_DAMAGE: 20,
   STATION_CAP: 400, STATION_REFILL: 10, STATION_RATE: 30, CARRY_MAX: 100, BASE_RADIUS: 14, TRICKLE: 1, LAUNCH_EU: 500,
   DROP_RADIUS: 4, DROP_SECONDS: 30, SHIP_HULL: 3000, SHIP_SPEED: 4, DUEL_RANGE: 120, DUEL_DPS: 30, BOMBARD_DPS: 15,
   SHIP_GUN_RANGE: 110, AA_RANGE: 150, AA_DPS: 25,
-  KILL_XP: 100, BOT_KILL_XP: 25, HEAL_XP: 0.5, MATCH_XP: 100, WIN_XP: 150, CAPTURE_XP: 50, EU_XP: 0.5, SHIP_XP: 0.05, MAX_LEVEL: 99,
+  TAKE_SECONDS: 3, CAPTURES_TO_WIN: 3, PICKUP_RADIUS: 3, FLAG_CAPTURE_POINTS: 200, FLAG_RETURN_POINTS: 50, LADEN_SPEED: 0.8, // ctf.rs, lib.rs
+  SPEED: 10, ESCORT_SPEEDS: [0.75, 1, 1.25, 1.5], ESCORT_RANGE: 30, SHIELD: 1500, STALL_SECONDS: 8, ESCORT_POINTS: 2, // convoy.rs
+  KILL_XP: 100, BOT_KILL_XP: 25, HEAL_XP: 0.5, MATCH_XP: 100, WIN_XP: 150, CAPTURE_XP: 50, EU_XP: 0.5, SHIP_XP: 0.05, ESCORT_XP: 1, MAX_LEVEL: 99,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -47,9 +49,10 @@ const SLOTS = [
 const link = (id) => `<a href="/guide/${SLOTS.find(([, list]) => weapons[list].includes(byId[id]))[4]}#${id}">${byId[id].name}</a>`;
 const num = (label, value) => `<div><dt>${label}</dt><dd>${value}</dd></div>`;
 
-// Maps load only for the sections that show them; blockout is the sim's test map, never played.
-const MAP_FILES = import.meta.glob(['../maps/*.json', '!../maps/nav.json', '!../maps/blockout.json'], { import: 'default' });
-const loadMaps = async () => (await Promise.all(Object.entries(MAP_FILES).map(async ([path, load]) => ({ id: path.match(/(\w+)\.json$/)[1], ...(await load()) }))))
+// Maps load only for the sections that show them: those guide/maps.json covers (not the sim's
+// test map, or one still being made).
+const MAP_FILES = import.meta.glob(['../maps/*.json', '!../maps/nav.json'], { import: 'default' });
+const loadMaps = async () => (await Promise.all(Object.keys(GUIDE_MAPS).map(async (id) => ({ id, ...(await MAP_FILES[`../maps/${id}.json`]()) }))))
   .sort((a, b) => a.size[0] - b.size[0] || a.name.localeCompare(b.name));
 // The modes, and which maps play them (Mode::fits in sim/src/game.rs).
 const MODES = [
@@ -57,6 +60,8 @@ const MODES = [
   ['dm', 'Deathmatch', (m) => Math.max(...m.size) <= SIM.DM_MAX_SIZE],
   ['ma', 'Missile Assault', (m) => !!m.objectives?.bases && m.objectives.silos?.length === 3],
   ['siege', 'Siege', (m) => !!(m.objectives?.bases && m.objectives.aa && m.objectives.sky) && m.objectives.stations?.length > 0],
+  ['ctf', 'Capture the Flag', (m) => !!m.objectives?.flags],
+  ['convoy', 'Convoy', (m) => { const c = m.objectives?.convoy; return !!c && c.points.length >= 3 && c.start > 0 && c.start < c.points.length - 1; }],
 ];
 const TEAM = ['#4fb4ff', '#ff5a36'];
 // The maps' pictures, as tools/shoot.html made them from guide/maps.json's viewpoints: <map>-plan, <map>-hero and <map>-<spot id>.
@@ -86,7 +91,7 @@ function overview() {
       <a href="/guide/weapons"><b>WEAPONS</b><small>${count('primaries')} primaries and ${count('secondaries')} secondaries, with their numbers</small></a>
       <a href="/guide/items"><b>ITEMS</b><small>${count('offensive')} items, ${count('support')} support items and ${count('abilities')} abilities</small></a>
       <a href="/guide/modes"><b>MODES</b><small>${MODES.map(([, name]) => name).join(', ')}</small></a>
-      <a href="/guide/maps"><b>MAPS</b><small>${Object.keys(MAP_FILES).length} arenas: layouts and places worth knowing</small></a>
+      <a href="/guide/maps"><b>MAPS</b><small>${Object.keys(GUIDE_MAPS).length} arenas: layouts and places worth knowing</small></a>
       <a href="/guide/mechanics"><b>MECHANICS</b><small>Movement, heat, damage, repair, lock-ons and progression</small></a>
     </div>`;
 }
@@ -231,6 +236,19 @@ async function modes() {
       `Whoever holds the anti-air (AA) zone, taken like a silo, hits the enemy ship within ${SIM.AA_RANGE} m for ${SIM.AA_DPS}/s; base guns fire on it within ${SIM.SENTRY_SHIP_RANGE} m.`,
       `Destroy the enemy base to win; at time, more hull left wins. Pilots score ${SIM.CAPTURE_POINTS} for taking the AA, ${SIM.EU_POINTS} per EU banked and ${SIM.SHIP_POINTS} per point of hull shot off the enemy ship.`,
     ],
+    ctf: [
+      `Each team's flag stands by its base. Stand in the enemy stand's zone ${SIM.TAKE_SECONDS} s to take their flag; a defender in the zone holds the raid off, and it ebbs once the raiders leave.`,
+      `Carry it into your own stand's zone to capture it; your own flag needn't be home. First to ${SIM.CAPTURES_TO_WIN} captures wins; at time, more captures, or a draw.`,
+      `The carrier walks at ${SIM.LADEN_SPEED * 100}% speed and can't boost or dash (hover and jump pads still work), drops out of Camouflage, and can still shoot; the flag rides over them for all to see.`,
+      `A downed carrier drops the flag where they fell, and anyone walking over it picks it up: the raiders to carry on, the owners to carry it home. One that falls where nobody can reach goes home.`,
+      `Pilots score ${SIM.CAPTURE_POINTS} for taking a flag off its stand, ${SIM.FLAG_CAPTURE_POINTS} for a capture and ${SIM.FLAG_RETURN_POINTS} for carrying their own home.`,
+    ],
+    convoy: [
+      `A hauler waits in the middle of a route that runs between the two bases. Walk it into the enemy base to win; at time, the side that pushed it further from the start wins.`,
+      `The side with more mechs within ${SIM.ESCORT_RANGE} m of it walks it toward the other's base, faster the bigger its lead: ${SIM.SPEED * SIM.ESCORT_SPEEDS[0]} m/s with one more, ${SIM.SPEED * SIM.ESCORT_SPEEDS[1]} with two, up to ${SIM.SPEED * SIM.ESCORT_SPEEDS.at(-1)} with all ${SIM.ESCORT_SPEEDS.length} unopposed. Even numbers stop it, and with nobody near it stays put.`,
+      `Anyone can shoot it: knock its ${SIM.SHIELD.toLocaleString('en')} shield through and it stalls ${SIM.STALL_SECONDS} s, then comes back full.`,
+      `Escorts score ${SIM.ESCORT_POINTS} points a second while it walks for them.`,
+    ],
   };
   return `
     <h1>MODES</h1>
@@ -275,7 +293,7 @@ async function mapPage(id) {
     <h2>LAYOUT</h2>
     <div class="layout">
       <div class="plan">${picture(`${id}-plan`, `${m.name} from above`)}${marks(m)}</div>
-      <div class="key"><span><i style="color:${TEAM[0]}">●</i> <i style="color:${TEAM[1]}">●</i> the two sides' bases and spawns</span><span><i>■</i> base guns</span><span><i>A B C</i> missile silos</span><span><i style="color:#5dff9a">EU</i> energy station</span><span><i style="color:#ffc46a">AA</i> anti-air</span><span><i style="color:#7fe0ff">⤳</i> jump pads</span></div>
+      <div class="key"><span><i style="color:${TEAM[0]}">●</i> <i style="color:${TEAM[1]}">●</i> the two sides' bases and spawns</span><span><i>■</i> base guns</span><span><i>A B C</i> missile silos</span><span><i style="color:#5dff9a">EU</i> energy station</span><span><i style="color:#ffc46a">AA</i> anti-air</span><span><i style="color:#7fe0ff">⤳</i> jump pads</span><span><i>⚑</i> flag stands</span><span><i style="color:#ffd36a">┄ ●</i> Convoy route, and where the hauler starts</span></div>
     </div>
     ${g.spots?.length ? `<h2>POINTS OF INTEREST</h2><div class="spots">${g.spots.map((s) => `<figure class="card" id="${s.id}">
       <div class="shot">${picture(`${id}-${s.id}`, s.name)}</div><figcaption><h3>${s.name}</h3><p>${s.text}</p></figcaption></figure>`).join('')}</div>` : ''}
@@ -285,6 +303,8 @@ async function mapPage(id) {
 function marks(m) {
   const o = m.objectives ?? {}, s = Math.max(...m.size) / 240, xz = (p) => `${p[0]},${p[2]}`;
   const out = [];
+  // Convoy's route, under the rest, and where its hauler starts.
+  if (o.convoy) out.push(`<polyline points="${o.convoy.points.map(xz).join(' ')}" fill="none" stroke="#ffd36a" stroke-width="${1.5 * s}" stroke-dasharray="${4 * s} ${3 * s}"/><circle cx="${o.convoy.points[o.convoy.start][0]}" cy="${o.convoy.points[o.convoy.start][2]}" r="${3 * s}" fill="#ffd36a" stroke="#000" stroke-width="${0.6 * s}"/>`);
   for (const pad of m.pads ?? []) out.push(`<path d="M${xz(pad.at)} L${xz(pad.to)}" stroke="#7fe0ff" stroke-width="${1.2 * s}" stroke-dasharray="${3 * s} ${2 * s}" fill="none"/><circle cx="${pad.at[0]}" cy="${pad.at[2]}" r="${2 * s}" fill="#7fe0ff"/>`);
   m.spawns?.forEach((team, t) => team.forEach((p) => out.push(`<circle cx="${p[0]}" cy="${p[2]}" r="${1.6 * s}" fill="${TEAM[t]}"/>`)));
   o.sentries?.forEach((team, t) => team.forEach((p) => out.push(`<rect x="${p[0] - 2.5 * s}" y="${p[2] - 2.5 * s}" width="${5 * s}" height="${5 * s}" fill="${TEAM[t]}" stroke="#000" stroke-width="${0.6 * s}"/>`)));
@@ -298,6 +318,7 @@ function marks(m) {
     labels.set(spot, [...(labels.get(spot) ?? []), [z.at, color, label]]);
   }
   for (const stack of labels.values()) stack.forEach(([at, color, label], i) => out.push(`<text x="${at[0]}" y="${at[2] + (i - (stack.length - 1) / 2) * 10 * s}" fill="${color}" stroke-width="${2.5 * s}">${label}</text>`));
+  o.flags?.forEach((f, t) => out.push(`<text x="${f.at[0]}" y="${f.at[2]}" fill="${TEAM[t]}" stroke-width="${2.5 * s}" font-size="${12 * s}">⚑</text>`));
   o.bases?.forEach((p, t) => out.push(`<circle cx="${p[0]}" cy="${p[2]}" r="${6 * s}" fill="${TEAM[t]}" stroke="#000" stroke-width="${s}"/>`));
   const half = Math.max(...m.size) / 2;
   return `<svg viewBox="${-half} ${-half} ${2 * half} ${2 * half}" aria-hidden="true"><g font-size="${9 * s}" stroke-linejoin="round">${out.join('')}</g></svg>`;
@@ -310,7 +331,8 @@ function mechanics() {
     ['Downing a pilot', `${SIM.KILL_XP}, shared by the damage each pilot did in the last ${SIM.ASSIST_WINDOW} s; the one who downs them gets ${SIM.KILL_XP * SIM.KILLER_BONUS} more`],
     ['Downing a bot', `${SIM.BOT_KILL_XP}, shared the same way`],
     ['Healing teammates', `${SIM.HEAL_XP} per hp`],
-    ['Taking a silo or the AA', `${SIM.CAPTURE_XP}`],
+    ['Taking a silo, the AA, or a flag off its stand, or capturing one', `${SIM.CAPTURE_XP}`],
+    ['Escorting the Convoy hauler', `${SIM.ESCORT_XP} a second`],
     ['Banking energy (Siege)', `${SIM.EU_XP} per EU`],
     ['Shooting the enemy ship', `${SIM.SHIP_XP} per point of hull`],
     ['Finishing a match', `${SIM.MATCH_XP}, and ${SIM.WIN_XP} more for a win`],
@@ -352,7 +374,7 @@ function mechanics() {
 
     <h2 id="lock-on">LOCK-ONS AND COUNTERS</h2>
     <ul>
-      <li>The ${link('hornet')} locks on: press MMB with an enemy within ${hellfire('alt_lock_cone')}° of your crosshair and about ${Math.round(hellfire('alt_speed') * hellfire('alt_fuse') / 10) * 10} m, and keep it there ${hellfire('alt_lock_time')} s. The lock then holds ${hellfire('alt_lock_hold')} s wherever you look. Turrets and battleships can be locked; base guns can't.</li>
+      <li>The ${link('hornet')} locks on: press MMB with an enemy within ${hellfire('alt_lock_cone')}° of your crosshair and about ${Math.round(hellfire('alt_speed') * hellfire('alt_fuse') / 10) * 10} m, and keep it there ${hellfire('alt_lock_time')} s. The lock then holds ${hellfire('alt_lock_hold')} s wherever you look. Turrets, battleships, base guns and the Convoy hauler can all be locked.</li>
       <li>The ${link('talon')} doesn't lock: its rockets turn toward the enemy nearest your crosshair, within ${stat(byId.talon)('shot_seek_cone')}°, while you keep it there.</li>
       <li>${link('cloak')} breaks locks on you and hides your tag and radar contact; turrets and bots can't see you either.</li>
       <li>A ${link('smoke')} cloud blinds turrets, base guns and bots, and no pilot sees into or through it, though a Hellfire can still lock on through it.</li>
@@ -360,7 +382,8 @@ function mechanics() {
     </ul>
 
     <h2 id="base-guns">BASE GUNS</h2>
-    <p>In the team modes each base has two guns. They fire ${SIM.SENTRY_BURST}-round bursts, ${SIM.SENTRY_ROUND} damage a round, at enemy mechs within ${SIM.SENTRY_RANGE} m, and in Siege at an enemy ship within ${SIM.SENTRY_SHIP_RANGE} m. They can't be destroyed or locked, and can't see through walls, smoke or shield domes, or spot a shielded or camouflaged mech. Don't fight under the enemy's.</p>
+    <p>In the team modes each base has two guns. They open up ${SIM.SENTRY_ACQUIRE} s after an enemy mech shows within ${SIM.SENTRY_RANGE} m, in ${SIM.SENTRY_BURST}-round bursts of ${SIM.SENTRY_ROUND} damage a round, and in Siege fire on an enemy ship within ${SIM.SENTRY_SHIP_RANGE} m. They can't see through walls, smoke or shield domes, or spot a shielded or camouflaged mech.</p>
+    <p>Each has a ${SIM.SENTRY_SHIELD} shield that regains ${SIM.SENTRY_REGEN} a second. Shoot it through and the gun goes offline for ${SIM.SENTRY_OFFLINE} s, then comes back full and can't be hurt for ${SIM.SENTRY_IMMUNE} s: a window to push a base, or to get a flag out.</p>
 
     <h2 id="deployables">TURRETS, DOMES AND BARRIERS</h2>
     <p>You can have one of each out at a time; setting down another takes the first away. Each has hull you can shoot off (its card says how much), and the ${link('spindle')}'s slug punches straight through domes and barriers.</p>
