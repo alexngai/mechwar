@@ -14,9 +14,11 @@ const COLORS = {
   trim: 0x55585b, rail: 0xd3a23a, pipe: 0x7d7262, pole: 0x3a3c3f, rust: 0x8a5634, soot: 0x4f4c49, stack: 0x6e5a4c,
   tower: 0x6c7470, rock: 0x7f7c8c, bark: 0x5b4a3a, moss: 0x6b7a4f, stone: 0x8f8b7b, hull: 0x7b7e74, deadwood: 0x6e675a,
   snow: 0xe8edf1, ice: 0xa9c6d8, sand: 0xdcbf86, sandstone: 0xc49a5c,
+  // A mine's strata and the gravel on its benches.
+  gravel: 0x8b8274, shale: 0x5e5955, ore: 0x9b5a37, clay: 0xb38a5b,
 };
 // Ground, rock and wood: no trim, ribs or beams on these.
-const NATURAL = new Set(['ground', 'rock', 'stone', 'moss', 'bark', 'deadwood', 'snow', 'ice', 'sand', 'sandstone']);
+const NATURAL = new Set(['ground', 'rock', 'stone', 'moss', 'bark', 'deadwood', 'snow', 'ice', 'sand', 'sandstone', 'gravel', 'shale', 'ore', 'clay']);
 // Tree crowns and undergrowth, unless the palette's `leaf` names its own.
 const LEAVES = ['#4d7834', '#5d8a3b', '#3e6a2f', '#6c9844'];
 const REEDS = ['#7a7a48', '#6a6e40', '#8a7e50', '#5e6238'];

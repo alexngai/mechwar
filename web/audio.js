@@ -32,7 +32,7 @@ const AMBIENCE = {
   acidrain: { gain: 1.15, beds: [['rain', 0.05, 2500], ['hum', 0.02, [62, 124.6]]], accents: [['patter', [0.3, 1.2], 0.03], ['siren', [25, 50], 0.025]] },
   canyon: { gain: 1.5, beds: [['wind', 0.06, 320, 2.5], ['hum', 0.025, [73.4, 74.1, 110]]], accents: [['rumble', [12, 25], 0.06], ['moan', [18, 35], 0.03]] },
   undercity: { beds: [['water', 0.05], ['hum', 0.03, [50, 100.3]]], accents: [['drip', [0.4, 1.6], 0.06], ['creak', [14, 28], 0.04]] },
-  jungle: { gain: 1.3, beds: [['buzz', 0.07, 4200], ['water', 0.06]], accents: [['bird', [3, 9], 0.04], ['croak', [5, 12], 0.04]] },
+  quarry: { gain: 1.3, beds: [['wind', 0.07, 650, 0.9], ['hum', 0.025, [41, 82.3]]], accents: [['rumble', [16, 34], 0.08], ['clank', [6, 14], 0.04], ['creak', [12, 24], 0.035], ['siren', [50, 90], 0.02]] },
   twilight: { gain: 1.5, beds: [['wind', 0.035, 1800, 0.5], ['cricket', 0.02, 4600]], accents: [['hoot', [14, 30], 0.035], ['bird', [10, 25], 0.025]] },
   storm: { gain: 1.2, beds: [['rain', 0.07, 1800], ['wind', 0.05, 450, 1]], accents: [['croak', [3, 8], 0.035], ['creak', [8, 18], 0.05]] },
   desert: { gain: 1.2, beds: [['wind', 0.1, 900, 0.8], ['wind', 0.06, 3200, 1.2]], accents: [['whistle', [15, 35], 0.025]] },
@@ -517,13 +517,6 @@ export class Sound {
       lp.connect(out);
       for (const f of a) osc('sine', f).connect(this.amp(1 / a.length)).connect(lp);
       wobble(out.gain, 0.05, level * 0.25);
-    } else if (kind === 'buzz') {
-      // Cicadas: a narrow band of noise trembling fast, the chorus swelling and fading.
-      const am = ctx.createGain();
-      am.gain.value = 0.5;
-      loop(this.long).connect(filter('bandpass', a, 10)).connect(am).connect(out);
-      wobble(am.gain, 28, 0.5);
-      wobble(out.gain, 0.06, level * 0.8);
     } else if (kind === 'cricket') {
       // A tone pulsed fast, in bursts: chirp, chirp.
       const pulse = ctx.createGain(), burst = ctx.createGain();
