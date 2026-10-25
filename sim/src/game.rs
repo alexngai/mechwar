@@ -3337,6 +3337,45 @@ mod tests {
     }
 
     #[test]
+    fn furnace_bots_throw_fireballs_once_warm() {
+        // A bot with the Furnace and a rifle held 30 m from a human standing in the open, who drops
+        // out of its sight (camouflaged) every other 3 s, as fights come and go in a match: its gun
+        // cools between sightings. Its fireballs, and how many caught the human.
+        let t = Tuning::default();
+        let (mut fireballs, mut caught) = (0, 0);
+        for seed in 1..=4 {
+            let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+            game.bots = false;
+            let human = game.join().unwrap();
+            let bot = game.add_player(1, Some(Bot::new(seed)), MechClass::B).unwrap();
+            let at = Vector::new(0.0, 0.1, 25.0);
+            for (id, pos) in [(human, Vector::new(0.0, 0.1, -5.0)), (bot, at)] {
+                let m = &mut game.players.iter_mut().find(|p| p.id == id).unwrap().mech;
+                // Its guns only: no grenades or EMPs, and no vent; the human camouflages.
+                (m.pos, m.loadout, m.grenades, m.emps) = (pos, Loadout { ability: arsenal::index(Slot::Ability, if id == bot { "power" } else { "cloak" }), ..Loadout::named("pike", "furnace") }, 0, 0);
+            }
+            unshield(&mut game);
+            for k in 0..secs(24.0) {
+                game.players.iter_mut().find(|p| p.id == human).unwrap().mech.ability_time = if k / secs(3.0) % 2 == 0 { 0.0 } else { 1.0 };
+                game.step();
+                for e in &game.events {
+                    if let Event::Blast { owner, primary: false, hits, .. } = *e
+                        && owner == bot
+                    {
+                        fireballs += 1;
+                        caught += u32::from(hits & 1 << human != 0);
+                    }
+                }
+                game.players.iter_mut().find(|p| p.id == human).unwrap().mech.health = t.health_max; // so it never dies
+                let m = &mut game.players.iter_mut().find(|p| p.id == bot).unwrap().mech;
+                (m.pos, m.vel) = (at, Vector::ZERO);
+            }
+        }
+        // At 60% heat it threw none.
+        assert!(fireballs >= 8 && caught * 4 >= fireballs * 3, "{caught} of {fireballs} fireballs caught the human");
+    }
+
+    #[test]
     fn bots_close_in_and_land_the_pile_driver() {
         // A bot with an SMG and the pile driver 15 m from a human in the open, standing, then
         // strafing side to side: how many strikes it lets go, and how many land.

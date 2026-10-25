@@ -553,7 +553,8 @@ pub struct Policy {
     pub follow: f32,
     /// Farthest it lobs a grenade (short of its flat-ground reach).
     pub grenade_range: f32,
-    /// Heat it fires a heat-fed launcher at. (When to use items and abilities is `Bot::brain`'s.)
+    /// Heat it fires a heat-fed launcher at: low, since in a match a bot seldom runs hot for long.
+    /// (When to use items and abilities is `Bot::brain`'s.)
     pub heat_fed: f32,
     /// How it weighs where to fight from (`tactics::Weighing`): a share of its own hull lost
     /// against one of the target's dealt, how far ahead it looks (s), what share of its damage it
@@ -582,7 +583,7 @@ impl Default for Policy {
             focus_m: 10.0,
             follow: 10.0,
             grenade_range: 28.0,
-            heat_fed: 0.6,
+            heat_fed: 0.1,
             post_take: 1.0,
             post_horizon: 6.0,
             post_moving: 0.5,
