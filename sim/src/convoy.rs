@@ -1,29 +1,32 @@
 //! Convoy's rules. A neutral hauler (`deploy::Kind::Hauler`) starts in the middle of a route that
-//! runs from team 0's base to team 1's, and walks it toward the base of whichever team has no
-//! mech near it, so long as the other team has: faster the more of them escort it. Both near, it
-//! stops; nobody near, it stays put. Shot through its shield, it stalls a while. Into a base, it's
-//! delivered: the other team wins. At the time limit, whoever pushed it further wins. `Game` keeps
-//! the hauler among its deployables, says who stands where, and applies what comes out.
+//! runs from team 0's base to team 1's. It's a tug of war: the team with more mechs near it walks
+//! it toward the other's base, faster the bigger its lead in numbers. Level, it stops; nobody near,
+//! it stays put. Shot through its shield, it stalls a while. Into a base's zone, it's delivered:
+//! the team that walked it there wins. At the time limit, whoever pushed it further wins. `Game`
+//! keeps the hauler among its deployables, says who stands where, and applies what comes out.
 
 use serde::{Deserialize, Serialize};
 
 use crate::map::Objectives;
 use crate::{DT, Vector};
 
-/// Its walk (m/s) with two escorts: 40% of a Heavy's. One escort walks it at ESCORT_SPEEDS[0]
-/// of that, each more at the next, the full team at the last.
-pub const SPEED: f32 = 3.8;
+/// Its walk (m/s) with a lead of two escorts. A lead of one walks it at ESCORT_SPEEDS[0] of that,
+/// each more at the next, the full team unopposed at the last. (Tuned in bot-only matches: at
+/// 6.5 m/s and ESCORT_RANGE 30 m about 2 in 5 end in a delivery.)
+pub const SPEED: f32 = 6.5;
 const ESCORT_SPEEDS: [f32; 4] = [0.75, 1.0, 1.25, 1.5];
-/// Mechs this near (across, and up or down within ESCORT_BAND) escort it.
-pub const ESCORT_RANGE: f32 = 15.0;
+/// Mechs this near (across, and up or down within ESCORT_BAND) escort it, or hold it back.
+pub const ESCORT_RANGE: f32 = 30.0;
 const ESCORT_BAND: f32 = 6.0;
 /// Its shield; shot through, it stalls this long, then comes back full.
 pub const SHIELD: f32 = 1500.0;
 pub const STALL_SECONDS: f32 = 8.0;
+/// It's in a base, delivered, this far from its route's end there: the base's zone (as Siege's).
+const BASE_REACH: f32 = 14.0;
 
 /// What players see of the convoy: where the hauler is along its route and where it started
-/// (0 at team 0's base, 1 at team 1's), who's pushing it and with how many, whether both teams
-/// are at it, and the seconds its stall has left.
+/// (0 at team 0's base, 1 at team 1's), who's pushing it and by how many more mechs, whether both
+/// teams are at it in even numbers (so it's stopped), and the seconds its stall has left.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ConvoyNet {
     pub along: f32,
@@ -52,7 +55,8 @@ pub struct Convoy {
     /// Where it started, and where it is (m along the route).
     pub start: f32,
     pub along: f32,
-    /// This tick: the team pushing it and its escorts, and whether both teams are at it.
+    /// This tick: the team pushing it and its lead in escorts, and whether both teams are at it
+    /// in even numbers.
     pub pusher: Option<u8>,
     pub escorts: usize,
     pub contested: bool,
@@ -91,24 +95,20 @@ impl Convoy {
     }
 
     /// One tick with the living `mechs` (team, feet), the hauler at `hauler` and `stalled` or
-    /// not: who escorts it, and where it walks. News of a team taking it over, and of delivery.
+    /// not: who's ahead at it, and where it walks. News of a team taking it over, and of delivery.
     pub fn step(&mut self, mechs: &[(u8, Vector)], hauler: Vector, stalled: bool) -> Option<News> {
         let near = |p: Vector| (p - hauler).with_y(0.0).length() <= ESCORT_RANGE && (p.y - hauler.y).abs() <= ESCORT_BAND;
+        // Tug of war: the side with more mechs at it walks it, as fast as its lead in numbers.
         let count = [0, 1].map(|t| mechs.iter().filter(|m| m.0 == t && near(m.1)).count());
-        self.contested = count[0] > 0 && count[1] > 0;
-        self.pusher = match count {
-            [0, 0] => None,
-            [_, 0] => Some(0),
-            [0, _] => Some(1),
-            _ => None,
-        };
-        self.escorts = self.pusher.map_or(0, |t| count[usize::from(t)]);
+        self.contested = count[0] > 0 && count[0] == count[1];
+        self.pusher = (count[0] != count[1]).then_some(u8::from(count[1] > count[0]));
+        self.escorts = count[0].abs_diff(count[1]);
         let Some(team) = self.pusher.filter(|_| !stalled) else { return None };
         // Team 0 walks it toward team 1's base, the far end, and team 1 back.
         let speed = SPEED * ESCORT_SPEEDS[self.escorts.clamp(1, ESCORT_SPEEDS.len()) - 1];
         let step = if team == 0 { speed * DT } else { -speed * DT };
         self.along = (self.along + step).clamp(0.0, self.length());
-        if self.along >= self.length() || self.along <= 0.0 {
+        if self.along >= self.length() - BASE_REACH || self.along <= BASE_REACH {
             return Some(News::Delivered(team));
         }
         let took = self.last != Some(team);
@@ -181,9 +181,9 @@ mod tests {
         let before = c.along;
         walk(&mut c, &[(0, 5.0), (0, 6.0), (0, 7.0), (0, 8.0)], 1.0);
         assert!((c.along - before - 1.5 * SPEED).abs() < 0.05, "the full team: {}", c.along - before);
-        // Team 1 takes it over: back the other way.
+        // Team 1 takes it over three to one: back the other way, at a lead of two's pace.
         let before = c.along;
-        assert_eq!(walk(&mut c, &[(1, 5.0), (1, 6.0)], 1.0), [News::Pushing(1)]);
+        assert_eq!(walk(&mut c, &[(1, 5.0), (1, 6.0), (1, 7.0), (0, 8.0)], 1.0), [News::Pushing(1)]);
         assert!((before - c.along - SPEED).abs() < 0.05);
         assert!(c.pushed()[0] > 0.0 && c.leader() == Some(0));
     }
@@ -204,10 +204,10 @@ mod tests {
     #[test]
     fn into_a_base_its_delivered() {
         let mut c = convoy();
-        c.along = 2.0;
+        c.along = BASE_REACH + 1.0;
         assert_eq!(walk(&mut c, &[(1, 5.0)], 1.0).last(), Some(&News::Delivered(1)));
-        let (at, yaw) = c.at(c.along);
-        assert_eq!((at, c.pushed()[1]), (Vector::new(0.0, 0.0, 100.0), 1.0));
+        assert!(c.along <= BASE_REACH && c.leader() == Some(1));
+        let (_, yaw) = c.at(c.along);
         // Heading toward team 1's end: -z, a yaw of 0.
         assert!(yaw.abs() < 1e-4, "{yaw}");
     }

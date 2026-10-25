@@ -2181,7 +2181,8 @@ mod tests {
         };
         let start = hauler(&game).pos;
         walk(&mut game, 2.0);
-        let moved = hauler(&game).pos - start;
+        // (Across: it rides the ground up and down on the way.)
+        let moved = (hauler(&game).pos - start).with_y(0.0);
         // Toward the other team's base (team 0 pushes toward -z), at one escort's pace.
         assert!(moved.z * if team == 0 { -1.0 } else { 1.0 } > 0.0, "{moved}");
         assert!((moved.length() - 2.0 * 0.75 * convoy::SPEED).abs() < 0.3, "{}", moved.length());
