@@ -3125,6 +3125,42 @@ mod tests {
     }
 
     #[test]
+    fn bots_lob_shells_onto_shorter_mechs() {
+        // A Heavy bot with Scatter 25 m from a Light standing in the open: the Light's head is below
+        // the Heavy's eye. Lobbed level with that eye, the pellets flew over it.
+        let t = Tuning::default();
+        let (mut pellets, mut caught) = (0, 0);
+        for seed in 1..=4 {
+            let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+            game.bots = false;
+            let human = game.join().unwrap();
+            let bot = game.add_player(1, Some(Bot::new(seed)), MechClass::C).unwrap();
+            for (id, class, pos) in [(human, MechClass::A, Vector::new(0.0, 0.1, -5.0)), (bot, MechClass::C, Vector::new(0.0, 0.1, 20.0))] {
+                let p = game.players.iter_mut().find(|p| p.id == id).unwrap();
+                p.class = class;
+                // Its guns only: no grenades or EMPs.
+                p.mech = Mech { grenades: 0, emps: 0, ..spawn(&game.arsenal, class, Loadout { ability: 2, ..Loadout::named("pike", "darts") }, pos) };
+            }
+            unshield(&mut game);
+            for _ in 0..secs(15.0) {
+                game.step();
+                for e in &game.events {
+                    if let Event::Blast { owner, primary: false, hits, .. } = *e
+                        && owner == bot
+                    {
+                        pellets += 1;
+                        caught += u32::from(hits & 1 << human != 0);
+                    }
+                }
+                let p = game.players.iter_mut().find(|p| p.id == human).unwrap();
+                p.mech.health = game.arsenal.of(&p.mech).health_max; // so it never dies
+            }
+        }
+        // Lobbed level with the eye, 13 of 149 caught it.
+        assert!(pellets >= 100 && caught * 3 >= pellets, "only {caught} of {pellets} pellets caught the Light");
+    }
+
+    #[test]
     fn bots_close_in_and_land_the_pile_driver() {
         // A bot with an SMG and the pile driver 15 m from a human in the open, standing, then
         // strafing side to side: how many strikes it lets go, and how many land.

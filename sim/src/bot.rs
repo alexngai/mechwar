@@ -1081,12 +1081,16 @@ impl Bot {
             let primary_lead = if t.shot_speed > 0.0 { dist / speed } else { 0.0 };
             let lead = shell.map_or(primary_lead, |s| dist / s.alt_speed);
             // Led by the motion it read, as fast as it judges it.
-            let (yaw, mut pitch) = look_at(eye, chest + self.seen_vel * (1.0 + self.misjudge.0) * lead);
-            // Range d (as it judges it) on flat ground: sin(2θ) = g d / v².
+            let led = chest + self.seen_vel * (1.0 + self.misjudge.0) * lead;
+            let (yaw, mut pitch) = look_at(eye, led);
+            // Range d as it judges it. A shell's lob passes through the led chest, however far below
+            // or above the eye (lobbed level with the eye, it flew over a shorter mech, or one below,
+            // and burst far past); a projectile primary's drop raises its aim by the flat-ground arc,
+            // sin(2θ) = g d / v².
             let judged = flat(chest - eye).length() * (1.0 + self.misjudge.1);
             let arc = |g: f32, v: f32| 0.5 * asinf((g * judged / (v * v)).min(1.0));
             match shell {
-                Some(s) if s.alt_gravity > 0.0 => pitch = arc(s.alt_gravity, s.alt_speed) - s.alt_loft_deg.to_radians(),
+                Some(s) if s.alt_gravity > 0.0 => pitch = lob_pitch(s.alt_gravity, s.alt_speed, judged, led.y - eye.y) - s.alt_loft_deg.to_radians(),
                 None if t.shot_speed > 0.0 && t.shot_gravity > 0.0 => pitch += arc(t.shot_gravity, speed),
                 _ => {}
             }
@@ -1424,6 +1428,14 @@ fn mend(t: &Tuning, me: &Mech, mate: &Mech, max_turn: f32) -> Input {
 
 fn flat(v: Vector) -> Vector {
     Vector::new(v.x, 0.0, v.z)
+}
+
+/// The pitch of the low arc at speed `v` under gravity `g` through a point `x` m across and `y` m
+/// up (45° when it can't reach it).
+fn lob_pitch(g: f32, v: f32, x: f32, y: f32) -> f32 {
+    let v2 = v * v;
+    let disc = v2 * v2 - g * (g * x * x + 2.0 * y * v2);
+    if disc < 0.0 { PI / 4.0 } else { atan2f(v2 - disc.sqrt(), g * x) }
 }
 
 /// Yaw and pitch that point from `from` at `to`, matching `aim_ray`.
