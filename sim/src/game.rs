@@ -683,10 +683,11 @@ impl Game {
                 p.ack_seq = msg.seq;
                 let t = self.arsenal.of(&p.mech);
                 let was = p.mech.ability_time;
-                let ready = p.mech.ability_cooldown <= 0.0;
+                let (ready, beamed) = (p.mech.ability_cooldown <= 0.0, p.mech.beaming);
                 step_mech(&self.arena, t, &mut p.mech, &msg.input);
-                // An ability's use starts its cooldown (a Power shot can be used and spent in a tick).
-                let used = [p.mech.shot, p.mech.launched, p.mech.threw, p.mech.pulsed, ready && p.mech.ability_cooldown > 0.0];
+                // A beam's use is its start; an ability's starts its cooldown (a Power shot can be
+                // used and spent in a tick).
+                let used = [p.mech.shot, p.mech.launched || p.mech.beaming && !beamed, p.mech.threw, p.mech.pulsed, ready && p.mech.ability_cooldown > 0.0];
                 for (n, used) in p.tally.uses.iter_mut().zip(used) {
                     *n += u32::from(used);
                 }
