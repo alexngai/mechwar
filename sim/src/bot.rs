@@ -830,6 +830,13 @@ impl Bot {
         bot
     }
 
+    /// The middle of enemy `id` (a mech, or a turret's stand-in) standing at `pos`: what the bot
+    /// looks for and aims at. As high as its kit has it (`FoeKit`); with none, as the bot's own (a
+    /// turret's stand-in is set below its body by that).
+    fn chest(&self, t: &Tuning, id: Option<u8>, pos: Vector) -> Vector {
+        pos + Vector::Y * id.and_then(|id| self.foes.iter().find(|f| f.id == id)).map_or(t.mech_height * 0.5, |f| f.mid)
+    }
+
     /// Its reaction time, aim wander (radians) and turn per tick (radians), by skill: each
     /// factor of 2 in either direction across the skill range.
     fn reaction(&self, t: &Tuning) -> f32 {
@@ -899,9 +906,9 @@ impl Bot {
         for &(id, ref m, hull) in enemies {
             let known = self.contacts.iter().position(|c| c.id == id);
             let recently = known.and_then(|k| self.contacts[k].seen_at).is_some_and(|at| tick.saturating_sub(at) < secs(TRACK));
-            let (eye, chest) = (me.pos + Vector::Y * t.eye_height, m.pos + Vector::Y * (t.mech_height * 0.5));
+            let (eye, chest) = (me.pos + Vector::Y * t.eye_height, self.chest(t, Some(id), m.pos));
             let domed = || deploy::stops(&self.domes, t, &Ray::new(eye, (chest - eye).normalize_or_zero()), chest.distance(eye)).is_some();
-            let seen = in_view(arena, t, me, m, recently) && !item::hidden(&self.smoke, eye, chest) && !domed();
+            let seen = in_view(arena, t, me, chest, recently) && !item::hidden(&self.smoke, eye, chest) && !domed();
             let heard = m.pos.distance(me.pos) < noise(m);
             if let Some(k) = known {
                 self.contacts[k].seen = seen;
@@ -1045,7 +1052,7 @@ impl Bot {
             at.flag(Feature::FallingBack, true).flag(Feature::Mending, r.why == Why::Mend).set(Feature::Hull, me.health / t.health_max);
             at.flag(Feature::Overheated, me.overheated).set(Feature::Heat, me.heat / t.heat_max);
             if let Some(m) = target.filter(|m| m.health > 0.0) {
-                at.flag(Feature::TargetInSight, sees(arena, t, me, m)).set(Feature::TargetDist, m.pos.distance(me.pos));
+                at.flag(Feature::TargetInSight, sees_at(arena, t, me, self.chest(t, self.focus, m.pos))).set(Feature::TargetDist, m.pos.distance(me.pos));
             }
             at.set(Feature::EnemiesInView, self.contacts.iter().filter(|c| c.seen).count() as f32).set(Feature::MatesNear, f32::from(self.mates_near));
             if self.brain.wants(Action::StopFallingBack, &at) || tick >= r.until {
@@ -1067,7 +1074,7 @@ impl Bot {
                 }
             }
         }
-        if let Some(mate) = heal.filter(|_| alt_use(t) == AltUse::Beam && !target.is_some_and(|m| m.health > 0.0 && sees(arena, t, me, m))) {
+        if let Some(mate) = heal.filter(|_| alt_use(t) == AltUse::Beam && !target.is_some_and(|m| m.health > 0.0 && sees_at(arena, t, me, self.chest(t, self.focus, m.pos)))) {
             self.mending = true;
             return mend(t, me, mate, max_turn);
         }
@@ -1103,7 +1110,8 @@ impl Bot {
             return self.walk(arena, nav, t, me, &spot, watch, tick);
         };
 
-        self.seen.push_back(target.pos + Vector::Y * (t.mech_height * 0.5));
+        let chest = self.chest(t, self.focus, target.pos);
+        self.seen.push_back(chest);
         let reaction_ticks = (self.reaction(t) * TICK_HZ).round() as usize;
         while self.seen.len() > reaction_ticks + 1 {
             self.seen.pop_front();
@@ -1121,7 +1129,7 @@ impl Bot {
         let range = flat(target.pos - me.pos).length();
         let (near, far) = band(t, &self.policy);
 
-        if sees(arena, t, me, target) {
+        if sees_at(arena, t, me, chest) {
             let err = self.aim_error(t);
             self.wobble.0 = (self.wobble.0 + (self.rand() - 0.5) * err * 0.3).clamp(-err, err);
             self.wobble.1 = (self.wobble.1 + (self.rand() - 0.5) * err * 0.3).clamp(-err, err);
@@ -1401,7 +1409,7 @@ impl Bot {
             _ => spots.spots[post.spot].pos,
         };
         let max_turn = self.max_turn(t);
-        let (yaw, pitch) = look_at(me.pos + Vector::Y * t.eye_height, c.pos + Vector::Y * (t.mech_height * 0.5));
+        let (yaw, pitch) = look_at(me.pos + Vector::Y * t.eye_height, self.chest(t, Some(id), c.pos));
         let new_yaw = me.yaw + wrap(yaw - me.yaw).clamp(-max_turn, max_turn);
         let new_pitch = me.pitch + (pitch - me.pitch).clamp(-max_turn, max_turn);
         let off = flat(at - me.pos);
@@ -1570,19 +1578,24 @@ impl Bot {
     }
 }
 
-/// Clear line from `me`'s eye to `target`'s chest, within weapon range.
+/// Clear line from `me`'s eye to `target`'s chest (taking it for `me`'s size), within weapon range.
 pub fn sees(arena: &Arena, t: &Tuning, me: &Mech, target: &Mech) -> bool {
+    sees_at(arena, t, me, target.pos + Vector::Y * (t.mech_height * 0.5))
+}
+
+/// `me` has `chest` in clear sight within its gun's range.
+fn sees_at(arena: &Arena, t: &Tuning, me: &Mech, chest: Vector) -> bool {
     let eye = me.pos + Vector::Y * t.eye_height;
-    let d = target.pos + Vector::Y * (t.mech_height * 0.5) - eye;
+    let d = chest - eye;
     let len = d.length();
     len <= t.weapon_range && arena.cast_ray(&Ray::new(eye, d / len), len).is_none()
 }
 
 /// `target` is in `me`'s view: in clear sight within VISION, and in its field of view, or close,
 /// or `recently` in view (so one strafing past the edge isn't lost).
-fn in_view(arena: &Arena, t: &Tuning, me: &Mech, target: &Mech, recently: bool) -> bool {
+fn in_view(arena: &Arena, t: &Tuning, me: &Mech, chest: Vector, recently: bool) -> bool {
     let eye = me.pos + Vector::Y * t.eye_height;
-    let d = target.pos + Vector::Y * (t.mech_height * 0.5) - eye;
+    let d = chest - eye;
     let len = d.length();
     let facing = Rotation::from_rotation_y(me.yaw) * Vector::NEG_Z;
     let ahead = flat(d).normalize_or_zero().dot(facing) >= HALF_FOV.cos();
