@@ -626,6 +626,9 @@ impl Game {
             let (focus, enemies) = &seen[i];
             let target = focus.and_then(|id| enemies.iter().find(|e| e.0 == id)).map(|e| e.1);
             let mut input = bot.think_with(&self.arena, self.nav, t, &p.mech, target.as_ref(), heal.as_ref(), self.tick);
+            if p.mech.health > 0.0 {
+                p.tally.doing[bot.doing() as usize] += 1;
+            }
             #[cfg(test)]
             {
                 bot.last = input;
@@ -663,6 +666,10 @@ impl Game {
                 let t = self.arsenal.of(&p.mech);
                 let was = p.mech.ability_time;
                 step_mech(&self.arena, t, &mut p.mech, &msg.input);
+                let used = [p.mech.shot, p.mech.launched, p.mech.threw, p.mech.pulsed, p.mech.ability_time > was];
+                for (n, used) in p.tally.uses.iter_mut().zip(used) {
+                    *n += u32::from(used);
+                }
                 if p.mech.launched && t.alt_melee > 0.0 {
                     // At foes where its client saw them, its newest snapshot's, as it predicted the lunge.
                     let (mut m, team) = (p.mech, p.team);
@@ -1459,6 +1466,9 @@ impl Game {
         let dead = target.mech.health <= 0.0;
         if let Some(a) = attacker.filter(|&a| a != j) {
             self.players[a].tally.dealt += took;
+            if let Cause::Weapon { slot, .. } = cause {
+                self.players[a].tally.dealt_by[slot as usize] += took;
+            }
         }
         if !dead {
             return;
@@ -1977,6 +1987,10 @@ mod tests {
         // Every hull point dealt was taken by someone; base guns' and turrets' with no owner here
         // are only taken.
         assert!(dealt <= taken + 1e-3, "dealt {dealt} > taken {taken}");
+        // Every hull point dealt is put down to a slot; guns fired; and bots logged what they did.
+        let by_slot: f32 = tallies.iter().flat_map(|t| t.dealt_by).sum();
+        assert!((by_slot - dealt).abs() < 1e-2 * dealt, "by slot {by_slot}, dealt {dealt}");
+        assert!(tallies.iter().all(|t| t.uses[0] > 0 && t.doing.iter().sum::<u32>() > 0), "a bot that never fired or did nothing");
     }
 
     /// A Siege on Foundry, with one human in it (and bots, if `bots`).

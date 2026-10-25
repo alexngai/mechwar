@@ -91,6 +91,12 @@ pub struct Tally {
     /// runs.
     pub dealt: f32,
     pub taken: f32,
+    /// Also for balance runs, by slot (primary, secondary, offensive, support, ability): uses
+    /// (shots, launches, throws, items set off, abilities used) and hull dealt; and a bot's ticks
+    /// alive spent by `bot::Doing`.
+    pub uses: [u32; 5],
+    pub dealt_by: [f32; 5],
+    pub doing: [u32; 4],
 }
 
 impl Tally {

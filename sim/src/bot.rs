@@ -433,6 +433,15 @@ fn sensible(t: &Tuning) -> bool {
     }
 }
 
+/// What a bot is doing, for balance logs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Doing {
+    Fight,
+    FallBack,
+    Mend,
+    Move,
+}
+
 /// How a bot goes after its target this life.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Role {
@@ -549,6 +558,8 @@ pub struct Bot {
     seen_vel: Vector,
     seen_last: Option<Vector>,
     misjudge: (f32, f32),
+    /// Mending a teammate this tick.
+    mending: bool,
     /// Target chest positions, oldest first, so aim lags by the reaction time.
     seen: VecDeque<Vector>,
     last_health: f32,
@@ -609,6 +620,7 @@ impl Bot {
             seen_vel: Vector::ZERO,
             seen_last: None,
             misjudge: (0.0, 0.0),
+            mending: false,
             seen: VecDeque::new(),
             last_health: 0.0,
             grenade_at: 0,
@@ -732,6 +744,19 @@ impl Bot {
     }
     fn max_turn(&self, t: &Tuning) -> f32 {
         t.bot_turn_rate_deg.to_radians() * DT * 2f32.powf(self.skill - 0.5)
+    }
+
+    /// What it did on its last `think`.
+    pub fn doing(&self) -> Doing {
+        if self.retreat.is_some() {
+            Doing::FallBack
+        } else if self.mending {
+            Doing::Mend
+        } else if self.focus.is_some() {
+            Doing::Fight
+        } else {
+            Doing::Move
+        }
     }
 
     /// The enemy it's fighting, as of its last `perceive`.
@@ -880,6 +905,7 @@ impl Bot {
     #[allow(clippy::too_many_arguments)]
     pub fn think_with(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: Option<&Mech>, heal: Option<&Mech>, tick: u32) -> Input {
         let idle = Input { yaw: me.yaw, pitch: me.pitch, ..Input::default() };
+        self.mending = false;
         let took_damage = me.health < self.last_health;
         self.last_health = me.health;
         if me.health <= 0.0 {
@@ -915,6 +941,7 @@ impl Bot {
             }
         }
         if let Some(mate) = heal.filter(|_| alt_use(t) == AltUse::Beam && !target.is_some_and(|m| m.health > 0.0 && sees(arena, t, me, m))) {
+            self.mending = true;
             return mend(t, me, mate, max_turn);
         }
         let Some(target) = target.filter(|m| m.health > 0.0) else {
