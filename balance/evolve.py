@@ -19,6 +19,7 @@ import io
 import json
 import math
 import random
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -27,7 +28,8 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 ARENA = ROOT / 'target' / 'release' / 'arena'
-MAPS = ['foundry', 'saltworks', 'verdigris', 'riftline', 'sump', 'sinkhole', 'canopy', 'crashsite']
+# The server's rotation, as sim/src/map.rs lists it.
+MAPS = re.findall(r'"(\w+)"', re.search(r'ROTATION: \[&str; \d+\] = \[(.*?)\]', (ROOT / 'sim' / 'src' / 'map.rs').read_text()).group(1))
 WEAPONS = json.loads((ROOT / 'weapons.json').read_text())
 CLASSES = json.loads((ROOT / 'classes.json').read_text())
 LISTS = {'primary': 'primaries', 'secondary': 'secondaries', 'offensive': 'offensive', 'support': 'support', 'ability': 'abilities'}
