@@ -312,7 +312,7 @@ const STICKY_M: f32 = 5.0;
 /// A bot this far or more from its order's spot is on its way there: it fights on the move.
 const ERRAND: f32 = 6.0;
 /// A contact only told of, or only heard from farther than this, is vague: a bot far from its
-/// lead (`Policy::regroup`) rejoins it first. One it saw, felt, or heard close it goes after at once.
+/// lead rejoins it first (`Action::Regroup`). One it saw, felt, or heard close it goes after at once.
 const URGENT: f32 = 40.0;
 /// Bots' skill spreads this far (in all) around the server's default.
 const SKILL_SPREAD: f32 = 0.5;
@@ -507,10 +507,8 @@ pub struct Policy {
     pub threat_m: f32,
     pub wounded_m: f32,
     pub focus_m: f32,
-    /// With nothing to do it holds within `follow` of its lead; farther than `regroup` off, it
-    /// rejoins before going after a vague contact.
+    /// With nothing to do it holds within this of its lead.
     pub follow: f32,
-    pub regroup: f32,
     /// Farthest it lobs a grenade (short of its flat-ground reach).
     pub grenade_range: f32,
     /// Heat it fires a heat-fed launcher at. (When to use items and abilities is `Bot::brain`'s.)
@@ -533,7 +531,6 @@ impl Default for Policy {
             wounded_m: 30.0,
             focus_m: 10.0,
             follow: 10.0,
-            regroup: 30.0,
             grenade_range: 28.0,
             heat_fed: 0.6,
         }
@@ -865,23 +862,22 @@ impl Bot {
     /// from it; else the freshest of any contact; else its lead; else a random waypoint it can
     /// reach, patrolled to.
     /// A last known position reached with nobody there is forgotten.
-    fn goal(&mut self, arena: &Arena, nav: &Nav, me: &Mech, tick: u32) -> (Vector, Goal) {
+    fn goal(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, tick: u32) -> (Vector, Goal) {
         self.contacts.retain(|c| c.seen || flat(c.pos - me.pos).length() > SEARCHED);
-        if let Some(spot) = self.order {
-            return (spot, Goal::Order);
-        }
         let urgent = |c: &&Contact| !c.told && (c.seen_at.is_some() || c.hit_at.is_some() || flat(c.pos - me.pos).length() < URGENT);
-        if let Some(c) = self.contacts.iter().filter(urgent).max_by_key(|c| c.at) {
-            return (c.pos, Goal::Contact);
-        }
-        if let Some(lead) = self.lead.filter(|l| flat(*l - me.pos).length() > self.policy.regroup) {
-            return (lead, Goal::Lead);
-        }
-        if let Some(c) = self.contacts.iter().max_by_key(|c| c.at) {
-            return (c.pos, Goal::Contact);
-        }
-        if let Some(lead) = self.lead {
-            return (lead, Goal::Lead);
+        let urgent = self.contacts.iter().filter(urgent).max_by_key(|c| c.at).map(|c| c.pos);
+        let fresh = self.contacts.iter().max_by_key(|c| c.at).map(|c| c.pos);
+        let mut at = Features::default();
+        at.flag(Feature::HasOrder, self.order.is_some()).flag(Feature::HasUrgent, urgent.is_some()).flag(Feature::HasContact, fresh.is_some());
+        at.flag(Feature::HasLead, self.lead.is_some()).set(Feature::LeadDist, self.lead.map_or(f32::MAX, |l| flat(l - me.pos).length()));
+        at.set(Feature::Hull, me.health / t.health_max).set(Feature::MatesNear, f32::from(self.mates_near));
+        // The first of these it wants is where it goes.
+        let wants = |a: Action| self.brain.wants(a, &at);
+        let choice = [(Action::GoToOrder, self.order, Goal::Order), (Action::ChaseUrgent, urgent, Goal::Contact), (Action::Regroup, self.lead, Goal::Lead), (Action::ChaseContact, fresh, Goal::Contact), (Action::Follow, self.lead, Goal::Lead)]
+            .into_iter()
+            .find_map(|(a, spot, goal)| spot.filter(|_| wants(a)).map(|spot| (spot, goal)));
+        if let Some(choice) = choice {
+            return choice;
         }
         let here = nav.nearest(arena, me.pos);
         let arrived = self.patrol.is_some_and(|i| flat(nav.node(i) - me.pos).length() < 2.0 * ARRIVE);
@@ -1007,7 +1003,7 @@ impl Bot {
             {
                 return self.lob(t, me, Item::Grenade, spot, tick);
             }
-            let (pos, goal) = self.goal(arena, nav, me, tick);
+            let (pos, goal) = self.goal(arena, nav, t, me, tick);
             let spot = Mech { pos, ..Mech::default() };
             // At its order, or with its lead and nothing else to go on, it holds there, looking about.
             let hold = match goal {
@@ -1598,7 +1594,7 @@ mod tests {
         // It fires: heard, 76 m off, so the bot goes there, still without a target in view.
         hidden.shot = true;
         assert_eq!(bot.perceive(&arena, &t, &me, &[(1, hidden, 1.0)], 1), None);
-        assert_eq!(bot.goal(&arena, nav, &me, 1).0, hidden.pos);
+        assert_eq!(bot.goal(&arena, nav, &t, &me, 1).0, hidden.pos);
 
         // Standing silent 20 m behind it, in the open: unseen, until it hits the bot.
         let mut bot = Bot::new(1);
@@ -1677,7 +1673,7 @@ mod tests {
             bot.contacts.is_empty()
         });
         assert!(searched, "never gave up on the empty spot; at {}", me.pos);
-        bot.goal(&arena, nav, &me, secs(8.0));
+        bot.goal(&arena, nav, &t, &me, secs(8.0));
         assert!(bot.patrol.is_some(), "didn't go on patrol");
     }
 
@@ -1808,10 +1804,10 @@ mod tests {
         let mut bot = Bot::new(1);
         let there = Vector::new(-30.0, 0.1, -20.0);
         bot.told(5, there, 0);
-        assert_eq!(bot.goal(&arena, nav, &me, 0).0, there);
+        assert_eq!(bot.goal(&arena, nav, &t, &me, 0).0, there);
         // With a lead far off, it rejoins the lead first.
         bot.lead = Some(Vector::new(35.0, 0.1, 40.0));
-        assert_eq!(bot.goal(&arena, nav, &me, 0), (Vector::new(35.0, 0.1, 40.0), Goal::Lead));
+        assert_eq!(bot.goal(&arena, nav, &t, &me, 0), (Vector::new(35.0, 0.1, 40.0), Goal::Lead));
         // Of two in view, the one a teammate is on beats one a few metres nearer.
         let (far, near) = (spawn_mech(&t, Vector::new(-3.0, 0.1, 20.2)), spawn_mech(&t, Vector::new(3.0, 0.1, 24.3)));
         let mut bot = Bot::new(1);

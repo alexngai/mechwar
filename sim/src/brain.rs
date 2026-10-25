@@ -69,10 +69,17 @@ pub enum Feature {
     Errand,
     /// The target's hull, as a share.
     TargetHull,
+    /// With no enemy in view: it has an order, an urgent contact (seen, felt, or heard close), any
+    /// contact, a lead; and how far off its lead is (m; a long way with none).
+    HasOrder,
+    HasUrgent,
+    HasContact,
+    HasLead,
+    LeadDist,
 }
 
 /// How many features there are.
-const FEATURES: usize = Feature::TargetHull as usize + 1;
+const FEATURES: usize = Feature::LeadDist as usize + 1;
 
 /// What a bot can do that a rule decides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -88,6 +95,13 @@ pub enum Action {
     Orb,
     Dome,
     Barrier,
+    // With no enemy in view, tried in this order (the first it wants is where it goes, else it
+    // patrols): its order, an urgent contact, its lead when far off, any contact, its lead.
+    GoToOrder,
+    ChaseUrgent,
+    Regroup,
+    ChaseContact,
+    Follow,
     // In a fight: go on along the route (to the target, a perch, or its order), and back off
     // inside the band; otherwise it strafes, holding the band.
     Push,
@@ -215,6 +229,13 @@ impl Default for Brain {
             rule
         };
         let rules = [
+            // With no enemy in view: its order first; then an urgent contact; its lead if more than
+            // 30 m off; any contact; its lead.
+            (Action::GoToOrder, vec![vec![yes(HasOrder)]]),
+            (Action::ChaseUrgent, vec![vec![yes(HasUrgent)]]),
+            (Action::Regroup, vec![vec![yes(HasLead), (LeadDist, Above(30.0))]]),
+            (Action::ChaseContact, vec![vec![yes(HasContact)]]),
+            (Action::Follow, vec![vec![yes(HasLead)]]),
             // Far off, keep walking the route (firing on the way); perches keep climbing, a bot
             // cooling off repositions, and one with an order keeps going. Too close: back off.
             (

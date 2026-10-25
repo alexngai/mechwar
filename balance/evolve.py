@@ -41,9 +41,9 @@ DEFAULT = json.loads(subprocess.run([ARENA, '--policy'], capture_output=True, te
 _brain = subprocess.run([ARENA, '--brain'], capture_output=True, text=True)
 BRAIN = json.loads(_brain.stdout) if _brain.returncode == 0 else None
 # Each measured feature's span, for the thresholds evolution draws; every other feature is a flag.
-SPAN = {'hull': (0.0, 1.0), 'heat': (0.0, 1.0), 'range': (0.0, 2.0), 'range_near': (0.0, 2.0), 'target_hull': (0.0, 1.0), 'throws': (0.0, 3.0), 'charges': (0.0, 3.0), 'target_dist': (0.0, 60.0), 'enemies_in_view': (0.0, 4.0), 'mates_near': (0.0, 3.0)}
+SPAN = {'hull': (0.0, 1.0), 'heat': (0.0, 1.0), 'range': (0.0, 2.0), 'range_near': (0.0, 2.0), 'target_hull': (0.0, 1.0), 'throws': (0.0, 3.0), 'charges': (0.0, 3.0), 'target_dist': (0.0, 60.0), 'enemies_in_view': (0.0, 4.0), 'mates_near': (0.0, 3.0), 'lead_dist': (0.0, 80.0)}
 FLAGS = ['mending', 'in_cover', 'overheated', 'hit', 'fire', 'alt_fire', 'striking', 'melee', 'target_jammed', 'target_thrusters', 'emp_reaches', 'alt_ready',
-         'grenade_ready', 'first_sight', 'perched', 'barrier_room', 'orb_near', 'exposed', 'limpet_out', 'limpet_hits', 'cooling', 'vent_ready', 'target_in_sight', 'perch_role', 'errand']
+         'grenade_ready', 'first_sight', 'perched', 'barrier_room', 'orb_near', 'exposed', 'limpet_out', 'limpet_hits', 'cooling', 'vent_ready', 'target_in_sight', 'perch_role', 'errand', 'has_order', 'has_urgent', 'has_contact', 'has_lead']
 # Which moment a rule is about: rules keep these.
 CONTEXT = {'engaged', 'falling_back', 'starting_fall_back'}
 # Genes that are shares (of hull, heat, range, or a chance): nudged by adding, kept in (0, 1).
