@@ -483,18 +483,15 @@ enum Role {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Policy {
-    /// Hull it breaks off below, to mend at an orb or in cover, and stops mending at.
-    pub retreat_hull: f32,
-    pub mended_hull: f32,
-    /// Heat it stops firing at to cool off, and starts again at.
+    /// Heat it stops firing at to cool off, and starts again at. (When it falls back, and comes
+    /// back, is `Bot::brain`'s.)
     pub cool_high: f32,
     pub cool_low: f32,
     /// Farthest by route it goes for cover, and straight off for an orb.
     pub cover_range: f32,
     pub orb_range: f32,
-    /// Longest it holds a retreat, and how close an enemy in view breaks it to fight.
+    /// Longest it holds a retreat.
     pub hold_for: f32,
-    pub cornered: f32,
     /// Its engagement band as shares of its preferred range: it backs off inside the first and
     /// closes in beyond the second.
     pub band_near: f32,
@@ -521,14 +518,11 @@ pub struct Policy {
 impl Default for Policy {
     fn default() -> Self {
         Self {
-            retreat_hull: 0.35,
-            mended_hull: 0.9,
             cool_high: 0.85,
             cool_low: 0.4,
             cover_range: 35.0,
             orb_range: 45.0,
             hold_for: 12.0,
-            cornered: 15.0,
             band_near: 0.6,
             band_far: 1.4,
             dodge_chance: 0.3,
@@ -964,13 +958,13 @@ impl Bot {
         let max_turn = self.max_turn(t);
         // Falling back: until cooled or mended, or out of time, or cornered (then fight).
         if let Some(r) = self.retreat {
-            let p = &self.policy;
-            let cornered = target.is_some_and(|m| m.health > 0.0 && m.pos.distance(me.pos) < p.cornered && sees(arena, t, me, m));
-            let done = match r.why {
-                Why::Cool => !me.overheated && me.heat <= p.cool_low * t.heat_max,
-                Why::Mend => me.health >= p.mended_hull * t.health_max,
-            };
-            if done || cornered || tick >= r.until {
+            let mut at = Features::default();
+            at.flag(Feature::FallingBack, true).flag(Feature::Mending, r.why == Why::Mend).set(Feature::Hull, me.health / t.health_max);
+            at.flag(Feature::Overheated, me.overheated).set(Feature::Heat, me.heat / t.heat_max);
+            if let Some(m) = target.filter(|m| m.health > 0.0) {
+                at.flag(Feature::TargetInSight, sees(arena, t, me, m)).set(Feature::TargetDist, m.pos.distance(me.pos));
+            }
+            if self.brain.wants(Action::StopFallingBack, &at) || tick >= r.until {
                 self.retreat = None;
             } else {
                 // There, but in the target's view after all (it moved, say): other cover from it
@@ -1116,10 +1110,10 @@ impl Bot {
                 self.cooling = false;
             }
             // Badly hurt, or too hot with no vent to hand: fall back, to an orb or out of sight.
-            let vent = Ability::of(me.loadout) == Ability::Vent && me.ability_cooldown <= 0.0;
-            let why = if me.health < self.policy.retreat_hull * t.health_max {
+            at.flag(Feature::Cooling, self.cooling).flag(Feature::VentReady, Ability::of(me.loadout) == Ability::Vent && me.ability_cooldown <= 0.0);
+            let why = if self.brain.wants(Action::FallBackToMend, &at) {
                 Some(Why::Mend)
-            } else if self.cooling && !vent {
+            } else if self.brain.wants(Action::FallBackToCool, &at) {
                 Some(Why::Cool)
             } else {
                 None

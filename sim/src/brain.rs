@@ -53,10 +53,16 @@ pub enum Feature {
     /// Its limpet is down, and an enemy stands in its blast.
     LimpetOut,
     LimpetHits,
+    /// Holding fire to cool off; a vent to hand (off cooldown).
+    Cooling,
+    VentReady,
+    /// The target in its sight (a clear line), and how far off it is (m).
+    TargetInSight,
+    TargetDist,
 }
 
 /// How many features there are.
-const FEATURES: usize = Feature::LimpetHits as usize + 1;
+const FEATURES: usize = Feature::TargetDist as usize + 1;
 
 /// What a bot can do that a rule decides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -72,6 +78,10 @@ pub enum Action {
     Orb,
     Dome,
     Barrier,
+    // Falling back: to mend, to cool off, and done with it (back to the fight).
+    FallBackToMend,
+    FallBackToCool,
+    StopFallingBack,
     // Abilities.
     Slipstream,
     Vent,
@@ -185,6 +195,18 @@ impl Default for Brain {
             rule
         };
         let rules = [
+            // Badly hurt, or too hot with no vent to hand: fall back, to an orb or out of sight.
+            (Action::FallBackToMend, vec![with(engaged(), &[(Hull, Below(0.35))])]),
+            (Action::FallBackToCool, vec![with(engaged(), &[yes(Cooling), no(VentReady)])]),
+            // Mended, or cooled; or cornered: an enemy in sight this close.
+            (
+                Action::StopFallingBack,
+                vec![
+                    vec![yes(Mending), (Hull, AtLeast(0.9))],
+                    vec![no(Mending), no(Overheated), (Heat, AtMost(0.4))],
+                    vec![yes(TargetInSight), (TargetDist, Below(15.0))],
+                ],
+            ),
             // A grenade every few seconds at a target in lobbing range while the secondary isn't
             // taking the aim; a turret as a fight starts, or to hold a perch.
             (Action::Grenade, vec![with(engaged(), &[no(AltReady), (Throws, Above(0.0)), yes(GrenadeReady)])]),

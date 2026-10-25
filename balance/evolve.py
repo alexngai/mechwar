@@ -35,8 +35,8 @@ CLASSES = json.loads((ROOT / 'classes.json').read_text())
 LISTS = {'primary': 'primaries', 'secondary': 'secondaries', 'offensive': 'offensive', 'support': 'support', 'ability': 'abilities'}
 DEFAULT = json.loads(subprocess.run([ARENA, '--policy'], capture_output=True, text=True, check=True).stdout)
 # Genes that are shares (of hull, heat, range, or a chance): nudged by adding, kept in (0, 1).
-SHARES = {'retreat_hull', 'mended_hull', 'cool_high', 'cool_low', 'band_near', 'dodge_chance', 'heat_fed'}
-ORDERED = [('cool_low', 'cool_high'), ('retreat_hull', 'mended_hull'), ('band_near', 'band_far')]
+SHARES = {'cool_high', 'cool_low', 'band_near', 'dodge_chance', 'heat_fed'}
+ORDERED = [('cool_low', 'cool_high'), ('band_near', 'band_far')]
 def options(slot, cls):
     return [w['id'] for w in WEAPONS[LISTS[slot]] if cls in w.get('classes', [cls])]
 
