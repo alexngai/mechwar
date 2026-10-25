@@ -1156,15 +1156,17 @@ impl Bot {
             let wound = use_ == AltUse::Melee && me.alt_held && me.alt_charge >= 1.0;
             let lunging = use_ == AltUse::Melee && me.strike > 0.0;
             self.striking = wound && wrap(atan2f(-to.x, -to.z) - new_yaw).abs() < STRIKE_CONE && lunge_lands(arena, t, me, target, me.alt_charge);
+            at.flag(Feature::PerchRole, perch).flag(Feature::Errand, errand.is_some()).flag(Feature::Cooling, self.cooling);
+            at.set(Feature::RangeNear, range / near).set(Feature::TargetHull, self.contacts.iter().find(|c| Some(c.id) == self.focus).map_or(1.0, |c| c.hull));
             let (move_x, move_z) = if (wound && range <= far) || lunging {
                 let (dir, rot) = (to.normalize_or_zero(), Rotation::from_rotation_y(new_yaw));
                 (dir.dot(rot * Vector::X), dir.dot(rot * Vector::NEG_Z))
-            } else if range > far || perch || self.cooling || errand.is_some() {
+            } else if self.brain.wants(Action::Push, &at) {
                 let dir = self.route(arena, nav, t, me, errand.as_ref().unwrap_or(target), tick).normalize_or_zero();
                 let rot = Rotation::from_rotation_y(new_yaw);
                 (dir.dot(rot * Vector::X), dir.dot(rot * Vector::NEG_Z))
             } else {
-                (self.strafe, if range < near { -1.0 } else { 0.0 })
+                (self.strafe, if self.brain.wants(Action::BackOff, &at) { -1.0 } else { 0.0 })
             };
             // A charged gun charges while it holds (on target or not) and lets go once full and
             // on target; a rail gun is pressed one tick and let go the next; a lock-on launcher

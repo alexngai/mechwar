@@ -62,10 +62,17 @@ pub enum Feature {
     /// Enemies it has in view, and teammates alive within 20 m: how a fight stands.
     EnemiesInView,
     MatesNear,
+    /// Range to the target over the near edge of its band (under 1: closer than it likes).
+    RangeNear,
+    /// Its role this life is to perch, with a vantage picked; it has an order to get to.
+    PerchRole,
+    Errand,
+    /// The target's hull, as a share.
+    TargetHull,
 }
 
 /// How many features there are.
-const FEATURES: usize = Feature::MatesNear as usize + 1;
+const FEATURES: usize = Feature::TargetHull as usize + 1;
 
 /// What a bot can do that a rule decides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -81,6 +88,10 @@ pub enum Action {
     Orb,
     Dome,
     Barrier,
+    // In a fight: go on along the route (to the target, a perch, or its order), and back off
+    // inside the band; otherwise it strafes, holding the band.
+    Push,
+    BackOff,
     // Falling back: to mend, to cool off, and done with it (back to the fight).
     FallBackToMend,
     FallBackToCool,
@@ -204,6 +215,13 @@ impl Default for Brain {
             rule
         };
         let rules = [
+            // Far off, keep walking the route (firing on the way); perches keep climbing, a bot
+            // cooling off repositions, and one with an order keeps going. Too close: back off.
+            (
+                Action::Push,
+                vec![with(engaged(), &[(Range, Above(1.0))]), with(engaged(), &[yes(PerchRole)]), with(engaged(), &[yes(Cooling)]), with(engaged(), &[yes(Errand)])],
+            ),
+            (Action::BackOff, vec![with(engaged(), &[(RangeNear, Below(1.0))])]),
             // Badly hurt, or too hot with no vent to hand: fall back, to an orb or out of sight.
             (Action::FallBackToMend, vec![with(engaged(), &[(Hull, Below(0.35))])]),
             (Action::FallBackToCool, vec![with(engaged(), &[yes(Cooling), no(VentReady)])]),
