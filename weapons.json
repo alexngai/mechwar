@@ -52,10 +52,10 @@
       }
     },
     {
-      "id": "talon", "name": "Homing rocket", "unlock": 2, "desc": "Single rockets that curve toward the enemy nearest your crosshair, within 6°, for as long as you keep them there; look away and they fly straight", "sound": "rocket", "recoil": "medium", "projectile": "rocket",
+      "id": "talon", "name": "Homing rocket", "unlock": 2, "desc": "Single rockets that curve toward the enemy nearest your crosshair, within 3°, for as long as you keep them there; look away and they fly straight", "sound": "rocket", "recoil": "medium", "projectile": "rocket",
       "stats": {
-        "fire_rate": 1.5, "shot_damage": 18, "heat_per_shot": 13, "spread_deg": 0, "bloom_per_shot": 0, "bloom_max": 0,
-        "shot_speed": 60, "shot_gravity": 0, "shot_radius": 2, "shot_turn": 50, "shot_seek_cone": 6, "weapon_range": 150
+        "fire_rate": 1.5, "shot_damage": 20.7, "heat_per_shot": 13, "spread_deg": 0, "bloom_per_shot": 0, "bloom_max": 0,
+        "shot_speed": 60, "shot_gravity": 0, "shot_radius": 2, "shot_turn": 50, "shot_seek_cone": 3, "weapon_range": 150
       }
     }
   ],
