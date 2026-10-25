@@ -3,6 +3,7 @@
 //!
 //!   cargo run --release -p sim --bin arena -- job.json > rows.csv
 //!   cargo run --release -p sim --bin arena -- --policy     (today's policy, as JSON)
+//!   cargo run --release -p sim --bin arena -- --brain      (genome 0's brain, as JSON)
 //!
 //! A job: `{"mode": "tdm", "seconds": 120, "skill": 0.5, "ideal": false,
 //!   "genomes": {"base": {}, "x": {"class": "A", "build": {"primary": "pike", ...}, "policy": {...}}},
@@ -21,6 +22,7 @@ use std::sync::mpsc;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use sim::bot::{Bot, Policy};
+use sim::brain::Brain;
 use sim::game::{Game, Mode};
 use sim::{Arsenal, Loadout, MechClass, Slot, TICK_HZ, Tuning, arsenal, map};
 
@@ -61,6 +63,8 @@ struct Genome {
     class: Option<MechClass>,
     build: Option<Build>,
     policy: Policy,
+    /// When it uses items and abilities; genome 0's when left out.
+    brain: Option<Brain>,
 }
 
 /// A build by weapons.json ids.
@@ -84,6 +88,10 @@ fn main() {
     let arg = std::env::args().nth(1).unwrap_or_else(|| fail("usage: arena <job.json> | --policy"));
     if arg == "--policy" {
         println!("{}", serde_json::to_string(&Policy::default()).expect("policy serializes"));
+        return;
+    }
+    if arg == "--brain" {
+        println!("{}", serde_json::to_string(&Brain::default()).expect("brain serializes"));
         return;
     }
     let job: Job = serde_json::from_str(&std::fs::read_to_string(&arg).unwrap_or_else(|e| fail(&format!("{arg}: {e}")))).unwrap_or_else(|e| fail(&format!("{arg}: {e}")));
@@ -156,6 +164,7 @@ fn play(job: &Job, mode: Mode, arsenal: &Arsenal, i: usize, m: &Match) -> String
             let class = g.class.unwrap_or(MechClass::ALL[(seed >> 33) as usize % 3]);
             let mut bot = Bot::new(seed);
             (bot.skill, bot.policy) = (job.skill, g.policy.clone());
+            bot.brain = g.brain.clone().unwrap_or_default();
             bot.build = g.build.as_ref().map(|b| loadout(class, b));
             // A role for the first life under this policy.
             bot.respawned();

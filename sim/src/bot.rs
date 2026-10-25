@@ -10,6 +10,7 @@ use rapier3d::prelude::{Ray, Rotation};
 use serde::{Deserialize, Serialize};
 
 use crate::ability::Ability;
+use crate::brain::{Action, Brain, Feature, Features};
 use crate::arsenal;
 use crate::deploy::{self, Deployable};
 use crate::item::{self, Item};
@@ -511,12 +512,7 @@ pub struct Policy {
     pub regroup: f32,
     /// Farthest it lobs a grenade (short of its flat-ground reach).
     pub grenade_range: f32,
-    /// Hull it raises a shield dome below and a bulwark below (once hit), and EMPs a target that
-    /// isn't on thrusters below; heat it vents at, and fires a heat-fed launcher at.
-    pub dome_hull: f32,
-    pub brace_hull: f32,
-    pub emp_hull: f32,
-    pub vent_heat: f32,
+    /// Heat it fires a heat-fed launcher at. (When to use items and abilities is `Bot::brain`'s.)
     pub heat_fed: f32,
 }
 
@@ -541,10 +537,6 @@ impl Default for Policy {
             follow: 10.0,
             regroup: 30.0,
             grenade_range: 28.0,
-            dome_hull: 0.6,
-            brace_hull: 0.75,
-            emp_hull: 0.5,
-            vent_heat: 0.8,
             heat_fed: 0.6,
         }
     }
@@ -614,6 +606,8 @@ pub struct Bot {
     /// (which are skill 0.5's).
     pub skill: f32,
     pub policy: Policy,
+    /// When it uses its items and abilities.
+    pub brain: Brain,
     /// The build it always takes (a balance run's genome); None picks one each life.
     pub build: Option<Loadout>,
     #[cfg(test)]
@@ -661,6 +655,7 @@ impl Bot {
             order: None,
             skill: 0.5,
             policy: Policy::default(),
+            brain: Brain::default(),
             build: None,
             #[cfg(test)]
             last: Input::default(),
@@ -714,13 +709,11 @@ impl Bot {
         // Seen as `cover` hides it: its chest from the target's eye.
         let seen = target.is_some_and(|m| sees(arena, t, m, me));
         input.repair = r.why == Why::Mend && here && !seen && !self.at_orb(me);
-        input.ability = match Ability::of(me.loadout) {
-            Ability::Slipstream | Ability::Cloak => r.why == Why::Mend && !here,
-            Ability::Vent => me.overheated,
-            Ability::Brace => r.why == Why::Mend && hit,
-            Ability::Power | Ability::Barrage | Ability::Artillery => false,
-        };
-        input.emp = hit && me.emps > 0 && Item::of(me.loadout, false) == Item::Dome;
+        let mut at = Features::default();
+        at.flag(Feature::FallingBack, true).flag(Feature::Mending, r.why == Why::Mend).flag(Feature::InCover, here);
+        at.flag(Feature::Overheated, me.overheated).flag(Feature::Hit, hit).set(Feature::Charges, f32::from(me.emps));
+        input.ability = self.brain.wants(Action::of_ability(Ability::of(me.loadout)), &at);
+        input.emp = Action::of_support(Item::of(me.loadout, false)).is_some_and(|a| self.brain.wants(a, &at));
         input
     }
 
@@ -1049,14 +1042,17 @@ impl Bot {
             let alt_cool = matches!(use_, AltUse::HeatFed | AltUse::Melee) || (!me.overheated && me.heat + t.alt_heat < t.heat_max);
             // Otherwise a grenade takes the aim the same way, every few seconds while charges last.
             let grenade = t.thrown(Item::Grenade);
-            let throw = !alt
-                && me.grenades > 0
-                && Item::of(me.loadout, true) == Item::Grenade
-                && tick >= self.grenade_at
-                && dist < self.policy.grenade_range
-                && dist > t.grenade_radius + 2.0;
+            // What the brain reads to decide on its items and abilities.
+            let mut at = Features::default();
+            at.flag(Feature::Engaged, true).set(Feature::Hull, me.health / t.health_max).set(Feature::Heat, me.heat / t.heat_max);
+            at.flag(Feature::Overheated, me.overheated).flag(Feature::Hit, took_damage).set(Feature::Range, range / far);
+            at.set(Feature::Throws, f32::from(me.grenades)).set(Feature::Charges, f32::from(me.emps)).flag(Feature::AltReady, alt);
+            at.flag(Feature::GrenadeReady, tick >= self.grenade_at && dist < self.policy.grenade_range && dist > t.grenade_radius + 2.0);
+            at.flag(Feature::FirstSight, self.seen.len() == 1).flag(Feature::Melee, use_ == AltUse::Melee);
+            let offensive = Item::of(me.loadout, true);
+            let throw = offensive == Item::Grenade && self.brain.wants(Action::Grenade, &at);
             // A turret goes down as a fight starts (the first tick it's in view), or to help hold a perch.
-            let turret = me.grenades > 0 && matches!(Item::of(me.loadout, true), Item::MgTurret | Item::RocketTurret) && (self.seen.len() == 1 || self.perched(nav, me));
+            let turret = matches!(offensive, Item::MgTurret | Item::RocketTurret) && self.brain.wants(Action::Turret, at.flag(Feature::Perched, self.perched(nav, me)));
             let shell = if alt && !matches!(use_, AltUse::Beam | AltUse::Melee) { Some(t) } else if throw { Some(&grenade) } else { None };
             // Shells are led by their flight time, and so are projectile primaries: at the speed
             // the charge held now (what it lets go with) sends them, raised for their drop.
@@ -1111,7 +1107,8 @@ impl Bot {
                 let mut input = self.hold(arena, nav, t, me, r, Some(target), took_damage, tick);
                 // A barrier raised toward the threat (turning to it for the tick) covers the fall
                 // back, if the threat's not where the barrier would go up.
-                if me.emps > 0 && Item::of(me.loadout, false) == Item::Barrier && flat(target.pos - me.pos).length() > t.barrier_distance + 3.0 {
+                at.flag(Feature::StartingFallBack, true).flag(Feature::BarrierRoom, flat(target.pos - me.pos).length() > t.barrier_distance + 3.0);
+                if Item::of(me.loadout, false) == Item::Barrier && self.brain.wants(Action::Barrier, &at) {
                     let d = target.pos - me.pos;
                     (input.yaw, input.move_x, input.move_z, input.emp) = (atan2f(-d.x, -d.z), 0.0, 0.0, true);
                 }
@@ -1156,6 +1153,11 @@ impl Bot {
                     AltUse::Melee => !self.striking,
                     _ => on_target,
                 };
+            at.flag(Feature::Fire, fire).flag(Feature::AltFire, alt_fire).flag(Feature::Striking, self.striking);
+            if Item::of(me.loadout, false) == Item::Emp {
+                at.flag(Feature::TargetJammed, target.jammed > 0.0).flag(Feature::TargetThrusters, target.boosting || target.hovering || target.dodge_time > 0.0);
+                at.flag(Feature::EmpReaches, item::emp_reaches(arena, t, me, t, target));
+            }
             return Input {
                 move_x,
                 move_z,
@@ -1172,27 +1174,9 @@ impl Bot {
                 // An EMP when it would land (taking the target for our size) on one not jammed
                 // already, and it counts: they're on thrusters (it grounds them), or we're hurt (it
                 // slows pursuit). A shield dome once hurt and under fire.
-                emp: me.emps > 0
-                    && match Item::of(me.loadout, false) {
-                        Item::Emp => {
-                            target.jammed <= 0.0
-                                && (target.boosting || target.hovering || target.dodge_time > 0.0 || me.health < self.policy.emp_hull * t.health_max)
-                                && item::emp_reaches(arena, t, me, t, target)
-                        }
-                        Item::Dome => took_damage && me.health < self.policy.dome_hull * t.health_max,
-                        _ => false,
-                    },
-                // Speed boost to close on a far target; vent before stalling; raise the bulwark
-                // once hurt and under fire; power up a volley as it goes, and boost a fight once
-                // on target in range. Camouflage is for falling back (see `hold`).
-                ability: match Ability::of(me.loadout) {
-                    Ability::Slipstream => range > far,
-                    Ability::Vent => me.overheated || me.heat >= self.policy.vent_heat * t.heat_max,
-                    Ability::Brace => took_damage && me.health < self.policy.brace_hull * t.health_max,
-                    Ability::Power => if use_ == AltUse::Melee { self.striking } else { alt_fire },
-                    Ability::Barrage | Ability::Artillery => fire && range <= far,
-                    Ability::Cloak => false,
-                },
+                // Its support item and ability, as its brain has it (`Brain::default` for genome 0).
+                emp: Action::of_support(Item::of(me.loadout, false)).is_some_and(|a| self.brain.wants(a, &at)),
+                ability: self.brain.wants(Action::of_ability(Ability::of(me.loadout)), &at),
                 ..Input::default()
             };
         }
@@ -1711,7 +1695,7 @@ mod tests {
     fn bots_raise_domes_when_hurt_and_barriers_to_fall_back() {
         let (arena, nav, t) = blockout();
         let carrying = |id: &str| Loadout { support: crate::arsenal::index(crate::Slot::Support, id), ..Loadout::of(MechClass::B) };
-        // A dome: not while whole, nor when hurt but not under fire; once hit below `dome_hull`.
+        // A dome: not while whole, nor when hurt but not under fire; once hit below 60% (genome 0's dome rule).
         let enemy = spawn_mech(&t, Vector::new(0.0, 0.1, 22.0));
         let domes = |health: f32, hit: bool| {
             let me = Mech { loadout: carrying("dome"), health: health * t.health_max, ..spawn_mech(&t, Vector::new(0.0, 0.1, 40.0)) };

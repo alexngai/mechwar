@@ -35,7 +35,7 @@ CLASSES = json.loads((ROOT / 'classes.json').read_text())
 LISTS = {'primary': 'primaries', 'secondary': 'secondaries', 'offensive': 'offensive', 'support': 'support', 'ability': 'abilities'}
 DEFAULT = json.loads(subprocess.run([ARENA, '--policy'], capture_output=True, text=True, check=True).stdout)
 # Genes that are shares (of hull, heat, range, or a chance): nudged by adding, kept in (0, 1).
-SHARES = {'retreat_hull', 'mended_hull', 'cool_high', 'cool_low', 'band_near', 'dodge_chance', 'dome_hull', 'brace_hull', 'emp_hull', 'vent_heat', 'heat_fed'}
+SHARES = {'retreat_hull', 'mended_hull', 'cool_high', 'cool_low', 'band_near', 'dodge_chance', 'heat_fed'}
 ORDERED = [('cool_low', 'cool_high'), ('retreat_hull', 'mended_hull'), ('band_near', 'band_far')]
 # Items bots know how to use (`Bot::pick_loadout`); any other would be a dead slot.
 BOT_ITEMS = {'offensive': {'grenade', 'mg_turret', 'rocket_turret'}, 'support': {'emp', 'dome', 'barrier'}}

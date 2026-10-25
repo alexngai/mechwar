@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub mod ability;
 pub mod arsenal;
 pub mod bot;
+pub mod brain;
 pub mod client;
 pub mod collide;
 pub mod deploy;
