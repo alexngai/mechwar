@@ -79,6 +79,12 @@ function skyMaterial(sunDir) {
       sunColor: { value: new THREE.Color(SKY.day.sun) },
       sunDir: { value: sunDir }, // shared: a map can turn the sun, and the dome follows
       stars: { value: 0 },
+      time: { value: 0 },
+      aurora: { value: 0 },
+      auroraLow: { value: new THREE.Color() },
+      auroraHigh: { value: new THREE.Color() },
+      flash: { value: 0 },
+      flashDir: { value: new THREE.Vector3(0, 1, 0) },
     },
     vertexShader: /* glsl */ `
       varying vec3 vWorld;
@@ -88,8 +94,8 @@ function skyMaterial(sunDir) {
         gl_Position = projectionMatrix * viewMatrix * world;
       }`,
     fragmentShader: /* glsl */ `
-      uniform vec3 horizon, zenith, sunColor, sunDir;
-      uniform float stars;
+      uniform vec3 horizon, zenith, sunColor, sunDir, auroraLow, auroraHigh, flashDir;
+      uniform float stars, time, aurora, flash;
       varying vec3 vWorld;
       #include <common>
       #include <dithering_pars_fragment>
@@ -104,6 +110,16 @@ function skyMaterial(sunDir) {
         // Stars: a sparse hash over direction cells, fading into the haze near the horizon.
         float star = step(0.9985, fract(sin(dot(floor(dir * 300.0), vec3(12.9898, 78.233, 45.164))) * 43758.5453));
         col += stars * star * smoothstep(0.03, 0.3, up) * vec3(0.85, 0.9, 1.0);
+        if (aurora > 0.0) {
+          // Curtains: a band about 18 degrees up, waving round the sky, in fine vertical rays;
+          // one color low, another high. Whole multiples of the azimuth, so no seam behind.
+          float az = atan(dir.x, dir.z), wave = 0.08 * sin(az * 3.0 + time * 0.07) + 0.04 * sin(az * 7.0 - time * 0.11);
+          float band = exp(-pow((up - 0.32 - wave) * 5.0, 2.0)) * smoothstep(0.04, 0.2, up);
+          float rays = 0.55 + 0.45 * sin(az * 90.0 + 3.0 * sin(az * 13.0 + time * 0.3));
+          col += aurora * band * rays * mix(auroraLow, auroraHigh, smoothstep(0.2, 0.55, up + wave));
+        }
+        // Lightning: the whole sky lit, brightest toward the strike.
+        col += flash * (vec3(0.55, 0.6, 0.75) + vec3(1.6, 1.7, 2.0) * pow(max(dot(dir, flashDir), 0.0), 6.0));
         gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -304,7 +320,8 @@ function skylineMaterial(push) {
  * Adds the sky dome and distant skyline to `scene`, and sets its fog and background to the horizon color.
  * `sunDir` points toward the sun (normalized), or the moon at night. Returns `{ fit(map), setHaze(on) }`:
  * `fit` moves the skyline clear of the map's `size`, sets the sky for its `night` (and `palette`:
- * `sky`, `fog`, `haze`, `skyline`, `windows`) and lays the haze on its lowest floor.
+ * `sky`, `fog`, `haze`, `skyline`, `windows`, `aurora`, `lightning`) and lays the haze on its lowest
+ * floor. A storm's thunder goes out as a window `thunder` event ({ delay, close }) for the sound.
  */
 export function createSky(scene, sunDir) {
   scene.background = new THREE.Color(SKY.day.horizon);
@@ -320,8 +337,34 @@ export function createSky(scene, sunDir) {
   const windows = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ vertexColors: true, fog: false }));
   windows.matrixAutoUpdate = false;
   windows.frustumCulled = false;
-  scene.add(dome, skyline, windows);
-  const color = new THREE.Color();
+  // A storm's lightning lights the world through this, as well as the sky and the fog.
+  const flashLight = new THREE.HemisphereLight(0xc8d4ff, 0x404858, 0);
+  scene.add(dome, skyline, windows, flashLight);
+  const color = new THREE.Color(), fogBase = new THREE.Color(), WHITE = new THREE.Color(1, 1, 1);
+  let storm = null;
+  // Animated from the dome's own render, every frame: the aurora's drift and the lightning.
+  dome.onBeforeRender = () => {
+    const t = performance.now() / 1000, u = dome.material.uniforms;
+    u.time.value = t % 10000;
+    if (!storm) return;
+    const { every: [lo, hi], strength = 1 } = storm.spec;
+    if (t >= storm.next) {
+      // A strike: two or three flickers over half a second, out of a random quarter of the sky,
+      // its thunder a second or few behind (the nearer, the sharper).
+      storm.at = t;
+      storm.flickers = [0, 0.08 + 0.06 * Math.random(), 0.22 + 0.2 * Math.random()].slice(0, Math.random() < 0.5 ? 2 : 3);
+      storm.next = t + lo + Math.random() * (hi - lo);
+      const az = Math.random() * Math.PI * 2, el = 0.15 + Math.random() * 0.35;
+      u.flashDir.value.set(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el));
+      const delay = 0.6 + Math.random() * 3;
+      dispatchEvent(new CustomEvent('thunder', { detail: { delay, close: delay < 1.4 } }));
+    }
+    const k = Math.min(storm.flickers.reduce((sum, f) => sum + (t >= storm.at + f ? Math.exp(-(t - storm.at - f) * 14) : 0), 0), 1.2) * strength;
+    u.flash.value = k;
+    flashLight.intensity = 2.5 * k;
+    scene.fog.color.copy(fogBase).lerp(WHITE, 0.4 * Math.min(k, 1));
+    scene.background.copy(scene.fog.color);
+  };
   let density = 0, hazy = true, built = '';
   const fit = (map) => {
     const { size: [w, d], night, palette = {} } = map;
@@ -331,6 +374,11 @@ export function createSky(scene, sunDir) {
     u.sunColor.value.set(look.sun);
     u.stars.value = look.stars;
     scene.fog.color.set(look.horizon);
+    fogBase.copy(scene.fog.color);
+    u.aurora.value = palette.aurora?.strength ?? 0;
+    if (palette.aurora) palette.aurora.colors.forEach((c, i) => u[i ? 'auroraHigh' : 'auroraLow'].value.set(c));
+    storm = palette.lightning ? { spec: palette.lightning, next: performance.now() / 1000 + 3, at: -1e9, flickers: [] } : null;
+    u.flash.value = flashLight.intensity = 0;
     [scene.fog.near, scene.fog.far] = palette.fog ?? FOG;
     scene.background.set(look.horizon);
     const [haze, , falloff] = palette.haze ?? look.haze;

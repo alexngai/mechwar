@@ -1,4 +1,5 @@
-// Sinkhole: a 200 m red-rock pit under a dusty day sky. An eight-sided hole steps down in rings
+// Sinkhole: a 200 m cenote, a limestone pit in the jungle with a turquoise pool on its floor and
+// mist rising off it, foliage hanging over every lip. An eight-sided hole steps down in rings
 // (rim 0, terraces -7, -14 and -21, floor -28) joined by a double spiral of ramps, and three bridges
 // cross it through the center at -7, 0 and +8, each turned 60 degrees from the last.
 // Writes sinkhole.json next to this file; rerun `node maps/sinkhole.mjs` after editing.
@@ -7,7 +8,7 @@
 // (maps/kit.mjs) adds the 180-degree twin. Metrics as Riftline's: 8 m terraces, 6.5 m+ under
 // every deck, ramps near 24 degrees. A side "facing" d degrees has its outward normal d degrees
 // clockwise from north; on it, p runs outward from the center and s runs clockwise along it.
-import { bases, box, growth, lamp, once, pad, point, r3, railing, ramp, sentries, sign, silos, turned, write } from './kit.mjs';
+import { bases, box, decor, growth, lamp, once, pad, point, r3, railing, ramp, sentries, sign, silos, turned, write } from './kit.mjs';
 
 const BASE = -29; // bottom of every rock mass
 const CYAN = '#3de0ff';
@@ -30,29 +31,29 @@ const along = (deg, d) => at(deg, d, 0);
  * with a ground slab on top. Diagonal sides sit 2 cm low, so where they overlap a square side
  * the tops never z-fight.
  */
-function slab(deg, p0, p1, half, top, mat = 'rock') {
+function slab(deg, p0, p1, half, top, mat = 'stone') {
   const h = top - (deg % 90 ? 0.02 : 0), [x, z] = at(deg, (p0 + p1) / 2, 0), depth = r3((p1 - p0) / 2);
   turned([x, r3((BASE + h - 1) / 2), z], [r3(half), r3((h - 1 - BASE) / 2), depth], deg, mat);
-  turned([x, r3(h - 0.5), z], [r3(half), 0.5, depth], deg, 'ground');
+  turned([x, r3(h - 0.5), z], [r3(half), 0.5, depth], deg, 'moss');
 }
 
 /** A craggy boulder on the face of the ring whose inner apothem is `p`, from `bottom` to `top`. */
 function boulder(deg, p, s, bottom, top, w, yaw) {
   const [x, z] = at(deg, p - 0.4, s);
-  turned([x, r3((bottom + top) / 2), z], [r3(w / 2), r3((top - bottom) / 2), 1.6], r3(deg + yaw), 'rock');
+  turned([x, r3((bottom + top) / 2), z], [r3(w / 2), r3((top - bottom) / 2), 1.6], r3(deg + yaw), 'stone');
 }
 
 // --- The pit: floor, terrace rings and the rim -----------------------------------------------------
 once(() => box([-30, BASE, -30], [30, -28, 30], 'ground'));
 for (const [p0, p1, top] of BANDS.slice(1)) for (const deg of SIDES) slab(deg, p0, p1, p1 * T, top);
 // The rim: square blocks out to the walls, and diagonal blocks filling the square's corners.
-box([-RIM, BASE, RIM], [RIM, -1, 100], 'rock');
-box([-RIM, -1, RIM], [RIM, 0, 100], 'ground');
-box([RIM, BASE, -RIM], [100, -1, RIM], 'rock');
-box([RIM, -1, -RIM], [100, 0, RIM], 'ground');
+box([-RIM, BASE, RIM], [RIM, -1, 100], 'stone');
+box([-RIM, -1, RIM], [RIM, 0, 100], 'moss');
+box([RIM, BASE, -RIM], [100, -1, RIM], 'stone');
+box([RIM, -1, -RIM], [100, 0, RIM], 'moss');
 for (const x0 of [RIM, -100]) {
-  box([x0, BASE, RIM], [x0 + 100 - RIM, -1, 100], 'rock');
-  box([x0, -1, RIM], [x0 + 100 - RIM, 0, 100], 'ground');
+  box([x0, BASE, RIM], [x0 + 100 - RIM, -1, 100], 'stone');
+  box([x0, -1, RIM], [x0 + 100 - RIM, 0, 100], 'moss');
 }
 for (const deg of [45, 135]) slab(deg, RIM, RIM * Math.SQRT2, RIM * T, 0);
 
@@ -64,8 +65,8 @@ for (let k = 0; k < 4; k++) {
   ramp([lx, H[k], lz], [hx, H[k + 1], hz], 7, 'metal', true);
   // The landing runs half a meter into the ring, 1 cm under its top (no z-fighting).
   const top = H[k + 1] - 0.01, [x, z] = at(deg, wall - 3.25, 10);
-  turned([x, r3((H[k] + top - 1) / 2), z], [2, r3((top - 1 - H[k]) / 2), 3.75], deg, 'rock');
-  turned([x, r3(top - 0.5), z], [2, 0.5, 3.75], deg, 'ground');
+  turned([x, r3((H[k] + top - 1) / 2), z], [2, r3((top - 1 - H[k]) / 2), 3.75], deg, 'stone');
+  turned([x, r3(top - 0.5), z], [2, 0.5, 3.75], deg, 'moss');
 }
 // Boulders break up each ring's face, except where a ramp climbs it.
 for (let k = 0; k < 4; k++) {
@@ -106,10 +107,10 @@ for (const [deg, half, under] of [[0, 4.4, -7.5], [ROAD, 5.4, -0.5], [HIGH + 180
 }
 
 // --- Rim: outcrops, a pump house, a pylon, and the north base -----------------------------------
-turned([-40, 1.5, 64], [5, 1.5, 3], 20, 'rock'); // 3 m hover-ups and taller walls
-turned([-48, 3.5, 70], [3, 3.5, 2.5], -15, 'rock');
-turned([80, 1.5, 40], [4, 1.5, 3], -30, 'rock');
-turned([-88, 4, 20], [5, 4, 4], 10, 'rock');
+turned([-40, 1.5, 64], [5, 1.5, 3], 20, 'stone'); // 3 m hover-ups and taller walls
+turned([-48, 3.5, 70], [3, 3.5, 2.5], -15, 'stone');
+turned([80, 1.5, 40], [4, 1.5, 3], -30, 'stone');
+turned([-88, 4, 20], [5, 4, 4], 10, 'stone');
 box([58, 0, 56], [72, 7, 68], 'panel'); // pump house, roof by ramp
 ramp([65, 0, 84], [65, 7, 68], 7);
 railing([58, 7, 56], [72, 7, 56]);
@@ -133,8 +134,17 @@ for (const [deg, p, s, y] of [[0, 52, -14, 0], [90, 52, 10, 0], [45, 47, -14, -7
   lamp([x, y, z]);
 }
 for (const at_ of [[-25, 0, 70], [25, 0, 70], [-24, 0, 96]]) lamp(at_);
-box([100, -1, -101], [101, 20, 101], 'rock'); // perimeter cliffs
-box([-101, -1, 100], [101, 20, 101], 'rock');
+box([100, -1, -101], [101, 20, 101], 'stone'); // perimeter cliffs
+box([-101, -1, 100], [101, 20, 101], 'stone');
+
+// --- Foliage: clumps hanging over each lip at the octagon's corners (clear of the ramps mid-side),
+// and over the rim; props only.
+for (const [p, y] of [[26, -21], [34, -14], [42, -7], [RIM, 0]]) {
+  for (const deg of SIDES) {
+    const [x, z] = at(deg + 22.5, (p - 0.5) / Math.cos(Math.PI / 8), 0);
+    decor.push({ kind: 'canopy', at: [x, r3(y - 0.6), z], r: r3(2.4 + (y + 28) / 14) });
+  }
+}
 
 // --- Jump pads: the pit floor out to the east rim, and the -21 terrace up onto the gantry -------
 pad([21, -28, 0], [58, 0, 0], 3);
@@ -179,12 +189,18 @@ silos({ at: [-70, 0, 40], radius: 10, band: 4, pad: [-75, 0, 39.5] }, { at: [0, 
 
 // --- Spawns, twin, write -------------------------------------------------------------------------
 const north = [[-20, 0.1, 84], [-12, 0.1, 92], [12, 0.1, 80], [20, 0.1, 82]];
+// A humid jungle noon: a pale green-white sky over wooded hills, mist lying in the pit and the
+// pool turquoise under it, leaves lush.
 const palette = {
-  sky: { horizon: '#e8a888', zenith: '#6f7fae', sun: '#fff0e0', stars: 0 },
-  fog: [80, 260],
-  haze: ['#e0b090', 0.018, 6],
-  light: { sky: '#f0d0c0', ground: '#5a3020', ambient: 1.5, sun: '#fff0e0', direct: 2.2 },
-  lamp: '#ffd8b0',
-  tint: '#e0a890',
+  sky: { horizon: '#d4e6da', zenith: '#5f98c4', sun: '#fff4dc', stars: 0 },
+  fog: [70, 240],
+  haze: ['#dcefe6', 0.045, 7],
+  light: { sky: '#d6f0e6', ground: '#3e5a3a', ambient: 1.6, sun: '#fff1d0', direct: 2.4 },
+  lamp: '#ffe8b0',
+  tint: '#e8f0e4',
+  leaf: ['#3f7a3a', '#4f8f3e', '#356a34', '#5c9a48'],
+  skyline: 'forest',
+  water: { level: -27.4, color: '#2fb3ad', opacity: 0.72 },
+  ambience: 'jungle', // its sound bed and accents (web/audio.js)
 };
 write(new URL('./sinkhole.json', import.meta.url), { name: 'Sinkhole', size: [200, 200], night: false, palette }, north);

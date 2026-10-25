@@ -2,7 +2,7 @@
   "name": "Ziggurat",
   "size": [200, 200],
   "night": false,
-  "palette": {"sunDir":[0.4, 0.62, -0.68], "sky":{"horizon":"#d4dce3", "zenith":"#a3b0bd", "sun":"#eef2f5", "stars":0}, "fog":[25, 170], "haze":["#e4eaef", 0.045, 9], "light":{"sky":"#d2dce6", "ground":"#8c98a6", "ambient":1.7, "sun":"#eef3f8", "direct":1.1}, "lamp":"#ffb070", "tint":"#eef3f9", "terrain":["#e8edf2", "#a7b6c4", "#dde4ea"], "skyline":"snow", "motes":{"color":[[0.86, 0.88, 0.9], [0.8, 0.83, 0.87]], "rate":900, "size":0.2, "drift":1.5, "rise":-2.2, "life":2.5, "wind":[9, -4], "range":20, "solid":true}},
+  "palette": {"sunDir":[0.4, 0.62, -0.68], "sky":{"horizon":"#d4dce3", "zenith":"#a3b0bd", "sun":"#eef2f5", "stars":0}, "fog":[25, 170], "haze":["#e4eaef", 0.045, 9], "light":{"sky":"#d2dce6", "ground":"#8c98a6", "ambient":1.7, "sun":"#eef3f8", "direct":1.1}, "lamp":"#ffb070", "tint":"#eef3f9", "terrain":["#e8edf2", "#a7b6c4", "#dde4ea"], "skyline":"snow", "motes":{"color":[[0.86, 0.88, 0.9], [0.8, 0.83, 0.87]], "rate":900, "size":0.2, "drift":1.5, "rise":-2.2, "life":2.5, "wind":[9, -4], "range":20, "solid":true}, "ambience":"blizzard"},
   "solids": [
     {"box":[21.17,7.25,25.67],"half":[16.17,7.25,11.67],"mat":"concrete"},
     {"box":[21.17,14.75,25.67],"half":[16.17,0.25,11.67],"mat":"snow"},

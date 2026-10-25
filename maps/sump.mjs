@@ -1,7 +1,7 @@
-// Sump: a 150 m flooded undercity in deep blue. An old street grid at -8 lies under the city deck
-// (0), which its buildings hold up; light wells and ramp wells open the deck, a trench splits its
-// center, and two roofs stand 7 m above it. Writes sump.json next to this file; rerun
-// `node maps/sump.mjs` after editing.
+// Sump: a 150 m flooded undercity in deep blue. An old street grid at -8, knee deep in water,
+// lies under the city deck (0), which its buildings hold up; light wells and ramp wells open the
+// deck, a trench splits its center, and two roofs stand 7 m above it. Writes sump.json next to
+// this file; rerun `node maps/sump.mjs` after editing.
 //
 // The north half (z > 0), the east half of the z = 0 street and the center are authored here;
 // `write` (maps/kit.mjs) adds the 180-degree twin. Metrics as the other maps': 10 m streets, 7.5 m
@@ -132,5 +132,10 @@ const palette = {
   cover: 0.5,
   skyline: 'city',
   windows: ['#bfe8ff', '#7fd4ff', '#ffe2a0'],
+  // The undercity's streets stand 0.4 m deep (mechs wade them), and water drips from the deck
+  // everywhere, thickest down the wells.
+  water: { level: -7.6, color: '#2a5c78', opacity: 0.65 }, // lighter than the swamp's: the lamp-lit street shows through
+  motes: { color: [[0.5, 0.62, 0.78], [0.4, 0.52, 0.68]], rate: 160, size: 0.05, drift: 0.05, rise: -9, life: 1.6, range: 22, solid: true },
+  ambience: 'undercity', // its sound bed and accents (web/audio.js)
 };
 write(new URL('./sump.json', import.meta.url), { name: 'Sump', size: [150, 150], night: true, palette }, north);

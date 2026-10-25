@@ -223,5 +223,6 @@ const palette = {
   skyline: 'snow',
   // Flakes under the bloom threshold (0.7), so they read as snow, not sparks.
   motes: { color: [[0.86, 0.88, 0.9], [0.8, 0.83, 0.87]], rate: 900, size: 0.2, drift: 1.5, rise: -2.2, life: 2.5, wind: [9, -4], range: 20, solid: true },
+  ambience: 'blizzard', // its sound bed and accents (web/audio.js)
 };
 write(new URL('./ziggurat.json', import.meta.url), { name: 'Ziggurat', size: SIZE, night: false, palette }, north);

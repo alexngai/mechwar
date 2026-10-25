@@ -2,7 +2,7 @@
   "name": "Canopy",
   "size": [360, 360],
   "night": true,
-  "palette": {"sunDir":[-0.5, 0.25, 0.83], "sky":{"horizon":"#f08a50", "zenith":"#2a2150", "sun":"#ffb070", "stars":0.25}, "fog":[45, 260], "haze":["#d98a5a", 0.02, 6], "light":{"sky":"#e0a884", "ground":"#5c3c30", "ambient":2.1, "sun":"#ff9a50", "direct":2.3}, "lamp":"#ffb35c", "tint":"#f2d8c2", "terrain":["#6a7840", "#7a685c", "#8a7444"], "leaf":["#4a6a2e", "#6a7a32", "#3e5a2a", "#80783a"], "undergrowth":1, "cover":0.7, "skyline":"forest", "motes":{"color":[[1, 0.86, 0.45], [1, 0.42, 0.1]], "rate":50, "size":0.22, "drift":0.5, "rise":0.15, "life":6}},
+  "palette": {"sunDir":[-0.5, 0.25, 0.83], "sky":{"horizon":"#f08a50", "zenith":"#2a2150", "sun":"#ffb070", "stars":0.25}, "fog":[45, 260], "haze":["#d98a5a", 0.02, 6], "light":{"sky":"#e0a884", "ground":"#5c3c30", "ambient":2.1, "sun":"#ff9a50", "direct":2.3}, "lamp":"#ffb35c", "tint":"#f2d8c2", "terrain":["#6a7840", "#7a685c", "#8a7444"], "leaf":["#4a6a2e", "#6a7a32", "#3e5a2a", "#80783a"], "undergrowth":1, "cover":0.7, "skyline":"forest", "motes":[{"color":[[1, 0.86, 0.45], [1, 0.42, 0.1]], "rate":50, "size":0.22, "drift":0.5, "rise":0.15, "life":6}, {"color":[[0.55, 0.32, 0.14], [0.4, 0.24, 0.1]], "rate":25, "size":0.22, "drift":0.8, "rise":-0.7, "life":9, "wind":[1.2, -0.5], "range":30, "solid":true}], "ambience":"twilight"},
   "solids": [
     {"box":[11.548494156391085,20.75,116.78354290456362],"half":[5.6,0.25,4.5],"yaw":68,"mat":"metal"},
     {"box":[4.783542904563623,20.75,123.54849415639109],"half":[5.6,0.25,4.5],"yaw":23,"mat":"metal"},
