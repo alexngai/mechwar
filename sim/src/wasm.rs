@@ -439,7 +439,8 @@ impl WasmNetClient {
     /// Co-op (kind 14): a = what (0 a wave comes: b = which, x = how many; 1 b is cleared; 2 a
     /// walker reached the reactor; 3 player b's build order refused, x = why: `defense::Refusal`'s
     /// index). Arc pylon lightning (kind 15), two records a jump: a = 0 xyz = from, then a = 1
-    /// xyz = to. Pulse pylon EMP (kind 16): a = radius, xyz = where.
+    /// xyz = to. Pulse pylon EMP (kind 16): a = radius, xyz = where. Mortar shell fired (kind 17),
+    /// two records: a = 0 xyz = from, then a = 1 xyz = where it lands; b = its flight (s).
     pub fn take_events(&mut self) -> Vec<f32> {
         let mut out = Vec::new();
         for e in std::mem::take(&mut self.0.events) {
@@ -481,6 +482,10 @@ impl WasmNetClient {
                     out.extend([15.0, 1.0, 0.0, to.x, to.y, to.z]);
                 }
                 Event::Stun { at, radius } => out.extend([16.0, radius, 0.0, at.x, at.y, at.z]),
+                Event::Shell { from, to, flight } => {
+                    out.extend([17.0, 0.0, flight, from.x, from.y, from.z]);
+                    out.extend([17.0, 1.0, flight, to.x, to.y, to.z]);
+                }
                 // The client turns these into the blasts and hits below.
                 Event::Launch(_) | Event::Blast { .. } => {}
             }

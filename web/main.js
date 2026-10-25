@@ -13,7 +13,7 @@ import classesText from '../classes.json?raw';
 import weaponsText from '../weapons.json?raw';
 import { buildArena, HIGH_ONLY, LOW_ONLY } from './arena.js';
 import { Effects, HOT, halo, hot } from './fx.js';
-import { ARC, BRUTE, CRAWLER, HAULER, Objectives, foeHull, foeMiddle, PULSE, TOWER_NAMES, TOWER_PRICES, REACTOR_HULL, WALKER, SENTRY, SENTRY_HEIGHT, SENTRY_SHIELD, SHIP, SHIP_HULL } from './objectives.js';
+import { ARC, FOE_NAMES, FOES, HAULER, Objectives, foeHull, foeMiddle, PULSE, TOWER_NAMES, TOWER_PRICES, REACTOR_HULL, SENTRY, SENTRY_HEIGHT, SENTRY_SHIELD, SHIP, SHIP_HULL } from './objectives.js';
 import { Preview, weaponThumbs } from './hangar.js';
 import { GLYPHS, STATS, facts as cardFacts, shown } from './cards.js';
 import { controlsHtml } from './controls.js';
@@ -572,7 +572,7 @@ const feed = [];
 let eliminated = null, callout = null, capture = null, blipAt = 0, reactorHitAt = null;
 // Co-op building: the tower being placed (-1: not building), the last one picked, what the panel
 // says of it (or of the tower aimed at), and where the last arc pylon jump left from.
-let building = -1, lastTower = 0, buildHint = '', zapFrom = null;
+let building = -1, lastTower = 0, buildHint = '', zapFrom = null, shellFrom = null;
 const coop = () => !!net && net.defense().length > 0;
 const sendBuild = (order) => ws?.readyState === WebSocket.OPEN && ws.send(net.build(order));
 /** Why a build order didn't go (defense.rs `Refusal`, in order). */
@@ -1005,6 +1005,13 @@ function frame(now) {
       fx.pulse(new THREE.Vector3(x, y, z), a);
       sound.emp(new THREE.Vector3(x, y, z));
     }
+    // A mortar shell: from (a 0), then where it lands (a 1), b its flight.
+    if (kind === 17 && a === 0) shellFrom = [x, y, z];
+    if (kind === 17 && a === 1 && shellFrom) {
+      objectives.shell(shellFrom, [x, y, z], b, now);
+      sound.grenade(new THREE.Vector3(...shellFrom));
+      shellFrom = null;
+    }
     if (kind === 13) {
       // Convoy: a team (b) took the hauler over (a 0), it stalled (1), came back (2), or b delivered it (3).
       const ours = b === myTeam;
@@ -1155,6 +1162,7 @@ function frame(now) {
   objectives.drawHauler(game.deployables(), convoy, myTeam, FRIEND.accent, FOE.accent, dt, now);
   objectives.drawWalkers(game.deployables(), dt, now, turretGuns, (net ? net.defense()[0] : 0) || 1);
   objectives.drawDefense(net ? net.defense() : [], now);
+  objectives.drawShells(now);
   drawBuild(now, alive, myId);
 
   // Look is applied at render rate for responsiveness; position is interpolated. In the cockpit
@@ -1679,8 +1687,9 @@ function drawDeployables(now, myTeam) {
   turretGuns.clear();
   for (let i = 0; i < list.length; i += 10) {
     const [kind, team, owner, x, y, z, yaw, pitch, left, hull] = list.subarray(i, i + 10);
-    if (kind === SHIP || kind === SENTRY || kind === HAULER || kind === WALKER || kind === CRAWLER || kind === BRUTE || kind === ARC || kind === PULSE) continue; // objectives.js draws ships, base guns, the hauler and co-op's walkers and pylons
-    const key = `${owner}:${kind}:${x},${z}`, was = deployed.get(key);
+    if (kind === SHIP || kind === SENTRY || kind === HAULER || FOES.includes(kind) || kind === ARC || kind === PULSE) continue; // objectives.js draws ships, base guns, the hauler and co-op's walkers and pylons
+    // (A co-op shield node's dome walks with it: known by its owner alone.)
+    const key = owner >= 16 ? `${owner}:${kind}` : `${owner}:${kind}:${x},${z}`, was = deployed.get(key);
     if (!was) sound.deploy({ x, y, z });
     let mesh = deployMeshes[kind][used[kind]++];
     if (!mesh) {
@@ -1814,7 +1823,7 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
     const [kind, team, owner, x, y, z, , , , hull] = turrets.subarray(i, i + 10);
     if (kind < 2 || kind === HAULER) continue; // the hauler has its own mark
     const enemy = myTeam >= 0 && team !== myTeam; // offline, all ours
-    const ship = kind === SHIP, sentry = kind === SENTRY, walker = kind === WALKER || kind === CRAWLER || kind === BRUTE;
+    const ship = kind === SHIP, sentry = kind === SENTRY, walker = FOES.includes(kind);
     chest.set(x, y + (ship ? 0 : sentry ? SENTRY_HEIGHT : walker ? foeMiddle(kind) : classValue(1, 'turret_height') * 0.6), z);
     const dist = chest.distanceTo(eye);
     let visible = false;
@@ -1828,7 +1837,7 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
     if (ndc.z > 1 || Math.abs(ndc.x) > 1.1 || Math.abs(ndc.y) > 1.1) continue;
     const wave = (net ? net.defense()[0] : 0) || 1; // (co-op's walkers grow each wave)
     const hullMax = ship ? SHIP_HULL : sentry ? SENTRY_SHIELD : walker ? foeHull(kind, wave) : classValue(1, 'turret_hull');
-    const label = ship ? 'Battleship' : sentry ? 'Base gun' : kind === CRAWLER ? 'Crawler' : kind === BRUTE ? 'Ore brute' : walker ? 'Infested walker' : kind === 2 ? 'MG turret' : 'Rocket turret';
+    const label = ship ? 'Battleship' : sentry ? 'Base gun' : walker ? FOE_NAMES[kind] : kind === 2 ? 'MG turret' : 'Rocket turret';
     const tag = {
       // `unit` is its lock-on id (deploy::target_id), so the lock diamond finds it.
       ...toScreen(ndc), dist, enemy, unit: 64 + 2 * owner + (kind === 3 ? 1 : 0), name: ship || sentry ? `Enemy ${label.toLowerCase()}` : walker ? label : `${nameOf(owner)}'s ${label}`, bot: false, status: sentry && hull <= 0 ? 'OFFLINE' : '', focus: false,

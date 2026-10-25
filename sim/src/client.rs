@@ -439,7 +439,7 @@ impl NetClient {
                         }
                     }
                 }
-                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } | Event::TurretShot { .. } | Event::TurretHit { .. } | Event::Strike { .. } | Event::Captured { .. } | Event::Missile { .. } | Event::Ship { .. } | Event::Flag { .. } | Event::Convoy(_) | Event::Defense(_) | Event::Zap { .. } | Event::Stun { .. } => self.events.push(*e),
+                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } | Event::TurretShot { .. } | Event::TurretHit { .. } | Event::Strike { .. } | Event::Captured { .. } | Event::Missile { .. } | Event::Ship { .. } | Event::Flag { .. } | Event::Convoy(_) | Event::Defense(_) | Event::Zap { .. } | Event::Stun { .. } | Event::Shell { .. } => self.events.push(*e),
             }
         }
         self.snapshots.push_back(s);

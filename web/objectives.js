@@ -29,13 +29,16 @@ export const SHIP_HULL = 3000;
 /** The AA gun fires a burst of AA_BURST rounds AA_GAP ms apart every AA_EVERY ms, while firing; it turns at AA_TURN rad/s. */
 const AA_BURST = 4, AA_GAP = 110, AA_EVERY = 1000, AA_TURN = 1.6;
 /** The deployable kinds of a battleship, and of a team mode's base gun. */
-export const SHIP = 4, SENTRY = 5, HAULER = 6, WALKER = 7, ARC = 8, PULSE = 9, CRAWLER = 10, BRUTE = 11;
+export const SHIP = 4, SENTRY = 5, HAULER = 6, WALKER = 7, ARC = 8, PULSE = 9, CRAWLER = 10, BRUTE = 11, MORTAR = 12, NODE = 13;
+/** Co-op's lane enemies. */
+export const FOES = [WALKER, CRAWLER, BRUTE, MORTAR, NODE];
 /** Match defense.rs: the reactor's hull, and a walker's in wave `n`. */
 export const REACTOR_HULL = 2000;
 export const walkerHull = (n) => 100 + 12 * n;
 /** Match defense.rs `species`: a lane enemy's hull in wave `n`, and (here) how high its middle is. */
-export const foeHull = (kind, n) => (kind === CRAWLER ? 30 + 3 * n : kind === BRUTE ? 600 + 50 * n : walkerHull(n));
-export const foeMiddle = (kind) => (kind === CRAWLER ? 0.6 : kind === BRUTE ? 2.5 : 2);
+export const foeHull = (kind, n) => ({ [CRAWLER]: 30 + 3 * n, [BRUTE]: 600 + 50 * n, [MORTAR]: 140 + 14 * n, [NODE]: 150 + 12 * n })[kind] ?? walkerHull(n);
+export const foeMiddle = (kind) => ({ [CRAWLER]: 0.6, [BRUTE]: 2.5, [MORTAR]: 1.8, [NODE]: 2.2 })[kind] ?? 2;
+export const FOE_NAMES = { [WALKER]: 'Infested walker', [CRAWLER]: 'Crawler', [BRUTE]: 'Ore brute', [MORTAR]: 'Mortar walker', [NODE]: 'Shield node' };
 /** Match defense.rs: what pilots build (`TOWERS`, in Build::Place's order), their prices, their reach at tier 1 (m: tuning's turret ranges, game.rs's ARC_RANGE and PULSE_RADIUS) and how it grows a tier. */
 export const TOWER_NAMES = ['MG tower', 'Rocket tower', 'Arc pylon', 'Pulse pylon'];
 export const TOWER_PRICES = [100, 150, 175, 200];
@@ -49,7 +52,7 @@ export const SENTRY_HEIGHT = 5.5;
 export class Objectives {
   /** `cast(ox, oy, oz, dx, dy, dz, max)`: how far a ray goes into the arena, up to `max`. */
   constructor(scene, fx, sound, cast) {
-    Object.assign(this, { scene, fx, sound, cast, silos: [], aa: [], zones: [], labels: [], stations: [], dropZones: [], bases: [], missiles: [], ships: new Map(), sentries: new Map(), drops: [], stands: [], flags: [], walkers: new Map(), gates: [], reactor: null, pylons: new Map(), ghost: null, lanes: null, fire: {}, seen: null });
+    Object.assign(this, { scene, fx, sound, cast, silos: [], aa: [], zones: [], labels: [], stations: [], dropZones: [], bases: [], missiles: [], ships: new Map(), sentries: new Map(), drops: [], stands: [], flags: [], walkers: new Map(), gates: [], reactor: null, pylons: new Map(), ghost: null, lanes: null, shells: [], fire: {}, seen: null });
     this.dropGeometry = new THREE.OctahedronGeometry(0.6);
     this.dropMaterial = hot(new THREE.MeshBasicMaterial({ color: ENERGY }));
   }
@@ -236,11 +239,11 @@ export class Objectives {
     const live = new Set();
     for (let i = 0; i < list.length; i += 10) {
       const kind = list[i];
-      if (kind !== WALKER && kind !== CRAWLER && kind !== BRUTE) continue;
+      if (!FOES.includes(kind)) continue;
       const [, , owner, x, y, z, yaw, pitch] = list.subarray(i, i + 8);
       let w = this.walkers.get(owner);
       if (!w) {
-        w = { kind, group: (kind === CRAWLER ? crawlerMesh : kind === BRUTE ? bruteMesh : walkerMesh)(), heading: 0, gait: 0, aim: yaw, rear: 0 };
+        w = { kind, group: ({ [CRAWLER]: crawlerMesh, [BRUTE]: bruteMesh, [MORTAR]: mortarMesh, [NODE]: nodeMesh })[kind]?.() ?? walkerMesh(), heading: 0, gait: 0, aim: yaw, rear: 0 };
         w.group.position.set(x, y, z);
         this.scene.add(w.group);
         this.walkers.set(owner, w);
@@ -265,9 +268,10 @@ export class Objectives {
         pod.rotation.y = w.aim - w.heading;
         guns.set(`${owner}:2`, muzzle.getWorldPosition(new THREE.Vector3()));
       }
+      // A brute rears up, and a mortar walker raises its tube, as the server pitches them up.
       if (body) {
         w.rear += (pitch - w.rear) * (1 - Math.exp(-(pitch > w.rear ? 4 : 18) * dt));
-        body.rotation.x = 0.45 * w.rear;
+        body.rotation.x = (body.userData.rest ?? 0) + 0.45 * w.rear;
       }
       // The hive's fungus pulses on it, thicker each wave.
       const grown = 0.8 + 0.05 * wave;
@@ -278,7 +282,7 @@ export class Objectives {
       // Gone: shot down (a burst and spores), or walked into the reactor.
       const at = w.group.position.clone().setY(w.group.position.y + 1.5);
       if (!this.reactor || at.distanceTo(this.reactor.at) > 14) {
-        const big = w.kind === BRUTE ? 1.6 : w.kind === CRAWLER ? 1 : 0.7;
+        const big = w.kind === BRUTE ? 1.6 : w.kind === CRAWLER ? 1 : w.kind === NODE ? 1.2 : 0.7;
         this.fx.explosion(at, big);
         this.sound.blast(4 * big, at);
       }
@@ -357,6 +361,31 @@ export class Objectives {
     this.ghost.position.set(spot[0], spot[1], spot[2]);
     this.ghost.userData.material.color.setHex(ok ? 0x6dff9a : 0xff5a4a);
     this.ghost.userData.ring.scale.setScalar(towerReach(k));
+  }
+
+  /** A mortar shell fired `from` (xyz), landing at `to` in `flight` seconds, at `now` (ms). */
+  shell(from, to, flight, now) {
+    const orb = part(this.scene, ball, foeGlow, ...from);
+    orb.scale.setScalar(0.35);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(3.4, 4, 40).rotateX(-Math.PI / 2), hot(new THREE.MeshBasicMaterial({ color: 0xff3020, transparent: true, depthWrite: false, side: THREE.DoubleSide })));
+    ring.position.set(to[0], to[1] + 0.2, to[2]);
+    this.scene.add(ring);
+    this.shells.push({ ball: orb, ring, from: new THREE.Vector3(...from), to: new THREE.Vector3(...to), flight: flight * 1000, at: now });
+  }
+
+  /** Mortar shells on their arcs, each landing ringed in red till it lands (then a blast). */
+  drawShells(now) {
+    this.shells = this.shells.filter((s) => {
+      const u = Math.min((now - s.at) / s.flight, 1), lob = Math.max(12, s.from.distanceTo(s.to) * 0.45);
+      s.ball.position.lerpVectors(s.from, s.to, u).y += 4 * lob * u * (1 - u);
+      s.ring.material.opacity = 0.4 + 0.5 * Math.abs(Math.sin(now / (60 + 200 * (1 - u))));
+      if (u < 1) return true;
+      this.fx.explosion(s.to.clone().setY(s.to.y + 1), 1.2);
+      this.sound.blast(5, s.to);
+      for (const m of [s.ball, s.ring]) this.scene.remove(m);
+      s.ring.geometry.dispose();
+      return false;
+    });
   }
 
   /** The reactor as a mark for the glass and radar, in co-op. */
@@ -1112,6 +1141,45 @@ function crawlerMesh() {
   // Tripods: front and back on one side with the middle on the other.
   const phases = [0, Math.PI, Math.PI, 0, 0, Math.PI];
   group.userData = { legs, fungus, stride: 0.8, phases };
+  return group;
+}
+
+/**
+ * Co-op's mortar walker, along -Z: a walker's chassis on four legs splayed wide, a fat tube on its
+ * back angled up (`userData.body`, raised further as it digs in), fungus round the breech.
+ */
+function mortarMesh() {
+  const group = new THREE.Group();
+  part(group, new THREE.BoxGeometry(2.2, 0.9, 2.6), foePaint, 0, 1.8, 0);
+  part(group, new THREE.BoxGeometry(1.8, 0.4, 2.2), foeDark, 0, 1.25, 0);
+  const tube = new THREE.Group();
+  tube.position.set(0, 2.3, 0.4);
+  tube.userData.rest = -0.6;
+  tube.rotation.x = -0.6;
+  group.add(tube);
+  part(tube, new THREE.CylinderGeometry(0.42, 0.5, 2.6, 12), foeDark, 0, 1.1, 0);
+  part(tube, new THREE.TorusGeometry(0.46, 0.08, 6, 16).rotateX(Math.PI / 2), foeHazard, 0, 2.3, 0);
+  part(tube, ball, foeGlow, 0, 2.4, 0).scale.set(0.3, 0.05, 0.3); // the glow down its mouth
+  const fungus = blobs(group, [[0.7, 2.4, 1.0, 0.28], [-0.8, 2.3, 0.9, 0.22], [0.9, 1.8, -0.9, 0.18], [-0.4, 2.4, -0.8, 0.16]]);
+  const legs = legsOf(group, [[-1, 1.6, -1.1], [1, 1.6, -1.1], [-1, 1.6, 1.1], [1, 1.6, 1.1]], [[-2.4, -2.0], [2.4, -2.0], [-2.4, 2.0], [2.4, 2.0]], 1.6, 0.14);
+  group.userData = { legs, body: tube, fungus, stride: 1.3, phases: [0, Math.PI, Math.PI, 0] };
+  return group;
+}
+
+/**
+ * Co-op's shield node, along -Z: a tall thin tripod, a mast up from its hub to a great glowing
+ * fungal bulb (what throws the dome), smaller growths down the mast.
+ */
+function nodeMesh() {
+  const group = new THREE.Group();
+  part(group, new THREE.CylinderGeometry(0.5, 0.7, 0.6, 8), foeDark, 0, 1.6, 0);
+  part(group, new THREE.CylinderGeometry(0.12, 0.18, 2.6, 6), foePaint, 0, 3.2, 0);
+  part(group, new THREE.TorusGeometry(0.55, 0.06, 6, 20).rotateX(Math.PI / 2), foeHazard, 0, 4.0, 0);
+  const fungus = blobs(group, [[0, 4.6, 0, 0.6], [0.2, 3.1, 0.15, 0.16], [-0.18, 2.6, -0.12, 0.13]]);
+  const hips = [0, 1, 2].map((k) => [0.4 * Math.sin((k * 2 * Math.PI) / 3), 1.5, 0.4 * Math.cos((k * 2 * Math.PI) / 3)]);
+  const feet = [0, 1, 2].map((k) => [1.6 * Math.sin((k * 2 * Math.PI) / 3), 1.6 * Math.cos((k * 2 * Math.PI) / 3)]);
+  const legs = legsOf(group, hips, feet, 1.2, 0.08);
+  group.userData = { legs, fungus, stride: 1.0, phases: [0, (2 * Math.PI) / 3, (4 * Math.PI) / 3] };
   return group;
 }
 

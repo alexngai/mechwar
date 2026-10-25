@@ -208,6 +208,8 @@ pub enum Event {
     Defense(crate::defense::News),
     /// A co-op arc pylon's lightning jumping `from` `to`.
     Zap { from: Vector, to: Vector },
+    /// A co-op mortar walker's shell fired `from`, landing at `to` in `flight` seconds.
+    Shell { from: Vector, to: Vector, flight: f32 },
     /// A co-op pulse pylon's EMP going off at `at`, `radius` round.
     Stun { at: Vector, radius: f32 },
 }

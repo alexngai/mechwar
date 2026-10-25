@@ -24,21 +24,21 @@ pub const LEAK: f32 = 100.0;
 pub const WAVES: u8 = 10;
 const FIRST_BREAK: f32 = 60.0;
 const BREAK: f32 = 30.0;
-/// Each wave's foes for a full team (walkers, crawlers, brutes, infested mechs), each new kind
-/// coming in on a wave of its own; SOLO_SHARE of them for one pilot and evenly between (at least
+/// Each wave's foes for a full team (walkers, crawlers, brutes, infested mechs, mortar walkers,
+/// shield nodes), each new kind coming in on a wave of its own; SOLO_SHARE of them for one pilot and evenly between (at least
 /// one of a kind the wave has). They come through the gates in turn, SPAWN_GAP apart, a pack of
 /// crawlers CRAWLER_GAP apart.
-const WAVE_TABLE: [[u16; 4]; WAVES as usize] = [
-    [6, 0, 0, 0],
-    [8, 0, 0, 0],
-    [6, 8, 0, 0],
-    [8, 6, 1, 0],
-    [8, 12, 1, 0],
-    [8, 8, 1, 1],
-    [10, 14, 2, 1],
-    [10, 16, 2, 2],
-    [12, 20, 3, 2],
-    [14, 24, 3, 3],
+const WAVE_TABLE: [[u16; 6]; WAVES as usize] = [
+    [6, 0, 0, 0, 0, 0],
+    [8, 0, 0, 0, 0, 0],
+    [6, 8, 0, 0, 0, 0],
+    [8, 6, 1, 0, 0, 0],
+    [8, 8, 1, 0, 2, 0],
+    [8, 8, 1, 1, 1, 0],
+    [8, 10, 1, 1, 1, 2],
+    [10, 16, 2, 2, 2, 2],
+    [12, 20, 3, 2, 2, 3],
+    [14, 24, 3, 3, 3, 3],
 ];
 const SOLO_SHARE: f32 = 0.6;
 const SPAWN_GAP: f32 = 1.2;
@@ -71,6 +71,8 @@ pub fn species(kind: Kind) -> Species {
     match kind {
         Kind::Crawler => Species { hull: 30.0, hull_step: 3.0, speed: 8.5, spread: 3.5, leak: 25.0, armor: 0.0 },
         Kind::Brute => Species { hull: 600.0, hull_step: 50.0, speed: 2.8, spread: 0.5, leak: 300.0, armor: 5.0 },
+        Kind::Mortar => Species { hull: 140.0, hull_step: 14.0, speed: 3.5, spread: 1.5, leak: LEAK, armor: 0.0 },
+        Kind::Node => Species { hull: 150.0, hull_step: 12.0, speed: 4.0, spread: 1.0, leak: 50.0, armor: 0.0 },
         _ => Species { hull: 100.0, hull_step: 12.0, speed: 4.5, spread: 2.0, leak: LEAK, armor: 0.0 },
     }
 }
@@ -145,6 +147,14 @@ pub enum Refusal {
     Tower,
     /// The tower's at its top tier, or there's no room for another.
     Full,
+}
+
+/// A mortar walker's shell in the air: the tick it lands, where, and whose.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shell {
+    pub lands: u32,
+    pub at: Vector,
+    pub owner: u8,
 }
 
 /// A tower: its owner id among the deployables, who built it, its tier, and the scrap gone into it.
@@ -268,6 +278,8 @@ pub struct Defense {
     /// Each player's scrap, by id; the towers standing.
     pub scrap: [f32; MAX_PLAYERS],
     pub towers: Vec<Tower>,
+    /// Mortar shells in the air.
+    pub shells: Vec<Shell>,
 }
 
 impl Defense {
@@ -312,6 +324,7 @@ impl Defense {
             rng: 0x9e37_79b9,
             scrap: [START_SCRAP; MAX_PLAYERS],
             towers: Vec::new(),
+            shells: Vec::new(),
         })
     }
 
@@ -410,17 +423,18 @@ impl Defense {
         Defense::foes(n, pilots).len() as u16
     }
 
-    /// Wave `n`'s foes with `pilots` on the team, in the order they come: a couple of walkers,
-    /// a pack of crawlers, a brute, an infested mech, and again, till all have come.
+    /// Wave `n`'s foes with `pilots` on the team, in the order they come: a shield node, a couple
+    /// of walkers, a pack of crawlers, a brute, an infested mech, a mortar walker, and again, till
+    /// all have come.
     pub fn foes(n: u8, pilots: usize) -> Vec<Foe> {
         let full = crate::game::TEAM_SIZE;
         let share = SOLO_SHARE + (1.0 - SOLO_SHARE) * (pilots.clamp(1, full) - 1) as f32 / (full - 1) as f32;
         let row = WAVE_TABLE[usize::from(n.clamp(1, WAVES) - 1)];
         let mut left = row.map(|c| if c == 0 { 0 } else { ((f32::from(c) * share).round() as u16).max(1) });
-        let kinds = [Foe::Lane(Kind::Walker), Foe::Lane(Kind::Crawler), Foe::Lane(Kind::Brute), Foe::Elite];
+        let kinds = [Foe::Lane(Kind::Walker), Foe::Lane(Kind::Crawler), Foe::Lane(Kind::Brute), Foe::Elite, Foe::Lane(Kind::Mortar), Foe::Lane(Kind::Node)];
         let mut out = Vec::new();
         while left.iter().any(|&c| c > 0) {
-            for (k, take) in [(0, 2), (1, 4), (2, 1), (3, 1)] {
+            for (k, take) in [(5, 1), (0, 2), (1, 4), (2, 1), (3, 1), (4, 1)] {
                 let n = left[k].min(take);
                 out.extend(std::iter::repeat_n(kinds[k], usize::from(n)));
                 left[k] -= n;
@@ -581,13 +595,14 @@ mod tests {
 
     #[test]
     fn waves_grow_and_scale_with_the_team() {
-        assert_eq!((Defense::count(1, 4), Defense::count(10, 4)), (6, 44));
+        assert_eq!((Defense::count(1, 4), Defense::count(10, 4)), (6, 50));
         assert!(Defense::count(5, 1) < Defense::count(5, 4));
         assert!(hull(Kind::Walker, 10) > hull(Kind::Walker, 1));
         // Each kind first on a wave of its own, then mixed in: walkers in pairs, crawlers in packs.
         let first = |foe| (1..=WAVES).find(|&n| Defense::foes(n, 4).contains(&foe)).unwrap();
         assert_eq!([Kind::Walker, Kind::Crawler, Kind::Brute].map(|k| first(Foe::Lane(k))), [1, 3, 4]);
         assert_eq!(first(Foe::Elite), 6);
+        assert_eq!([Kind::Mortar, Kind::Node].map(|k| first(Foe::Lane(k))), [5, 7]);
         assert_eq!(Defense::foes(3, 4)[..6], [Foe::Lane(Kind::Walker), Foe::Lane(Kind::Walker), Foe::Lane(Kind::Crawler), Foe::Lane(Kind::Crawler), Foe::Lane(Kind::Crawler), Foe::Lane(Kind::Crawler)]);
         // A lone pilot still meets at least one of each kind a wave has.
         assert!(Defense::foes(6, 1).contains(&Foe::Elite));

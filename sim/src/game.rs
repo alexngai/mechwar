@@ -63,6 +63,16 @@ const BRUTE_SMASH: f32 = 150.0;
 const BRUTE_PILOT: f32 = 40.0;
 const BRUTE_COOLDOWN: f32 = 4.0;
 const ELITE_SCRAP: f32 = 1.5;
+/// Co-op's mortar walker (see `shell_towers`) and shield node (`shield_foes`).
+const MORTAR_RANGE: f32 = 60.0;
+const MORTAR_COOLDOWN: f32 = 5.0;
+const MORTAR_FLIGHT: f32 = 2.5;
+const MORTAR_BLAST: f32 = 4.0;
+const MORTAR_DAMAGE: f32 = 80.0;
+const MORTAR_PILOT: f32 = 30.0;
+const NODE_DOME: f32 = 250.0;
+const NODE_DOME_STEP: f32 = 20.0;
+const NODE_RECHARGE: f32 = 8.0;
 const ELITE_WRECK: f32 = 2.0;
 /// Co-op's reactor as a torch meets it: a ball REACTOR_BODY round, REACTOR_MIDDLE over its foot.
 const REACTOR_MIDDLE: f32 = 6.0;
@@ -660,7 +670,7 @@ impl Game {
                 let full = match d.kind {
                     Kind::Sentry => SENTRY_SHIELD,
                     Kind::Hauler => convoy::SHIELD,
-                    Kind::Walker | Kind::Crawler | Kind::Brute => defense::hull(d.kind, defense::WAVES),
+                    Kind::Walker | Kind::Crawler | Kind::Brute | Kind::Mortar | Kind::Node => defense::hull(d.kind, defense::WAVES),
                     Kind::Arc | Kind::Pulse => defense::tower_hull(defense::TIERS),
                     _ => sizes.turret_hull,
                 };
@@ -2107,6 +2117,8 @@ impl Game {
         let tick = self.tick;
         let towers: Vec<usize> = (0..self.deployables.len()).filter(|&k| self.defense.as_ref().unwrap().tower(self.deployables[k].owner).is_some()).collect();
         let near = |a: Vector, b: Vector, r: f32| (a - b).with_y(0.0).length() <= r && (a.y - b.y).abs() < 4.0;
+        self.shell_towers(&towers);
+        self.shield_foes();
         for k in 0..self.deployables.len() {
             let e = self.deployables[k];
             if e.hull <= 0.0 || tick < e.ready {
@@ -2142,6 +2154,70 @@ impl Game {
             match e.kind {
                 Kind::Crawler => e.hull = 0.0,
                 _ => (e.pitch, e.ready) = (0.0, tick + secs(BRUTE_COOLDOWN)),
+            }
+        }
+    }
+
+    /// Co-op's mortar walkers: one with a tower within MORTAR_RANGE digs in (stops on its lane, its
+    /// pitch 1 for all to see) and every MORTAR_COOLDOWN lobs a shell at the nearest, landing
+    /// MORTAR_FLIGHT later where the tower stood (everyone sees where: dodge it, or not): then
+    /// MORTAR_DAMAGE to every tower and MORTAR_PILOT to every pilot within MORTAR_BLAST.
+    fn shell_towers(&mut self, towers: &[usize]) {
+        let tick = self.tick;
+        for k in 0..self.deployables.len() {
+            let m = self.deployables[k];
+            if m.kind != Kind::Mortar || m.hull <= 0.0 {
+                continue;
+            }
+            let target = towers.iter().map(|&t| self.deployables[t].pos).filter(|t| (*t - m.pos).with_y(0.0).length() <= MORTAR_RANGE).min_by(|a, b| a.distance(m.pos).total_cmp(&b.distance(m.pos)));
+            self.deployables[k].pitch = if target.is_some() { 1.0 } else { 0.0 };
+            let (Some(at), Some(d)) = (target, self.defense.as_mut()) else { continue };
+            d.stun(&[m.owner], tick + 2);
+            if tick >= m.ready {
+                d.shells.push(defense::Shell { lands: tick + secs(MORTAR_FLIGHT), at, owner: m.owner });
+                self.events.push(Event::Shell { from: m.pos + Vector::Y * m.kind.lane_body().1, to: at, flight: MORTAR_FLIGHT });
+                self.deployables[k].ready = tick + secs(MORTAR_COOLDOWN);
+            }
+        }
+        let landed: Vec<defense::Shell> = self.defense.as_ref().map_or_else(Vec::new, |d| d.shells.iter().filter(|s| s.lands <= tick).copied().collect());
+        if let Some(d) = self.defense.as_mut() {
+            d.shells.retain(|s| s.lands > tick);
+        }
+        let near = |a: Vector, b: Vector| (a - b).with_y(0.0).length() <= MORTAR_BLAST && (a.y - b.y).abs() < 4.0;
+        for s in landed {
+            let hit: Vec<usize> = towers.iter().copied().filter(|&t| t < self.deployables.len() && near(self.deployables[t].pos, s.at)).collect();
+            for t in hit {
+                self.wear(t, MORTAR_DAMAGE, s.owner);
+            }
+            let pilots: Vec<usize> = (0..self.players.len()).filter(|&j| self.players[j].team == 0 && near(self.players[j].mech.pos, s.at)).collect();
+            for j in pilots {
+                self.apply_damage_by(None, j, MORTAR_PILOT, Cause::Unknown);
+            }
+        }
+    }
+
+    /// Co-op's shield nodes: each throws a dome (the item's, on the hive's side, NODE_DOME hull and
+    /// NODE_DOME_STEP more each wave) round itself as it walks, stopping shots crossing it either
+    /// way; broken, it's back NODE_RECHARGE later. A node's dome goes with it. (Its owner is the
+    /// node's; `burst` 1 marks a node whose dome is up.)
+    fn shield_foes(&mut self) {
+        let (tick, wave) = (self.tick, self.defense.as_ref().map_or(1, |d| d.wave));
+        let nodes: Vec<Deployable> = self.deployables.iter().filter(|n| n.kind == Kind::Node && n.hull > 0.0).copied().collect();
+        self.deployables.retain(|d| d.kind != Kind::Dome || d.team != 1 || nodes.iter().any(|n| n.owner == d.owner));
+        for n in nodes {
+            let dome = self.deployables.iter().position(|d| d.kind == Kind::Dome && d.owner == n.owner && d.hull > 0.0);
+            let k = self.deployables.iter().position(|d| d.kind == Kind::Node && d.owner == n.owner).unwrap();
+            match dome {
+                Some(j) => self.deployables[j].pos = n.pos,
+                // Just broken: back in a while.
+                None if n.burst == 1 => (self.deployables[k].burst, self.deployables[k].ready) = (0, tick + secs(NODE_RECHARGE)),
+                None if tick >= n.ready => {
+                    self.deployables.retain(|d| !(d.kind == Kind::Dome && d.owner == n.owner));
+                    let hull = NODE_DOME + NODE_DOME_STEP * f32::from(wave);
+                    self.deployables.push(Deployable { kind: Kind::Dome, team: 1, owner: n.owner, pos: n.pos, yaw: 0.0, pitch: 0.0, hull, placed: tick, expires: u32::MAX, ready: 0, burst: 0 });
+                    self.deployables[k].burst = 1;
+                }
+                None => {}
             }
         }
     }
@@ -2194,6 +2270,10 @@ impl Game {
                 }
                 if let Some(d) = self.defense.as_mut() {
                     d.stun(&owners, until);
+                }
+                // And it pops the hive's domes in reach.
+                for e in self.deployables.iter_mut().filter(|e| e.kind == Kind::Dome && e.team == 1 && (e.pos - p.pos).with_y(0.0).length() <= radius) {
+                    e.hull = 0.0;
                 }
                 self.deployables[k].ready = tick + secs(PULSE_COOLDOWN / defense::rate(tier));
             }
@@ -2996,6 +3076,66 @@ mod tests {
         assert!((hull - game.deployables[k].hull - 1.5).abs() < 1e-3);
         game.wear(k, 60.0, id);
         assert!((hull - game.deployables[k].hull - 1.5 - 55.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_mortar_walker_digs_in_and_shells_towers_from_out_of_their_reach() {
+        let (mut game, id) = co_op(false);
+        let reactor = game.defense.as_ref().unwrap().reactor;
+        aim_to_build(&mut game, id, reactor, 14.0);
+        game.build(id, defense::Build::Place(0));
+        game.dock(id);
+        let tower = towers(&game)[0];
+        let k = lane_enemy(&mut game, Kind::Mortar, tower.pos + Vector::new(50.0, 0.0, 0.0));
+        game.step();
+        assert_eq!(game.deployables[k].pitch, 1.0, "dug in");
+        let shell = game.events.iter().find_map(|e| if let Event::Shell { to, flight, .. } = e { Some((*to, *flight)) } else { None });
+        let (to, flight) = shell.expect("no shell");
+        assert!(to.distance(tower.pos) < 0.01);
+        for _ in 0..secs(flight) {
+            game.step();
+        }
+        assert_eq!(towers(&game)[0].hull, defense::TOWER_HULL - MORTAR_DAMAGE);
+        // Out of its reach, it walks on.
+        game.deployables[k].pos = tower.pos + Vector::new(80.0, 0.0, 0.0);
+        game.step();
+        assert_eq!(game.deployables[k].pitch, 0.0);
+    }
+
+    #[test]
+    fn a_shield_node_carries_a_dome_that_stops_shots_and_comes_back_once_broken() {
+        let (mut game, id) = co_op(false);
+        game.dock(id);
+        let reactor = game.defense.as_ref().unwrap().reactor;
+        let k = lane_enemy(&mut game, Kind::Node, reactor + Vector::new(30.0, 0.0, 0.0));
+        game.step();
+        let dome = |game: &Game| game.deployables.iter().find(|d| d.kind == Kind::Dome && d.team == 1 && d.hull > 0.0).copied();
+        let d = dome(&game).expect("no dome");
+        assert_eq!(d.pos, game.deployables[k].pos);
+        // It stops a shot from outside at what's inside.
+        let from = d.pos + Vector::new(20.0, 2.0, 0.0);
+        let t = items(&game.arsenal);
+        assert!(deploy::stops(&game.deployables, t, &Ray::new(from, (d.pos + Vector::Y * 2.0 - from).normalize()), 20.0).is_some());
+        // It goes where the node goes.
+        game.deployables[k].pos += Vector::new(3.0, 0.0, 0.0);
+        game.step();
+        assert_eq!(dome(&game).unwrap().pos, game.deployables[k].pos);
+        // Broken, it's gone a while, then back.
+        let j = game.deployables.iter().position(|d| d.kind == Kind::Dome && d.team == 1).unwrap();
+        game.wear(j, 1e4, id);
+        game.step();
+        game.step();
+        assert!(dome(&game).is_none());
+        for _ in 0..secs(NODE_RECHARGE) {
+            game.step();
+        }
+        assert!(dome(&game).is_some());
+        // And the node down, its dome goes too.
+        let k = game.deployables.iter().position(|d| d.kind == Kind::Node).unwrap();
+        game.deployables[k].hull = 0.0;
+        game.step();
+        game.step();
+        assert!(dome(&game).is_none());
     }
 
     #[test]

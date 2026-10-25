@@ -47,6 +47,10 @@ pub enum Kind {
     /// (slow, plated, smashing towers): lane enemies like the walker, unarmed.
     Crawler,
     Brute,
+    /// Co-op Defense's mortar walker (digs in and shells towers from out of their reach) and
+    /// shield node (throws a dome over the foes round it): lane enemies too.
+    Mortar,
+    Node,
 }
 
 impl Kind {
@@ -64,7 +68,7 @@ impl Kind {
 
     /// Co-op's lane enemies: what walks its lanes at the reactor (`defense.rs`).
     pub fn lane_enemy(self) -> bool {
-        matches!(self, Kind::Walker | Kind::Crawler | Kind::Brute)
+        matches!(self, Kind::Walker | Kind::Crawler | Kind::Brute | Kind::Mortar | Kind::Node)
     }
 
     /// A lane enemy's body: how wide (radius) and tall.
@@ -72,6 +76,8 @@ impl Kind {
         match self {
             Kind::Crawler => (0.9, 1.2),
             Kind::Brute => (2.6, 5.0),
+            Kind::Mortar => (1.8, 3.6),
+            Kind::Node => (1.2, 4.5),
             _ => (WALKER_RADIUS, WALKER_HEIGHT),
         }
     }
@@ -183,7 +189,7 @@ pub fn place<'a>(arena: &Arena, t: &Tuning, m: &Mech, kind: Kind, team: u8, owne
         Kind::Dome => (m.pos, t.dome_seconds, t.dome_hull),
         Kind::Barrier => (ahead(t.barrier_distance, t.barrier_thickness * 0.5 + 0.1), t.barrier_seconds, t.barrier_hull),
         Kind::MgTurret | Kind::RocketTurret => (ahead(t.turret_distance, t.turret_radius + 0.1), t.turret_seconds, t.turret_hull),
-        Kind::Ship | Kind::Sentry | Kind::Hauler | Kind::Walker | Kind::Crawler | Kind::Brute | Kind::Arc | Kind::Pulse => unreachable!("ships are launched, base guns and pylons built and haulers and walkers walked, not put down"),
+        Kind::Ship | Kind::Sentry | Kind::Hauler | Kind::Walker | Kind::Crawler | Kind::Brute | Kind::Mortar | Kind::Node | Kind::Arc | Kind::Pulse => unreachable!("ships are launched, base guns and pylons built and haulers and walkers walked, not put down"),
     };
     // The ground below, from a little over the mech's feet (so a barrier on a slope or step finds it).
     let from = Vector::new(at.x, m.pos.y + 2.0, at.z);
@@ -202,7 +208,7 @@ pub fn gun(t: &Tuning, d: &Deployable) -> Vector {
         Kind::Hauler => d.pos + Vector::Y * (HAULER_HEIGHT * 0.5),
         Kind::Walker => d.pos + Vector::Y * WALKER_GUN,
         // Their middles, for lock-on.
-        Kind::Crawler | Kind::Brute => d.pos + Vector::Y * (d.kind.lane_body().1 * 0.5),
+        Kind::Crawler | Kind::Brute | Kind::Mortar | Kind::Node => d.pos + Vector::Y * (d.kind.lane_body().1 * 0.5),
         _ => d.pos + Vector::Y * t.turret_height,
     }
 }
@@ -231,7 +237,7 @@ fn body(t: &Tuning, d: &Deployable) -> (Capsule, Vector) {
         // The tower up to its head, over the muzzle.
         Kind::Sentry => return (Capsule::new_y((SENTRY_HEIGHT + 1.0) * 0.5 - SENTRY_RADIUS, SENTRY_RADIUS), d.pos + Vector::Y * ((SENTRY_HEIGHT + 1.0) * 0.5)),
         Kind::Hauler => return (Capsule::new_y(HAULER_HEIGHT * 0.5 - HAULER_RADIUS, HAULER_RADIUS), d.pos + Vector::Y * (HAULER_HEIGHT * 0.5)),
-        Kind::Walker | Kind::Crawler | Kind::Brute => {
+        Kind::Walker | Kind::Crawler | Kind::Brute | Kind::Mortar | Kind::Node => {
             let (r, h) = d.kind.lane_body();
             return (Capsule::new_y((h * 0.5 - r).max(0.0), r), d.pos + Vector::Y * (h * 0.5));
         }
@@ -247,7 +253,7 @@ pub fn as_mech(t: &Tuning, d: &Deployable) -> (Tuning, Mech) {
         Kind::Ship => return (Tuning { mech_height: 2.0 * SHIP_RADIUS, mech_radius: SHIP_RADIUS, ..t.clone() }, Mech { pos: d.pos - Vector::Y * SHIP_RADIUS, ..Mech::default() }),
         Kind::Sentry => return (Tuning { mech_height: SENTRY_HEIGHT + 1.0, mech_radius: SENTRY_RADIUS, ..t.clone() }, Mech { pos: d.pos, ..Mech::default() }),
         Kind::Hauler => return hauler_body(t, d),
-        Kind::Walker | Kind::Crawler | Kind::Brute => {
+        Kind::Walker | Kind::Crawler | Kind::Brute | Kind::Mortar | Kind::Node => {
             let (mech_radius, mech_height) = d.kind.lane_body();
             return (Tuning { mech_height, mech_radius, ..t.clone() }, Mech { pos: d.pos, health: 1.0, ..Mech::default() });
         }
