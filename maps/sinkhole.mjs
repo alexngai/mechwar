@@ -14,7 +14,7 @@
 // clockwise from north; on it, p runs outward from the center and s runs clockwise along it.
 // Every class goes everywhere: the workings are 10, 6 and 5 m wide and give a Heavy (5.8 m tall)
 // 6.5 m of headroom (6 under the -7 bench).
-import { bases, beam, box, cylinder, decor, growth, lamp, once, pad, pipe, point, r3, railing, ramp, sentries, sign, silos, slope, turned, write } from './kit.mjs';
+import { bases, beam, box, cylinder, decor, flagStand, flags, growth, lamp, once, pad, pipe, point, r3, railing, ramp, sentries, sign, silos, slope, turned, write } from './kit.mjs';
 
 const BASE = -29; // bottom of every rock mass
 const AMBER = '#ffae2a';
@@ -343,6 +343,9 @@ point([-15, 0, 68], [15, 0, 68], [-15, 0, 80], [15, 0, 78], [0, 0, 94], [-60, 0,
 bases([-16, 0, 88]);
 // Base guns: either side of the yard's front.
 sentries([[-17, 0, 73.5], [18, 0, 73.5]]);
+// Capture the Flag: the stand outside the yard's west wall, its back to the base guns, its doorways
+// to the rim and the west gate.
+flags(flagStand([-47, 0, 90], 0));
 // B's launch pad is between two of the bridges, open to the sky.
 silos({ at: [-70, 0, 40], radius: 10, band: 4, pad: [-75, 0, 39.5] }, { at: [0, -28, 0], radius: 14, band: 4, pad: [-4.5, -28, 7.5] });
 
