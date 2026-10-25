@@ -331,6 +331,59 @@ impl WasmNetClient {
         self.0.defense().map_or_else(Vec::new, |d| vec![f32::from(d.wave), f32::from(d.waves), d.break_left.unwrap_or(-1.0), d.hull, f32::from(d.left)])
     }
 
+    /// Co-op: each player's scrap, by id.
+    pub fn scrap(&self) -> Vec<f32> {
+        self.0.defense().map_or_else(Vec::new, |d| d.scrap.iter().map(|&s| f32::from(s)).collect())
+    }
+
+    /// Co-op's towers: five floats each: owner (its deployable's), builder's id, tier, what
+    /// raising it a tier costs (0 at the top), what selling it refunds.
+    pub fn towers(&self) -> Vec<f32> {
+        let Some(d) = self.0.defense() else { return Vec::new() };
+        let kind = |owner| self.0.deployables().iter().find(|e| e.owner == owner).map(|e| e.kind);
+        d.towers
+            .iter()
+            .flat_map(|t| {
+                let up = if t.tier < crate::defense::TIERS { kind(t.owner).map_or(0.0, |k| t.upgrade(k)) } else { 0.0 };
+                [f32::from(t.owner), f32::from(t.by), f32::from(t.tier), up, t.refund()]
+            })
+            .collect()
+    }
+
+    /// A co-op build order to send: 0-3 put down that tower (`defense::TOWERS`), 4 raise the one
+    /// aimed at a tier, 5 sell it.
+    pub fn build(&self, order: u8) -> Vec<u8> {
+        use crate::defense::Build;
+        let order = match order {
+            4 => Build::Upgrade,
+            5 => Build::Sell,
+            k => Build::Place(k.min(3)),
+        };
+        crate::net::encode(&crate::net::ClientMsg::Build(order))
+    }
+
+    /// Where a co-op tower would go where the player aims (as the server judges it): xyz, then -1
+    /// if it can, else why not (`defense::Refusal`'s index). Empty outside co-op.
+    pub fn build_spot(&self) -> Vec<f32> {
+        self.lanes_with(|d, arena| {
+            let towers = self.0.defense().map(|n| n.towers.iter().map(|t| t.owner).collect::<Vec<_>>()).unwrap_or_default();
+            let at = self.0.deployables().iter().filter(|e| towers.contains(&e.owner)).map(|e| e.pos);
+            let aim = self.0.aim();
+            match d.spot(arena, &aim, at) {
+                Ok(p) => vec![p.x, p.y, p.z, -1.0],
+                Err(why) => {
+                    let p = aim.point_at(arena.cast_ray(&aim, crate::defense::REACH).unwrap_or(crate::defense::REACH));
+                    vec![p.x, p.y, p.z, why as u8 as f32]
+                }
+            }
+        })
+    }
+
+    /// Co-op's lanes, six floats a stretch (from xyz, to xyz), to draw. Empty outside co-op.
+    pub fn lanes(&self) -> Vec<f32> {
+        self.lanes_with(|d, _| d.segments().flat_map(|(a, b)| [a.x, a.y, a.z, b.x, b.y, b.z]).collect())
+    }
+
     /// Index of the server's map, or -1 before the Welcome.
     pub fn map(&self) -> i32 {
         self.0.map.map_or(-1, |m| m as i32)
@@ -384,7 +437,9 @@ impl WasmNetClient {
     /// captured), x = by whom (an id, or -1). Convoy (kind 13): a = what (0 a team took it over,
     /// 1 stalled, 2 back up, 3 delivered), b = the team (that took it over, or delivered it; else -1).
     /// Co-op (kind 14): a = what (0 a wave comes: b = which, x = how many; 1 b is cleared; 2 a
-    /// walker reached the reactor).
+    /// walker reached the reactor; 3 player b's build order refused, x = why: `defense::Refusal`'s
+    /// index). Arc pylon lightning (kind 15), two records a jump: a = 0 xyz = from, then a = 1
+    /// xyz = to. Pulse pylon EMP (kind 16): a = radius, xyz = where.
     pub fn take_events(&mut self) -> Vec<f32> {
         let mut out = Vec::new();
         for e in std::mem::take(&mut self.0.events) {
@@ -418,8 +473,14 @@ impl WasmNetClient {
                         News::Wave { n, count } => [14.0, 0.0, f32::from(n), f32::from(count), 0.0, 0.0],
                         News::Cleared(n) => [14.0, 1.0, f32::from(n), 0.0, 0.0, 0.0],
                         News::Hit => [14.0, 2.0, 0.0, 0.0, 0.0, 0.0],
+                        News::Refused { id, why } => [14.0, 3.0, f32::from(id), why as u8 as f32, 0.0, 0.0],
                     });
                 }
+                Event::Zap { from, to } => {
+                    out.extend([15.0, 0.0, 0.0, from.x, from.y, from.z]);
+                    out.extend([15.0, 1.0, 0.0, to.x, to.y, to.z]);
+                }
+                Event::Stun { at, radius } => out.extend([16.0, radius, 0.0, at.x, at.y, at.z]),
                 // The client turns these into the blasts and hits below.
                 Event::Launch(_) | Event::Blast { .. } => {}
             }
@@ -467,6 +528,27 @@ impl WasmNetClient {
             c.board().iter().find(|p| Some(p.id) == c.id).map_or(0.0, |p| f32::from(p.eu)),
             f32::from(s.limit),
         ]
+    }
+}
+
+impl WasmNetClient {
+    /// `f` of the co-op lanes on the server's map (worked out as the server does, once a map) and
+    /// the arena; empty outside co-op.
+    fn lanes_with(&self, f: impl FnOnce(&crate::defense::Defense, &crate::Arena) -> Vec<f32>) -> Vec<f32> {
+        use std::cell::RefCell;
+        thread_local! {
+            static LANES: RefCell<Option<(usize, Option<crate::defense::Defense>)>> = const { RefCell::new(None) };
+        }
+        let (Some(index), true) = (self.0.map, self.0.defense().is_some()) else { return Vec::new() };
+        let arena = self.0.arena();
+        LANES.with_borrow_mut(|lanes| {
+            if lanes.as_ref().is_none_or(|(i, _)| *i != index) {
+                let nav = crate::bot::Nav::for_map(index);
+                let spots = crate::Map::load(index).objectives.defense;
+                *lanes = Some((index, spots.and_then(|s| crate::defense::Defense::new(&s, 0, |a, b| nav.route(arena, a, b)))));
+            }
+            lanes.as_ref().and_then(|(_, d)| d.as_ref()).map_or_else(Vec::new, |d| f(d, arena))
+        })
     }
 }
 

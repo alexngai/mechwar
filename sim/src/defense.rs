@@ -4,11 +4,18 @@
 //! gone; the reactor falling loses the run, holding through the last wave wins it. Between waves
 //! the team has a while to get ready. `Game` keeps the walkers among its deployables (shot, locked
 //! onto and manned like turrets), says which are still standing, and applies what comes out.
+//!
+//! Pilots build towers (`Build`) anywhere they can stand one (`spot`), out of the lanes, paying in
+//! their own scrap: earned by the hull they and their towers shoot off walkers, and for each wave
+//! beaten. Anyone raises any tower a tier (to TIERS); its builder can sell it back.
 
+use rapier3d::prelude::Ray;
 use serde::{Deserialize, Serialize};
 
+use crate::deploy::Kind;
+use crate::game::MAX_PLAYERS;
 use crate::map::DefenseSpots;
-use crate::{DT, TICK_HZ, Vector};
+use crate::{Arena, DT, TICK_HZ, Vector};
 
 /// The reactor's hull, and what a walker that reaches it takes off.
 pub const REACTOR_HULL: f32 = 2000.0;
@@ -29,20 +36,116 @@ const WALKER_HULL: f32 = 100.0;
 const WALKER_HULL_STEP: f32 = 12.0;
 const WALKER_SPEED: f32 = 4.5;
 const SPREAD: f32 = 2.0;
-/// Walkers' owner ids (for lock-on: `deploy::target_id` must stay a u8): past every player's,
-/// ship's, base gun's and the hauler's, up to the last that fits.
+/// Walkers' owner ids, then towers' (for lock-on: `deploy::target_id` must stay a u8): past every
+/// player's, ship's, base gun's and the hauler's, up to the last that fits.
 const FIRST_OWNER: u8 = 16;
-const LAST_OWNER: u8 = 95;
+const LAST_OWNER: u8 = 63;
+const FIRST_TOWER: u8 = 64;
+const LAST_TOWER: u8 = 95;
+
+/// What pilots build, in the order of `Build::Place`'s index, and each one's price in scrap.
+pub const TOWERS: [Kind; 4] = [Kind::MgTurret, Kind::RocketTurret, Kind::Arc, Kind::Pulse];
+pub const PRICES: [f32; 4] = [100.0, 150.0, 175.0, 200.0];
+/// A tower's hull at tier 1; its tiers; what raising it a tier costs (UPGRADE of its price for
+/// each tier it has), and what selling it refunds (REFUND of all that went into it).
+pub const TOWER_HULL: f32 = 300.0;
+pub const TIERS: u8 = 3;
+const UPGRADE: f32 = 0.75;
+const REFUND: f32 = 0.7;
+/// Each pilot's scrap to start, for each hull point they (or their towers) shoot off a walker, and
+/// for each wave beaten.
+const START_SCRAP: f32 = 250.0;
+const SCRAP_PER_HULL: f32 = 0.5;
+const WAVE_BONUS: f32 = 100.0;
+/// Where a tower goes: on ground within REACH of the eye, no steeper than FLAT (its normal's
+/// rise), with ROOM over it; not within LANE_CLEAR of a lane's line, GAP of another tower, or
+/// REACTOR_CLEAR of the reactor's reach.
+pub const REACH: f32 = 30.0;
+const FLAT: f32 = 0.85;
+const ROOM: f32 = 3.0;
+const LANE_CLEAR: f32 = 5.0;
+const GAP: f32 = 4.0;
+const REACTOR_CLEAR: f32 = 4.0;
+
+/// A pilot's build order: put down `TOWERS[i]` where they aim, raise the tower they aim at a tier,
+/// or sell it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Build {
+    Place(u8),
+    Upgrade,
+    Sell,
+}
+
+/// Why a build order didn't go through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Refusal {
+    /// No ground in reach where they aim.
+    Reach,
+    /// Too steep, or no room over it.
+    Ground,
+    /// In a lane.
+    Lane,
+    /// Too near another tower.
+    Crowded,
+    /// Too near the reactor.
+    Reactor,
+    /// Not enough scrap.
+    Scrap,
+    /// No tower aimed at, or (to sell) not theirs.
+    Tower,
+    /// The tower's at its top tier, or there's no room for another.
+    Full,
+}
+
+/// A tower: its owner id among the deployables, who built it, its tier, and the scrap gone into it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Tower {
+    pub owner: u8,
+    pub by: u8,
+    pub tier: u8,
+    pub spent: f32,
+}
+
+impl Tower {
+    /// What raising it a tier costs (`kind` is its kind).
+    pub fn upgrade(&self, kind: Kind) -> f32 {
+        price(kind) * UPGRADE * f32::from(self.tier)
+    }
+
+    /// What selling it refunds.
+    pub fn refund(&self) -> f32 {
+        REFUND * self.spent
+    }
+}
+
+/// `kind`'s price as a tower.
+pub fn price(kind: Kind) -> f32 {
+    TOWERS.iter().position(|&k| k == kind).map_or(0.0, |i| PRICES[i])
+}
+
+/// A tower at `tier`: its hull, its reach (times tier 1's), and its rate of fire (times tier 1's).
+pub fn tower_hull(tier: u8) -> f32 {
+    TOWER_HULL * (1.0 + 0.5 * f32::from(tier.max(1) - 1))
+}
+pub fn reach(tier: u8) -> f32 {
+    1.0 + 0.15 * f32::from(tier.max(1) - 1)
+}
+pub fn rate(tier: u8) -> f32 {
+    1.0 + 0.4 * f32::from(tier.max(1) - 1)
+}
 
 /// What players see of a run: the wave (the one on, or next), whether it's a break (and the
 /// seconds left of it), the reactor's hull, and the walkers still to come or standing this wave.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// Every pilot's scrap (by id), and the towers.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DefenseNet {
     pub wave: u8,
     pub waves: u8,
     pub break_left: Option<f32>,
     pub hull: f32,
     pub left: u16,
+    pub scrap: Vec<u16>,
+    pub towers: Vec<Tower>,
 }
 
 /// What happened in a run.
@@ -54,6 +157,8 @@ pub enum News {
     Cleared(u8),
     /// A walker reached the reactor.
     Hit,
+    /// Player `id`'s build order didn't go through.
+    Refused { id: u8, why: Refusal },
 }
 
 /// Where a run stands.
@@ -66,13 +171,15 @@ pub enum Stage {
     Won,
 }
 
-/// A walker on its lanes: the edge it's on and how far along (m), and its place across the lane.
+/// A walker on its lanes: the edge it's on and how far along (m), its place across the lane, and
+/// the tick it's stunned till.
 #[derive(Clone, Copy, Debug)]
 struct Walker {
     owner: u8,
     edge: usize,
     along: f32,
     offset: f32,
+    stunned: u32,
 }
 
 /// What a tick asks of `Game`: walkers to put down (owner, where, hull), walkers to move (owner,
@@ -104,6 +211,9 @@ pub struct Defense {
     walkers: Vec<Walker>,
     /// Picks walkers' branches and places, run to run the same (xorshift).
     rng: u32,
+    /// Each player's scrap, by id; the towers standing.
+    pub scrap: [f32; MAX_PLAYERS],
+    pub towers: Vec<Tower>,
 }
 
 impl Defense {
@@ -146,7 +256,73 @@ impl Defense {
             total: 0,
             walkers: Vec::new(),
             rng: 0x9e37_79b9,
+            scrap: [START_SCRAP; MAX_PLAYERS],
+            towers: Vec::new(),
         })
+    }
+
+    /// Where a tower would go for a pilot aiming along `aim` (from the eye) with towers at `towers`
+    /// already: the ground there, or why not.
+    pub fn spot(&self, arena: &Arena, aim: &Ray, mut towers: impl Iterator<Item = Vector>) -> Result<Vector, Refusal> {
+        let (toi, normal) = arena.cast_ray_normal(aim, REACH).ok_or(Refusal::Reach)?;
+        let at = aim.point_at(toi);
+        if normal.y < FLAT || arena.cast_ray(&Ray::new(at + Vector::Y * 0.1, Vector::Y), ROOM).is_some() {
+            return Err(Refusal::Ground);
+        }
+        if self.in_lane(at) {
+            return Err(Refusal::Lane);
+        }
+        if towers.any(|t| (t - at).with_y(0.0).length() < GAP && (t.y - at.y).abs() < ROOM) {
+            return Err(Refusal::Crowded);
+        }
+        if (at - self.reactor).with_y(0.0).length() < self.radius + REACTOR_CLEAR {
+            return Err(Refusal::Reactor);
+        }
+        Ok(at)
+    }
+
+    /// Whether `p` is within LANE_CLEAR of a lane's line (across, near its height).
+    fn in_lane(&self, p: Vector) -> bool {
+        self.edges.iter().any(|&(a, b, _)| {
+            let (a, b) = (self.points[a], self.points[b]);
+            let ab = (b - a).with_y(0.0);
+            let s = ((p - a).with_y(0.0).dot(ab) / ab.length_squared().max(1e-6)).clamp(0.0, 1.0);
+            let on = a.lerp(b, s);
+            (p - on).with_y(0.0).length() < LANE_CLEAR && (p.y - on.y).abs() < ROOM + 2.0
+        })
+    }
+
+    /// The lanes' lines, as segments (for drawing them).
+    pub fn segments(&self) -> impl Iterator<Item = (Vector, Vector)> + '_ {
+        self.edges.iter().map(|&(a, b, _)| (self.points[a], self.points[b]))
+    }
+
+    /// An owner id for a new tower, if there's room for one.
+    pub fn free_tower(&self) -> Option<u8> {
+        (FIRST_TOWER..=LAST_TOWER).find(|o| !self.towers.iter().any(|t| t.owner == *o))
+    }
+
+    pub fn tower(&self, owner: u8) -> Option<&Tower> {
+        self.towers.iter().find(|t| t.owner == owner)
+    }
+
+    /// Who gets the credit for `attacker`'s damage: a tower's builder, else `attacker`.
+    pub fn credit(&self, attacker: u8) -> u8 {
+        self.tower(attacker).map_or(attacker, |t| t.by)
+    }
+
+    /// Scrap for player `id` for shooting `hull` off a walker.
+    pub fn earn(&mut self, id: u8, hull: f32) {
+        if let Some(s) = self.scrap.get_mut(usize::from(id)) {
+            *s += SCRAP_PER_HULL * hull;
+        }
+    }
+
+    /// Stops the walkers `owners` in their tracks till tick `until`.
+    pub fn stun(&mut self, owners: &[u8], until: u32) {
+        for w in self.walkers.iter_mut().filter(|w| owners.contains(&w.owner)) {
+            w.stunned = w.stunned.max(until);
+        }
     }
 
     pub fn net(&self, tick: u32) -> DefenseNet {
@@ -158,7 +334,8 @@ impl Defense {
             Stage::Wave { .. } => self.total - self.spawned + self.walkers.len() as u16,
             _ => 0,
         };
-        DefenseNet { wave: self.wave, waves: WAVES, break_left, hull: self.hull, left }
+        let scrap = self.scrap.iter().map(|s| s.round() as u16).collect();
+        DefenseNet { wave: self.wave, waves: WAVES, break_left, hull: self.hull, left, scrap, towers: self.towers.clone() }
     }
 
     /// Where each of the team's mechs (whether each is a living bot) should head with `walkers`
@@ -185,15 +362,17 @@ impl Defense {
         WALKER_HULL + WALKER_HULL_STEP * f32::from(n)
     }
 
-    /// One tick at `tick` with `pilots` on the team, and the walkers still standing (their owners;
-    /// any not among them fell): breaks and waves, walkers coming through the gates, walking their
-    /// lanes (the next edge picked by weight at each fork), and reaching the reactor.
-    pub fn step(&mut self, tick: u32, pilots: usize, standing: &[u8]) -> Tick {
+    /// One tick at `tick` with `pilots` (their ids) on the team, and the walkers and towers still
+    /// standing (their owners; any not among them fell): breaks and waves (and scrap for each
+    /// pilot for each beaten), walkers coming through the gates, walking their lanes (the next
+    /// edge picked by weight at each fork) unless stunned, and reaching the reactor.
+    pub fn step(&mut self, tick: u32, pilots: &[u8], standing: &[u8]) -> Tick {
         let mut out = Tick::default();
         self.walkers.retain(|w| standing.contains(&w.owner));
+        self.towers.retain(|t| standing.contains(&t.owner));
         match self.stage {
             Stage::Break { until } if tick >= until => {
-                self.total = Defense::count(self.wave, pilots);
+                self.total = Defense::count(self.wave, pilots.len());
                 self.spawned = 0;
                 self.stage = Stage::Wave { next_at: tick };
                 out.news.push(News::Wave { n: self.wave, count: self.total });
@@ -203,7 +382,7 @@ impl Defense {
                     let gate = self.gates[usize::from(self.spawned) % self.gates.len()];
                     let offset = SPREAD * (2.0 * self.rand() - 1.0);
                     if let Some(edge) = self.fork(gate) {
-                        self.walkers.push(Walker { owner, edge, along: 0.0, offset });
+                        self.walkers.push(Walker { owner, edge, along: 0.0, offset, stunned: 0 });
                         out.spawn.push((owner, self.points[gate], Defense::walker_hull(self.wave)));
                         self.spawned += 1;
                     }
@@ -212,6 +391,9 @@ impl Defense {
             }
             Stage::Wave { .. } if self.spawned >= self.total && self.walkers.is_empty() => {
                 out.news.push(News::Cleared(self.wave));
+                for &id in pilots {
+                    self.earn(id, WAVE_BONUS / SCRAP_PER_HULL);
+                }
                 if self.wave >= WAVES {
                     self.stage = Stage::Won;
                     out.won = true;
@@ -226,7 +408,9 @@ impl Defense {
         let mut gone = Vec::new();
         for i in 0..self.walkers.len() {
             let mut w = self.walkers[i];
-            w.along += WALKER_SPEED * DT;
+            if tick >= w.stunned {
+                w.along += WALKER_SPEED * DT;
+            }
             loop {
                 let (a, b, _) = self.edges[w.edge];
                 let len = self.points[a].distance(self.points[b]);
@@ -301,7 +485,7 @@ mod tests {
         let mut out = Vec::new();
         for t in from..from + (seconds * TICK_HZ) as u32 {
             let standing: Vec<u8> = d.walkers.iter().map(|w| w.owner).collect();
-            out.push(d.step(t, 4, &standing));
+            out.push(d.step(t, &[0, 1, 2, 3], &standing));
         }
         out
     }
@@ -349,7 +533,7 @@ mod tests {
         let mut won = false;
         while t < ((FIRST_BREAK + 60.0) * TICK_HZ) as u32 && !won {
             // Every walker falls as soon as it comes.
-            let out = d.step(t, 4, &[]);
+            let out = d.step(t, &[0, 1, 2, 3], &[]);
             won = out.won;
             t += 1;
         }

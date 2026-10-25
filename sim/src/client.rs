@@ -302,6 +302,11 @@ impl NetClient {
         self.snapshots.back().and_then(|s| s.convoy.as_ref())
     }
 
+    /// The player's aim from the eye, as predicted.
+    pub fn aim(&self) -> rapier3d::prelude::Ray {
+        crate::aim_ray(self.arsenal.of(&self.mech), &self.mech)
+    }
+
     /// A co-op run as of the latest snapshot.
     pub fn defense(&self) -> Option<&crate::defense::DefenseNet> {
         self.snapshots.back().and_then(|s| s.defense.as_ref())
@@ -434,7 +439,7 @@ impl NetClient {
                         }
                     }
                 }
-                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } | Event::TurretShot { .. } | Event::TurretHit { .. } | Event::Strike { .. } | Event::Captured { .. } | Event::Missile { .. } | Event::Ship { .. } | Event::Flag { .. } | Event::Convoy(_) | Event::Defense(_) => self.events.push(*e),
+                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } | Event::TurretShot { .. } | Event::TurretHit { .. } | Event::Strike { .. } | Event::Captured { .. } | Event::Missile { .. } | Event::Ship { .. } | Event::Flag { .. } | Event::Convoy(_) | Event::Defense(_) | Event::Zap { .. } | Event::Stun { .. } => self.events.push(*e),
             }
         }
         self.snapshots.push_back(s);

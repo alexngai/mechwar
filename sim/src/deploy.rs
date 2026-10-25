@@ -39,6 +39,10 @@ pub enum Kind {
     Hauler,
     /// Co-op Defense's infested walker (`defense.rs`), on the enemy team.
     Walker,
+    /// Co-op Defense's pylons, built by pilots: the arc pylon's lightning chains between walkers,
+    /// the pulse pylon's EMP stops them in their tracks (game.rs `power_pylons`).
+    Arc,
+    Pulse,
 }
 
 impl Kind {
@@ -48,9 +52,9 @@ impl Kind {
         matches!(self, Kind::MgTurret | Kind::RocketTurret | Kind::Ship | Kind::Sentry | Kind::Walker)
     }
 
-    /// Shot at and locked onto like a turret: the turrets, and the hauler.
+    /// Shot at and locked onto like a turret: the turrets, the pylons, and the hauler.
     pub fn shootable(self) -> bool {
-        self.turret() || self == Kind::Hauler
+        self.turret() || matches!(self, Kind::Hauler | Kind::Arc | Kind::Pulse)
     }
 }
 
@@ -160,7 +164,7 @@ pub fn place<'a>(arena: &Arena, t: &Tuning, m: &Mech, kind: Kind, team: u8, owne
         Kind::Dome => (m.pos, t.dome_seconds, t.dome_hull),
         Kind::Barrier => (ahead(t.barrier_distance, t.barrier_thickness * 0.5 + 0.1), t.barrier_seconds, t.barrier_hull),
         Kind::MgTurret | Kind::RocketTurret => (ahead(t.turret_distance, t.turret_radius + 0.1), t.turret_seconds, t.turret_hull),
-        Kind::Ship | Kind::Sentry | Kind::Hauler | Kind::Walker => unreachable!("ships are launched, base guns built and haulers and walkers walked, not put down"),
+        Kind::Ship | Kind::Sentry | Kind::Hauler | Kind::Walker | Kind::Arc | Kind::Pulse => unreachable!("ships are launched, base guns and pylons built and haulers and walkers walked, not put down"),
     };
     // The ground below, from a little over the mech's feet (so a barrier on a slope or step finds it).
     let from = Vector::new(at.x, m.pos.y + 2.0, at.z);

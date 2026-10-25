@@ -13,7 +13,7 @@ import classesText from '../classes.json?raw';
 import weaponsText from '../weapons.json?raw';
 import { buildArena, HIGH_ONLY, LOW_ONLY } from './arena.js';
 import { Effects, HOT, halo, hot } from './fx.js';
-import { HAULER, Objectives, REACTOR_HULL, WALKER, walkerHull, SENTRY, SENTRY_HEIGHT, SENTRY_SHIELD, SHIP, SHIP_HULL } from './objectives.js';
+import { ARC, HAULER, Objectives, PULSE, TOWER_NAMES, TOWER_PRICES, REACTOR_HULL, WALKER, walkerHull, SENTRY, SENTRY_HEIGHT, SENTRY_SHIELD, SHIP, SHIP_HULL } from './objectives.js';
 import { Preview, weaponThumbs } from './hangar.js';
 import { GLYPHS, STATS, facts as cardFacts, shown } from './cards.js';
 import { controlsHtml } from './controls.js';
@@ -329,6 +329,12 @@ addEventListener('mousemove', (e) => {
 });
 addEventListener('mousedown', (e) => {
   if (!locked()) return;
+  // Building in co-op, the left button puts the tower down and the right puts the menu away.
+  if (building >= 0 && (e.button === 0 || e.button === 2)) {
+    if (e.button === 0) sendBuild(building);
+    else building = -1;
+    return;
+  }
   if (e.button === 0) firing = true;
   if (e.button === 2) altFiring = true;
   if (e.button === 1) {
@@ -356,6 +362,12 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyF') ability = true;
   if (e.code === 'KeyQ') grenade = true;
   if (e.code === 'KeyE') emp = true;
+  // Co-op: B opens the build menu (1-4 pick the tower, the left button puts it down, B or the
+  // right button puts it away); U raises the tower aimed at a tier, X sells it.
+  if (coop() && e.code === 'KeyB') building = building < 0 ? lastTower : -1;
+  const tower = ['Digit1', 'Digit2', 'Digit3', 'Digit4'].indexOf(e.code);
+  if (building >= 0 && tower >= 0) building = lastTower = tower;
+  if (coop() && (e.code === 'KeyU' || e.code === 'KeyX')) sendBuild(e.code === 'KeyU' ? 4 : 5);
   if (e.code === 'KeyK' && sim) { sim.reset(); prev = curr = sim.state(); }
   if (e.code === 'KeyI') $('stats').hidden = !$('stats').hidden;
   if (e.code === 'KeyM') setMuted(!sound.muted);
@@ -558,6 +570,13 @@ const esc = (text) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const feed = [];
 // Our latest kill, named over the aim frame for a moment.
 let eliminated = null, callout = null, capture = null, blipAt = 0, reactorHitAt = null;
+// Co-op building: the tower being placed (-1: not building), the last one picked, what the panel
+// says of it (or of the tower aimed at), and where the last arc pylon jump left from.
+let building = -1, lastTower = 0, buildHint = '', zapFrom = null;
+const coop = () => !!net && net.defense().length > 0;
+const sendBuild = (order) => ws?.readyState === WebSocket.OPEN && ws.send(net.build(order));
+/** Why a build order didn't go (defense.rs `Refusal`, in order). */
+const REFUSALS = ['NOTHING IN REACH', 'NO ROOM HERE', 'TOO CLOSE TO A LANE', 'TOO CLOSE TO A TOWER', 'TOO CLOSE TO THE REACTOR', 'NOT ENOUGH SCRAP', 'AIM AT A TOWER (YOUR OWN TO SELL)', 'AS HIGH AS IT GOES'];
 /** Siege energy we carried as of the last frame; CARRY_MAX matches siege::CARRY_MAX. */
 let heldBefore = 0, bankBefore = 0;
 const ENERGY_COLOR = 0x5dff9a;
@@ -960,11 +979,28 @@ function frame(now) {
       } else if (a === 1) {
         callout = { text: `WAVE ${b} CLEARED`, color: hex(FRIEND.accent), at: now };
         sound.zone('took');
+      } else if (a === 3) {
+        // Our build order refused (b us, x why).
+        if (b === myId) {
+          callout = { text: REFUSALS[x] ?? 'CAN\'T BUILD THERE', color: hex(FOE.accent), at: now };
+          sound.full();
+        }
       } else if (now - (reactorHitAt ?? -Infinity) > 1500) {
         callout = { text: 'REACTOR HIT', color: hex(FOE.accent), at: now };
         sound.flagAlarm();
         reactorHitAt = now;
       }
+    }
+    // Co-op pylons: an arc pylon's lightning, one jump in two records (from, then to); a pulse pylon's EMP.
+    if (kind === 15 && a === 0) zapFrom = new THREE.Vector3(x, y, z);
+    if (kind === 15 && a === 1 && zapFrom) {
+      fx.beam(zapFrom, new THREE.Vector3(x, y, z));
+      fx.impact(new THREE.Vector3(x, y, z));
+      zapFrom = null;
+    }
+    if (kind === 16) {
+      fx.pulse(new THREE.Vector3(x, y, z), a);
+      sound.emp(new THREE.Vector3(x, y, z));
     }
     if (kind === 13) {
       // Convoy: a team (b) took the hauler over (a 0), it stalled (1), came back (2), or b delivered it (3).
@@ -1116,6 +1152,7 @@ function frame(now) {
   objectives.drawHauler(game.deployables(), convoy, myTeam, FRIEND.accent, FOE.accent, dt, now);
   objectives.drawWalkers(game.deployables(), dt, now, turretGuns);
   objectives.drawDefense(net ? net.defense() : [], now);
+  drawBuild(now, alive, myId);
 
   // Look is applied at render rate for responsiveness; position is interpolated. In the cockpit
   // the view bobs with the gait and shakes when hit, but stays level (no roll).
@@ -1408,8 +1445,9 @@ function topPanel(hudState, myId, zones, siege, clock) {
   } else if (mode === DEFENSE) {
     // The reactor's hull, and the walkers still to come or standing; between waves, the countdown.
     const [wave, waves, breakLeft, hull, left] = net.defense().length ? net.defense() : [1, 10, -1, REACTOR_HULL, 0];
-    main = `<span class="us"><small>WAVE</small> ${wave}/${waves}</span><span class="us"><small>REACTOR</small>${bar((1000 * hull) / REACTOR_HULL)}${Math.ceil(hull)}</span><span class="them">${left} <small>WALKERS</small></span>`;
-    state = breakLeft >= 0 ? `GET READY · WAVE ${wave} IN ${Math.ceil(breakLeft)}s` : '';
+    const scrap = Math.floor(net.scrap()[myId] ?? 0);
+    main = `<span class="us"><small>WAVE</small> ${wave}/${waves}</span><span class="us"><small>REACTOR</small>${bar((1000 * hull) / REACTOR_HULL)}${Math.ceil(hull)}</span><span class="us"><small>SCRAP</small> ${scrap}</span><span class="them">${left} <small>WALKERS</small></span>`;
+    state = [buildHint, breakLeft >= 0 ? `GET READY · WAVE ${wave} IN ${Math.ceil(breakLeft)}s` : ''].filter(Boolean).join(' · ');
   } else if (mode === CONVOY) {
     // The hauler on its track from our base (left) to theirs, the middle marked, in the color of
     // whoever walks it (blinking while both sides are at it); a word on a stall or a standoff.
@@ -1582,12 +1620,63 @@ function turretMesh(kind, material) {
   group.userData.head = head;
   return group;
 }
+/** Co-op towers' tiers, by owner, as of this frame. */
+const towerTiers = new Map();
+
+/**
+ * Co-op building, each frame: the lanes and (while building) the tower's ghost where it would go;
+ * the pylons; and the panel's word on the tower being placed (its price, or why it can't go
+ * there), else on the tower aimed at (its tier, what raising and selling it come to).
+ */
+function drawBuild(now, alive, myId) {
+  if (!coop()) {
+    building = -1;
+    buildHint = '';
+    return;
+  }
+  if (!alive) building = -1;
+  const towers = net.towers(), list = game.deployables(), info = new Map();
+  towerTiers.clear();
+  for (let i = 0; i < towers.length; i += 5) {
+    towerTiers.set(towers[i], towers[i + 2]);
+    info.set(towers[i], towers.subarray(i, i + 5));
+  }
+  objectives.drawPylons(list, towerTiers, FRIEND.accent, now);
+  const spot = building >= 0 ? net.build_spot() : [];
+  objectives.drawBuild(net.lanes(), building, spot, now);
+  const scrap = net.scrap()[myId] ?? 0;
+  if (building >= 0) {
+    const [name, price] = [TOWER_NAMES[building].toUpperCase(), TOWER_PRICES[building]];
+    const why = spot.length === 4 && spot[3] >= 0 ? REFUSALS[spot[3]] : scrap < price ? 'NOT ENOUGH SCRAP' : '';
+    buildHint = `${building + 1} ${name} · ${price} SCRAP · ${why || 'CLICK TO BUILD'} · 1-4 TOWER · B DONE`;
+    return;
+  }
+  // The tower nearest the crosshair, within reach and in sight.
+  camera.getWorldDirection(heading);
+  let best = null, bestAngle = 0.08;
+  for (let i = 0; i < list.length; i += 10) {
+    const t = info.get(list[i + 2]);
+    if (!t) continue;
+    const at = new THREE.Vector3(list[i + 3], list[i + 4] + 1, list[i + 5]), to = at.clone().sub(camera.position), dist = to.length();
+    const angle = heading.angleTo(to);
+    if (dist > 30 || angle > bestAngle || game.cast_ray(camera.position.x, camera.position.y, camera.position.z, to.x / dist, to.y / dist, to.z / dist, dist) < dist - 1) continue;
+    [best, bestAngle] = [{ kind: list[i], t }, angle];
+  }
+  if (!best) {
+    buildHint = alive ? 'B BUILD' : '';
+    return;
+  }
+  const [, by, tier, up, refund] = best.t, name = TOWER_NAMES[[2, 3, ARC, PULSE].indexOf(best.kind)] ?? 'Tower';
+  const raise = up > 0 ? `U RAISE ${Math.round(up)}` : 'TOP TIER', sell = by === myId ? ` · X SELL ${Math.round(refund)}` : '';
+  buildHint = `${name.toUpperCase()} ${'I'.repeat(tier)} · ${raise}${sell}`;
+}
+
 function drawDeployables(now, myTeam) {
   const list = game.deployables(), used = { 0: 0, 1: 0, 2: 0, 3: 0 }, live = new Map();
   turretGuns.clear();
   for (let i = 0; i < list.length; i += 10) {
     const [kind, team, owner, x, y, z, yaw, pitch, left, hull] = list.subarray(i, i + 10);
-    if (kind === SHIP || kind === SENTRY || kind === HAULER || kind === WALKER) continue; // objectives.js draws ships, base guns, the hauler and co-op's walkers
+    if (kind === SHIP || kind === SENTRY || kind === HAULER || kind === WALKER || kind === ARC || kind === PULSE) continue; // objectives.js draws ships, base guns, the hauler and co-op's walkers and pylons
     const key = `${owner}:${kind}:${x},${z}`, was = deployed.get(key);
     if (!was) sound.deploy({ x, y, z });
     let mesh = deployMeshes[kind][used[kind]++];
@@ -1613,6 +1702,7 @@ function drawDeployables(now, myTeam) {
     mesh.visible = true;
     mesh.position.set(x, y + (kind === 1 ? classValue(1, 'barrier_height') / 2 : 0), z);
     if (kind >= 2) {
+      mesh.scale.setScalar(1 + 0.15 * ((towerTiers.get(owner) ?? 1) - 1)); // a co-op tower grows with its tier
       const head = mesh.userData.head, gun = head.children[0];
       head.rotation.y = yaw;
       gun.rotation.x = pitch;

@@ -51,6 +51,25 @@ const WALKER_RATE: f32 = 6.0;
 const WALKER_PAUSE: f32 = 1.5;
 const WALKER_ROUND: f32 = 3.0;
 const WALKER_WARMUP: f32 = 1.0;
+/// Co-op's reactor as a torch meets it: a ball REACTOR_BODY round, REACTOR_MIDDLE over its foot.
+const REACTOR_MIDDLE: f32 = 6.0;
+const REACTOR_BODY: f32 = 6.0;
+/// Co-op's arc pylon: lightning from its top (PYLON_TOP up) at the nearest walker in sight within
+/// ARC_RANGE, ARC_DAMAGE, jumping on to ARC_HOPS more, each the nearest unstruck within ARC_HOP of
+/// the last, for ARC_FALLOFF of the one before; again after ARC_COOLDOWN. Its pulse pylon stuns
+/// every walker within PULSE_RADIUS for PULSE_STUN, and shakes PULSE_DAMAGE off each; again after
+/// PULSE_COOLDOWN. (Reach and cooldowns by tier: `defense::reach`, `rate`.)
+const PYLON_TOP: f32 = 3.0;
+const ARC_RANGE: f32 = 20.0;
+const ARC_DAMAGE: f32 = 40.0;
+const ARC_HOPS: usize = 3;
+const ARC_HOP: f32 = 9.0;
+const ARC_FALLOFF: f32 = 0.7;
+const ARC_COOLDOWN: f32 = 1.5;
+const PULSE_RADIUS: f32 = 14.0;
+const PULSE_STUN: f32 = 2.5;
+const PULSE_DAMAGE: f32 = 15.0;
+const PULSE_COOLDOWN: f32 = 7.0;
 /// Convoy: points a second for each mech escorting the hauler while it walks.
 const ESCORT_POINTS: f32 = 2.0;
 /// A dropped flag nobody can reach (no waypoint this near, or nothing under it) goes home.
@@ -1355,6 +1374,8 @@ impl Game {
                 continue;
             }
             let (t, rt) = (items(&self.arsenal), self.arsenal.get(MechClass::B, rocket));
+            // A co-op tower's tier (1 for anything else).
+            let tier = self.defense.as_ref().and_then(|df| df.tower(d.owner)).map_or(1, |tw| tw.tier);
             let (range, speed) = match d.kind {
                 Kind::MgTurret => (t.mg_turret_range, f32::INFINITY),
                 Kind::Ship => (SHIP_GUN_RANGE, f32::INFINITY),
@@ -1362,6 +1383,7 @@ impl Game {
                 Kind::Walker => (WALKER_RANGE, f32::INFINITY),
                 _ => (t.rocket_turret_range, rt.alt_speed),
             };
+            let range = range * defense::reach(tier);
             let gun = deploy::gun(t, &d);
             let (arena, clouds) = (&self.arena, &self.clouds);
             // Not one across a dome's surface, which would only soak up the fire.
@@ -1380,6 +1402,12 @@ impl Game {
             let target = (self.players.iter())
                 .filter(|q| q.team != d.team && q.mech.health > 0.0 && q.mech.shield <= 0.0 && !cloaked(q))
                 .map(|q| (q.mech.pos + Vector::Y * (self.arsenal.of(&q.mech).mech_height * 0.5), q.mech.vel))
+                // In co-op, walkers fire on the team's towers too, and towers on walkers.
+                .chain(
+                    (deployables.iter())
+                        .filter(|e| e.team != d.team && e.hull > 0.0 && e.kind.shootable() && (d.kind == Kind::Walker) != (e.kind == Kind::Walker))
+                        .map(|e| (deploy::center(t, e), Vector::ZERO)),
+                )
                 .filter(|&(chest, _)| sighted(chest, range))
                 .min_by(|a, b| a.0.distance(gun).total_cmp(&b.0.distance(gun)))
                 .or_else(ship);
@@ -1407,10 +1435,10 @@ impl Game {
                     d.burst = burst;
                 }
                 d.burst -= 1;
-                d.ready = tick + secs(if d.burst > 0 { 1.0 / rate } else { pause });
+                d.ready = tick + secs(if d.burst > 0 { 1.0 / rate } else { pause } / defense::rate(tier));
                 self.turret_round(k);
             } else {
-                d.ready = tick + secs(t.rocket_turret_cooldown);
+                d.ready = tick + secs(t.rocket_turret_cooldown / defense::rate(tier));
                 let dir = Rotation::from_rotation_y(d.yaw) * Rotation::from_rotation_x(d.pitch) * Vector::NEG_Z;
                 let p = Projectile {
                     owner: d.owner, seq: tick, n: projectile::TURRET, primary: false, class: MechClass::B, loadout: rocket, charge: 0.0, boosted: false,
@@ -1427,11 +1455,12 @@ impl Game {
     fn turret_round(&mut self, k: usize) {
         let (d, t) = (self.deployables[k], items(&self.arsenal));
         let ray = Ray::new(deploy::gun(t, &d), weapon::in_cone(d.yaw, d.pitch, t.mg_turret_spread_deg.to_radians(), self.tick, u32::from(d.owner)));
+        let tier = self.defense.as_ref().and_then(|df| df.tower(d.owner)).map_or(1, |tw| tw.tier);
         let range = match d.kind {
             Kind::Ship => SHIP_GUN_RANGE,
             Kind::Sentry => SENTRY_SHIP_RANGE,
             Kind::Walker => WALKER_RANGE,
-            _ => t.mg_turret_range,
+            _ => t.mg_turret_range * defense::reach(tier),
         };
         let wall = self.arena.cast_ray(&ray, range).unwrap_or(range);
         let mut best = deploy::stops(&self.deployables, t, &ray, wall).unwrap_or(wall);
@@ -1478,8 +1507,16 @@ impl Game {
         let standing = d.hull > 0.0;
         let dealt = amount.min(d.hull.max(0.0));
         d.hull -= amount;
-        // (Points and XP for the hull shot off a ship, the hauler or a walker.)
+        // (Points and XP for the hull shot off a ship, the hauler or a walker; in co-op, scrap for
+        // a walker's, a tower's going to its builder.)
         let ship = matches!(d.kind, Kind::Ship | Kind::Hauler | Kind::Walker);
+        let attacker = self.defense.as_ref().map_or(attacker, |df| df.credit(attacker));
+        if d.kind == Kind::Walker
+            && let Some(df) = self.defense.as_mut()
+        {
+            df.earn(attacker, dealt);
+        }
+        let d = &mut self.deployables[k];
         if standing && d.hull <= 0.0 {
             match d.kind {
                 Kind::Sentry => (d.ready, d.burst) = (tick + secs(SENTRY_OFFLINE), 0),
@@ -1515,6 +1552,27 @@ impl Game {
             (end, hit) = (eye + (end - eye).normalize_or_zero() * toi, None);
         }
         let (owner, team, heal, burn) = (u.id, u.team, t.alt_beam_heal * DT, t.alt_damage * DT * ability::damage_mult(t, &u.mech));
+        // In co-op it mends the team's towers, and the reactor, short of whatever else it meets.
+        if let Some(df) = self.defense.as_mut().filter(|_| team == 0) {
+            let (dir, reach) = ((end - eye).normalize_or_zero(), end.distance(eye));
+            let towers = deploy::first_turret(&self.deployables, t, 1, &Ray::new(eye, dir), reach).filter(|&(k, _)| df.tower(self.deployables[k].owner).is_some());
+            let core = df.reactor + Vector::Y * REACTOR_MIDDLE;
+            let s = (core - eye).dot(dir).clamp(0.0, reach);
+            let reactor = ((eye + dir * s - core).length() < REACTOR_BODY).then_some(s);
+            match (towers, reactor) {
+                (Some((k, toi)), r) if r.is_none_or(|s| toi < s) => {
+                    let tier = df.tower(self.deployables[k].owner).map_or(1, |tw| tw.tier);
+                    let e = &mut self.deployables[k];
+                    e.hull = (e.hull + heal).min(defense::tower_hull(tier));
+                    (end, hit) = (eye + dir * toi, None);
+                }
+                (_, Some(s)) => {
+                    df.hull = (df.hull + heal).min(defense::REACTOR_HULL);
+                    (end, hit) = (eye + dir * s, None);
+                }
+                _ => {}
+            }
+        }
         self.players[user].mech.beam_end = end;
         self.events.push(Event::Beam { owner, end, hit });
         if let Some(k) = worn(&self.deployables, t, team, None, hit.is_some(), end) {
@@ -1897,9 +1955,9 @@ impl Game {
             Defense::new(self.spots.defense.as_ref()?, tick, |a, b| nav.route(arena, a, b))
         });
         let Some(mut d) = made else { return };
-        let pilots = self.players.iter().filter(|p| p.team == 0).count();
-        let standing: Vec<u8> = self.deployables.iter().filter(|w| w.kind == Kind::Walker).map(|w| w.owner).collect();
-        let out = d.step(tick, pilots, &standing);
+        let pilots: Vec<u8> = self.players.iter().filter(|p| p.team == 0).map(|p| p.id).collect();
+        let standing: Vec<u8> = self.deployables.iter().filter(|w| w.hull > 0.0).map(|w| w.owner).collect();
+        let out = d.step(tick, &pilots, &standing);
         for (owner, at, hull) in out.spawn {
             let pos = self.ground(at);
             let ready = tick + secs(WALKER_WARMUP);
@@ -1916,8 +1974,130 @@ impl Game {
         self.deployables.retain(|w| w.kind != Kind::Walker || !out.leaked.contains(&w.owner));
         self.events.extend(out.news.iter().map(|&n| Event::Defense(n)));
         self.defense = Some(d);
+        self.power_pylons();
         if out.lost || out.won {
             self.end_match();
+        }
+    }
+
+    /// Player `id`'s build order in co-op (`defense::Build`), where they aim: a tower put down for
+    /// its price in their scrap, the tower raised a tier for its upgrade, or (theirs) sold back.
+    /// A refusal is news, for them.
+    pub fn build(&mut self, id: u8, order: defense::Build) {
+        let Some(i) = self.players.iter().position(|p| p.id == id && p.team == 0 && p.mech.health > 0.0) else { return };
+        let Some(d) = self.defense.as_ref() else { return };
+        let (t, m) = (self.arsenal.of(&self.players[i].mech), self.players[i].mech);
+        let aim = aim_ray(t, &m);
+        let refused = match order {
+            defense::Build::Place(k) => {
+                let kind = *defense::TOWERS.get(usize::from(k)).unwrap_or(&Kind::MgTurret);
+                let towers = self.deployables.iter().filter(|e| d.tower(e.owner).is_some()).map(|e| e.pos);
+                match (d.spot(&self.arena, &aim, towers), d.free_tower()) {
+                    (Err(why), _) => Some(why),
+                    (_, None) => Some(defense::Refusal::Full),
+                    _ if d.scrap[usize::from(id)] < defense::price(kind) => Some(defense::Refusal::Scrap),
+                    (Ok(pos), Some(owner)) => {
+                        let (tick, hull) = (self.tick, defense::tower_hull(1));
+                        let ready = tick + secs(items(&self.arsenal).turret_warmup);
+                        self.deployables.push(Deployable { kind, team: 0, owner, pos, yaw: m.yaw, pitch: 0.0, hull, placed: tick, expires: u32::MAX, ready, burst: 0 });
+                        let d = self.defense.as_mut().unwrap();
+                        d.scrap[usize::from(id)] -= defense::price(kind);
+                        d.towers.push(defense::Tower { owner, by: id, tier: 1, spent: defense::price(kind) });
+                        None
+                    }
+                }
+            }
+            defense::Build::Upgrade | defense::Build::Sell => {
+                // The nearest of the team's towers along the aim, within reach.
+                let k = deploy::first_turret(&self.deployables, items(&self.arsenal), 1, &aim, defense::REACH).map(|(k, _)| k).filter(|&k| d.tower(self.deployables[k].owner).is_some());
+                match k {
+                    None => Some(defense::Refusal::Tower),
+                    Some(k) => {
+                        let e = self.deployables[k];
+                        let d = self.defense.as_mut().unwrap();
+                        let (cost, tower) = {
+                            let tower = d.towers.iter_mut().find(|t| t.owner == e.owner).unwrap();
+                            (tower.upgrade(e.kind), *tower)
+                        };
+                        match order {
+                            _ if order == defense::Build::Sell && tower.by != id => Some(defense::Refusal::Tower),
+                            defense::Build::Sell => {
+                                d.scrap[usize::from(id)] += tower.refund();
+                                d.towers.retain(|t| t.owner != e.owner);
+                                self.deployables.remove(k);
+                                None
+                            }
+                            _ if tower.tier >= defense::TIERS => Some(defense::Refusal::Full),
+                            _ if d.scrap[usize::from(id)] < cost => Some(defense::Refusal::Scrap),
+                            _ => {
+                                d.scrap[usize::from(id)] -= cost;
+                                let tower = d.towers.iter_mut().find(|t| t.owner == e.owner).unwrap();
+                                (tower.tier, tower.spent) = (tower.tier + 1, tower.spent + cost);
+                                // Its new hull, less what it's lost.
+                                self.deployables[k].hull += defense::tower_hull(tower.tier) - defense::tower_hull(tower.tier - 1);
+                                None
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        if let Some(why) = refused {
+            self.events.push(Event::Defense(defense::News::Refused { id, why }));
+        }
+    }
+
+    /// Co-op's pylons: each ready one with a walker in reach lets go (see ARC_RANGE, PULSE_RADIUS).
+    fn power_pylons(&mut self) {
+        let tick = self.tick;
+        for k in 0..self.deployables.len() {
+            let p = self.deployables[k];
+            if !matches!(p.kind, Kind::Arc | Kind::Pulse) || p.hull <= 0.0 || tick < p.ready {
+                continue;
+            }
+            let tier = self.defense.as_ref().and_then(|d| d.tower(p.owner)).map_or(1, |t| t.tier);
+            let top = p.pos + Vector::Y * PYLON_TOP;
+            let arena = &self.arena;
+            let walkers: Vec<(usize, Vector)> = (self.deployables.iter().enumerate())
+                .filter(|(_, w)| w.kind == Kind::Walker && w.hull > 0.0)
+                .map(|(j, w)| (j, w.pos + Vector::Y * (deploy::WALKER_HEIGHT * 0.5)))
+                .filter(|&(_, c)| arena.cast_ray(&Ray::new(top, (c - top).normalize_or_zero()), c.distance(top)).is_none())
+                .collect();
+            if p.kind == Kind::Arc {
+                let Some(&first) = walkers.iter().filter(|w| w.1.distance(top) <= ARC_RANGE * defense::reach(tier)).min_by(|a, b| a.1.distance(top).total_cmp(&b.1.distance(top))) else { continue };
+                let (mut from, mut at, mut damage, mut struck) = (top, first, ARC_DAMAGE, vec![first.0]);
+                for hop in 0..=ARC_HOPS {
+                    self.events.push(Event::Zap { from, to: at.1 });
+                    self.wear(at.0, damage, p.owner);
+                    let next = walkers.iter().filter(|w| !struck.contains(&w.0) && w.1.distance(at.1) <= ARC_HOP).min_by(|a, b| a.1.distance(at.1).total_cmp(&b.1.distance(at.1)));
+                    match next {
+                        Some(&w) if hop < ARC_HOPS => {
+                            (from, at, damage) = (at.1, w, damage * ARC_FALLOFF);
+                            struck.push(w.0);
+                        }
+                        _ => break,
+                    }
+                }
+                self.deployables[k].ready = tick + secs(ARC_COOLDOWN / defense::rate(tier));
+            } else {
+                let radius = PULSE_RADIUS * defense::reach(tier);
+                let hit: Vec<usize> = walkers.iter().filter(|w| (w.1 - p.pos).with_y(0.0).length() <= radius).map(|w| w.0).collect();
+                if hit.is_empty() {
+                    continue;
+                }
+                let until = tick + secs(PULSE_STUN);
+                self.events.push(Event::Stun { at: top, radius });
+                let owners: Vec<u8> = hit.iter().map(|&j| self.deployables[j].owner).collect();
+                for &j in &hit {
+                    let w = &mut self.deployables[j];
+                    (w.ready, w.burst) = (w.ready.max(until), 0);
+                    self.wear(j, PULSE_DAMAGE, p.owner);
+                }
+                if let Some(d) = self.defense.as_mut() {
+                    d.stun(&owners, until);
+                }
+                self.deployables[k].ready = tick + secs(PULSE_COOLDOWN / defense::rate(tier));
+            }
         }
     }
 
@@ -2493,6 +2673,198 @@ mod tests {
         }
         let state = game.match_state();
         assert!(state.ended && state.winner == Some(1), "{state:?}");
+    }
+
+    /// Stands player `id` somewhere looking down at ground they could build on, among spots
+    /// `near` (nearest first) at least `from` m from it; where the tower would go.
+    fn aim_to_build(game: &mut Game, id: u8, near: Vector, from: f32) -> Vector {
+        let i = game.players.iter().position(|p| p.id == id).unwrap();
+        for r in (0..40).map(|k| from + k as f32) {
+            for a in (0..24).map(|k| k as f32 * std::f32::consts::TAU / 24.0) {
+                let feet = game.ground(near + Vector::new(r * a.cos(), 4.0, r * a.sin()));
+                let m = &mut game.players[i].mech;
+                (m.pos, m.yaw, m.pitch) = (feet, 0.0, -1.2);
+                let aim = aim_ray(game.arsenal.of(&game.players[i].mech), &game.players[i].mech);
+                let towers = game.deployables.iter().filter(|e| game.defense.as_ref().unwrap().tower(e.owner).is_some()).map(|e| e.pos);
+                if let Ok(at) = game.defense.as_ref().unwrap().spot(&game.arena, &aim, towers) {
+                    return at;
+                }
+            }
+        }
+        panic!("nowhere to build near {near}");
+    }
+
+    fn towers(game: &Game) -> Vec<Deployable> {
+        game.deployables.iter().filter(|d| game.defense.as_ref().unwrap().tower(d.owner).is_some()).copied().collect()
+    }
+
+    fn scrap(game: &Game, id: u8) -> f32 {
+        game.defense.as_ref().unwrap().scrap[usize::from(id)]
+    }
+
+    fn refused(game: &Game) -> Option<defense::Refusal> {
+        game.events.iter().find_map(|e| if let Event::Defense(defense::News::Refused { why, .. }) = e { Some(*why) } else { None })
+    }
+
+    #[test]
+    fn pilots_build_towers_for_scrap_off_the_lanes_and_apart() {
+        let (mut game, id) = co_op(false);
+        let reactor = game.defense.as_ref().unwrap().reactor;
+        let start = scrap(&game, id);
+        let at = aim_to_build(&mut game, id, reactor, 14.0);
+        game.build(id, defense::Build::Place(0));
+        let built = towers(&game);
+        assert_eq!(built.len(), 1, "{:?}", refused(&game));
+        assert!(built[0].pos.distance(at) < 0.01 && built[0].kind == Kind::MgTurret && built[0].team == 0 && built[0].hull == defense::TOWER_HULL);
+        assert_eq!(scrap(&game, id), start - defense::PRICES[0]);
+        // Not on top of it, and not in a lane.
+        game.events.clear();
+        game.build(id, defense::Build::Place(0));
+        assert_eq!(refused(&game), Some(defense::Refusal::Crowded));
+        let gate = Vector::from_array(game.spots.defense.as_ref().unwrap().gates[0]);
+        let i = game.players.iter().position(|p| p.id == id).unwrap();
+        let m = &mut game.players[i].mech;
+        (m.pos, m.yaw, m.pitch) = (gate, 0.0, -1.2);
+        game.events.clear();
+        game.build(id, defense::Build::Place(0));
+        assert_eq!(refused(&game), Some(defense::Refusal::Lane));
+        // Not without the scrap.
+        game.defense.as_mut().unwrap().scrap[usize::from(id)] = 10.0;
+        aim_to_build(&mut game, id, reactor, 14.0);
+        game.events.clear();
+        game.build(id, defense::Build::Place(1));
+        assert_eq!((refused(&game), towers(&game).len()), (Some(defense::Refusal::Scrap), 1));
+    }
+
+    #[test]
+    fn anyone_upgrades_a_tower_and_its_builder_sells_it() {
+        let (mut game, id) = co_op(false);
+        let other = game.join().unwrap();
+        let reactor = game.defense.as_ref().unwrap().reactor;
+        aim_to_build(&mut game, id, reactor, 14.0);
+        game.build(id, defense::Build::Place(1));
+        let tower = towers(&game)[0];
+        // The other pilot, where the builder stood, raises it twice, then no more.
+        let me = game.players.iter().find(|p| p.id == id).unwrap().mech;
+        let j = game.players.iter().position(|p| p.id == other).unwrap();
+        game.players[j].mech = Mech { pos: me.pos, yaw: me.yaw, pitch: me.pitch, health: 100.0, ..game.players[j].mech };
+        let before = scrap(&game, other);
+        game.defense.as_mut().unwrap().scrap[usize::from(other)] = 1000.0;
+        game.build(other, defense::Build::Upgrade);
+        game.build(other, defense::Build::Upgrade);
+        let d = game.defense.as_ref().unwrap();
+        let t = *d.tower(tower.owner).unwrap();
+        assert_eq!(t.tier, 3);
+        assert!((scrap(&game, other) - (1000.0 - 3.0 * 0.75 * defense::PRICES[1])).abs() < 1e-3, "{before}");
+        assert_eq!(towers(&game)[0].hull, defense::tower_hull(3));
+        game.events.clear();
+        game.build(other, defense::Build::Upgrade);
+        assert_eq!(refused(&game), Some(defense::Refusal::Full));
+        // Only its builder sells it, for most of what went into it.
+        game.events.clear();
+        game.build(other, defense::Build::Sell);
+        assert_eq!(refused(&game), Some(defense::Refusal::Tower));
+        let had = scrap(&game, id);
+        game.build(id, defense::Build::Sell);
+        assert!(towers(&game).is_empty());
+        assert!((scrap(&game, id) - had - 0.7 * t.spent).abs() < 1e-3);
+    }
+
+    #[test]
+    fn towers_shoot_walkers_down_for_their_builders_scrap_and_walkers_shoot_back() {
+        let (mut game, id) = co_op(false);
+        // A rocket tower by the first gate's lane, the wave on.
+        let gate = Vector::from_array(game.spots.defense.as_ref().unwrap().gates[0]);
+        aim_to_build(&mut game, id, gate + Vector::new(0.0, 0.0, 20.0), 6.0);
+        game.build(id, defense::Build::Place(1));
+        assert_eq!(towers(&game).len(), 1, "{:?}", refused(&game));
+        // Its builder out of it: back in the hangar.
+        game.dock(id);
+        skip_break(&mut game);
+        let (start, mut shot, mut hit) = (scrap(&game, id), false, false);
+        for _ in 0..secs(40.0) {
+            game.step();
+            shot |= game.events.iter().any(|e| matches!(e, Event::TurretHit { wrecked: true, .. }));
+            hit |= towers(&game).first().is_none_or(|t| t.hull < defense::TOWER_HULL);
+        }
+        assert!(shot, "the tower shot none down");
+        assert!(scrap(&game, id) > start, "no scrap for it");
+        assert!(hit, "no walker fired on it");
+    }
+
+    #[test]
+    fn arc_pylons_chain_between_walkers_and_pulse_pylons_stop_them() {
+        for (k, kind) in [(2, Kind::Arc), (3, Kind::Pulse)] {
+            let (mut game, id) = co_op(false);
+            let gate = Vector::from_array(game.spots.defense.as_ref().unwrap().gates[0]);
+            aim_to_build(&mut game, id, gate + Vector::new(0.0, 0.0, 12.0), 6.0);
+            game.build(id, defense::Build::Place(k));
+            assert_eq!(towers(&game)[0].kind, kind, "{:?}", refused(&game));
+            game.dock(id);
+            skip_break(&mut game);
+            let (mut zaps, mut stuns) = (0, 0);
+            for _ in 0..secs(20.0) {
+                game.step();
+                zaps += game.events.iter().filter(|e| matches!(e, Event::Zap { .. })).count();
+                stuns += game.events.iter().filter(|e| matches!(e, Event::Stun { .. })).count();
+                if stuns > 0 {
+                    // A stunned walker stays put.
+                    let before = walkers(&game);
+                    game.step();
+                    let after = walkers(&game);
+                    let stood = before.iter().filter(|w| after.iter().any(|a| a.owner == w.owner && a.pos.distance(w.pos) < 1e-3)).count();
+                    assert!(stood > 0);
+                    break;
+                }
+            }
+            if kind == Kind::Arc {
+                assert!(zaps > 1, "{zaps} zaps");
+            } else {
+                assert!(stuns > 0);
+            }
+        }
+    }
+
+    #[test]
+    fn a_torch_mends_towers_and_the_reactor() {
+        let (mut game, id) = co_op(false);
+        let reactor = game.defense.as_ref().unwrap().reactor;
+        aim_to_build(&mut game, id, reactor, 14.0);
+        game.build(id, defense::Build::Place(0));
+        let k = game.deployables.iter().position(|d| d.kind == Kind::MgTurret).unwrap();
+        game.deployables[k].hull = 100.0;
+        let mender = (0u8..).map(|s| Loadout { secondary: s, ..Loadout::of(MechClass::B) }).find(|&l| game.arsenal.get(MechClass::B, l).alt_beam > 0.0).unwrap();
+        let i = game.players.iter().position(|p| p.id == id).unwrap();
+        let tower = game.deployables[k].pos + Vector::Y * 0.8;
+        let m = &mut game.players[i].mech;
+        m.loadout = mender;
+        let eye = m.pos + Vector::Y * game.arsenal.of(m).eye_height;
+        (m.yaw, m.pitch) = crate::bot::look_at(eye, tower);
+        game.beam(i);
+        assert!(game.deployables[k].hull > 100.0);
+        // And the reactor.
+        game.defense.as_mut().unwrap().hull = 1000.0;
+        let m = &mut game.players[i].mech;
+        m.pos = reactor + Vector::new(15.0, 0.0, 0.0);
+        let eye = m.pos + Vector::Y * game.arsenal.of(m).eye_height;
+        (m.yaw, m.pitch) = crate::bot::look_at(eye, reactor + Vector::Y * 6.0);
+        game.beam(i);
+        assert!(game.defense.as_ref().unwrap().hull > 1000.0);
+    }
+
+    #[test]
+    fn a_beaten_wave_pays_every_pilot() {
+        let (mut game, id) = co_op(false);
+        let start = scrap(&game, id);
+        skip_break(&mut game);
+        for _ in 0..secs(1.2 * f32::from(Defense::count(1, 1)) + 1.0) {
+            game.step();
+            let standing: Vec<usize> = (0..game.deployables.len()).filter(|&k| game.deployables[k].kind == Kind::Walker).collect();
+            for k in standing {
+                game.wear(k, 1e4, 200);
+            }
+        }
+        assert_eq!(scrap(&game, id), start + 100.0);
     }
 
     #[test]

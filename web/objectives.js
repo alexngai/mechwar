@@ -29,10 +29,15 @@ export const SHIP_HULL = 3000;
 /** The AA gun fires a burst of AA_BURST rounds AA_GAP ms apart every AA_EVERY ms, while firing; it turns at AA_TURN rad/s. */
 const AA_BURST = 4, AA_GAP = 110, AA_EVERY = 1000, AA_TURN = 1.6;
 /** The deployable kinds of a battleship, and of a team mode's base gun. */
-export const SHIP = 4, SENTRY = 5, HAULER = 6, WALKER = 7;
+export const SHIP = 4, SENTRY = 5, HAULER = 6, WALKER = 7, ARC = 8, PULSE = 9;
 /** Match defense.rs: the reactor's hull, and a walker's in wave `n`. */
 export const REACTOR_HULL = 2000;
 export const walkerHull = (n) => 100 + 12 * n;
+/** Match defense.rs: what pilots build (`TOWERS`, in Build::Place's order), their prices, their reach at tier 1 (m: tuning's turret ranges, game.rs's ARC_RANGE and PULSE_RADIUS) and how it grows a tier. */
+export const TOWER_NAMES = ['MG tower', 'Rocket tower', 'Arc pylon', 'Pulse pylon'];
+export const TOWER_PRICES = [100, 150, 175, 200];
+const TOWER_REACH = [30, 45, 20, 14];
+export const towerReach = (k, tier = 1) => TOWER_REACH[k] * (1 + 0.15 * (tier - 1));
 /** Match game.rs SENTRY_SHIELD: a base gun's shield. */
 export const SENTRY_SHIELD = 400;
 /** A base gun's muzzles, this high over its foot (deploy::SENTRY_HEIGHT). */
@@ -41,7 +46,7 @@ export const SENTRY_HEIGHT = 5.5;
 export class Objectives {
   /** `cast(ox, oy, oz, dx, dy, dz, max)`: how far a ray goes into the arena, up to `max`. */
   constructor(scene, fx, sound, cast) {
-    Object.assign(this, { scene, fx, sound, cast, silos: [], aa: [], zones: [], labels: [], stations: [], dropZones: [], bases: [], missiles: [], ships: new Map(), sentries: new Map(), drops: [], stands: [], flags: [], walkers: new Map(), gates: [], reactor: null, fire: {}, seen: null });
+    Object.assign(this, { scene, fx, sound, cast, silos: [], aa: [], zones: [], labels: [], stations: [], dropZones: [], bases: [], missiles: [], ships: new Map(), sentries: new Map(), drops: [], stands: [], flags: [], walkers: new Map(), gates: [], reactor: null, pylons: new Map(), ghost: null, lanes: null, fire: {}, seen: null });
     this.dropGeometry = new THREE.OctahedronGeometry(0.6);
     this.dropMaterial = hot(new THREE.MeshBasicMaterial({ color: ENERGY }));
   }
@@ -57,8 +62,11 @@ export class Objectives {
     for (const s of [...this.ships.values(), ...this.sentries.values()]) gone(s.group);
     if (this.hauler) gone(this.hauler.group);
     this.hauler = null;
-    for (const w of this.walkers?.values() ?? []) gone(w.group);
+    for (const w of [...(this.walkers?.values() ?? []), ...(this.pylons?.values() ?? [])]) gone(w.group);
     this.walkers = new Map();
+    this.pylons = new Map();
+    if (this.lanes) gone(this.lanes);
+    this.lanes = null;
     for (const g of [...(this.gates ?? []), ...(this.reactor ? [this.reactor] : [])]) gone(g.group);
     // Co-op Defense: the reactor, and the gates the walkers come out of, fungus round their mouths.
     const d = map.objectives?.defense;
@@ -262,6 +270,78 @@ export class Objectives {
       this.scene.remove(w.group);
       this.walkers.delete(owner);
     }
+  }
+
+  /**
+   * Co-op's pylons from `list` (deployable floats), sized by tier (`tiers`, by owner): the arc
+   * pylon's coil mast, its ball crackling; the pulse pylon's dish, its ring breathing.
+   */
+  drawPylons(list, tiers, accent, now) {
+    const live = new Set();
+    for (let i = 0; i < list.length; i += 10) {
+      const kind = list[i];
+      if (kind !== ARC && kind !== PULSE) continue;
+      const [, , owner, x, y, z, yaw] = list.subarray(i, i + 7);
+      let p = this.pylons.get(owner);
+      if (!p) {
+        p = { group: pylonMesh(kind) };
+        this.scene.add(p.group);
+        this.pylons.set(owner, p);
+        this.sound.deploy({ x, y, z });
+      }
+      live.add(owner);
+      p.group.position.set(x, y, z);
+      p.group.rotation.y = yaw;
+      p.group.scale.setScalar(1 + 0.15 * ((tiers.get(owner) ?? 1) - 1));
+      const { glow } = p.group.userData;
+      glow.material.color.setHex(accent);
+      glow.scale.setScalar(kind === ARC ? 1 + 0.25 * Math.random() : 1 + 0.1 * Math.sin(now / 300));
+    }
+    for (const [owner, p] of this.pylons) {
+      if (live.has(owner)) continue;
+      this.scene.remove(p.group);
+      this.pylons.delete(owner);
+    }
+  }
+
+  /**
+   * Co-op's building aids: the lanes walkers walk, glowing faintly on the ground (`lanes`, six
+   * floats a stretch; brighter while building), and the ghost of tower `k` at `spot` (xyz and
+   * why not, -1 if it can go there), its reach ringed round it, green where it can go, red where
+   * not. `k` < 0 hides the ghost.
+   */
+  drawBuild(lanes, k, spot, now) {
+    if (!this.lanes && lanes.length) {
+      // A ribbon LANE_WIDTH wide along each stretch, just over the ground.
+      const corners = [];
+      for (let i = 0; i < lanes.length; i += 6) {
+        const [ax, ay, az, bx, by, bz] = lanes.slice(i, i + 6), len = Math.hypot(bx - ax, bz - az) || 1;
+        const [sx, sz] = [(-(bz - az) / len) * LANE_WIDTH * 0.5, ((bx - ax) / len) * LANE_WIDTH * 0.5];
+        const [a0, a1, b0, b1] = [[ax - sx, ay + 0.3, az - sz], [ax + sx, ay + 0.3, az + sz], [bx - sx, by + 0.3, bz - sz], [bx + sx, by + 0.3, bz + sz]];
+        corners.push(...a0, ...b0, ...a1, ...a1, ...b0, ...b1);
+      }
+      const geometry = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(corners, 3));
+      this.lanes = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: LANE_COLOR, side: THREE.DoubleSide }));
+      this.scene.add(this.lanes);
+    }
+    if (this.lanes) this.lanes.material.color.setHex(LANE_COLOR).multiplyScalar((k >= 0 ? 0.9 : 0.4) * (0.8 + 0.2 * Math.sin(now / 400)));
+    if (!this.ghost) {
+      const material = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.35, depthWrite: false });
+      const ghost = new THREE.Group();
+      ghost.add(new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.8, 1.8, 12).translate(0, 0.9, 0), material));
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.97, 1, 64).rotateX(-Math.PI / 2), material);
+      ring.position.y = 0.15;
+      ghost.add(ring);
+      ghost.userData = { material, ring };
+      this.ghost = ghost;
+      this.scene.add(ghost);
+    }
+    this.ghost.visible = k >= 0 && spot.length === 4;
+    if (!this.ghost.visible) return;
+    const ok = spot[3] < 0;
+    this.ghost.position.set(spot[0], spot[1], spot[2]);
+    this.ghost.userData.material.color.setHex(ok ? 0x6dff9a : 0xff5a4a);
+    this.ghost.userData.ring.scale.setScalar(towerReach(k));
   }
 
   /** The reactor as a mark for the glass and radar, in co-op. */
@@ -925,6 +1005,9 @@ function haulerMesh() {
 /** Co-op's fungus, glowing orange; a walker's stride. */
 const FUNGUS = 0xff7a1f;
 const WALKER_STRIDE = 1.4;
+/** How wide co-op's lanes are drawn on the ground (m), and in what (a hazard red, to stand out on any map's floor). */
+const LANE_WIDTH = 1.6;
+const LANE_COLOR = 0xff3b1f;
 
 /**
  * Co-op's infested walker, walking along -Z: a rusted industrial chassis on four jointed legs
@@ -963,6 +1046,34 @@ function walkerMesh() {
     return leg;
   });
   group.userData = { legs, pod, muzzle, fungus };
+  return group;
+}
+
+/**
+ * A co-op pylon, its foot at y 0, its glowing part `userData.glow`: the arc pylon a mast wound
+ * with coils, a ball at its top; the pulse pylon a squat drum under an emitter ring.
+ */
+function pylonMesh(kind) {
+  const group = new THREE.Group();
+  const steel = new THREE.MeshStandardMaterial({ color: 0x50565e, roughness: 0.5, metalness: 0.6 });
+  const glow = new THREE.Mesh(kind === ARC ? new THREE.SphereGeometry(0.35, 12, 8) : new THREE.TorusGeometry(0.9, 0.12, 8, 24), hot(new THREE.MeshBasicMaterial({ color: 0xffffff })));
+  const add = (geometry, y) => {
+    const mesh = new THREE.Mesh(geometry, steel);
+    mesh.position.y = y;
+    group.add(mesh);
+  };
+  add(new THREE.CylinderGeometry(0.7, 0.9, 0.4, 10), 0.2);
+  if (kind === ARC) {
+    add(new THREE.CylinderGeometry(0.12, 0.18, 2.6, 8), 1.6);
+    for (const y of [1.0, 1.6, 2.2]) add(new THREE.TorusGeometry(0.32 - 0.05 * y, 0.06, 6, 16).rotateX(Math.PI / 2), y);
+    glow.position.y = 3.0;
+  } else {
+    add(new THREE.CylinderGeometry(0.55, 0.65, 1.6, 12), 1.2);
+    glow.rotation.x = Math.PI / 2;
+    glow.position.y = 2.2;
+  }
+  group.add(glow);
+  group.userData = { glow };
   return group;
 }
 

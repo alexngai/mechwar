@@ -491,6 +491,7 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
                     game.pick(id, class, loadout);
                 }
                 Cmd::Msg(id, ClientMsg::Name(name)) => game.set_name(id, &name),
+                Cmd::Msg(id, ClientMsg::Build(order)) => game.build(id, order),
                 // Once a visit: taking another record mid-match would count the match twice.
                 Cmd::Msg(id, ClientMsg::Progress(token)) if !pilots.contains_key(&id) => {
                     let base = signer.verify(&token).unwrap_or_else(|| {
