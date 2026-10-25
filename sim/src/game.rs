@@ -665,8 +665,10 @@ impl Game {
                 p.ack_seq = msg.seq;
                 let t = self.arsenal.of(&p.mech);
                 let was = p.mech.ability_time;
+                let ready = p.mech.ability_cooldown <= 0.0;
                 step_mech(&self.arena, t, &mut p.mech, &msg.input);
-                let used = [p.mech.shot, p.mech.launched, p.mech.threw, p.mech.pulsed, p.mech.ability_time > was];
+                // An ability's use starts its cooldown (a Power shot can be used and spent in a tick).
+                let used = [p.mech.shot, p.mech.launched, p.mech.threw, p.mech.pulsed, ready && p.mech.ability_cooldown > 0.0];
                 for (n, used) in p.tally.uses.iter_mut().zip(used) {
                     *n += u32::from(used);
                 }
@@ -1991,6 +1993,7 @@ mod tests {
         let by_slot: f32 = tallies.iter().flat_map(|t| t.dealt_by).sum();
         assert!((by_slot - dealt).abs() < 1e-2 * dealt, "by slot {by_slot}, dealt {dealt}");
         assert!(tallies.iter().all(|t| t.uses[0] > 0 && t.doing.iter().sum::<u32>() > 0), "a bot that never fired or did nothing");
+        assert!(tallies.iter().any(|t| t.uses[4] > 0), "no ability used");
     }
 
     /// A Siege on Foundry, with one human in it (and bots, if `bots`).
