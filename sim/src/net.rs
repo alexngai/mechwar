@@ -123,6 +123,9 @@ pub struct MechView {
     pub ability: bool,
     pub repairing: bool,
     pub shielded: bool,
+    /// A melee secondary's wind-up (0-1), and how hard its booster burns (`melee::burn`).
+    pub wind: f32,
+    pub burn: f32,
 }
 
 impl From<&Mech> for MechView {
@@ -137,6 +140,8 @@ impl From<&Mech> for MechView {
             ability: m.ability_time > 0.0,
             repairing: m.repair_time > 0.0,
             shielded: m.shield > 0.0,
+            wind: m.alt_charge,
+            burn: crate::melee::burn(m),
         }
     }
 }
@@ -178,6 +183,9 @@ pub enum Event {
     TurretShot { owner: u8, end: Vector, hit: Option<u8> },
     /// Player `attacker` hit a turret (and `wrecked` it).
     TurretHit { attacker: u8, wrecked: bool },
+    /// Player `owner`'s melee strike landed on `hit` at `pos`, or `hit` was slammed into a wall
+    /// by the throw (`melee.rs`).
+    Strike { owner: u8, hit: u8, pos: Vector },
     /// `team` took zone `zone` (a silo, by its index).
     Captured { zone: u8, team: u8 },
     /// Silo `silo`, held by `team`, fired at the other team's base; it lands after `objective::MISSILE_FLIGHT`.

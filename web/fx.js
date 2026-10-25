@@ -168,18 +168,24 @@ export function halo(color, size) {
   return sprite;
 }
 
+let lineTexture;
+/** Soft across its height (a beam's width), solid along it. */
+function softLine() {
+  return (lineTexture ??= canvasTexture(1, 32, (g, w, h) => {
+    const l = g.createLinearGradient(0, 0, 0, h);
+    l.addColorStop(0, 'rgba(255,255,255,0)');
+    l.addColorStop(0.5, 'rgba(255,255,255,1)');
+    l.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = l;
+    g.fillRect(0, 0, w, h);
+  }));
+}
+
 /** Tracers: pooled camera-facing quads stretched muzzle to impact, soft across their width. */
 class Beams {
   constructor(scene, count = 24, color = 0xffe2a0, width = BEAM_WIDTH) {
     this.width = width;
-    const texture = canvasTexture(1, 32, (g, w, h) => {
-      const l = g.createLinearGradient(0, 0, 0, h);
-      l.addColorStop(0, 'rgba(255,255,255,0)');
-      l.addColorStop(0.5, 'rgba(255,255,255,1)');
-      l.addColorStop(1, 'rgba(255,255,255,0)');
-      g.fillStyle = l;
-      g.fillRect(0, 0, w, h);
-    });
+    const texture = softLine();
     const geometry = new THREE.PlaneGeometry(1, 1);
     this.next = 0;
     this.items = Array.from({ length: count }, () => {
@@ -219,6 +225,56 @@ class Beams {
     }
   }
 }
+const ARC_STEPS = 16;
+const ctrl = new THREE.Vector3(), along = new THREE.Vector3(), out = new THREE.Vector3();
+/**
+ * Held beams, one per slot: camera-facing ribbons along a curve that leaves the muzzle along the
+ * aim and bends onto where the beam lands (onto a mech just off the aim, when it snapped to one).
+ */
+class Arcs {
+  constructor(scene, count, color, width) {
+    this.width = width;
+    const index = [];
+    for (let i = 0; i < ARC_STEPS; i++) index.push(2 * i, 2 * i + 1, 2 * i + 2, 2 * i + 1, 2 * i + 3, 2 * i + 2);
+    const uv = new Float32Array(4 * (ARC_STEPS + 1));
+    for (let i = 0; i <= ARC_STEPS; i++) uv.set([i / ARC_STEPS, 0, i / ARC_STEPS, 1], 4 * i);
+    this.items = Array.from({ length: count }, () => {
+      const geometry = new THREE.BufferGeometry().setIndex(index);
+      geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6 * (ARC_STEPS + 1)), 3));
+      geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+      const mesh = new THREE.Mesh(
+        geometry,
+        hot(new THREE.MeshBasicMaterial({ map: softLine(), color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })),
+      );
+      mesh.frustumCulled = false;
+      mesh.visible = false;
+      scene.add(mesh);
+      return { mesh, from: new THREE.Vector3(), to: new THREE.Vector3(), aim: new THREE.Vector3(), life: 0 };
+    });
+  }
+
+  update(dt, camera) {
+    for (const b of this.items) {
+      b.life -= dt;
+      b.mesh.visible = b.life > 0;
+      if (!b.mesh.visible) continue;
+      // A quadratic Bézier: from the muzzle, toward a point half the beam's length down the aim, to its end.
+      ctrl.copy(b.aim).multiplyScalar(0.5 * b.from.distanceTo(b.to)).add(b.from);
+      const position = b.mesh.geometry.attributes.position;
+      for (let i = 0; i <= ARC_STEPS; i++) {
+        const t = i / ARC_STEPS, u = 1 - t;
+        spot.copy(b.from).multiplyScalar(u * u).addScaledVector(ctrl, 2 * u * t).addScaledVector(b.to, t * t);
+        along.subVectors(ctrl, b.from).multiplyScalar(u).addScaledVector(out.subVectors(b.to, ctrl), t);
+        side.crossVectors(along, view.subVectors(camera.position, spot)).normalize().multiplyScalar(this.width / 2);
+        position.setXYZ(2 * i, spot.x + side.x, spot.y + side.y, spot.z + side.z);
+        position.setXYZ(2 * i + 1, spot.x - side.x, spot.y - side.y, spot.z - side.z);
+      }
+      position.needsUpdate = true;
+      b.mesh.material.opacity = b.life / BEAM_LIFE;
+    }
+  }
+}
+
 /** Projectiles, pooled: a dark body along the flight with a glowing core. */
 class Shells {
   constructor(scene, count = 64) {
@@ -262,7 +318,7 @@ export class Effects {
     this.embers = new Pool(scene, 800, THREE.AdditiveBlending, 0.012);
     this.beams = new Beams(scene);
     // Held beams: one slot per mech (0 for our own, id + 1 for others), refreshed while on.
-    this.mends = new Beams(scene, 17, 0x60ffb0, 0.5);
+    this.mends = new Arcs(scene, 17, 0x60ffb0, 0.5);
     this.shells = new Shells(scene);
     // Two short-lived lights at the latest muzzle flashes (High quality only).
     this.lights = [0, 1].map(() => {
@@ -305,11 +361,16 @@ export class Effects {
     this.beams.spawn(from, to);
   }
 
-  /** Holds `slot`'s beam on from `from` to `to` this frame (it fades once no longer held), glowing where it lands. */
-  mend(slot, from, to, dt) {
+  /**
+   * Holds `slot`'s beam on from `from` to `to` this frame (it fades once no longer held), leaving
+   * along `aim` (a unit vector; straight at `to` without one), glowing where it lands.
+   */
+  mend(slot, from, to, dt, aim) {
     const b = this.mends.items[slot];
     b.from.copy(from);
     b.to.copy(to);
+    if (aim) b.aim.copy(aim);
+    else b.aim.subVectors(to, from).normalize();
     b.life = BEAM_LIFE;
     for (let k = count(30, dt); k > 0; k--) this.glow.spawn(to, scatter(UP, 2, 1.5), { life: rand(0.15, 0.3), size: [0.5, 0.1], color: REPAIR, drag: 3 });
   }
@@ -457,7 +518,7 @@ export class Effects {
       }
       const shell = p.look === 'shell', dart = p.look === 'dart', slug = p.look === 'slug' || p.look === 'ember';
       const pellet = !slug && (p.primary || p.look === 'flak');
-      item.mesh.scale.setScalar(slug ? 1.1 + 0.8 * p.charge : pellet ? 0.6 : dart ? 0.6 : shell ? 1.6 : 1);
+      item.mesh.scale.setScalar(slug ? 1.1 + 0.8 * p.charge : pellet ? 0.6 : dart ? 0.6 : shell ? (p.primary ? 0.8 : 1.6) : 1);
       item.core.visible = !shell || (p.age * 6) % 1 < 0.5;
       item.core.material.color.setHex(slug ? 0xff9a40 : pellet ? 0xffe2a0 : shell ? 0xff4020 : 0xffb060);
       if (slug) {

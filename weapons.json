@@ -43,6 +43,20 @@
         "shot_damage": 18.4, "heat_per_shot": 24, "spread_deg": 0.1, "bloom_per_shot": 0, "bloom_max": 0,
         "shot_speed": 90, "shot_gravity": 6, "shot_radius": 1, "weapon_range": 200
       }
+    },
+    {
+      "id": "hail", "name": "Grenade rifle", "unlock": 3, "desc": "A drum-fed grenade rifle: three small grenades a second that drop, bounce off what they hit, and burst on a mech or after 1 s", "sound": "mortar", "recoil": "medium", "projectile": "shell",
+      "stats": {
+        "fire_rate": 3, "shot_damage": 14, "heat_per_shot": 8, "spread_deg": 0.4, "bloom_per_shot": 0.3, "bloom_max": 2, "bloom_recovery": 4,
+        "shot_speed": 45, "shot_gravity": 20, "shot_radius": 2.5, "shot_bounce": 0.5, "shot_fuse": 1
+      }
+    },
+    {
+      "id": "talon", "name": "Homing rocket", "unlock": 2, "desc": "Single rockets that curve toward the enemy nearest your crosshair, within 6°, for as long as you keep them there; look away and they fly straight", "sound": "rocket", "recoil": "medium", "projectile": "rocket",
+      "stats": {
+        "fire_rate": 1.5, "shot_damage": 18, "heat_per_shot": 13, "spread_deg": 0, "bloom_per_shot": 0, "bloom_max": 0,
+        "shot_speed": 60, "shot_gravity": 0, "shot_radius": 2, "shot_turn": 50, "shot_seek_cone": 6, "weapon_range": 150
+      }
     }
   ],
   "secondaries": [
@@ -70,10 +84,10 @@
       "stats": { "alt_radius": 8 }
     },
     {
-      "id": "spindle", "name": "Rail gun", "unlock": 3, "desc": "Middle-click toggles the scope; let go of the trigger to fire one fast, flat, heavy slug", "sound": "spindle", "recoil": "high", "projectile": "rail", "zoom": 2.5,
+      "id": "spindle", "name": "Rail gun", "unlock": 3, "desc": "Middle-click toggles the scope; let go of the trigger to fire one fast, flat, heavy slug that punches through shield domes and barriers, wearing them as it passes", "sound": "spindle", "recoil": "high", "projectile": "rail", "zoom": 2.5,
       "stats": {
         "alt_release": 1, "alt_count": 1, "alt_speed": 1000, "alt_gravity": 0, "alt_loft_deg": 0, "alt_bounce": 0,
-        "alt_fuse": 0.4, "alt_damage": 34, "alt_radius": 0.8, "alt_cooldown": 3.5, "alt_heat": 66
+        "alt_fuse": 0.4, "alt_damage": 34, "alt_radius": 0.8, "alt_cooldown": 3.5, "alt_heat": 66, "alt_pierce": 1
       }
     },
     {
@@ -103,6 +117,13 @@
         "alt_cooldown": 1, "alt_heat": 12, "alt_count": 1, "alt_spread_deg": 0, "alt_speed": 50, "alt_loft_deg": 10, "alt_gravity": 18,
         "alt_bounce": 0, "alt_stick": 1, "alt_trigger": 3.5, "alt_max": 10, "alt_fuse": 20, "alt_damage": 22, "alt_radius": 3.5
       }
+    },
+    {
+      "id": "piston", "name": "Pile driver", "unlock": 2, "desc": "A rocket punch: hold to spool up the spike's booster, let go to fire it. The longer the wind-up, the harder it hits (20, or 55 fully wound) and the farther the booster carries you, up to 12 m: onto an enemy ahead in that range, or else along your aim, up too if you look up. A hit throws them along your aim, a Light farthest, and a wall they slam into hurts too. It fires even overheated, but locks your guns for 0.5 s", "sound": "piston", "recoil": "high",
+      "stats": {
+        "alt_melee": 3, "alt_charge_time": 0.8, "alt_lunge": 12, "alt_lunge_speed": 36, "alt_impulse": 255, "alt_charge_damage": 2.75,
+        "alt_release": 1, "alt_damage": 20, "alt_cooldown": 2.5, "alt_heat": 12
+      }
     }
   ],
   "offensive": [
@@ -115,8 +136,8 @@
   "support": [
     { "id": "emp", "name": "Brownout", "unlock": 0, "desc": "An EMP around you: drains enemies' fuel and jams their boost" },
     { "id": "orb", "name": "Salve", "unlock": 2, "desc": "Drops a repair orb at your feet, like a wreck's, that only your side can heal from" },
-    { "id": "dome", "name": "Shield dome", "unlock": 2, "desc": "A half-sphere 21 m across around you for 4 s, or until enemy fire wears off its 150 hull: no shot crosses it either way, whoever fires it, so to hit someone under it you have to walk in or break it; mechs walk through" },
-    { "id": "barrier", "name": "Barrier", "unlock": 2, "desc": "Raises a wall 8 m wide and 8 m tall, 4 m ahead across your aim, for 5 s, or until enemy fire wears off its 200 hull: nothing gets through, either way" }
+    { "id": "dome", "name": "Shield dome", "unlock": 2, "desc": "A half-sphere 21 m across around you for 4 s, or until enemy fire wears off its 150 hull: no shot but a rail slug crosses it either way, whoever fires it, so to hit someone under it you have to walk in or break it; mechs walk through" },
+    { "id": "barrier", "name": "Barrier", "unlock": 2, "desc": "Raises a wall 8 m wide and 8 m tall, 4 m ahead across your aim, for 5 s, or until enemy fire wears off its 200 hull: nothing but a rail slug gets through, either way" }
   ],
   "abilities": [
     { "id": "slipstream", "name": "Speed boost", "unlock": 0, "classes": ["A"], "desc": "Refills the fuel tank, then 4 s of boost that burns no fuel and runs 25% faster" },

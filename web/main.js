@@ -24,12 +24,15 @@ import sinkhole from '../maps/sinkhole.json';
 import blockout from '../maps/blockout.json';
 import canopy from '../maps/canopy.json';
 import crashsite from '../maps/crashsite.json';
+import ziggurat from '../maps/ziggurat.json';
+import span from '../maps/span.json';
 import { CROUCH, LISTS, Mech, TEAMS, armament, ownLoadout, showRound, stoke, windUp } from './mech.js';
 import { Debug } from './debug.js';
 import { Cockpit } from './cockpit.js';
 import { Sound } from './audio.js';
 import { Hud, hex } from './hud.js';
 import { createSky } from './sky.js';
+import { heatShimmer } from './heat.js';
 import { STORE, fits, levelAt, levelXp, owns, pointsLeft, readRecord } from './progress.js';
 
 await init();
@@ -57,7 +60,7 @@ const sameOrigin = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${locatio
 const server = params.get('server') ?? (import.meta.env.PROD && !params.has('offline') ? sameOrigin : null);
 const net = server ? new WasmNetClient() : null;
 // Maps by name; the sim's compiled-in list gives the index. Offline, ?map=<name> picks one.
-const MAPS = { saltworks, blockout, foundry, verdigris, riftline, sump, sinkhole, canopy, crashsite };
+const MAPS = { saltworks, blockout, foundry, verdigris, riftline, sump, sinkhole, canopy, crashsite, ziggurat, span };
 const mapIndex = (name) => {
   for (let i = 0; map_name(i); i++) if (map_name(i) === name) return i;
   return 0;
@@ -102,7 +105,7 @@ if (net) {
 }
 
 // Index layout of state(); keep in sync with mech_state in sim/src/wasm.rs.
-const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, SPIN: 31, CHARGE: 32, BLOOM: 33, FIRE_WAIT: 34, LOCK: 35, LOCK_T: 36, BEAM: 37, BEAM_END: 38, SHIELD: 41, LIMPET: 42, OFFSET: 43 };
+const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, SPIN: 31, CHARGE: 32, BLOOM: 33, FIRE_WAIT: 34, LOCK: 35, LOCK_T: 36, BEAM: 37, BEAM_END: 38, SHIELD: 41, LIMPET: 42, SEEK: 43, ALT_CHARGE: 44, BURN: 45, OFFSET: 46 };
 // The HUD marks our side in blue and the other side in red, whichever team we're on.
 const FRIEND = TEAMS[0], FOE = TEAMS[1];
 const DEATHMATCH = 1, MISSILE_ASSAULT = 2, SIEGE = 3; // their indices in the sim's Mode::ALL
@@ -137,7 +140,8 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.info.autoReset = false; // the world and cockpit passes both count toward the stats
 const glass = new Hud(document.getElementById('glass'));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+const EXPOSURE = 1.05; // a map's palette may set its own
+renderer.toneMappingExposure = EXPOSURE;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 document.body.prepend(renderer.domElement);
 const scene = new THREE.Scene();
@@ -195,6 +199,7 @@ composer.addPass(bloom);
 const output = new OutputPass();
 output.needsSwap = false; // so every frame renders into the same target
 composer.addPass(output);
+const shimmer = heatShimmer(output); // a scorching map's heat shimmer, in the output pass
 
 
 const fx = new Effects(scene);
@@ -227,6 +232,8 @@ const ensureArena = (index) => {
   arena = buildArena(scene, map);
   aimSun(map.palette?.sunDir ?? SUN_AT);
   sky.fit(map);
+  shimmer.setMap(map);
+  renderer.toneMappingExposure = map.palette?.exposure ?? EXPOSURE;
   glass.setMap(map);
   objectives.setMap(map);
   hemi.color.set(light.sky);
@@ -249,7 +256,8 @@ function applyQuality() {
   sky.setHaze(gfx.haze);
   // The target's MSAA is most of High's cost: 11-11-10 float (no alpha) halves it against 16-bit
   // RGBA, and on a 2x screen two samples look as smooth as four.
-  composer.reset(new THREE.WebGLRenderTarget(1, 1, { type: THREE.UnsignedInt101111Type, format: THREE.RGBFormat, samples: !gfx.aa ? 0 : renderer.getPixelRatio() > 1 ? 2 : 4 }));
+  // Its depth (resolved from the samples) tells the heat shimmer far from near.
+  composer.reset(new THREE.WebGLRenderTarget(1, 1, { type: THREE.UnsignedInt101111Type, format: THREE.RGBFormat, samples: !gfx.aa ? 0 : renderer.getPixelRatio() > 1 ? 2 : 4, depthTexture: new THREE.DepthTexture(1, 1) }));
   camera.layers.set(0);
   if (high && gfx.shafts) camera.layers.enable(HIGH_ONLY);
   if (!bloomed) camera.layers.enable(LOW_ONLY);
@@ -665,7 +673,9 @@ const repairPhase = (t, cls = classIdx) => (t > 0 ? Math.min(t / Math.max(classV
 let prev = game.state(), curr = prev, acc = 0, last = performance.now();
 const eye = new THREE.Vector3(), offset = new THREE.Vector3(), aim = new THREE.Vector3();
 const pos = new THREE.Vector3(), vel = new THREE.Vector3(), seen = new THREE.Vector3(), step = new THREE.Vector3();
-const beamFrom = new THREE.Vector3(), beamTo = new THREE.Vector3();
+const beamFrom = new THREE.Vector3(), beamTo = new THREE.Vector3(), beamAim = new THREE.Vector3();
+/** The way `yaw` and `pitch` look, as the sim's `aim_ray` has it. */
+const aimDir = (yaw, pitch) => beamAim.set(0, Math.sin(pitch), -Math.cos(pitch)).applyAxisAngle(THREE.Object3D.DEFAULT_UP, yaw);
 const BEAM_HOLD = 120; // ms a remote's beam stays drawn after the server last said it was on
 // How faint camouflage draws a mech: our own or a teammate's (a ghost), and an enemy's (a veil
 // that dims what's behind it by about 6%, on any map: faint, but there to see).
@@ -727,6 +737,8 @@ function frame(now) {
     for (let k = 0; k < ends.length; k += 3) shots.push(Object.assign(new THREE.Vector3(ends[k], ends[k + 1], ends[k + 2]), { first: k === 0 }));
     if (curr[S.SHOT]) recoil(armament(loadout).primary, T('fire_rate'));
     if (curr[S.LAUNCHED]) recoil(armament(loadout).secondary, 1 / T('alt_cooldown'));
+    // A melee strike launches nothing: the release is the swing.
+    if (curr[S.LAUNCHED] && T('alt_melee') > 0) me.launch();
     // Own EMPs show as predicted; the server's Pulse for them only marks hits. A Salve's orb
     // comes with the snapshots.
     if (curr[S.PULSED] && armament(loadout).support.id === 'emp') {
@@ -814,13 +826,14 @@ function frame(now) {
     health: curr[S.HEALTH], heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     ability: curr[S.ABILITY_T] > 0, damage: 1 - curr[S.HEALTH] / T('health_max'), shielded: !!curr[S.SHIELD],
     repair: repairPhase(curr[S.REPAIR_T]), cloak: myCloak,
+    wind: T('alt_charge_time') > 0 ? curr[S.ALT_CHARGE] : 0, burn: curr[S.BURN],
   });
   if (curr[S.JAMMED] > 0) fx.jam(toChest(spark.copy(pos), classIdx), dt);
 
   if (net) {
     const r = net.remotes(now), live = new Set();
-    for (let i = 0; i < r.length; i += 21) {
-      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering, bot, abilityOn, repairing, primary, secondary, docked, shielded, ability, offensive, support] = r.subarray(i, i + 21);
+    for (let i = 0; i < r.length; i += 23) {
+      const [id, team, cls, x, y, z, ryaw, rpitch, health, boosting, hovering, bot, abilityOn, repairing, primary, secondary, docked, shielded, ability, offensive, support, wind, burn] = r.subarray(i, i + 23);
       if (docked) continue; // in the hangar: nothing to draw
       let e = remotes.get(id);
       if (e && (e.cls !== cls || e.mech.loadout.primary !== primary || e.mech.loadout.secondary !== secondary || e.mech.loadout.ability !== ability)) {
@@ -852,9 +865,9 @@ function frame(now) {
         grounded: !hovering && Math.abs(e.vel.y) < 1.5, boosting: !!boosting, hovering: !!hovering, health,
         ability: !!abilityOn, damage: 1 - health / classValue(cls, 'health_max'), shielded: !!shielded,
         repair: repairPhase(e.repairAt === null ? 0 : (now - e.repairAt) / 1000 + 1e-3, cls),
-        cloak: e.hidden ? CLOAK_HIDDEN : e.cloaked ? CLOAK_SEEN : 0, hidden: e.hidden,
+        cloak: e.hidden ? CLOAK_HIDDEN : e.cloaked ? CLOAK_SEEN : 0, hidden: e.hidden, wind, burn,
       });
-      if (now - (e.beamAt ?? -Infinity) < BEAM_HOLD) fx.mend(id + 1, e.mech.launcher.getWorldPosition(beamFrom), e.beamTo, dt);
+      if (now - (e.beamAt ?? -Infinity) < BEAM_HOLD) fx.mend(id + 1, e.mech.launcher.getWorldPosition(beamFrom), e.beamTo, dt, aimDir(ryaw, rpitch));
       if (now < (e.jammedUntil ?? 0) && !e.hidden) fx.jam(toChest(spark.copy(e.pos), cls), dt);
       if (health > 0) debug.hitbox(e.pos, classValue(cls, 'mech_radius'), classValue(cls, 'mech_height') * (repairing ? CROUCH : 1));
     }
@@ -941,6 +954,19 @@ function frame(now) {
       if (b === myId) tookHit(a, now, from);
       else if (b >= 0) remotes.get(b)?.mech.hit();
     }
+    if (kind === 11) {
+      // A melee strike landing on b, or b slammed into a wall by the throw: a heavy, close impact.
+      blastAt.set(x, y, z);
+      fx.explosion(blastAt, 0.4);
+      fx.muzzleLight(blastAt);
+      sound.blast(3, blastAt, 0.5);
+      if (a === myId) {
+        hits.push({ at: now, kill: false });
+        sound.hitConfirm();
+      }
+      if (b === myId) tookHit(a, now);
+      else remotes.get(b)?.mech.hit();
+    }
     if (kind === 7 && a === myId) {
       // We hit a turret: a hit marker, and a kill's once it's wrecked.
       hits.push({ at: now, kill: b > 0 });
@@ -998,7 +1024,7 @@ function frame(now) {
     if (look === 'rail') fx.beam(shot.from, new THREE.Vector3(x + vx * ahead, y + vy * ahead, z + vz * ahead));
     // A shell or grenade whose velocity jumps between frames has bounced: it clanks, as hard as the
     // jump (one that stops dead, a mine sticking, doesn't).
-    if (!primary && shot.vel) {
+    if ((!primary || look === 'shell') && shot.vel) {
       const jump = shot.vel.distanceTo(vel);
       if (jump > BOUNCE_JUMP && vel.length() > 1) sound.clank(p, jump, item);
     }
@@ -1011,6 +1037,8 @@ function frame(now) {
   debug.endShells(live);
   fx.projectiles(drawn, dt);
   jets.push(...objectives.exhausts());
+  // Pile drivers' boosters roar through a punch.
+  for (const m of [me, ...[...remotes.values()].map((e) => e.mech)]) if (m.jet) jets.push({ x: m.jet.x, y: m.jet.y, z: m.jet.z, big: true });
   sound.exhausts(jets);
   drawOrbs(now, dt, alive, myTeam);
   drawSmoke(dt);
@@ -1069,7 +1097,7 @@ function frame(now) {
   // A held beam, from the launcher (the cockpit's, in first person) to where the sim says it stops.
   if (curr[S.BEAM]) {
     const from = firstPerson && cockpit.weapons ? cockpit.launcherTip(camera, beamFrom) : me.launcher.getWorldPosition(beamFrom);
-    fx.mend(0, from, beamTo.set(curr[S.BEAM_END], curr[S.BEAM_END + 1], curr[S.BEAM_END + 2]), dt);
+    fx.mend(0, from, beamTo.set(curr[S.BEAM_END], curr[S.BEAM_END + 1], curr[S.BEAM_END + 2]), dt, aimDir(yaw, pitch));
   }
   // ...and light it from the night lamps and flashes nearby (not our own guns': the cockpit flashes those).
   if (firstPerson) {
@@ -1113,7 +1141,8 @@ function frame(now) {
   sound.cockpit({
     alive, heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     hull: curr[S.HEALTH] / T('health_max'), repairing: repairPhase(curr[S.REPAIR_T]), jammed: curr[S.JAMMED] > 0, beaming: !!curr[S.BEAM],
-    spin: curr[S.SPIN], charge: curr[S.CHARGE], incoming,
+    // A pile driver's booster spools up like the Gatling's barrels.
+    spin: Math.max(curr[S.SPIN], T('alt_charge_time') > 0 ? curr[S.ALT_CHARGE] : 0), charge: curr[S.CHARGE], incoming,
     lock: curr[S.LOCK] > 0 ? Math.min(curr[S.LOCK_T] / Math.max(T('alt_lock_time'), 1e-6), 1) : 0,
   }, dt);
   // A jump pad fires as a mech leaves it upward: a pulse on the pad and a thump.
@@ -1197,6 +1226,7 @@ function frame(now) {
 
   if (!firstPerson && alive) debug.hitbox(pos, T('mech_radius'), T('mech_height') * (curr[S.REPAIR_T] > 0 || curr[S.STAND] > 0 ? CROUCH : 1));
   debug.update(dt);
+  shimmer.tick(now / 1000, camera);
   if (quality === 'high') composer.render(dt);
   else renderer.render(scene, camera);
   if (firstPerson) {
@@ -1621,7 +1651,8 @@ function drawGlass(now, myTeam) {
       unit: curr[S.LOCK] - 1, progress: Math.min(curr[S.LOCK_T] / Math.max(T('alt_lock_time'), 1e-6), 1),
       left: T('alt_lock_time') + T('alt_lock_hold') - curr[S.LOCK_T], // s the lock holds once made
     } : null,
-    windup: T('charge_time') > 0 ? curr[S.CHARGE] : T('spin_up') > 0 ? curr[S.SPIN] : 0,
+    seek: curr[S.SEEK] > 0 ? curr[S.SEEK] - 1 : null,
+    windup: T('alt_charge_time') > 0 && curr[S.ALT_CHARGE] > 0 ? curr[S.ALT_CHARGE] : T('charge_time') > 0 ? curr[S.CHARGE] : T('spin_up') > 0 ? curr[S.SPIN] : 0,
     // The cone the next shot lands in (base spread plus bloom) as a fraction of the half-height,
     // and a slow primary's refire, 0 to 1 (null for fast guns and spinning ones).
     spread: Math.tan(THREE.MathUtils.degToRad(T('spread_deg') + curr[S.BLOOM])) / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)),

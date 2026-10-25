@@ -233,9 +233,11 @@ export class Sound {
    * A primary shot with weapons.json `sound` at `pos` (null: ours, clear on the cockpit bus;
    * others are heard through the hull). Each is a broadband report, a low punch, a body, and the
    * weapon's mechanical action; no high ringing, which is what reads as a plink. A charged shot
-   * (`charge` 0-1) goes off louder, up to 30% at full.
+   * (`charge` 0-1) goes off louder, up to 30% at full. A grenade or rocket primary launches like
+   * the secondary that sounds the same.
    */
   shot(sound, pos, charge = 0) {
+    if (sound === 'mortar' || sound === 'rocket') return this.launch(sound, pos);
     const mix = SHOT_MIX[sound] ?? {};
     const out = this.voice(pos, mix.life ?? 0.6, undefined, mix.send ?? 0);
     if (!out) return;
@@ -346,6 +348,19 @@ export class Sound {
       this.growl(out, 'sawtooth', 150, 80, 600, 0.004, 0.22, 0.35);
       this.tone(out, 'sine', 75, 38, 0.003, 0.32, 0.9);
       this.noise(out, 'white', 'bandpass', 700, 250, 0.01, 0.25, 0.45, 1.2);
+      return;
+    }
+    if (sound === 'piston') {
+      // Pile driver: its booster lighting, a hard crack and a deep whump into a falling roar (the
+      // exhaust carries the burn on), as the ram thumps out and its latch clacks behind.
+      const out = this.voice(pos, 0.7, undefined, 0.15);
+      if (!out) return;
+      out.gain.value = pos ? 1.6 : 1.1;
+      this.noise(out, 'white', 'highpass', 2200, 1200, 0.0005, 0.03, 0.7);
+      this.tone(out, 'sine', 110, 45, 0.003, 0.3, 1.0);
+      this.noise(out, 'brown', 'lowpass', 1600, 300, 0.01, 0.45, 0.8);
+      this.noise(out, 'white', 'bandpass', 1400, 500, 0.02, 0.4, 0.4, 0.8);
+      this.tone(out, 'square', 900, 600, 0.001, 0.05, 0.1, 0.1);
       return;
     }
     const out = this.voice(pos, 0.5);

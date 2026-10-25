@@ -55,7 +55,7 @@ impl Projectile {
 pub type Id = (u8, u32, u8, bool);
 
 /// What a projectile flies and bursts with: the secondary's `alt_*` values, or the primary's
-/// `shot_*` ones (no bounce, bursting at `weapon_range`).
+/// `shot_*` ones (bursting at `shot_fuse`, or at `weapon_range` without one).
 struct Ballistics {
     gravity: f32,
     bounce: f32,
@@ -65,16 +65,18 @@ struct Ballistics {
     /// Mines stick where they land, and burst for an enemy within `trigger`.
     stick: bool,
     trigger: f32,
+    /// Flies through domes and barriers (`alt_pierce`).
+    pierce: bool,
 }
 
 fn ballistics(t: &Tuning, primary: bool) -> Ballistics {
     if primary {
-        let fuse = t.weapon_range / t.shot_speed.max(1.0);
-        Ballistics { gravity: t.shot_gravity, bounce: 0.0, fuse, damage: t.shot_damage, radius: t.shot_radius, stick: false, trigger: 0.0 }
+        let fuse = if t.shot_fuse > 0.0 { t.shot_fuse } else { t.weapon_range / t.shot_speed.max(1.0) };
+        Ballistics { gravity: t.shot_gravity, bounce: t.shot_bounce, fuse, damage: t.shot_damage, radius: t.shot_radius, stick: false, trigger: 0.0, pierce: false }
     } else {
         Ballistics {
             gravity: t.alt_gravity, bounce: t.alt_bounce, fuse: t.alt_fuse, damage: t.alt_damage, radius: t.alt_radius,
-            stick: t.alt_stick > 0.5, trigger: t.alt_trigger,
+            stick: t.alt_stick > 0.5, trigger: t.alt_trigger, pierce: t.alt_pierce > 0.5,
         }
     }
 }
@@ -162,7 +164,7 @@ fn unboosted<'a>(t: &'a Tuning, p: &Projectile) -> Cow<'a, Tuning> {
     if p.n >= BOMBLET && !p.primary {
         let mut b = t.clone();
         (b.alt_damage, b.alt_radius, b.alt_fuse) = (t.alt_split_damage, t.alt_split_radius, BOMBLET_FUSE);
-        (b.alt_bounce, b.alt_stick, b.alt_trigger, b.alt_split, b.alt_turn) = (0.0, 0.0, 0.0, 0.0, 0.0);
+        (b.alt_bounce, b.alt_stick, b.alt_trigger, b.alt_split, b.alt_turn, b.alt_pierce) = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
         return Cow::Owned(b);
     }
     if p.charge <= 0.0 {
@@ -227,24 +229,39 @@ pub fn track(arena: &Arena, t: &Tuning, m: &mut Mech, chests: &[(u8, Vector)]) {
     }
     let ray = aim_ray(t, m);
     let (reach, cone) = (t.alt_speed * t.alt_fuse, t.alt_lock_cone.to_radians());
-    // How far off the aim `chest` is, if it's in the cone, in sight and in reach.
-    let sighted = |chest: Vector| {
-        let to = chest - ray.origin;
-        let (dist, angle) = (to.length(), ray.dir.angle_between(to));
-        let clear = || arena.cast_ray(&Ray::new(ray.origin, to / dist), dist).is_none();
-        (dist <= reach && angle <= cone && clear()).then_some(angle)
-    };
     if m.aux_pressed {
-        let nearest = chests.iter().filter_map(|&(id, chest)| Some((id, sighted(chest)?))).min_by(|a, b| a.1.total_cmp(&b.1));
-        (m.lock, m.lock_time) = (nearest.map_or(0, |(id, _)| id + 1), 0.0);
+        (m.lock, m.lock_time) = (nearest(arena, &ray, reach, cone, chests), 0.0);
         return;
     }
     let chest = chests.iter().find(|(id, _)| m.lock == id + 1).map(|&(_, chest)| chest);
     let made = m.lock_time >= t.alt_lock_time;
     match chest {
-        Some(chest) if (made || sighted(chest).is_some()) && m.lock_time < t.alt_lock_time + t.alt_lock_hold => m.lock_time += DT,
+        Some(chest) if (made || sighted(arena, &ray, reach, cone, chest).is_some()) && m.lock_time < t.alt_lock_time + t.alt_lock_hold => m.lock_time += DT,
         _ => (m.lock, m.lock_time) = (0, 0.0),
     }
+}
+
+/// A seeking primary's mark (`t.shot_turn` > 0), after `m`'s tick: whichever of `chests` (by
+/// player id) is nearest the aim within `shot_seek_cone` and `weapon_range`, in sight. Its shots
+/// in flight home on whatever it marks now, so looking off a target lets them fly on straight.
+pub fn seek(arena: &Arena, t: &Tuning, m: &mut Mech, chests: &[(u8, Vector)]) {
+    let on = t.shot_turn > 0.0 && m.health > 0.0;
+    m.seek = if on { nearest(arena, &aim_ray(t, m), t.weapon_range, t.shot_seek_cone.to_radians(), chests) } else { 0 };
+}
+
+/// How far off `ray` (radians) `chest` is, if it's within `cone` of it and `reach` of its
+/// origin, in sight.
+fn sighted(arena: &Arena, ray: &Ray, reach: f32, cone: f32, chest: Vector) -> Option<f32> {
+    let to = chest - ray.origin;
+    let (dist, angle) = (to.length(), ray.dir.angle_between(to));
+    let clear = || arena.cast_ray(&Ray::new(ray.origin, to / dist), dist).is_none();
+    (dist <= reach && angle <= cone && clear()).then_some(angle)
+}
+
+/// Of `chests` (by player id), the one `sighted` nearest `ray`: its id + 1, or 0 for none.
+fn nearest(arena: &Arena, ray: &Ray, reach: f32, cone: f32, chests: &[(u8, Vector)]) -> u8 {
+    let near = chests.iter().filter_map(|&(id, chest)| Some((id, sighted(arena, ray, reach, cone, chest)?)));
+    near.min_by(|a, b| a.1.total_cmp(&b.1)).map_or(0, |(id, _)| id + 1)
 }
 
 
@@ -253,16 +270,17 @@ pub fn track(arena: &Arena, t: &Tuning, m: &mut Mech, chests: &[(u8, Vector)]) {
 const TURRET_TURN: f32 = 3.0;
 
 /// Turns homing shell `p` (tuned by `t`) toward `goal`, by at most this tick's `alt_turn`, once
-/// it's flown `alt_home_delay`.
+/// it's flown `alt_home_delay`; a seeking primary's by `shot_turn`, from the muzzle.
 pub fn home(t: &Tuning, p: &mut Projectile, goal: Vector) {
     let (speed, want) = (p.vel.length(), (goal - p.pos).normalize_or_zero());
-    if p.primary || t.alt_turn <= 0.0 || p.age < t.alt_home_delay || speed < 1e-3 || want == Vector::ZERO {
+    let (turn, delay) = if p.primary { (t.shot_turn, 0.0) } else { (t.alt_turn, t.alt_home_delay) };
+    if turn <= 0.0 || p.age < delay || speed < 1e-3 || want == Vector::ZERO {
         return;
     }
     let have = p.vel / speed;
     let axis = have.cross(want).normalize_or_zero();
     if axis != Vector::ZERO {
-        let turn = t.alt_turn * if p.target > crate::deploy::TARGET { TURRET_TURN } else { 1.0 };
+        let turn = turn * if p.target > crate::deploy::TARGET { TURRET_TURN } else { 1.0 };
         p.vel = Rotation::from_axis_angle(axis, have.angle_between(want).min(turn.to_radians() * DT)) * have * speed;
     }
 }
@@ -296,10 +314,11 @@ pub fn set_off<'a>(owner: u8, shells: impl IntoIterator<Item = &'a mut Projectil
     }
 }
 
-/// Advances `p` one tick: gravity, then this tick's path against the arena and `hit_mech`, which
-/// gives how far along a ray (up to a limit) the nearest mech stops it. Off the arena it sticks if
-/// it's a mine (and stays put from then on), bounces if its weapon bounces, else bursts; it always
-/// bursts on a mech or once its fuse runs out. Returns where it burst.
+/// Advances `p` one tick: gravity, then this tick's path against the arena (through its barriers,
+/// if it pierces) and `hit_mech`, which gives how far along a ray (up to a limit) the nearest mech
+/// stops it. Off the arena it sticks if it's a mine (and stays put from then on), bounces if its
+/// weapon bounces, else bursts; it always bursts on a mech or once its fuse runs out. Returns
+/// where it burst.
 pub fn fly(arena: &Arena, t: &Tuning, p: &mut Projectile, mut hit_mech: impl FnMut(&Ray, f32) -> Option<f32>) -> Option<Vector> {
     let b = ballistics(t, p.primary);
     p.age += DT;
@@ -311,7 +330,7 @@ pub fn fly(arena: &Arena, t: &Tuning, p: &mut Projectile, mut hit_mech: impl FnM
     let len = step.length();
     if len > 1e-6 {
         let ray = Ray::new(p.pos, step / len);
-        let wall = arena.cast_ray_normal(&ray, len);
+        let wall = if b.pierce { arena.cast_past_barriers(&ray, len) } else { arena.cast_ray_normal(&ray, len) };
         if let Some(toi) = hit_mech(&ray, wall.map_or(len, |(toi, _)| toi)) {
             return Some(ray.point_at((toi - STANDOFF).max(0.0)));
         }
@@ -490,6 +509,36 @@ mod tests {
         assert!(path.iter().all(|p| p.pos.y >= 0.0) && at.y >= 0.0, "went under the floor");
         let ticks = path.len() as f32;
         assert!((ticks * DT - t.alt_fuse).abs() < DT, "burst after {} s", ticks * DT);
+    }
+
+    #[test]
+    fn grenade_rifle_grenades_bounce_then_burst_on_their_fuse() {
+        let arena = blockout();
+        let (t, m) = armed(MechClass::B, Loadout::named("hail", "rocket"), [0.0, 0.0, 45.0], 0.0, -0.6);
+        let (at, path) = fly_out(&arena, &t, weapon::volley(&t, &m, 0, 1)[0]);
+        assert!(path.windows(2).any(|w| w[0].vel.y < 0.0 && w[1].vel.y > 0.0), "never bounced");
+        assert!(path.iter().all(|p| p.pos.y >= 0.0) && at.y >= 0.0, "went under the floor");
+        assert!((path.len() as f32 * DT - t.shot_fuse).abs() < DT, "burst after {} s", path.len() as f32 * DT);
+    }
+
+    #[test]
+    fn homing_rockets_mark_the_enemy_nearest_the_aim_and_turn_toward_it() {
+        let arena = blockout();
+        let (t, mut m) = armed(MechClass::B, Loadout::named("talon", "rocket"), [0.0, 0.0, 40.0], 0.0, 0.0);
+        let eye = aim_ray(&t, &m).origin;
+        let off = |deg: f32| eye + Rotation::from_rotation_y(deg.to_radians()) * Vector::NEG_Z * 20.0;
+        let (near, wide) = (off(4.0), off(-15.0));
+        seek(&arena, &t, &mut m, &[(3, wide), (5, near)]);
+        assert_eq!(m.seek, 6, "marked the wrong one");
+        // Its shots launch marked; one turns toward the mark, from the muzzle on.
+        let mut p = weapon::volley(&t, &m, 0, 1)[0];
+        assert_eq!(p.target, 6);
+        let before = p.vel.angle_between(near - p.pos);
+        home(&t, &mut p, near);
+        assert!(p.vel.angle_between(near - p.pos) < before, "didn't turn");
+        // Nothing within the cone: nothing marked.
+        seek(&arena, &t, &mut m, &[(3, wide)]);
+        assert_eq!(m.seek, 0, "marked one outside the cone");
     }
 
     #[test]

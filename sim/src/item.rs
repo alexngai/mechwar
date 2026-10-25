@@ -109,6 +109,7 @@ impl Tuning {
             alt_trigger: 0.0,
             alt_split: 0.0,
             alt_turn: 0.0,
+            alt_pierce: 0.0,
             ..self.clone()
         };
         match item {
