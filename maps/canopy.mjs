@@ -330,12 +330,32 @@ const ridgePoint = (s) => {
 };
 const joints = []; // where one crest slab meets the next, level with crestY: a sure landing
 for (const [from, to] of [[0, TUNNEL - 5], [TUNNEL + 5, LS]]) {
-  const n = Math.ceil((to - from) / 12);
-  for (let i = 0; i < n; i++) {
-    const a = from + ((to - from) * i) / n - (i ? 0.6 : 0), b = from + ((to - from) * (i + 1)) / n + (i < n - 1 ? 0.6 : 0);
-    stone(ridgePoint(a), ridgePoint(b), 12, Math.max(crestY((a + b) / 2) - heightAt(...station(SPINE, (a + b) / 2).at) + 5, 4));
-    joints.push(from + ((to - from) * (i + 1)) / n);
+  const n = Math.ceil((to - from) / 12), at = (i) => from + ((to - from) * i) / n;
+  // Slabs from joint to joint, their ends on the crest line, each running 0.6 m on past its joints...
+  const slabs = Array.from({ length: n }, (_, i) => {
+    const a = at(i) - (i ? 0.6 : 0), b = at(i + 1) + (i < n - 1 ? 0.6 : 0);
+    return { a, b, ya: crestY(a), yb: crestY(b) };
+  });
+  // ...but where the crest rounds over on a slope, the overlap left a lip a Heavy walking up stopped
+  // at (nav gave up on the north end). There the two meet at the joint instead, the upper one 2 cm
+  // under the lower, as Span's arch does: a step down going up. (Not where the Spine bends, which
+  // would open a crack at the outer edge. The north end's lower joint still stops a Medium or Heavy
+  // setting off from just under it; walking up from the foot, they cross.)
+  const grade = (i) => (crestY(at(i + 1)) - crestY(at(i))) / (at(i + 1) - at(i));
+  const heading = ({ a, b }) => {
+    const [p, q] = [station(SPINE, a).at, station(SPINE, b).at];
+    return [(q[0] - p[0]) / dist(p, q), (q[1] - p[1]) / dist(p, q)];
+  };
+  for (let i = 1; i < n; i++) {
+    const [p, q, j, gp, gq] = [slabs[i - 1], slabs[i], at(i), grade(i - 1), grade(i)];
+    const [u, v] = [heading(p), heading(q)];
+    if (gp * gq <= 0 || gq >= gp || u[0] * v[0] + u[1] * v[1] < Math.cos(Math.PI / 180)) continue;
+    [p.b, p.yb, q.a, q.ya] = [j, crestY(j) - (gp < 0 ? 0.02 : 0), j, crestY(j) - (gp > 0 ? 0.02 : 0)];
   }
+  for (const { a, b, ya, yb } of slabs) {
+    stone(lift(station(SPINE, a).at, ya), lift(station(SPINE, b).at, yb), 12, Math.max(crestY((a + b) / 2) - heightAt(...station(SPINE, (a + b) / 2).at) + 5, 4));
+  }
+  for (let i = 1; i <= n; i++) joints.push(at(i));
 }
 {
   // The crest's south end stands a step over the ground: a wedge up onto it, for the convoy's hauler.
