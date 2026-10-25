@@ -279,7 +279,7 @@ const SMOKE_THROW: f32 = 8.0;
 const MOTION_MAX: f32 = 60.0;
 /// How far off a pile driver's facing its target can be for it to let go: inside the lunge's cone.
 const STRIKE_CONE: f32 = 10.0 * PI / 180.0;
-/// Farthest a Heavy lobs its grenade launcher's shells.
+/// Farthest a bot lobs shells that land and wait to burst: a grenade launcher's (they bounce), mines.
 const MORTAR_RANGE: f32 = 40.0;
 /// Farthest a perch may be from the target.
 const VANTAGE_RANGE: f32 = 75.0;
@@ -1040,9 +1040,11 @@ impl Bot {
             self.misjudge.0 = (self.misjudge.0 + (self.rand() - 0.5) * speed_err * 0.3).clamp(-speed_err, speed_err);
             self.misjudge.1 = (self.misjudge.1 + (self.rand() - 0.5) * range_err * 0.3).clamp(-range_err, range_err);
             // The secondary, when ready and in its useful range, takes over the aim until it fires:
-            // led by the flight time, and lobbed along the flat-ground arc for the mortar. The gun
-            // holds meanwhile, so heat drops enough for the launch not to overheat. A beam aims
-            // where the gun does and runs alongside it; a heat-fed launcher waits to run hot.
+            // led by the flight time, and lobbed when it drops. Shells that burst in the air or on
+            // contact reach as far as they fly before their fuse runs out; ones that land and wait
+            // go no farther than a lob. The gun holds meanwhile, so heat drops enough for the
+            // launch not to overheat. A beam aims where the gun does and runs alongside it; a
+            // heat-fed launcher waits to run hot.
             let (eye, chest) = (me.pos + Vector::Y * t.eye_height, self.seen[0]);
             let dist = chest.distance(eye);
             let use_ = alt_use(t);
@@ -1052,7 +1054,7 @@ impl Bot {
                     AltUse::HeatFed => me.heat >= self.policy.heat_fed * t.heat_max && dist < 0.8 * t.alt_speed * t.alt_fuse,
                     // A pile driver winds up on the way in.
                     AltUse::Melee => dist < 2.0 * t.alt_lunge,
-                    _ => dist < if t.alt_gravity > 0.0 { MORTAR_RANGE } else { 0.8 * t.alt_speed * t.alt_fuse } && dist > t.alt_radius + 2.0,
+                    _ => dist < if t.alt_bounce > 0.0 || t.alt_stick > 0.5 { MORTAR_RANGE } else { 0.8 * t.alt_speed * t.alt_fuse } && dist > t.alt_radius + 2.0,
                 };
             let alt_cool = matches!(use_, AltUse::HeatFed | AltUse::Melee) || (!me.overheated && me.heat + t.alt_heat < t.heat_max);
             // Otherwise a grenade takes the aim the same way, every few seconds while charges last.
