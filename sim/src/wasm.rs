@@ -31,7 +31,7 @@ fn mech_state(m: &Mech) -> Vec<f32> {
     ]
 }
 
-/// Ten floats per deployable: kind (0 dome, 1 barrier, 2 MG turret, 3 rocket turret, 4 battleship, 5 base gun), team,
+/// Ten floats per deployable: kind (0 dome, 1 barrier, 2 MG turret, 3 rocket turret, 4 battleship, 5 base gun, 6 Convoy's hauler), team (2 for none),
 /// owner, base xyz, facing yaw and pitch, seconds left as of tick `now`, and hull left (infinite
 /// for a dome or barrier).
 fn deployable_floats(list: &[Deployable], now: u32) -> Vec<f32> {
@@ -315,6 +315,15 @@ impl WasmNetClient {
         flag(0).into_iter().chain(flag(1)).chain(c.captures.map(f32::from)).collect()
     }
 
+    /// Convoy as of the latest snapshot: where the hauler is along its route and where it started
+    /// (0 at team 0's base, 1 at team 1's), the team pushing it (-1 for none), its escorts,
+    /// whether both teams are at it (0/1), and the seconds its stall has left. Empty outside Convoy.
+    pub fn convoy(&self) -> Vec<f32> {
+        self.0.convoy().map_or_else(Vec::new, |c| {
+            vec![c.along, c.start, c.pusher.map_or(-1.0, f32::from), f32::from(c.escorts), if c.contested { 1.0 } else { 0.0 }, c.stall]
+        })
+    }
+
     /// Index of the server's map, or -1 before the Welcome.
     pub fn map(&self) -> i32 {
         self.0.map.map_or(-1, |m| m as i32)
@@ -361,7 +370,9 @@ impl WasmNetClient {
     /// owner, b = id it's on or -1, xyz = where it stops. Captured (kind 8): a = zone, b = team.
     /// Missile (kind 9): a = silo, b = the team that fired it. Ship (kind 10): a = team, b = 1
     /// launched, 0 down. Flag (kind 11): a = the flag's team, b = what happened to it (0 taken,
-    /// 1 dropped, 2 picked up, 3 returned, 4 captured), x = by whom (an id, or -1). Turret round
+    /// 1 dropped, 2 picked up, 3 returned, 4 captured), x = by whom (an id, or -1). Convoy (kind
+    /// 12): a = what (0 a team took it over, 1 stalled, 2 back up, 3 delivered), b = the team
+    /// (that took it over, or delivered it; else -1). Turret round
     /// (kind 6): a = the MG
     /// turret's owner, b = hit id or -1, xyz = where it stopped. Turret hit (kind 7): a = who hit
     /// it, b = 1 if that wrecked it.
@@ -381,6 +392,16 @@ impl WasmNetClient {
                 Event::Missile { silo, team } => out.extend([9.0, f32::from(silo), f32::from(team), 0.0, 0.0, 0.0]),
                 Event::Ship { team, up } => out.extend([10.0, f32::from(team), if up { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0]),
                 Event::Flag { team, what, by } => out.extend([11.0, f32::from(team), f32::from(what as u8), by.map_or(-1.0, f32::from), 0.0, 0.0]),
+                Event::Convoy(news) => {
+                    use crate::convoy::News;
+                    let (what, team) = match news {
+                        News::Pushing(t) => (0.0, f32::from(t)),
+                        News::Stalled => (1.0, -1.0),
+                        News::Rebooted => (2.0, -1.0),
+                        News::Delivered(t) => (3.0, f32::from(t)),
+                    };
+                    out.extend([12.0, what, team, 0.0, 0.0, 0.0]);
+                }
                 // The client turns these into the blasts and hits below.
                 Event::Launch(_) | Event::Blast { .. } => {}
             }

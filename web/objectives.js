@@ -29,7 +29,7 @@ export const SHIP_HULL = 3000;
 /** The AA gun fires a burst of AA_BURST rounds AA_GAP ms apart every AA_EVERY ms, while firing; it turns at AA_TURN rad/s. */
 const AA_BURST = 4, AA_GAP = 110, AA_EVERY = 1000, AA_TURN = 1.6;
 /** The deployable kinds of a battleship, and of a team mode's base gun. */
-export const SHIP = 4, SENTRY = 5;
+export const SHIP = 4, SENTRY = 5, HAULER = 6;
 /** Match game.rs SENTRY_SHIELD: a base gun's shield. */
 export const SENTRY_SHIELD = 400;
 /** A base gun's muzzles, this high over its foot (deploy::SENTRY_HEIGHT). */
@@ -52,6 +52,8 @@ export class Objectives {
     for (const z of [...this.silos, ...this.aa, ...this.stations, ...this.dropZones, ...this.stands]) gone(z.group);
     for (const f of this.flags) gone(f);
     for (const s of [...this.ships.values(), ...this.sentries.values()]) gone(s.group);
+    if (this.hauler) gone(this.hauler.group);
+    this.hauler = null;
     for (const m of [...this.missiles.map((m) => m.mesh), ...this.drops]) this.scene.remove(m);
     Object.assign(this, { missiles: [], ships: new Map(), sentries: new Map(), drops: [] });
     const o = map.objectives ?? {};
@@ -129,6 +131,61 @@ export class Objectives {
     const t = 1 - myTeam, s = this.stands[t];
     if (!s || ctf[7 * t] !== 0 || Math.hypot(feet.x - s.at.x, feet.z - s.at.z) > s.radius || Math.abs(feet.y - s.at.y) > s.band) return null;
     return { taking: ctf[7 * t + 5], contested: !!ctf[7 * t + 6] };
+  }
+
+  /**
+   * Convoy's hauler from `list` (deployable floats), eased toward where the server has it, legs
+   * striding as it walks (each landing a stomp), lights in the color of the side walking it
+   * (`convoy`: see WasmNetClient.convoy) for a player on `myTeam`, blinking while both sides are
+   * at it; dark and smoking while stalled.
+   */
+  drawHauler(list, convoy, myTeam, friend, foe, dt, now) {
+    let i = 0;
+    while (i < list.length && list[i] !== HAULER) i += 10;
+    if (i >= list.length) {
+      if (this.hauler) this.scene.remove(this.hauler.group);
+      this.hauler = null;
+      return;
+    }
+    const [, , , x, y, z, yaw, , , hull] = list.subarray(i, i + 10);
+    let h = this.hauler;
+    if (!h) {
+      h = this.hauler = { group: haulerMesh(), yaw, gait: 0, lift: [0, 0, 0, 0], stalled: hull <= 0 };
+      h.group.position.set(x, y, z);
+      this.scene.add(h.group);
+    }
+    const { group } = h, before = group.position.clone();
+    group.position.lerp(new THREE.Vector3(x, y, z), 1 - Math.exp(-10 * dt));
+    h.yaw += Math.atan2(Math.sin(yaw - h.yaw), Math.cos(yaw - h.yaw)) * (1 - Math.exp(-4 * dt));
+    group.rotation.y = h.yaw;
+    // Diagonal pairs stride in turn, a foot sweeping back on the ground and swinging forward up in the air.
+    h.gait += (Math.hypot(group.position.x - before.x, group.position.z - before.z) / HAULER_STRIDE) * Math.PI;
+    group.userData.legs.forEach((leg, k) => {
+      const p = h.gait + (k === 0 || k === 3 ? 0 : Math.PI), lift = Math.max(0, Math.sin(p)) * 1.1;
+      leg.foot.set(leg.rest.x, lift, leg.rest.z + Math.cos(p) * HAULER_STRIDE * 0.5);
+      if (h.lift[k] > 0.05 && lift <= 0.05) this.sound.step('hauler', leg.foot.clone().applyMatrix4(group.matrixWorld));
+      h.lift[k] = lift;
+      pose(leg);
+    });
+    const stalled = hull <= 0, top = group.position.clone().setY(group.position.y + HAULER_TOP);
+    if (stalled !== h.stalled) {
+      if (stalled) {
+        this.sound.fieldDown(top);
+        this.fx.explosion(top, 0.8);
+      } else this.sound.deploy(top);
+      h.stalled = stalled;
+    }
+    if (stalled) this.fx.smoke(top, dt, 0.15);
+    const [, , pusher, , contested] = convoy;
+    const blink = contested && Math.floor(now / 300) % 2;
+    const color = stalled ? 0x1a1c20 : blink ? 0xffb347 : pusher < 0 || pusher === undefined ? NEUTRAL : pusher === myTeam ? friend : foe;
+    for (const a of group.userData.accents) a.material.color.setHex(color);
+  }
+
+  /** The hauler as a mark for the glass and radar, in the color of the side walking it, blinking while contested. */
+  haulerMarks(convoy) {
+    if (!this.hauler || convoy.length < 6) return [];
+    return [{ label: 'CONVOY', at: this.hauler.group.position, owner: convoy[2], contested: !!convoy[4] }];
   }
 
   /** Each flag where it is, as a mark for the glass and radar (blinking while it lies dropped). */
@@ -708,6 +765,73 @@ function flagMesh() {
   finial.position.y = 5.05;
   group.add(pole, banner, finial);
   group.userData = { banner, cloth };
+  return group;
+}
+
+/** Convoy's hauler: how far a foot sweeps in a stride, and how high its payload stands. */
+const HAULER_STRIDE = 3.2, HAULER_TOP = 6.4;
+/** A leg's two segments (thigh and shin), each this long. */
+const HAULER_LEG = 3.4;
+
+/** Sets `leg`'s thigh and shin between its hip, a knee bent up and out, and its foot (in the walker's frame). */
+function pose(leg) {
+  const { hip, foot, thigh, shin } = leg;
+  const mid = hip.clone().add(foot).multiplyScalar(0.5), half = hip.distanceTo(foot) / 2;
+  const knee = mid.addScaledVector(UP, Math.sqrt(Math.max(HAULER_LEG ** 2 - half ** 2, 0.25)));
+  knee.x += Math.sign(hip.x) * 0.6;
+  for (const [mesh, a, b] of [[thigh, hip, knee], [shin, knee, foot]]) {
+    mesh.position.copy(a).add(b).multiplyScalar(0.5);
+    mesh.quaternion.setFromUnitVectors(UP, b.clone().sub(a).normalize());
+    mesh.scale.y = a.distanceTo(b);
+  }
+}
+
+/**
+ * Convoy's hauler, walking along -Z: a squat armored chassis with plated flanks (cover to crouch
+ * behind), a great warhead slung on top in hazard bands, a sensor head, and four jointed legs
+ * (`userData.legs`: hip, foot, rest, thigh, shin), with light strips (`userData.accents`) in the
+ * color of whoever walks it.
+ */
+function haulerMesh() {
+  const group = new THREE.Group();
+  const armor = new THREE.MeshStandardMaterial({ color: 0x4c5249, roughness: 0.7, metalness: 0.35 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x24282c, roughness: 0.5, metalness: 0.6 });
+  const hazard = new THREE.MeshStandardMaterial({ color: 0xd4a017, roughness: 0.6 });
+  const warhead = new THREE.MeshStandardMaterial({ color: 0x8a8f86, roughness: 0.45, metalness: 0.5 });
+  const accents = [];
+  const add = (geometry, material, x, y, z) => {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(x, y, z);
+    group.add(mesh);
+    return mesh;
+  };
+  add(new THREE.BoxGeometry(4.4, 1.4, 6.2), armor, 0, 3.4, 0); // chassis
+  add(new THREE.BoxGeometry(3.6, 0.6, 5.2), dark, 0, 2.5, 0); // belly
+  for (const x of [-1, 1]) {
+    add(new THREE.BoxGeometry(0.35, 2.4, 5.6), armor, x * 2.35, 3.6, 0); // flank plates
+    // Flat (not bloomed): long strips glowing would swamp the walker at a distance.
+    accents.push(add(new THREE.BoxGeometry(0.08, 0.14, 4.6), new THREE.MeshBasicMaterial({ color: NEUTRAL }), x * 2.56, 4.2, 0));
+  }
+  // The payload: a warhead in its cradle, banded in hazard yellow.
+  const body = add(new THREE.CylinderGeometry(1.45, 1.45, 5.6, 20), warhead, 0, 5.2, 0.2);
+  body.rotation.x = Math.PI / 2;
+  const nose = add(new THREE.ConeGeometry(1.45, 1.6, 20), warhead, 0, 5.2, -3.4);
+  nose.rotation.x = -Math.PI / 2;
+  for (const z of [-1.6, 1.2]) add(new THREE.CylinderGeometry(1.5, 1.5, 0.35, 20), hazard, 0, 5.2, z).rotation.x = Math.PI / 2;
+  for (const z of [-2, 2]) add(new THREE.BoxGeometry(3.4, 0.9, 0.5), dark, 0, 4.4, z); // cradle
+  // The sensor head, its eye lit.
+  add(new THREE.BoxGeometry(1.6, 0.9, 1.0), dark, 0, 3.6, -3.5);
+  accents.push(add(new THREE.BoxGeometry(1.0, 0.22, 0.1), hot(new THREE.MeshBasicMaterial({ color: NEUTRAL })), 0, 3.7, -4.02));
+  accents.push(add(new THREE.SphereGeometry(0.25, 10, 8), hot(new THREE.MeshBasicMaterial({ color: NEUTRAL })), 0, HAULER_TOP + 0.1, 1.2));
+  const segment = new THREE.CylinderGeometry(0.32, 0.26, 1, 8);
+  const legs = [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([sx, sz]) => {
+    const hip = new THREE.Vector3(sx * 2.0, 3.0, sz * 2.4), rest = new THREE.Vector3(sx * 5.0, 0, sz * 4.2);
+    add(new THREE.SphereGeometry(0.55, 10, 8), dark, hip.x, hip.y, hip.z);
+    const leg = { hip, rest, foot: rest.clone(), thigh: add(segment, armor, 0, 0, 0), shin: add(segment, dark, 0, 0, 0) };
+    pose(leg);
+    return leg;
+  });
+  group.userData = { legs, accents };
   return group;
 }
 

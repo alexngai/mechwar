@@ -78,6 +78,14 @@ pub struct ZoneSpot {
     pub pad: Option<[f32; 3]>,
 }
 
+/// A Convoy route: points on walkable ground from team 0's base through the middle to team 1's,
+/// and the index of the one the hauler starts at (the middle).
+#[derive(Deserialize, Clone, Debug)]
+pub struct Route {
+    pub points: Vec<[f32; 3]>,
+    pub start: usize,
+}
+
 /// Where a map's objective modes play.
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct Objectives {
@@ -101,6 +109,9 @@ pub struct Objectives {
     /// Capture the Flag: each team's flag stand (team 0's first), its zone inside the shelter.
     #[serde(default)]
     pub flags: Option<[ZoneSpot; 2]>,
+    /// Convoy: the hauler's route.
+    #[serde(default)]
+    pub convoy: Option<Route>,
 }
 
 #[derive(Deserialize, Clone, Debug)]

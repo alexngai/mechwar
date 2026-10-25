@@ -13,6 +13,7 @@ use crate::ability::{self, Ability};
 use crate::arsenal;
 use crate::bot::{self, Bot, Nav};
 use crate::collide;
+use crate::convoy::{self, Convoy, News};
 use crate::ctf::{self, Ctf, Happened};
 use crate::deploy::{self, Deployable, Kind};
 use crate::item::{self, Item};
@@ -40,6 +41,8 @@ const EU_POINTS: f32 = 0.5;
 /// capturing it, and for carrying our own flag home.
 const FLAG_CAPTURE_POINTS: f32 = 200.0;
 const FLAG_RETURN_POINTS: f32 = 50.0;
+/// Convoy: points a second for each mech escorting the hauler while it walks.
+const ESCORT_POINTS: f32 = 2.0;
 /// A dropped flag nobody can reach (no waypoint this near, or nothing under it) goes home.
 const FLAG_REACH: f32 = 12.0;
 const SHIP_POINTS: f32 = 0.05;
@@ -87,10 +90,12 @@ pub enum Mode {
     Siege,
     /// Two teams; take the enemy flag from their base to yours, first to `ctf::CAPTURES_TO_WIN`.
     CaptureTheFlag,
+    /// Two teams; escort the hauler from the middle into the enemy base, or push it further.
+    Convoy,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 5] = [Mode::TeamDeathmatch, Mode::Deathmatch, Mode::MissileAssault, Mode::Siege, Mode::CaptureTheFlag];
+    pub const ALL: [Mode; 6] = [Mode::TeamDeathmatch, Mode::Deathmatch, Mode::MissileAssault, Mode::Siege, Mode::CaptureTheFlag, Mode::Convoy];
 
     /// As the lobby and the server's settings spell it.
     pub fn key(self) -> &'static str {
@@ -100,6 +105,7 @@ impl Mode {
             Mode::MissileAssault => "ma",
             Mode::Siege => "siege",
             Mode::CaptureTheFlag => "ctf",
+            Mode::Convoy => "convoy",
         }
     }
 
@@ -111,6 +117,7 @@ impl Mode {
             Mode::MissileAssault => "Missile Assault",
             Mode::Siege => "Siege",
             Mode::CaptureTheFlag => "Capture the Flag",
+            Mode::Convoy => "Convoy",
         }
     }
 
@@ -126,6 +133,7 @@ impl Mode {
             Mode::MissileAssault => Assault::new(&map.objectives, &[]).is_some(),
             Mode::Siege => Siege::new(&map.objectives, &[]).is_some(),
             Mode::CaptureTheFlag => Ctf::new(&map.objectives, &[]).is_some(),
+            Mode::Convoy => Convoy::new(&map.objectives).is_some(),
         }
     }
 }
@@ -263,11 +271,12 @@ pub struct Game {
     /// Feet positions per team and slot, from the map.
     spawns: [Vec<Vector>; 2],
     /// Where the map's objective modes play, and this match's objective state (Missile Assault's,
-    /// Siege's or Capture the Flag's).
+    /// Siege's, Capture the Flag's or Convoy's).
     spots: Objectives,
     assault: Option<Assault>,
     siege: Option<Siege>,
     ctf: Option<Ctf>,
+    convoy: Option<Convoy>,
     players: Vec<Player>,
     projectiles: Vec<Flying>,
     orbs: Vec<Orb>,
@@ -299,6 +308,7 @@ impl Game {
             assault: None,
             siege: None,
             ctf: None,
+            convoy: None,
             arsenal: Arsenal::new(&tuning),
             tick: 0,
             bots: true,
@@ -538,14 +548,16 @@ impl Game {
         // First every bot looks and listens...
         let mut seen: Vec<(Option<u8>, Vec<(u8, Mech, f32)>)> = Vec::with_capacity(self.players.len());
         let mut radio: Vec<Vec<(u8, u8, Vector)>> = vec![Vec::new(); MAX_PLAYERS]; // (from, enemy, where)
-        // Objectives to take or hold, in Missile Assault, Siege and Capture the Flag.
-        let orders = match (&self.assault, &self.siege, &self.ctf) {
-            (Some(a), _, _) => Some(a.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.mech.health > 0.0)).collect::<Vec<_>>())),
-            (_, Some(s), _) => {
+        // Objectives to take or hold, in Missile Assault, Siege, Capture the Flag and Convoy.
+        let hauler = self.deployables.iter().find(|d| d.kind == Kind::Hauler).map(|d| d.pos);
+        let orders = match (&self.assault, &self.siege, &self.ctf, self.convoy.as_ref().zip(hauler)) {
+            (Some(a), ..) => Some(a.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.mech.health > 0.0)).collect::<Vec<_>>())),
+            (_, Some(s), ..) => {
                 let ships = [0, 1].map(|t| self.deployables.iter().any(|d| d.kind == Kind::Ship && d.team == t));
                 Some(s.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.eu)).collect::<Vec<_>>(), ships))
             }
-            (_, _, Some(c)) => Some(c.orders(&self.players.iter().map(|p| (p.id, p.team, p.mech.pos, p.bot.is_some() && p.mech.health > 0.0)).collect::<Vec<_>>())),
+            (_, _, Some(c), _) => Some(c.orders(&self.players.iter().map(|p| (p.id, p.team, p.mech.pos, p.bot.is_some() && p.mech.health > 0.0)).collect::<Vec<_>>())),
+            (.., Some((c, at))) => Some(c.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.mech.health > 0.0)).collect::<Vec<_>>(), at)),
             _ => None,
         };
         for i in 0..self.players.len() {
@@ -565,9 +577,16 @@ impl Game {
             // The other side's turrets too, each as a mech to fight (by its lock-on id), set so
             // the bot's chest-high aim lands on its body.
             let sizes = items(&self.arsenal);
-            enemies.extend(self.deployables.iter().filter(|d| d.kind.turret() && d.hull > 0.0 && d.team != me.team).map(|d| {
+            // Convoy's hauler only while the other side's walking it at us.
+            let pushed_at_us = self.convoy.as_ref().is_some_and(|c| c.pusher == Some(1 - me.team));
+            let foe = |d: &&Deployable| d.kind.turret() || (d.kind == Kind::Hauler && pushed_at_us);
+            enemies.extend(self.deployables.iter().filter(|d| d.hull > 0.0 && d.team != me.team).filter(foe).map(|d| {
                 let at = deploy::center(sizes, d) - Vector::Y * (t.mech_height * 0.5);
-                let full = if d.kind == Kind::Sentry { SENTRY_SHIELD } else { sizes.turret_hull };
+                let full = match d.kind {
+                    Kind::Sentry => SENTRY_SHIELD,
+                    Kind::Hauler => convoy::SHIELD,
+                    _ => sizes.turret_hull,
+                };
                 (deploy::target_id(d), Mech { pos: at, health: d.hull, ..Mech::default() }, d.hull / full)
             }));
             let (team, id) = (usize::from(me.team), me.id);
@@ -725,6 +744,13 @@ impl Game {
                 collide::separate(&self.arena, ta, &mut a.mech, tb, &mut b.mech, share);
             }
         }
+        // And the hauler blocks them all, unmoved.
+        if let Some(d) = self.deployables.iter().find(|d| d.kind == Kind::Hauler) {
+            let (th, mut hauler) = deploy::hauler_body(items(&self.arsenal), d);
+            for p in &mut self.players {
+                collide::separate(&self.arena, self.arsenal.of(&p.mech), &mut p.mech, &th, &mut hauler, 1.0);
+            }
+        }
 
         self.tend_sentries();
         self.man_turrets();
@@ -795,8 +821,8 @@ impl Game {
         self.orbs.retain(|o| o.health > 1e-3 && tick < o.fades_at);
         self.clouds.retain(|c| tick < c.fades_at);
         let deployed = self.deployables.len();
-        // A base gun shot through stays, offline (`tend_sentries`).
-        self.deployables.retain(|d| tick < d.expires && (d.hull > 0.0 || d.kind == Kind::Sentry));
+        // A base gun or the hauler shot through stays, offline or stalled.
+        self.deployables.retain(|d| tick < d.expires && (d.hull > 0.0 || matches!(d.kind, Kind::Sentry | Kind::Hauler)));
         if self.deployables.len() != deployed {
             self.arena.set_barriers(items(&self.arsenal), &self.deployables);
         }
@@ -819,6 +845,7 @@ impl Game {
         self.assault = None;
         self.siege = None;
         self.ctf = None;
+        self.convoy = None;
         self.projectiles.clear();
         self.orbs.clear();
         self.clouds.clear();
@@ -864,6 +891,8 @@ impl Game {
                 std::cmp::Ordering::Less => Some(1),
                 std::cmp::Ordering::Equal => None,
             }),
+            // Delivered, or pushed further when time ran out.
+            Mode::Convoy => self.convoy.as_ref().and_then(Convoy::leader),
             Mode::CaptureTheFlag => self.ctf.as_ref().and_then(|c| match c.captures[0].cmp(&c.captures[1]) {
                 std::cmp::Ordering::Greater => Some(0),
                 std::cmp::Ordering::Less => Some(1),
@@ -1067,7 +1096,7 @@ impl Game {
             .map(|(k, d)| {
                 let damage = if matches!(d.kind, Kind::Dome | Kind::Barrier) {
                     projectile::blast(&t, p.primary, deploy::gap(sizes, d, at))
-                } else if !d.kind.turret() || domed(d) {
+                } else if !d.kind.shootable() || domed(d) {
                     0.0
                 } else {
                     let (tm, m) = deploy::as_mech(sizes, d);
@@ -1286,7 +1315,8 @@ impl Game {
         if let Some(j) = hit {
             self.apply_damage_by(owner, j, damage, Cause::Weapon { slot: Slot::Offensive, index: Item::MgTurret.index() });
         }
-        if let Some(k) = worn {
+        // Base guns' rounds stop at the hauler but don't wear it.
+        if let Some(k) = worn.filter(|&k| d.kind != Kind::Sentry || self.deployables[k].kind != Kind::Hauler) {
             self.wear(k, damage, d.owner);
         }
     }
@@ -1304,11 +1334,15 @@ impl Game {
         let standing = d.hull > 0.0;
         let dealt = amount.min(d.hull.max(0.0));
         d.hull -= amount;
-        let ship = d.kind == Kind::Ship;
-        if d.kind == Kind::Sentry && standing && d.hull <= 0.0 {
-            (d.ready, d.burst) = (tick + secs(SENTRY_OFFLINE), 0);
+        let ship = matches!(d.kind, Kind::Ship | Kind::Hauler);
+        if standing && d.hull <= 0.0 {
+            match d.kind {
+                Kind::Sentry => (d.ready, d.burst) = (tick + secs(SENTRY_OFFLINE), 0),
+                Kind::Hauler => d.ready = tick + secs(convoy::STALL_SECONDS),
+                _ => {}
+            }
         }
-        if d.kind.turret() {
+        if d.kind.shootable() {
             self.events.push(Event::TurretHit { attacker, wrecked: standing && d.hull <= 0.0 });
         }
         if let Some(p) = self.players.iter_mut().find(|p| p.id == attacker).filter(|_| ship) {
@@ -1446,7 +1480,7 @@ impl Game {
                 self.players.iter().any(|p| p.points >= limit)
             }
             // Only a base falling, or the last capture, ends it.
-            Mode::MissileAssault | Mode::Siege | Mode::CaptureTheFlag => false,
+            Mode::MissileAssault | Mode::Siege | Mode::CaptureTheFlag | Mode::Convoy => false,
         };
         if won {
             self.end_match();
@@ -1464,6 +1498,8 @@ impl Game {
         let scores = match self.mode {
             Mode::TeamDeathmatch => self.scores,
             Mode::CaptureTheFlag => self.ctf.as_ref().map_or([0; 2], |c| c.captures),
+            // How far each team's pushed the hauler toward the other's base, in percent.
+            Mode::Convoy => self.convoy.as_ref().map_or([0; 2], |c| c.pushed().map(|f| (f * 100.0).round() as u16)),
             Mode::MissileAssault | Mode::Siege => self.base_hull().unwrap_or([objective::BASE_HULL; 2]).map(|h| h.ceil() as u16),
             Mode::Deathmatch => {
                 let top = self.standings();
@@ -1476,7 +1512,11 @@ impl Game {
             next_mode: self.next.0,
             next_map: self.next.1 as u8,
             scores,
-            limit: if self.mode == Mode::CaptureTheFlag { ctf::CAPTURES_TO_WIN } else { self.score_limit },
+            limit: match self.mode {
+                Mode::CaptureTheFlag => ctf::CAPTURES_TO_WIN,
+                Mode::Convoy => 100,
+                _ => self.score_limit,
+            },
             seconds_left: (until.saturating_sub(self.tick) as f32 / TICK_HZ).ceil() as u16,
             ended,
             winner,
@@ -1524,6 +1564,10 @@ impl Game {
             },
             siege: self.siege.as_ref().map(Siege::net),
             ctf: self.ctf.as_ref().map(Ctf::net),
+            convoy: self.convoy.as_ref().map(|c| {
+                let stall = self.deployables.iter().find(|d| d.kind == Kind::Hauler && d.hull <= 0.0);
+                c.net(stall.map_or(0.0, |d| d.ready.saturating_sub(self.tick) as f32 * DT))
+            }),
             hangar: me.and_then(|p| p.respawn_at).map(|at| at.saturating_sub(self.tick) as f32 * DT),
             state: self.match_state(),
         }
@@ -1536,6 +1580,7 @@ impl Game {
             Mode::MissileAssault => self.step_assault(),
             Mode::Siege => self.step_siege(),
             Mode::CaptureTheFlag => self.step_ctf(),
+            Mode::Convoy => self.step_convoy(),
             _ => {}
         }
     }
@@ -1644,6 +1689,58 @@ impl Game {
         if won {
             self.end_match();
         }
+    }
+
+    /// Convoy's tick: the hauler (put on its route's start when missing) stalled and back, walked
+    /// on by its escorts (ground under it), their credit, and the match's end on delivery.
+    fn step_convoy(&mut self) {
+        let Some(mut c) = self.convoy.take().or_else(|| Convoy::new(&self.spots)) else { return };
+        let tick = self.tick;
+        if !self.deployables.iter().any(|d| d.kind == Kind::Hauler) {
+            let (at, yaw) = c.at(c.along);
+            let (pos, owner) = (self.ground(at), deploy::hauler_owner());
+            self.deployables.push(Deployable { kind: Kind::Hauler, team: deploy::NEUTRAL, owner, pos, yaw, pitch: 0.0, hull: convoy::SHIELD, placed: tick, expires: u32::MAX, ready: tick, burst: 0 });
+        }
+        let k = self.deployables.iter().position(|d| d.kind == Kind::Hauler).expect("put there above");
+        let mut news = Vec::new();
+        let d = &mut self.deployables[k];
+        if d.hull <= 0.0 && tick >= d.ready {
+            d.hull = convoy::SHIELD;
+            news.push(News::Rebooted);
+        }
+        let stalled = d.hull <= 0.0;
+        if stalled && !c.stalled {
+            news.push(News::Stalled);
+        }
+        c.stalled = stalled;
+        let living: Vec<(u8, Vector)> = self.players.iter().filter(|p| p.mech.health > 0.0).map(|p| (p.team, p.mech.pos)).collect();
+        let before = c.along;
+        news.extend(c.step(&living, d.pos, stalled));
+        if c.along != before {
+            let (at, heading) = c.at(c.along);
+            let pos = self.ground(at);
+            let d = &mut self.deployables[k];
+            // Facing the way it walks.
+            (d.pos, d.yaw) = (pos, if c.along > before { heading } else { heading + std::f32::consts::PI });
+            let hauler = pos;
+            for p in self.players.iter_mut().filter(|p| Some(p.team) == c.pusher && p.mech.health > 0.0) {
+                if (p.mech.pos - hauler).with_y(0.0).length() <= convoy::ESCORT_RANGE {
+                    p.points += ESCORT_POINTS * DT;
+                    p.tally.escort(DT);
+                }
+            }
+        }
+        let delivered = news.iter().any(|n| matches!(n, News::Delivered(_)));
+        self.events.extend(news.into_iter().map(Event::Convoy));
+        self.convoy = Some(c);
+        if delivered {
+            self.end_match();
+        }
+    }
+
+    /// The ground under `at`, from a little over it (so the hauler walks slopes and steps).
+    fn ground(&self, at: Vector) -> Vector {
+        self.arena.cast_ray(&Ray::new(at + Vector::Y * 4.0, Vector::NEG_Y), 8.0).map_or(at, |d| at + Vector::Y * (4.0 - d))
     }
 
     /// Whether feet at `feet` are somewhere a mech can get to: ground under them, and a waypoint near.
@@ -2052,6 +2149,84 @@ mod tests {
         game.players[them].mech.pos = Vector::new(0.0, -200.0, 0.0);
         game.apply_damage(Some(me), them, 1e3);
         assert_eq!(game.ctf.as_ref().unwrap().flags[usize::from(flag)], ctf::Flag::Home);
+    }
+
+    /// A Convoy match on Foundry along a straight route from base to base, and a human in it.
+    fn convoy_match() -> (Game, u8) {
+        let mut game = Game::new(Tuning::default(), Map::index("foundry").unwrap());
+        (game.mode, game.bots) = (Mode::Convoy, false);
+        let points = vec![[0.0, 0.0, 100.0], [0.0, 0.0, 0.0], [0.0, 0.0, -100.0]];
+        game.spots.convoy = Some(crate::map::Route { points, start: 1 });
+        let id = game.join().unwrap();
+        game.step();
+        (game, id)
+    }
+
+    fn hauler(game: &Game) -> Deployable {
+        *game.deployables.iter().find(|d| d.kind == Kind::Hauler).expect("no hauler")
+    }
+
+    #[test]
+    fn escorts_walk_the_hauler_and_delivering_it_wins() {
+        let (mut game, id) = convoy_match();
+        unshield(&mut game);
+        let me = game.players.iter().position(|p| p.id == id).unwrap();
+        let team = game.players[me].team;
+        let walk = |game: &mut Game, seconds: f32| {
+            for _ in 0..secs(seconds) {
+                game.players[me].mech.pos = hauler(game).pos + Vector::X * 6.0;
+                game.players[me].mech.health = 100.0;
+                game.step();
+            }
+        };
+        let start = hauler(&game).pos;
+        walk(&mut game, 2.0);
+        // (Across: it rides the ground up and down on the way.)
+        let moved = (hauler(&game).pos - start).with_y(0.0);
+        // Toward the other team's base (team 0 pushes toward -z), at one escort's pace.
+        assert!(moved.z * if team == 0 { -1.0 } else { 1.0 } > 0.0, "{moved}");
+        assert!((moved.length() - 2.0 * 0.75 * convoy::SPEED).abs() < 0.3, "{}", moved.length());
+        assert!(game.match_state().scores[usize::from(team)] > 0);
+        assert!(game.players[me].points > 0.0);
+        // Nearly there.
+        let c = game.convoy.as_mut().unwrap();
+        c.along = if team == 0 { c.length() - 1.0 } else { 1.0 };
+        walk(&mut game, 1.0);
+        let state = game.match_state();
+        assert!(state.ended && state.winner == Some(team), "{state:?}");
+    }
+
+    #[test]
+    fn a_hauler_shot_through_stalls_then_walks_on() {
+        let (mut game, id) = convoy_match();
+        unshield(&mut game);
+        let me = game.players.iter().position(|p| p.id == id).unwrap();
+        let k = game.deployables.iter().position(|d| d.kind == Kind::Hauler).unwrap();
+        game.wear(k, convoy::SHIELD, id);
+        let (at, shot) = (hauler(&game).pos, game.tick);
+        let mut news = Vec::new();
+        while game.tick < shot + secs(convoy::STALL_SECONDS + 1.0) {
+            game.players[me].mech.pos = hauler(&game).pos + Vector::X * 6.0;
+            game.step();
+            news.extend(game.events.iter().filter_map(|e| if let Event::Convoy(n) = e { Some(*n) } else { None }));
+            if game.tick < shot + secs(convoy::STALL_SECONDS) - 1 {
+                assert_eq!(hauler(&game).pos, at, "walked while stalled");
+            }
+        }
+        assert!(news.starts_with(&[News::Stalled, News::Rebooted]), "{news:?}");
+        assert_eq!(hauler(&game).hull, convoy::SHIELD);
+        assert_ne!(hauler(&game).pos, at, "didn't walk on");
+    }
+
+    #[test]
+    fn mechs_bump_into_the_hauler() {
+        let (mut game, id) = convoy_match();
+        let me = game.players.iter().position(|p| p.id == id).unwrap();
+        game.players[me].mech.pos = hauler(&game).pos + Vector::X;
+        game.step();
+        let (th, body) = deploy::hauler_body(items(&game.arsenal), &hauler(&game));
+        let m = &game.players[me].mech;
+        assert!(collide::contact(game.arsenal.of(m), m, &th, &body).is_none(), "inside it: {}", (m.pos - body.pos).with_y(0.0).length());
     }
 
     #[test]

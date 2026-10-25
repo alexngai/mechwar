@@ -214,6 +214,15 @@ export function flags(north, south = { ...north, at: flip(north.at) }) {
 }
 
 /**
+ * Convoy: the hauler's route, points on walkable ground at feet height: `north` from the middle (where
+ * it starts) to team 0's base, `south` from the same middle point to team 1's, defaulting to `north`'s
+ * twins.
+ */
+export function convoy(north, south = north.map(flip)) {
+  objectives.convoy = { points: [...north].reverse().concat(south.slice(1)), start: north.length - 1 };
+}
+
+/**
  * Siege: the energy station's zone `station` (`{ at, radius, band }`: one, mid-map, for the teams
  * to fight over), the anti-air gun's capture zone `aa` (the same shape, plus `pad`: where the gun
  * stands, on a surface under open sky), and `sky`, how high the battleships cruise.

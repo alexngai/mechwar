@@ -10,6 +10,7 @@ pub mod arsenal;
 pub mod bot;
 pub mod client;
 pub mod collide;
+pub mod convoy;
 pub mod ctf;
 pub mod deploy;
 pub mod game;

@@ -137,6 +137,75 @@ fn flag_stands_shelter_their_flags() {
     }
 }
 
+/// Convoy: exactly these maps have a route for the hauler (3.5 m round, 6.5 m tall), and it fits it all
+/// the way, checked every meter along the line: ground under it (no more than half a meter over the
+/// line, or 4 m under), no step over 0.6 m from the last meter's, nothing within 4 m either side at 1,
+/// 3.5 and 6 m up nor overhead under 7 m, its side 2 m off each base gun's foot and well off the pads.
+/// It runs from team 0's base to team 1's, and starts between its ends, about as far from each base.
+#[test]
+fn convoy_routes_fit_the_hauler() {
+    use rapier3d::prelude::Ray;
+    const CONVOY: [&str; 5] = ["span", "crashsite", "foundry", "riftline", "canopy"];
+    let flat = |v: Vector| Vector::new(v.x, 0.0, v.z);
+    for (index, (name, _)) in MAPS.iter().enumerate() {
+        let map = Map::load(index);
+        let Some(route) = &map.objectives.convoy else {
+            assert!(!CONVOY.contains(name), "{name}: no convoy route");
+            continue;
+        };
+        assert!(CONVOY.contains(name), "{name}: a convoy route on a map not in the mode");
+        let (points, start): (Vec<_>, _) = (route.points.iter().map(|p| Vector::from_array(*p)).collect(), route.start);
+        assert!(start > 0 && start + 1 < points.len(), "{name}: the hauler starts at {start} of {} points, not between the ends", points.len());
+        let bases = map.objectives.bases.expect("convoy maps have bases").map(Vector::from_array);
+        for (end, base) in [points[0], points[points.len() - 1]].into_iter().zip(bases) {
+            assert!(flat(end - base).length() <= 6.0, "{name}: the route ends at {end}, {:.1} m from the base at {base}", flat(end - base).length());
+        }
+        let [d0, d1] = bases.map(|b| flat(points[start] - b).length());
+        assert!((d0 - d1).abs() <= 15.0, "{name}: the hauler starts {d0:.0} m from team 0's base and {d1:.0} m from team 1's");
+
+        let arena = Arena::new(&map);
+        let guns: Vec<_> = map.objectives.sentries.iter().flatten().map(|p| Vector::from_array(*p)).collect();
+        let o = &map.objectives;
+        let pads: Vec<_> = o.silos.iter().chain(&o.aa).map(|z| z.pad.unwrap_or(z.at)).chain(map.pads.iter().map(|p| p.at)).map(Vector::from_array).collect();
+        let mut last: Option<f32> = None;
+        for w in points.windows(2) {
+            let dir = flat(w[1] - w[0]).normalize();
+            let side = Vector::new(-dir.z, 0.0, dir.x);
+            let n = flat(w[1] - w[0]).length().ceil() as usize;
+            for k in 0..=n {
+                let p = w[0] + (w[1] - w[0]) * (k as f32 / n as f32);
+                // Down from a meter over the line. (A ray straight down a terrain cell's edge can miss it:
+                // keep points, and runs along the grid, off the cell lines.)
+                let ground = arena.cast_ray(&Ray::new(p + Vector::Y, Vector::NEG_Y), 5.0).map(|d| p.y + 1.0 - d);
+                let g = ground.unwrap_or_else(|| panic!("{name}: no ground within 4 m under the route at {p}"));
+                assert!(g <= p.y + 0.5, "{name}: the ground at {p} is {:.2} m over the route", g - p.y);
+                if let Some(h) = last {
+                    assert!((g - h).abs() <= 0.6, "{name}: a {:.2} m step under the route at {p}", (g - h).abs());
+                }
+                last = Some(g);
+                let feet = Vector::new(p.x, g, p.z);
+                for up in [1.0, 3.5, 6.0] {
+                    for s in [side, -side] {
+                        let hit = arena.cast_ray(&Ray::new(feet + Vector::Y * up, s), 4.0);
+                        assert!(hit.is_none(), "{name}: something {:.1} m beside the hauler at {feet}, {up} m up", hit.unwrap_or(0.0));
+                    }
+                }
+                let roof = arena.cast_ray(&Ray::new(feet + Vector::Y * 0.05, Vector::Y), 6.95);
+                assert!(roof.is_none(), "{name}: a roof {:.1} m over the hauler at {feet}", roof.unwrap_or(0.0) + 0.05);
+                for gun in &guns {
+                    let off = flat(feet - *gun).length();
+                    assert!(off >= 5.5, "{name}: the hauler at {feet} passes {off:.1} m from the base gun at {gun}");
+                }
+                // A silo's pad is a 7.2 m slab; jump pads and the AA gun are smaller.
+                for pad in pads.iter().filter(|q| (q.y - g).abs() < 3.0) {
+                    let off = flat(feet - *pad).length();
+                    assert!(off >= 9.0, "{name}: the hauler at {feet} passes {off:.1} m from the pad at {pad}");
+                }
+            }
+        }
+    }
+}
+
 /// A silo's launch pad, or the AA gun, at `spot`'s `pad` (else its middle): on something, under
 /// open sky for its rockets or its fire.
 fn open_to_the_sky(name: &str, what: &str, arena: &Arena, spot: &sim::map::ZoneSpot) {

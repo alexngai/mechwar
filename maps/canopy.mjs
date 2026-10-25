@@ -15,7 +15,7 @@
 // with an overlook and a pad up to it, about as far from the Knoll and the Crown as the other's.
 // Metrics as the other maps': 6.5 m+ under decks, ramps near 24 degrees, hover ledges 3-4 m. Ground
 // over 40 degrees can't be walked up (tuning's max_slope_deg), which makes the cliffs walls.
-import { bases, beam, box, cylinder, decor, flagStand, flags, ground, heightAt, lamp, pad, point, r3, railing, ramp, sentries, siege, sign, silos, solids, turned, write } from './kit.mjs';
+import { bases, beam, box, convoy, cylinder, decor, flagStand, flags, ground, heightAt, lamp, pad, point, r3, railing, ramp, sentries, siege, sign, silos, solids, turned, write } from './kit.mjs';
 
 const SIZE = [360, 360], CELL = 4;
 const A = [-140, -118], B = [140, -118], C = [0, 140], ROUND = 30; // the playable triangle, grown ROUND m
@@ -547,4 +547,12 @@ siege({ at: onGround(HOLLOW), radius: 12, band: 5 }, { at: [6, 13, -18], radius:
 // Knoll's rock table, C at the Spine's tunnel (the east's flank).
 // C's launch pad is out of the tunnel, by its west mouth.
 silos({ at: [-68, -13, 13], radius: 12, band: 5 }, { at: [6, 13, -18], radius: 9, band: 3, pad: [2.5, 13, -17.5] }, { at: [76, -1, 15], radius: 12, band: 5, pad: [70.5, -1.4, 12.5] });
+// Convoy: the hauler starts in the Hollow, halfway between the bases (a little east of its middle,
+// which evens the two legs), and follows the south road out each way: west under the Gate's southern
+// roots and round the fallen log to Grove Station, east round the log and south of the Teeth, then in
+// north of Relay Station's crates. No point sits on a terrain cell's edge, where a ray down can miss.
+convoy(
+  [[5, -105.5], [-3, -108.5], [-11, -110.5], [-23, -113], [-37, -115], [-44.3, -115.2], [-51, -115.4], [-65, -114.5], [-79, -113], [-87, -111.5], [-91, -110.7], [-95, -110], [-106, -106.6], [-117, -103]].map(([x, z]) => at(x, z)),
+  [[5, -105.5], [13, -107.5], [21, -109.2], [29, -110.5], [41, -118], [51, -125], [63, -128.5], [75, -127], [82.5, -120.5], [88.5, -113.5], [99, -107.5], [110, -104.5], [117, -103]].map(([x, z]) => at(x, z)),
+);
 write(new URL('./canopy.json', import.meta.url), { name: 'Canopy', size: SIZE, night: true, palette }, spawns(BASES[0], 1), spawns(BASES[1], -1));

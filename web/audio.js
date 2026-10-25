@@ -7,7 +7,7 @@ const MAX_DISTANCE = 150; // m: farther world sounds aren't started
 const THRUST_SLOTS = 3; // remote thruster loops, for the nearest boosting or hovering mechs
 const EXHAUST_SLOTS = 4; // exhaust loops, for the nearest rockets and darts in flight
 const WEIGHT = { A: 0.65, B: 1, C: 1.5 }; // shot and landing heft by class
-const STEP_DEPTH = { A: 1, B: 1.5, C: 2.1 }; // footsteps: even the Light stomps; the Heavy shakes the ground
+const STEP_DEPTH = { A: 1, B: 1.5, C: 2.1, hauler: 3 }; // footsteps: even the Light stomps; the Heavy shakes the ground, Convoy's hauler more
 // Primary shots past the usual level, reverb and length (0.6 s). Fast guns stay dry: at their
 // fire rate reverb smears into a wash. The slow, heavy ones ring out, and hit about as hard as
 // the rail gun; the HEAT cannon's boom rolls on longest.
