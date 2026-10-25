@@ -103,6 +103,7 @@ fn main() {
     let mut tuning = Tuning::default();
     if job.ideal {
         (tuning.bot_aim_error_deg, tuning.bot_reaction_s, tuning.bot_turn_rate_deg) = (0.0, 0.0, 720.0);
+        (tuning.bot_lead_error, tuning.bot_range_error) = (0.0, 0.0);
     }
     let mut values = serde_json::to_value(&tuning).expect("tuning serializes");
     for (name, value) in &job.tuning {

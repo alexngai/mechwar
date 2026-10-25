@@ -308,6 +308,10 @@ pub struct Tuning {
     pub bot_turn_rate_deg: f32,
     pub bot_aim_error_deg: f32,
     pub bot_reaction_s: f32,
+    /// How far off a bot (of skill 0.5) may judge a target's speed when leading it, and the range
+    /// when lobbing, as shares; each wanders within that.
+    pub bot_lead_error: f32,
+    pub bot_range_error: f32,
 }
 
 impl Tuning {

@@ -270,6 +270,8 @@ const ARRIVE: f32 = 2.5;
 const BOOST_LEG: f32 = 15.0;
 /// Fire only when aim is this close to where the bot wants it.
 const AIM_TOLERANCE: f32 = 2.0 * PI / 180.0;
+/// Faster than any mech moves (m/s): a jump in what a bot sees is a switch of target.
+const MOTION_MAX: f32 = 60.0;
 /// Farthest a Heavy lobs its grenade launcher's shells.
 const MORTAR_RANGE: f32 = 40.0;
 /// Farthest a perch may be from the target.
@@ -541,6 +543,12 @@ pub struct Bot {
     strafe_until: u32,
     /// Slowly wandering aim error (yaw, pitch) in radians.
     wobble: (f32, f32),
+    /// The target's velocity as the bot reads it off what it saw, and the last seen spot that
+    /// came from; and how far off, wandering as shares, it judges speed (leading) and range
+    /// (lobbing).
+    seen_vel: Vector,
+    seen_last: Option<Vector>,
+    misjudge: (f32, f32),
     /// Target chest positions, oldest first, so aim lags by the reaction time.
     seen: VecDeque<Vector>,
     last_health: f32,
@@ -598,6 +606,9 @@ impl Bot {
             strafe: 1.0,
             strafe_until: 0,
             wobble: (0.0, 0.0),
+            seen_vel: Vector::ZERO,
+            seen_last: None,
+            misjudge: (0.0, 0.0),
             seen: VecDeque::new(),
             last_health: 0.0,
             grenade_at: 0,
@@ -687,7 +698,7 @@ impl Bot {
         let g = t.thrown(Item::Grenade);
         let eye = me.pos + Vector::Y * t.eye_height;
         let (yaw, _) = look_at(eye, spot);
-        let r = (g.alt_gravity * flat(spot - eye).length() / (g.alt_speed * g.alt_speed)).min(1.0);
+        let r = (g.alt_gravity * flat(spot - eye).length() * (1.0 + self.misjudge.1) / (g.alt_speed * g.alt_speed)).min(1.0);
         let pitch = 0.5 * asinf(r) - g.alt_loft_deg.to_radians();
         let max_turn = self.max_turn(t);
         let new_yaw = me.yaw + wrap(yaw - me.yaw).clamp(-max_turn, max_turn);
@@ -713,6 +724,11 @@ impl Bot {
     }
     fn aim_error(&self, t: &Tuning) -> f32 {
         t.bot_aim_error_deg.to_radians() * 2f32.powf((0.5 - self.skill) * 1.4)
+    }
+    /// How far off it may judge a target's speed and range, as shares, by skill like aim error.
+    fn misjudgement(&self, t: &Tuning) -> (f32, f32) {
+        let by_skill = 2f32.powf((0.5 - self.skill) * 1.4);
+        (t.bot_lead_error * by_skill, t.bot_range_error * by_skill)
     }
     fn max_turn(&self, t: &Tuning) -> f32 {
         t.bot_turn_rate_deg.to_radians() * DT * 2f32.powf(self.skill - 0.5)
@@ -905,6 +921,7 @@ impl Bot {
             // Nothing to fight in view. One that just ducked out of view nearby gets a grenade at
             // its last spot; otherwise go where an enemy was last known to be, watching that spot
             // when it's near, or patrol.
+            (self.seen_vel, self.seen_last) = (Vector::ZERO, None);
             self.seen.clear();
             let ducked = self.contacts.iter().find(|c| !c.seen && c.seen_at.is_some_and(|at| tick.saturating_sub(at) < secs(FLUSH_AFTER))).map(|c| c.pos);
             if let Some(spot) = ducked.filter(|s| (t.grenade_radius + 2.0..self.policy.grenade_range).contains(&s.distance(me.pos)))
@@ -934,6 +951,12 @@ impl Bot {
         while self.seen.len() > reaction_ticks + 1 {
             self.seen.pop_front();
         }
+        // Its motion, read off the spots seen a tick apart and smoothed over the reaction time (with
+        // none, the motion over the last tick). A jump is a switch to another target: read anew.
+        let step = self.seen_last.map(|last| (self.seen[0] - last) / DT).filter(|v| v.length() < MOTION_MAX);
+        let k = DT / (DT + self.reaction(t));
+        self.seen_vel = step.map_or(Vector::ZERO, |v| self.seen_vel + (v - self.seen_vel) * k);
+        self.seen_last = Some(self.seen[0]);
         let range = flat(target.pos - me.pos).length();
         let (near, far) = band(t, &self.policy);
 
@@ -941,6 +964,9 @@ impl Bot {
             let err = self.aim_error(t);
             self.wobble.0 = (self.wobble.0 + (self.rand() - 0.5) * err * 0.3).clamp(-err, err);
             self.wobble.1 = (self.wobble.1 + (self.rand() - 0.5) * err * 0.3).clamp(-err, err);
+            let (speed_err, range_err) = self.misjudgement(t);
+            self.misjudge.0 = (self.misjudge.0 + (self.rand() - 0.5) * speed_err * 0.3).clamp(-speed_err, speed_err);
+            self.misjudge.1 = (self.misjudge.1 + (self.rand() - 0.5) * range_err * 0.3).clamp(-range_err, range_err);
             // The secondary, when ready and in its useful range, takes over the aim until it fires:
             // led by the flight time, and lobbed along the flat-ground arc for the mortar. The gun
             // holds meanwhile, so heat drops enough for the launch not to overheat. A beam aims
@@ -973,9 +999,11 @@ impl Bot {
             let speed = weapon::speed(t, me.charge);
             let primary_lead = if t.shot_speed > 0.0 { dist / speed } else { 0.0 };
             let lead = shell.map_or(primary_lead, |s| dist / s.alt_speed);
-            let (yaw, mut pitch) = look_at(eye, chest + target.vel * lead);
-            // Range d on flat ground: sin(2θ) = g d / v².
-            let arc = |g: f32, v: f32| 0.5 * asinf((g * flat(chest - eye).length() / (v * v)).min(1.0));
+            // Led by the motion it read, as fast as it judges it.
+            let (yaw, mut pitch) = look_at(eye, chest + self.seen_vel * (1.0 + self.misjudge.0) * lead);
+            // Range d (as it judges it) on flat ground: sin(2θ) = g d / v².
+            let judged = flat(chest - eye).length() * (1.0 + self.misjudge.1);
+            let arc = |g: f32, v: f32| 0.5 * asinf((g * judged / (v * v)).min(1.0));
             match shell {
                 Some(s) if s.alt_gravity > 0.0 => pitch = arc(s.alt_gravity, s.alt_speed) - s.alt_loft_deg.to_radians(),
                 None if t.shot_speed > 0.0 && t.shot_gravity > 0.0 => pitch += arc(t.shot_gravity, speed),
@@ -1835,7 +1863,36 @@ mod tests {
             flat(target.pos - me.pos).length()
         };
         let (near, held) = (settle(close), settle(far));
-        assert!(near < 25.0 && held > 35.0, "short-range gun ended {near} m off, long-range {held} m");
+        // Each inside its own gun's band, the short one well short of the long.
+        let (close_band, far_band) = (band(build(&arsenal, close, 0), &Policy::default()), band(build(&arsenal, far, 0), &Policy::default()));
+        assert!(near < close_band.1 && held > far_band.0 && near + 10.0 < held, "short-range gun ended {near} m off (band {close_band:?}), long-range {held} m (band {far_band:?})");
+    }
+
+    #[test]
+    fn bots_read_motion_off_what_they_see_and_misjudge_it_by_skill() {
+        let blockout = Map::index("blockout").unwrap();
+        let (arena, nav) = (Arena::new(&Map::load(blockout)), Nav::for_map(blockout));
+        let loadout = Loadout::named("pike", "rocket");
+        let t = Arsenal::new(&Tuning::default()).get(MechClass::B, loadout).clone();
+        // A target 60 m off, walking steadily across in the open.
+        let me = Mech { loadout, grenades: 0, ..spawn_mech(&t, Vector::new(0.0, 0.1, 40.0)) };
+        let mut target = spawn_mech(&t, Vector::new(-18.0, 0.1, -20.0));
+        let (mut sharp, mut raw) = (Bot { skill: 1.0, ..Bot::new(1) }, Bot { skill: 0.0, ..Bot::new(1) });
+        for tick in 0..secs(2.0) {
+            for bot in [&mut sharp, &mut raw] {
+                bot.think(&arena, nav, &t, &me, Some(&target), tick);
+            }
+            step_mech(&arena, &t, &mut target, &Input { move_x: 1.0, ..Input::default() });
+        }
+        // Read off the spots it saw, not handed to it: close to the true motion once it has watched.
+        let off = (sharp.seen_vel - target.vel).length();
+        assert!(target.vel.length() > 5.0 && off < 0.15 * target.vel.length(), "read {} for {}", sharp.seen_vel, target.vel);
+        // A raw bot may misjudge speed and range more than a sharp one, and each stays in its bounds.
+        let (sharp_err, raw_err) = (sharp.misjudgement(&t), raw.misjudgement(&t));
+        assert!(raw_err.0 > sharp_err.0 && raw_err.1 > sharp_err.1);
+        for (bot, (speed, range)) in [(&sharp, sharp_err), (&raw, raw_err)] {
+            assert!(bot.misjudge.0.abs() <= speed && bot.misjudge.1.abs() <= range);
+        }
     }
 
     #[test]
@@ -1844,7 +1901,7 @@ mod tests {
         let (arena, nav) = (Arena::new(&Map::load(blockout)), Nav::for_map(blockout));
         let loadout = Loadout::named("kiln", "darts");
         // Perfect aim, so whatever misses is the lead's (and the drop's) fault.
-        let t = Tuning { bot_aim_error_deg: 0.0, bot_reaction_s: 0.0, ..Arsenal::new(&Tuning::default()).get(MechClass::B, loadout).clone() };
+        let t = Tuning { bot_aim_error_deg: 0.0, bot_reaction_s: 0.0, bot_lead_error: 0.0, bot_range_error: 0.0, ..Arsenal::new(&Tuning::default()).get(MechClass::B, loadout).clone() };
         assert!(t.charge_speed > 1.0 && t.shot_gravity > 0.0, "HEAT no longer speeds up when charged and drops");
         // A target 60 m off, strafing side to side in the open (short of the big box), turning every 2 s.
         let mut me = Mech { loadout, grenades: 0, ..spawn_mech(&t, Vector::new(0.0, 0.1, 40.0)) };
