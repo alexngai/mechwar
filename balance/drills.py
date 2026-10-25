@@ -23,6 +23,8 @@ DRILLS = {
     'team-30': {'at': [[-4, 0.1, 25], [4, 0.1, 25], [-4, 0.1, -5], [4, 0.1, -5]], 'hull': [1, 1, 1, 1], 'mates': 1, 'foes': 2},
     # By the 6 m block at (-5, -30), its foe 20 m beyond it in the open: cover to fight from.
     'cover-30': {'at': [[-12, 0.1, -22], [-5, 0.1, -48]], 'hull': [1, 1], 'mates': 0, 'foes': 1},
+    # Alone against two, 28 and 36 m off: whom to fight first.
+    'outnumbered': {'at': [[0, 0.1, 20], [-6, 0.1, -8], [8, 0.1, -14]], 'hull': [1, 1, 1], 'mates': 0, 'foes': 2},
 }
 SECONDS = 20
 TUNING = json.loads((ev.ROOT / 'tuning.json').read_text())

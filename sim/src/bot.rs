@@ -324,9 +324,10 @@ const HEAR_STEPS: f32 = 25.0;
 const MEMORY: f32 = 12.0;
 /// A last known position this close, with nobody there, is forgotten.
 const SEARCHED: f32 = 6.0;
-/// Target scoring (beside `Policy`'s): an enemy that hit us within `GRUDGE` s counts as closer by
-/// `Policy::threat_m`, and the current target by `STICKY_M`, so it isn't dropped for one a step
-/// nearer.
+/// Target scoring by distance (`Policy::target_kit` off; beside `Policy`'s): an enemy that hit us
+/// within `GRUDGE` s counts as closer by `Policy::threat_m`, and the current target by
+/// `STICKY_M`, so it isn't dropped for one a step nearer. Scoring by kit counts an enemy that hit
+/// us within GRUDGE s as all threat.
 const GRUDGE: f32 = 3.0;
 const STICKY_M: f32 = 5.0;
 /// A bot this far or more from its order's spot is on its way there: it fights on the move.
@@ -545,10 +546,22 @@ pub struct Policy {
     /// Its role each life: Hunt below the first cut, then Perch, Flank, and Sneak past the last.
     pub role_cuts: [f32; 3],
     /// Target scoring, in metres closer: an enemy that hit it lately, one wounded (per missing
-    /// share of hull), and one a teammate is fighting (focus fire).
+    /// share of hull), and one a teammate is fighting (focus fire). By distance, with
+    /// `target_kit` off.
     pub threat_m: f32,
     pub wounded_m: f32,
     pub focus_m: f32,
+    /// Target scoring by kit (`target_kit` above 0.5): an enemy is worth how fast it can be killed
+    /// (the bot's damage a second on it, and each teammate on it adding `target_focus` of that,
+    /// over the hull it has left) times what killing it takes away: `target_base`, plus the share
+    /// of its own hull a second it would lose to it (all of it from one that hit it lately,
+    /// `target_seen` of it from one only in view). The current target is worth `target_stick`
+    /// more.
+    pub target_kit: f32,
+    pub target_base: f32,
+    pub target_seen: f32,
+    pub target_focus: f32,
+    pub target_stick: f32,
     /// With nothing to do it holds within this of its lead.
     pub follow: f32,
     /// Farthest it lobs a grenade (short of its flat-ground reach).
@@ -581,6 +594,11 @@ impl Default for Policy {
             threat_m: 25.0,
             wounded_m: 30.0,
             focus_m: 10.0,
+            target_kit: 1.0,
+            target_base: 0.05,
+            target_seen: 0.5,
+            target_focus: 0.5,
+            target_stick: 0.3,
             follow: 10.0,
             grenade_range: 28.0,
             heat_fed: 0.1,
@@ -909,13 +927,36 @@ impl Bot {
                 c.seen_at = Some(tick);
             }
         }
-        let score = |c: &Contact| {
-            let grudge = c.hit_at.is_some_and(|at| tick.saturating_sub(at) < secs(GRUDGE));
-            let p = &self.policy;
-            let shared = if self.engaged.contains(&c.id) { p.focus_m } else { 0.0 };
-            c.pos.distance(me.pos) - if grudge { p.threat_m } else { 0.0 } - p.wounded_m * (1.0 - c.hull) - shared - if self.focus == Some(c.id) { STICKY_M } else { 0.0 }
+        let p = &self.policy;
+        let grudge = |c: &Contact| c.hit_at.is_some_and(|at| tick.saturating_sub(at) < secs(GRUDGE));
+        let seen = self.contacts.iter().filter(|c| c.seen);
+        self.focus = if p.target_kit > 0.5 {
+            // How fast it can kill each, times what that takes away (higher is better); the
+            // nearest first among those it can't hurt at all. One with no kit sent (a turret) it
+            // weighs as if it carried its own.
+            let score = |c: &Contact| {
+                let r = c.pos.distance(me.pos);
+                let (mine, on_me, hull) = match self.foes.iter().find(|k| k.id == c.id) {
+                    Some(k) => (k.mine.at(r), k.on_me.at(r), k.hull),
+                    None => {
+                        let d = crate::threat::dps(t, t, r).total();
+                        (d, d, t.health_max)
+                    }
+                };
+                let mates = self.engaged.iter().filter(|&&e| e == c.id).count() as f32;
+                let kill = mine * (1.0 + p.target_focus * mates) / (c.hull * hull).max(1.0);
+                let menace = if grudge(c) { 1.0 } else { p.target_seen } * on_me / t.health_max;
+                let stick = if self.focus == Some(c.id) { 1.0 + p.target_stick } else { 1.0 };
+                kill * (p.target_base + menace) * stick - 1e-6 * r
+            };
+            seen.max_by(|a, b| score(a).total_cmp(&score(b))).map(|c| c.id)
+        } else {
+            let score = |c: &Contact| {
+                let shared = if self.engaged.contains(&c.id) { p.focus_m } else { 0.0 };
+                c.pos.distance(me.pos) - if grudge(c) { p.threat_m } else { 0.0 } - p.wounded_m * (1.0 - c.hull) - shared - if self.focus == Some(c.id) { STICKY_M } else { 0.0 }
+            };
+            seen.min_by(|a, b| score(a).total_cmp(&score(b))).map(|c| c.id)
         };
-        self.focus = self.contacts.iter().filter(|c| c.seen).min_by(|a, b| score(a).total_cmp(&score(b))).map(|c| c.id);
         self.focus
     }
 
@@ -1815,6 +1856,26 @@ mod tests {
         assert_eq!(pick(1.0, false), Some(2), "not the nearest");
         assert_eq!(pick(0.4, false), Some(1), "not the badly wounded one");
         assert_eq!(pick(1.0, true), Some(1), "not the one that just hit it");
+    }
+
+    #[test]
+    fn bots_go_for_the_enemy_that_hurts_them_most() {
+        let (arena, _, t) = blockout();
+        let arsenal = Arsenal::new(&Tuning::default());
+        let me = spawn_mech(&t, Vector::new(0.0, 0.1, 40.0));
+        let mine = arsenal.get(MechClass::B, Loadout::named("pike", "rocket"));
+        // In view: one with a flak gun 20 m off, and nearer, 16 m off, one with a grenade rifle.
+        let (flak, lobber) = (spawn_mech(&t, Vector::new(-3.0, 0.1, 20.2)), spawn_mech(&t, Vector::new(3.0, 0.1, 24.3)));
+        let kit = |id: u8, theirs: &Tuning| FoeKit { id, on_me: Curve::of(theirs, mine), mine: Curve::of(mine, theirs), hull: theirs.health_max, eye: theirs.eye_height, mid: theirs.mech_height * 0.5 };
+        let foes = vec![kit(1, arsenal.get(MechClass::B, Loadout::named("squall", "rocket"))), kit(2, arsenal.get(MechClass::B, Loadout::named("hail", "rocket")))];
+        let pick = |policy: Policy| {
+            let mut bot = Bot { policy, ..Bot::new(1) };
+            bot.foes.clone_from(&foes);
+            bot.perceive(&arena, mine, &me, &[(1, flak, 1.0), (2, lobber, 1.0)], 1)
+        };
+        assert_eq!(pick(Policy::default()), Some(1), "not the flak gun");
+        // By distance, as before: the nearer one.
+        assert_eq!(pick(Policy { target_kit: 0.0, ..Policy::default() }), Some(2));
     }
 
     #[test]

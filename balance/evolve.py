@@ -47,7 +47,7 @@ FLAGS = ['mending', 'in_cover', 'overheated', 'hit', 'fire', 'alt_fire', 'striki
 # Which moment a rule is about: rules keep these.
 CONTEXT = {'engaged', 'falling_back', 'starting_fall_back'}
 # Genes that are shares (of hull, heat, range, or a chance): nudged by adding, kept in (0, 1).
-SHARES = {'cool_high', 'cool_low', 'band_near', 'dodge_chance', 'heat_fed', 'post_moving'}
+SHARES = {'cool_high', 'cool_low', 'band_near', 'dodge_chance', 'heat_fed', 'post_moving', 'target_seen'}
 ORDERED = [('cool_low', 'cool_high'), ('band_near', 'band_far')]
 def options(slot, cls):
     return [w['id'] for w in WEAPONS[LISTS[slot]] if cls in w.get('classes', [cls])]

@@ -567,6 +567,7 @@ impl Game {
             }
             _ => None,
         };
+        let mut matchups = std::mem::take(&mut self.matchups);
         for i in 0..self.players.len() {
             let me = &self.players[i];
             if me.bot.is_none() {
@@ -588,9 +589,25 @@ impl Game {
                 let at = deploy::center(sizes, d) - Vector::Y * (t.mech_height * 0.5);
                 (deploy::target_id(d), Mech { pos: at, health: d.hull, ..Mech::default() }, d.hull / sizes.turret_hull)
             }));
+            // The kits of the enemies about (players, not turrets): each one's damage on it, and
+            // its on them, by range.
+            let kit = |m: &Mech| [m.class.index() as u8, m.loadout.primary, m.loadout.secondary];
+            let mut curve = |a: &Mech, b: &Mech| {
+                let key = [kit(a), kit(b)].concat().try_into().expect("six");
+                *matchups.entry(key).or_insert_with(|| crate::threat::Curve::of(self.arsenal.of(a), self.arsenal.of(b)))
+            };
+            let foes: Vec<bot::FoeKit> = enemies
+                .iter()
+                .filter_map(|&(id, _, _)| self.players.iter().find(|q| q.id == id))
+                .map(|q| {
+                    let theirs = self.arsenal.of(&q.mech);
+                    bot::FoeKit { id: q.id, on_me: curve(&q.mech, &me.mech), mine: curve(&me.mech, &q.mech), hull: theirs.health_max, eye: theirs.eye_height, mid: theirs.mech_height * 0.5 }
+                })
+                .collect();
             let (team, id) = (usize::from(me.team), me.id);
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
+            bot.foes = foes;
             bot.engaged.clone_from(&engaged[team]);
             bot.smoke.clone_from(&self.clouds);
             bot.domes.clone_from(&self.deployables);
@@ -599,7 +616,6 @@ impl Game {
             seen.push((focus, enemies));
         }
         // ...then hears its team's radio, and acts.
-        let mut matchups = std::mem::take(&mut self.matchups);
         for i in 0..self.players.len() {
             let me = &self.players[i];
             if me.bot.is_none() {
@@ -633,26 +649,9 @@ impl Game {
                     self.players.iter().any(|q| q.team != me.team && q.mech.health > 0.0 && (q.mech.pos + Vector::Y * (self.arsenal.of(&q.mech).mech_height * 0.5)).distance(f.p.pos) < reach)
                 });
             let mates_near = self.players.iter().filter(|q| q.team == me.team && q.id != me.id && alive(q) && q.mech.pos.distance(me.mech.pos) < bot::MATES_NEAR).count() as u8;
-            // The kits of the enemies about (players, not turrets): each one's damage on it, and
-            // its on them, by range.
-            let kit = |m: &Mech| [m.class.index() as u8, m.loadout.primary, m.loadout.secondary];
-            let mut curve = |a: &Mech, b: &Mech| {
-                let key = [kit(a), kit(b)].concat().try_into().expect("six");
-                *matchups.entry(key).or_insert_with(|| crate::threat::Curve::of(self.arsenal.of(a), self.arsenal.of(b)))
-            };
-            let foes: Vec<bot::FoeKit> = seen[i]
-                .1
-                .iter()
-                .filter_map(|&(id, _, _)| self.players.iter().find(|q| q.id == id))
-                .map(|q| {
-                    let theirs = self.arsenal.of(&q.mech);
-                    bot::FoeKit { id: q.id, on_me: curve(&q.mech, &me.mech), mine: curve(&me.mech, &q.mech), hull: theirs.health_max, eye: theirs.eye_height, mid: theirs.mech_height * 0.5 }
-                })
-                .collect();
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
             bot.mates_near = mates_near;
-            bot.foes = foes;
             for &(from, enemy, at) in &radio[team] {
                 if from != p.id {
                     bot.told(enemy, at, self.tick);
