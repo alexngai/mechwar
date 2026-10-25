@@ -532,3 +532,368 @@ fn piston_match_probe() {
         100.0 * scores[0] as f32 / (scores[0] + scores[1]).max(1) as f32,
     );
 }
+
+/// Secondary probe: a bot (`PROBE_CLASS` A/B/C, default B) with `PROBE_PRIMARY` (default the rifle)
+/// and each of `PROBE_ALTS` (default Scatter, Furnace, Cluster launcher, Rocket) against a human
+/// (`PROBE_TARGET`, default B) in the open on Blockout, standing or strafing (1.2 s each way), from
+/// each of `PROBE_RANGES` m. Its ability stays on cooldown and it has no items, so only its guns
+/// count. Per minute: launches, the secondary's and the gun's damage; of the secondary's bursts,
+/// how many caught the target, and where the rest went (above its top, short, past, aside); time
+/// hot enough to feed a heat-fed launcher, and with the secondary ready.
+/// PROBE_SEEDS=<n> PROBE_SECS=<s> cargo test -p sim --release --lib alt_probe -- --ignored --nocapture
+#[test]
+#[ignore = "probe"]
+fn alt_probe() {
+    let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.into());
+    let run: f32 = env("PROBE_SECS", "20").parse().unwrap();
+    let seeds: u64 = env("PROBE_SEEDS", "8").parse().unwrap();
+    let primary = env("PROBE_PRIMARY", "pike");
+    let class_of = |s: &str| match s {
+        "A" => MechClass::A,
+        "C" => MechClass::C,
+        _ => MechClass::B,
+    };
+    let (class, target_class) = (class_of(&env("PROBE_CLASS", "B")), class_of(&env("PROBE_TARGET", "B")));
+    let ranges: Vec<f32> = env("PROBE_RANGES", "15,30,45").split(',').map(|r| r.parse().unwrap()).collect();
+    let t0 = Tuning::default();
+    for secondary in env("PROBE_ALTS", "darts,furnace,splitter,rocket").split(',') {
+        for &range in &ranges {
+            for strafe in [false, true] {
+                #[derive(Default)]
+                struct N {
+                    ticks: u32,
+                    launches: u32,
+                    alt_dmg: f32,
+                    gun_dmg: f32,
+                    bursts: u32,
+                    caught: u32,
+                    over: u32,
+                    short: u32,
+                    long: u32,
+                    aside: u32,
+                    bomblets: u32,
+                    bomblets_caught: u32,
+                    hot: u32,
+                    ready: u32,
+                    pressing: u32,
+                    heat_at_launch: f32,
+                }
+                let mut n = N::default();
+                for seed in 1..=seeds {
+                    let mut game = Game::new(t0.clone(), crate::map::Map::index("blockout").unwrap());
+                    game.bots = false;
+                    let human = game.join().unwrap();
+                    let bot = game.add_player(1, Some({
+                        let mut b = Bot::new(seed);
+                        b.skill = env("PROBE_SKILL", "1").parse().unwrap();
+                        b.policy.heat_fed = env("PROBE_HEATFED", "0.6").parse().unwrap();
+                        b
+                    }), class).unwrap();
+                    let loadout = Loadout::named(&primary, secondary);
+                    for (id, pos, c) in [(human, Vector::new(0.0, 0.1, -5.0), target_class), (bot, Vector::new(0.0, 0.1, -5.0 + range), class)] {
+                        let p = game.players.iter_mut().find(|p| p.id == id).unwrap();
+                        let l = Loadout { ability: if c == MechClass::C { 2 } else { 1 }, ..loadout };
+                        (p.class, p.loadout, p.next_loadout) = (c, l, l);
+                        p.mech = Mech { class: c, ..spawn(&game.arsenal, c, l, pos) };
+                        p.mech.shield = 0.0;
+                    }
+                    for k in 0..secs(run) {
+                        let side = if strafe && (k / secs(1.2)) % 2 == 0 { 1.0 } else if strafe { -1.0 } else { 0.0 };
+                        let tick = game.tick;
+                        game.push_input(human, InputMsg { seq: tick + 1, input: crate::Input { move_x: side, ..crate::Input::default() }, view_tick: tick as f32 });
+                        let dealt = |g: &Game| g.tally(bot).unwrap().0.dealt_by;
+                        let before = dealt(&game);
+                        let heat_before = mech_of(&game, bot).heat;
+                        game.step();
+                        let after = dealt(&game);
+                        n.alt_dmg += after[1] - before[1];
+                        n.gun_dmg += after[0] - before[0];
+                        let (b, h) = (mech_of(&game, bot), mech_of(&game, human));
+                        let (t, th) = (game.arsenal.of(&b), game.arsenal.of(&h));
+                        n.ticks += 1;
+                        n.hot += u32::from(b.heat >= 0.6 * t.heat_max);
+                        n.ready += u32::from(b.alt_wait <= 0.0);
+                        n.pressing += u32::from(game.players.iter().find(|p| p.id == bot).unwrap().bot.as_ref().unwrap().last.alt_fire);
+                        if b.launched {
+                            n.launches += 1;
+                            n.heat_at_launch += heat_before / t.heat_max;
+                        }
+                        for e in &game.events {
+                            let Event::Blast { owner, primary: false, n: k, hits, pos, .. } = *e else { continue };
+                            if owner != bot || k >= projectile::TURRET {
+                                continue;
+                            }
+                            let caught = hits & 1 << human != 0;
+                            if k >= projectile::BOMBLET {
+                                n.bomblets += 1;
+                                n.bomblets_caught += u32::from(caught);
+                                continue;
+                            }
+                            n.bursts += 1;
+                            if caught {
+                                n.caught += 1;
+                                continue;
+                            }
+                            // Where it went, from the bot's side of the target.
+                            let (to, off) = (flat(h.pos - b.pos).normalize_or_zero(), flat(pos - h.pos));
+                            let (along, across) = (off.dot(to), off.dot(Vector::new(-to.z, 0.0, to.x)).abs());
+                            if pos.y > h.pos.y + th.mech_height && along.abs() < 3.0 && across < 3.0 {
+                                n.over += 1;
+                            } else if across > along.abs() {
+                                n.aside += 1;
+                            } else if along < 0.0 {
+                                n.short += 1;
+                            } else {
+                                n.long += 1;
+                            }
+                        }
+                        let hm = &mut game.players.iter_mut().find(|p| p.id == human).unwrap().mech;
+                        hm.health = th.health_max;
+                        let bm = &mut game.players.iter_mut().find(|p| p.id == bot).unwrap().mech;
+                        (bm.grenades, bm.emps, bm.ability_cooldown) = (0, 0, 99.0);
+                    }
+                }
+                let mins = n.ticks as f32 / TICK_HZ / 60.0;
+                let pct = |x: u32, of: u32| 100.0 * x as f32 / of.max(1) as f32;
+                println!(
+                    "{secondary:8} {range:>2} m {:8}: launches {:.1}/min (heat {:.0}%), alt {:.0}/min, gun {:.0}/min | bursts caught {}/{} = {:.0}% (over {:.0}%, short {:.0}%, long {:.0}%, aside {:.0}%), bomblets {}/{} | hot {:.0}%, ready {:.0}%, pressing {:.0}%",
+                    if strafe { "strafing" } else { "standing" },
+                    n.launches as f32 / mins,
+                    100.0 * n.heat_at_launch / n.launches.max(1) as f32,
+                    n.alt_dmg / mins,
+                    n.gun_dmg / mins,
+                    n.caught,
+                    n.bursts,
+                    pct(n.caught, n.bursts),
+                    pct(n.over, n.bursts),
+                    pct(n.short, n.bursts),
+                    pct(n.long, n.bursts),
+                    pct(n.aside, n.bursts),
+                    n.bomblets_caught,
+                    n.bomblets,
+                    pct(n.hot, n.ticks),
+                    pct(n.ready, n.ticks),
+                    pct(n.pressing, n.ticks),
+                );
+            }
+        }
+    }
+}
+
+fn mech_of(game: &Game, id: u8) -> Mech {
+    game.players.iter().find(|p| p.id == id).unwrap().mech
+}
+
+/// Ability probe: a Heavy bot with each of `PROBE_BUILDS` (primary:secondary pairs) and Artillery
+/// or Barrage against a human Medium in the open on Blockout, `PROBE_RANGE` m off (default 30),
+/// standing or strafing. Each case runs twice, the ability live and held on cooldown, so the gap
+/// is what it adds. Per minute: uses, and damage by gun and secondary; per use, the heat it went
+/// on at (as a share), and of its spell, the share of ticks the gun fired and the launches.
+/// PROBE_SEEDS=<n> PROBE_SECS=<s> cargo test -p sim --release --lib ability_probe -- --ignored --nocapture
+#[test]
+#[ignore = "probe"]
+fn ability_probe() {
+    let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.into());
+    let run: f32 = env("PROBE_SECS", "60").parse().unwrap();
+    let seeds: u64 = env("PROBE_SEEDS", "8").parse().unwrap();
+    let range: f32 = env("PROBE_RANGE", "30").parse().unwrap();
+    let t0 = Tuning::default();
+    for build in env("PROBE_BUILDS", "squall:mortar,gyre:rocket,hail:mortar,kiln:darts").split(',') {
+        let (primary, secondary) = build.split_once(':').unwrap();
+        for ability in env("PROBE_ABILITIES", "artillery,barrage").split(',') {
+            for strafe in [false, true] {
+                let mut line = format!("{primary:6} {secondary:8} {ability:9} {:8}", if strafe { "strafing" } else { "standing" });
+                let mut base = 0.0;
+                for live in [false, true] {
+                    let (mut ticks, mut uses, mut gun, mut alt, mut heat, mut spell, mut firing, mut launches) = (0u32, 0u32, 0.0f32, 0.0f32, 0.0f32, 0u32, 0u32, 0u32);
+                    for seed in 1..=seeds {
+                        let mut game = Game::new(t0.clone(), crate::map::Map::index("blockout").unwrap());
+                        game.bots = false;
+                        let human = game.join().unwrap();
+                        let bot = game.add_player(1, Some({
+                            let mut b = Bot::new(seed);
+                            b.skill = env("PROBE_SKILL", "1").parse().unwrap();
+                            // Trigger variants for both: as genome 0's, or on the secondary ready, or cool.
+                            use crate::brain::{Action, Curve::*, Feature::*};
+                            let rule = match env("PROBE_TRIGGER", "fire").as_str() {
+                                "alt" => vec![(Engaged, Above(0.5)), (AltReady, Above(0.5)), (Range, AtMost(1.0))],
+                                "cool" => vec![(Engaged, Above(0.5)), (Fire, Above(0.5)), (Range, AtMost(1.0)), (Heat, AtMost(0.45))],
+                                "altcool" => vec![(Engaged, Above(0.5)), (AltReady, Above(0.5)), (Range, AtMost(1.0)), (Heat, AtMost(0.45))],
+                                _ => vec![(Engaged, Above(0.5)), (Fire, Above(0.5)), (Range, AtMost(1.0))],
+                            };
+                            b.brain.0.insert(Action::Artillery, vec![rule.clone()]);
+                            b.brain.0.insert(Action::Barrage, vec![rule]);
+                            b
+                        }), MechClass::C).unwrap();
+                        for (id, pos, c, l) in [
+                            (human, Vector::new(0.0, 0.1, -5.0), MechClass::B, Loadout::of(MechClass::B)),
+                            (bot, Vector::new(0.0, 0.1, -5.0 + range), MechClass::C, Loadout { ability: arsenal::index(Slot::Ability, ability), ..Loadout::named(primary, secondary) }),
+                        ] {
+                            let p = game.players.iter_mut().find(|p| p.id == id).unwrap();
+                            (p.class, p.loadout, p.next_loadout) = (c, l, l);
+                            p.mech = Mech { class: c, shield: 0.0, ..spawn(&game.arsenal, c, l, pos) };
+                        }
+                        for k in 0..secs(run) {
+                            let side = if strafe && (k / secs(1.2)) % 2 == 0 { 1.0 } else if strafe { -1.0 } else { 0.0 };
+                            let tick = game.tick;
+                            game.push_input(human, InputMsg { seq: tick + 1, input: crate::Input { move_x: side, ..crate::Input::default() }, view_tick: tick as f32 });
+                            let dealt = |g: &Game| g.tally(bot).unwrap().0.dealt_by;
+                            let (before, was) = (dealt(&game), mech_of(&game, bot));
+                            game.step();
+                            let (after, b) = (dealt(&game), mech_of(&game, bot));
+                            (gun, alt) = (gun + after[0] - before[0], alt + after[1] - before[1]);
+                            ticks += 1;
+                            let t = game.arsenal.of(&b);
+                            if b.ability_time > was.ability_time {
+                                uses += 1;
+                                heat += was.heat / t.heat_max;
+                            }
+                            if b.ability_time > 0.0 {
+                                spell += 1;
+                                firing += u32::from(game.players.iter().find(|p| p.id == bot).unwrap().bot.as_ref().unwrap().last.fire);
+                                launches += u32::from(b.launched);
+                            }
+                            let hm = &mut game.players.iter_mut().find(|p| p.id == human).unwrap().mech;
+                            hm.health = t0.health_max;
+                            let bm = &mut game.players.iter_mut().find(|p| p.id == bot).unwrap().mech;
+                            (bm.grenades, bm.emps) = (0, 0);
+                            if !live {
+                                bm.ability_cooldown = 99.0;
+                            }
+                        }
+                    }
+                    let mins = ticks as f32 / TICK_HZ / 60.0;
+                    let total = (gun + alt) / mins;
+                    if live {
+                        line += &format!(
+                            " | live {total:.0}/min (gun {:.0}, alt {:.0}), adds {:+.0}/min = {:+.1}% | {:.2} uses/min at heat {:.0}%, spell: gun firing {:.0}% of ticks, {:.1} launches",
+                            gun / mins,
+                            alt / mins,
+                            total - base,
+                            100.0 * (total - base) / base.max(1.0),
+                            uses as f32 / mins,
+                            100.0 * heat / uses.max(1) as f32,
+                            100.0 * firing as f32 / spell.max(1) as f32,
+                            launches as f32 / uses.max(1) as f32,
+                        );
+                    } else {
+                        base = total;
+                        line += &format!(" | off {total:.0}/min (gun {:.0}, alt {:.0})", gun / mins, alt / mins);
+                    }
+                }
+                println!("{line}");
+            }
+        }
+    }
+}
+
+/// A secondary in bot-only matches on every map: every bot carries `PROBE_ALT` (other slots as
+/// they roll, bounded). Per bot alive-minute: time fighting, launches, the secondary's damage; per
+/// launch, damage and heat, and launches by range to the target (under 20, 20-40, 40-60, 60-90,
+/// 90 m and over). Of fight ticks with the target in sight: the share hot enough to feed a
+/// heat-fed launcher (`Policy::heat_fed`), with the secondary ready, and both.
+/// PROBE_ALT=<id> PROBE_SEEDS=<n> PROBE_SECS=<s> cargo test -p sim --release --lib alt_match_probe -- --ignored --nocapture
+#[test]
+#[ignore = "probe"]
+fn alt_match_probe() {
+    let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.into());
+    let run: f32 = env("PROBE_SECS", "120").parse().unwrap();
+    let seeds: u64 = env("PROBE_SEEDS", "2").parse().unwrap();
+    let alt = env("PROBE_ALT", "furnace");
+    let want = Loadout::named("pike", &alt).secondary;
+    let bucket = |r: f32| [20.0, 40.0, 60.0, 90.0].iter().take_while(|&&b| r >= b).count();
+    let (mut alive, mut fight, mut sight, mut hot, mut ready, mut both, mut launches, mut dealt, mut heat) = (0u64, 0u64, 0u64, 0u64, 0u64, 0u64, 0u32, 0.0f32, 0.0f32);
+    let (mut by_range, mut dealt_by_range, mut total) = ([0u32; 5], [0.0f32; 5], 0.0f32);
+    for (index, _) in crate::map::MAPS.iter().enumerate() {
+        for seed in 0..seeds {
+            let mut game = Game::new(Tuning::default(), index);
+            (game.score_limit, game.match_seconds, game.tick) = (u16::MAX, 1e7, seed as u32 * 7919);
+            let human = game.join().unwrap();
+            game.dock(human);
+            game.step();
+            let mut roller = Bot::new(seed + 1);
+            // Each launch's owner and the range it went at, by (owner, seq), to credit its damage.
+            let mut flying: Vec<(u8, u32, usize)> = Vec::new();
+            for _ in 0..secs(run) {
+                for i in 0..game.players.len() {
+                    let p = &game.players[i];
+                    if p.bot.is_none() || p.mech.health <= 0.0 || p.loadout.secondary == want {
+                        continue;
+                    }
+                    let class = p.class;
+                    let Some(loadout) = (0..2000).map(|_| roller.pick_loadout(&game.arsenal, class)).find(|l| l.secondary == want) else { continue };
+                    let p = &mut game.players[i];
+                    (p.loadout, p.next_loadout) = (loadout, loadout);
+                    p.mech = Mech { shield: p.mech.shield, ..spawn(&game.arsenal, class, loadout, p.mech.pos) };
+                }
+                if let Ok(h) = std::env::var("PROBE_HEATFED") {
+                    for p in &mut game.players {
+                        if let Some(b) = &mut p.bot {
+                            b.policy.heat_fed = h.parse().unwrap();
+                        }
+                    }
+                }
+                let before: Vec<f32> = game.players.iter().map(|p| p.tally.dealt_by[1]).collect();
+                let all_before: f32 = game.players.iter().map(|p| p.tally.dealt).sum();
+                game.step();
+                total += game.players.iter().map(|p| p.tally.dealt).sum::<f32>() - all_before;
+                for (k, p) in game.players.iter().enumerate() {
+                    let Some(bot) = &p.bot else { continue };
+                    if p.mech.health <= 0.0 || p.respawn_at.is_some() {
+                        continue;
+                    }
+                    let t = game.arsenal.of(&p.mech);
+                    let d = p.tally.dealt_by[1] - before.get(k).copied().unwrap_or(0.0);
+                    dealt += d;
+                    alive += 1;
+                    let foe = bot.focus().and_then(|f| game.players.iter().find(|q| q.id == f));
+                    if foe.is_some() {
+                        fight += 1;
+                    }
+                    if let Some(q) = foe.filter(|q| bot::sees(&game.arena, t, &p.mech, &q.mech)) {
+                        let _ = q;
+                        sight += 1;
+                        let (h, r) = (p.mech.heat >= bot.policy.heat_fed * t.heat_max, p.mech.alt_wait <= 0.0);
+                        (hot, ready, both) = (hot + u64::from(h), ready + u64::from(r), both + u64::from(h && r));
+                    }
+                    if p.mech.launched {
+                        launches += 1;
+                        heat += p.mech.heat / t.heat_max;
+                        let b = foe.map_or(4, |q| bucket(flat(q.mech.pos - p.mech.pos).length()));
+                        by_range[b] += 1;
+                        flying.push((p.id, p.ack_seq, b));
+                    }
+                }
+                // Credit each Blast's damage to the range its launch went at.
+                for e in &game.events {
+                    if let Event::Blast { owner, seq, primary: false, hits, .. } = *e
+                        && hits != 0
+                        && let Some(&(_, _, b)) = flying.iter().find(|f| f.0 == owner && f.1 == seq)
+                    {
+                        dealt_by_range[b] += 1.0;
+                    }
+                }
+                if flying.len() > 400 {
+                    flying.drain(..200);
+                }
+            }
+        }
+    }
+    let mins = alive as f32 / TICK_HZ / 60.0;
+    let pct = |x: u64, of: u64| 100.0 * x as f32 / of.max(1) as f32;
+    println!(
+        "{alt}: {mins:.0} alive-min, all dealt {:.0}/min, fight {:.0}%, in sight {:.0}% | launches {:.2}/min, dealt {:.1}/min, {:.1}/launch, heat at launch {:.0}% | in sight: hot {:.0}%, ready {:.0}%, both {:.0}%",
+        total / mins,
+        pct(fight, alive),
+        pct(sight, alive),
+        launches as f32 / mins,
+        dealt / mins,
+        dealt / launches.max(1) as f32,
+        100.0 * heat / launches.max(1) as f32,
+        pct(hot, sight),
+        pct(ready, sight),
+        pct(both, sight),
+    );
+    println!("   launches by range <20/20-40/40-60/60-90/90+ {:?}", by_range.map(|n| format!("{:.0}%", 100.0 * n as f32 / launches.max(1) as f32)));
+    println!("   share of those with a hit                {:?}", std::array::from_fn::<_, 5, _>(|k| format!("{:.0}%", 100.0 * dealt_by_range[k] / by_range[k].max(1) as f32)));
+}
