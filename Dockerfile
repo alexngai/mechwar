@@ -22,7 +22,8 @@ FROM node:22-bookworm-slim AS web
 WORKDIR /src
 COPY package.json package-lock.json ./
 RUN npm ci
-COPY index.html tuning.json classes.json weapons.json ./
+COPY index.html vite.config.js tuning.json classes.json weapons.json ./
+COPY guide guide
 COPY maps maps
 COPY web web
 COPY --from=rust /src/sim/pkg sim/pkg

@@ -193,7 +193,13 @@ async fn main() {
     }));
     let app = App { rooms: Rooms::default(), lag, quick: Arc::new(quick), seed: Arc::new(AtomicU64::new(seed)), signer };
     let client = ServeDir::new(&static_dir).fallback(ServeFile::new(format!("{static_dir}/index.html")));
+    // The guide is one page for all its sections and pages (/guide/ itself is ServeDir's guide/index.html).
+    let guide = ServeFile::new(format!("{static_dir}/guide/index.html"));
     let router = Router::new()
+        .route_service("/guide/{section}", guide.clone())
+        .route_service("/guide/{section}/", guide.clone())
+        .route_service("/guide/{section}/{page}", guide.clone())
+        .route_service("/guide/{section}/{page}/", guide)
         .route("/ws", get(upgrade))
         .route("/api/rooms", get(list).post(create))
         .route("/api/rooms/{code}", get(lookup))

@@ -1,0 +1,623 @@
+{
+  "isotope": {
+    "blurb": "A waste treatment plant on the night shift: spent fuel glowing green in the storage pools and the cooling pond, sodium lamps over the rest, cooling towers looming through the smog.",
+    "hero": {
+      "eye": [
+        50,
+        30,
+        -50
+      ],
+      "look": [
+        0,
+        7,
+        0
+      ]
+    },
+    "spots": [
+      {
+        "id": "pump-house",
+        "name": "Pump House",
+        "text": "The pump house stands mid-map with its deck at 7 m, and a ramp climbs to it from the east. The reactor core under the deck glows green through its casing and lights the hall below, which you can enter through a gap in the middle of each wall.",
+        "eye": [
+          26,
+          4.5,
+          -1
+        ],
+        "look": [
+          0,
+          2,
+          0
+        ]
+      },
+      {
+        "id": "storage-pool",
+        "name": "Storage Pool and Gantry Crane",
+        "text": "In each west yard, spent fuel glows in the storage pool under a gantry crane that rides the perimeter walls, with its cask hanging 9.5 m over the pool. The shielded hot cell stands beside the pool with its window glowing, and waste containers around the yard give cover.",
+        "eye": [
+          -8,
+          5,
+          16
+        ],
+        "look": [
+          -16,
+          10,
+          38
+        ]
+      },
+      {
+        "id": "cooling-pond",
+        "name": "Cooling Pond",
+        "text": "On the east side a tank farm surrounds a glowing cooling pond. The 9 m tanks, joined by pipes, give hard cover, and a 3 m platform with a ramp up from the west stands just south of the pond.",
+        "eye": [
+          41,
+          5.5,
+          40
+        ],
+        "look": [
+          33,
+          0,
+          29
+        ]
+      }
+    ]
+  },
+  "sump": {
+    "blurb": "A flooded undercity: an old street grid knee deep in water under the city deck its buildings hold up, opened by light wells, ramp wells and a trench down the middle.",
+    "hero": {
+      "eye": [
+        40,
+        30,
+        -62
+      ],
+      "look": [
+        0,
+        0,
+        0
+      ]
+    },
+    "spots": [
+      {
+        "id": "the-trench",
+        "name": "The Trench",
+        "text": "The center avenue lies open through the city deck for 46 m, splitting the map down the middle. A ramp at each end runs down to the flooded streets 8 m below, and a footbridge crosses the middle at deck level.",
+        "eye": [
+          0,
+          4,
+          28
+        ],
+        "look": [
+          0,
+          -0.3,
+          0
+        ]
+      },
+      {
+        "id": "undercity",
+        "name": "The Undercity",
+        "text": "The old street grid runs 8 m below the city deck with 7.5 m of headroom, knee deep in water and lit by cyan lamps and wall signs. Its streets link the trench, the wells and the ramp slot up to each base yard.",
+        "eye": [
+          25,
+          -4,
+          28
+        ],
+        "look": [
+          -20,
+          -5,
+          28
+        ]
+      },
+      {
+        "id": "east-roof",
+        "name": "East Roof",
+        "text": "The east roof stands 7 m above the deck, up a ramp from it. Below it the east well drops to the flooded streets, with a ramp back up to the deck and a jump pad from the well's corner onto the east hall's deck.",
+        "eye": [
+          55,
+          11,
+          41
+        ],
+        "look": [
+          40,
+          -1.8,
+          9
+        ]
+      }
+    ]
+  },
+  "verdigris": {
+    "blurb": "A green-lit city on four levels under acid rain: drains, streets, roofs at 7 m and a viaduct at 14 m, neon running down the towers.",
+    "hero": {
+      "eye": [
+        30,
+        40,
+        -72
+      ],
+      "look": [
+        0,
+        12,
+        0
+      ]
+    },
+    "spots": [
+      {
+        "id": "market-square",
+        "name": "Market Square",
+        "text": "Inside the viaduct ring, 3 m market stalls that work as cover and hover-ups stand around the 26 m clock tower. In Missile Assault this is objective B, with the ring as the high ground over it.",
+        "eye": [
+          16,
+          4,
+          24
+        ],
+        "look": [
+          0,
+          12,
+          0
+        ]
+      },
+      {
+        "id": "viaduct",
+        "name": "Viaduct",
+        "text": "The highest level is a square ring 14 m up on pillars around the market, linking all three Missile Assault silos. You reach it by the transit ramp from each base plaza or by the ramps up from the east and west districts' roof landings.",
+        "eye": [
+          -24,
+          18,
+          32
+        ],
+        "look": [
+          30,
+          14,
+          31
+        ]
+      },
+      {
+        "id": "storm-drain",
+        "name": "Storm Drain",
+        "text": "The lowest level is a 10 m wide drain 7 m below the streets, running in front of each base. It passes under four grated street bridges and has a ramp up at each end.",
+        "eye": [
+          -35,
+          -3,
+          47
+        ],
+        "look": [
+          10,
+          -4,
+          47
+        ]
+      }
+    ]
+  },
+  "sinkhole": {
+    "blurb": "An open-pit mine under dust: benches stepping down to a flooded floor, a double spiral of haul ramps, three bridges across the middle, and old workings under each side's rim.",
+    "hero": {
+      "eye": [
+        -70,
+        38,
+        -70
+      ],
+      "look": [
+        0,
+        -7,
+        0
+      ]
+    },
+    "spots": [
+      {
+        "id": "pit-floor",
+        "name": "Pit Floor",
+        "text": "The pit's flooded floor at -28 is objective B in Missile Assault, under all three bridges: the conveyor gantry at -7, the haul road at 0 and the high bridge at +8. Haul ramps spiral up the benches, and jump pads throw mechs out to the east and west rims.",
+        "eye": [
+          12,
+          -24,
+          -20
+        ],
+        "look": [
+          0,
+          -7,
+          10
+        ]
+      },
+      {
+        "id": "headframe",
+        "name": "Headframe and Shaft",
+        "text": "Under each team's front rim lie the old workings: a station at -14 that opens onto the pit's -14 bench. You reach it down a broad haul decline, a narrower drift, or this open shaft under the headframe; drop in, and the cage pad at the bottom throws you back out in front of the base's west gate.",
+        "eye": [
+          -16,
+          4.5,
+          50
+        ],
+        "look": [
+          0,
+          10,
+          68
+        ]
+      },
+      {
+        "id": "excavator",
+        "name": "Bucket-Wheel Excavator",
+        "text": "A bucket-wheel excavator stands on each side rim with its boom out over the pit, the boom 12 m over the rim at its lowest and the wheel 9 m clear of the benches. South of it, a narrow adit runs in under the rim from the -7 bench up to the surface.",
+        "eye": [
+          62,
+          5,
+          -24
+        ],
+        "look": [
+          58,
+          12.4,
+          10
+        ]
+      }
+    ]
+  },
+  "ziggurat": {
+    "blurb": "A snowfield round a squat stepped pyramid faced in ice nobody can climb. Trenches cut it into four lobes that meet in the Vault under the top; each lobe has one way up.",
+    "hero": {
+      "eye": [
+        -70,
+        38,
+        60
+      ],
+      "look": [
+        0,
+        12,
+        0
+      ],
+      "fog": 2.2
+    },
+    "spots": [
+      {
+        "id": "the-vault",
+        "name": "The Vault",
+        "text": "Four 10 m trenches cut the pyramid into lobes and meet under its top in the Vault, a 28 m hall around a core column. In Missile Assault this is objective B, with its launch pad on the roof above.",
+        "eye": [
+          34,
+          4,
+          0
+        ],
+        "look": [
+          0,
+          9,
+          0
+        ]
+      },
+      {
+        "id": "radar-dish",
+        "name": "Toppled Radar Dish",
+        "text": "On the north-west lobe a toppled radar dish leans on the ice face with its top rim on the ledge's edge, making a round ramp from the snow up to the 15 m ledge. The 60-degree ice faces can't be climbed, so everywhere else off the faces is a drop.",
+        "eye": [
+          -34,
+          5,
+          76
+        ],
+        "look": [
+          -21.2,
+          7.6,
+          51.3
+        ]
+      },
+      {
+        "id": "grand-stair",
+        "name": "Grand Stair",
+        "text": "Each lobe has a grand stair that climbs straight from the snow to the 30 m top, with lamps at its foot and red lights either side of its head. The north-east lobe's stair runs up its north face.",
+        "eye": [
+          12.67,
+          5,
+          84
+        ],
+        "look": [
+          12.67,
+          21,
+          36.5
+        ]
+      }
+    ]
+  },
+  "foundry": {
+    "blurb": "An industrial yard on the night shift, on four levels: the cooling channel with slag glowing in its gutters, the ground, decks at 7 m and gantries at 14 m.",
+    "hero": {
+      "eye": [
+        90,
+        42,
+        42
+      ],
+      "look": [
+        0,
+        6,
+        -4
+      ]
+    },
+    "spots": [
+      {
+        "id": "smelter",
+        "name": "The Smelter",
+        "text": "The centre of the map is a soot core with its roof at 14 m and a ring deck at 7 m over an arcade lit by furnace mouths. A ramp climbs to the ring and rust blocks make hover steps on to the roof. The Siege station and silo B sit in the arcade round the core, and the AA gun and B's launch pad are on the roof.",
+        "eye": [
+          3,
+          4.5,
+          44
+        ],
+        "look": [
+          0,
+          4,
+          9.3
+        ]
+      },
+      {
+        "id": "cooling-channel",
+        "name": "Cooling Channel",
+        "text": "A 14 m wide trench runs 5 m below the yard through the east half, with a twin in the west. Slag glows in gutters along both walls and the lane between them stays clear. A 9 m ramp at each end climbs to the smelter's platform at one end and to the land bridge by the perimeter at the other.",
+        "eye": [
+          66,
+          -1,
+          -2
+        ],
+        "look": [
+          24,
+          0,
+          0
+        ]
+      },
+      {
+        "id": "skybridge",
+        "name": "Skybridge",
+        "text": "A railed deck at 14 m runs on three pillars from the base gantry, over the courtyard, to the smelter's roof. It and the hover steps are the ways up to the AA gun on the roof.",
+        "eye": [
+          -5,
+          18,
+          72
+        ],
+        "look": [
+          -3,
+          14,
+          8
+        ]
+      }
+    ]
+  },
+  "riftline": {
+    "blurb": "A lavender canyon split by a chasm, a fissure glowing violet down its floor, crossed by a three-deck bridge whose rail deck runs on to both bases as the high road.",
+    "hero": {
+      "eye": [
+        108,
+        30,
+        30
+      ],
+      "look": [
+        0,
+        0,
+        0
+      ]
+    },
+    "spots": [
+      {
+        "id": "the-bridge",
+        "name": "The Bridge",
+        "text": "Three decks cross the chasm at mid-map: a service gantry at -8, the road at 0 and the rail deck at +10. The rail deck runs on over both rims to the bases as the high road. The Siege station and silo B are on the road deck, with the AA gun and B's launch pad on the rail deck above.",
+        "eye": [
+          36,
+          -20,
+          -6
+        ],
+        "look": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "id": "switchback-stairs",
+        "name": "Switchback Stairs",
+        "text": "Metal ramps zigzag up the canyon wall from the floor at -24 to the -16 and -8 terraces and on to the rim, with a landing at each turn. There are two flights on each wall, and a jump pad near each end of the floor goes straight up to the rim. There is no fall damage, so the chasm is a slow road rather than a pit.",
+        "eye": [
+          40,
+          -2,
+          -22
+        ],
+        "look": [
+          46,
+          -14,
+          22
+        ]
+      },
+      {
+        "id": "broken-pipelines",
+        "name": "Broken Pipelines",
+        "text": "On each side of the bridge a 3.8 m duct runs across the chasm at rim level, torn in the middle. Crossing its 12 m gap takes a hover. Below it on the -8 terrace there is 6.2 m of clearance, enough for a Heavy to pass under.",
+        "eye": [
+          96,
+          12,
+          36
+        ],
+        "look": [
+          70,
+          -2,
+          0
+        ]
+      }
+    ]
+  },
+  "crashsite": {
+    "blurb": "A swamp where a freighter came down bow first and broke in four. The fight is on, in, under and between the pieces: the water and holds, the mid decks, the top decks up to 30 m.",
+    "hero": {
+      "eye": [
+        14.1,
+        40,
+        -99
+      ],
+      "look": [
+        -7.1,
+        18,
+        -7.1
+      ]
+    },
+    "spots": [
+      {
+        "id": "the-bow",
+        "name": "The Bow",
+        "text": "The freighter's nose is buried in the mound it pushed up. Its top deck climbs at 16 degrees to a 24 m overlook at the broken end, with containers caught on the slope, and silo A sits on this sloping deck. Inside are a hold and a mid deck joined by a ramp, and a girder runs on to the midship's top deck.",
+        "eye": [
+          -28.3,
+          12,
+          -113.1
+        ],
+        "look": [
+          -70.7,
+          14,
+          -70.7
+        ]
+      },
+      {
+        "id": "midship-hold",
+        "name": "Midship Hold",
+        "text": "The midship's hold sits at the water line under a mid deck at 9 m and a top deck at 18 m, whose hatches don't line up. The Siege station and silo B are down here. Ramps at either end climb from deck to deck, and the sides are breached to the water.",
+        "eye": [
+          -35.4,
+          4.7,
+          -29.7
+        ],
+        "look": [
+          4.2,
+          3.5,
+          1.4
+        ]
+      },
+      {
+        "id": "the-stern",
+        "name": "The Stern",
+        "text": "The stern is rolled onto its starboard side. Its keel is a ramp up from the water to a ridge walk along the top, and its deck face leans out over the water, holed by a window from the cavern inside. Silo C covers the cavern and its fallen deck, with its launch pad up on the ridge.",
+        "eye": [
+          113,
+          30,
+          85
+        ],
+        "look": [
+          63.6,
+          8,
+          63.6
+        ]
+      }
+    ]
+  },
+  "span": {
+    "blurb": "A desert at noon, crossed by a broken arch that climbs to 36 m and stops short over the middle, above a fallen block. Mesas and slot canyons stand between the walled corner yards.",
+    "hero": {
+      "eye": [
+        -122.3,
+        48,
+        -72.8
+      ],
+      "look": [
+        0,
+        6,
+        0
+      ]
+    },
+    "spots": [
+      {
+        "id": "broken-arch",
+        "name": "The Broken Arch",
+        "text": "From a town at each end, the arch climbs to 36 m over the middle and can be walked all the way up. Its two arms stop 24 m short of each other, so the top gives a view but no way across.",
+        "eye": [
+          42,
+          10,
+          42
+        ],
+        "look": [
+          0,
+          28,
+          0
+        ]
+      },
+      {
+        "id": "the-keystone",
+        "name": "The Keystone",
+        "text": "A fallen block lies under the arch's gap, with a ramp up each long side. In Siege the station rings its foot and the AA gun is on top. In Missile Assault it is silo B, with the launch pad in the open beside it.",
+        "eye": [
+          31.8,
+          4.5,
+          46
+        ],
+        "look": [
+          0,
+          6,
+          0
+        ]
+      },
+      {
+        "id": "the-mesa",
+        "name": "The Mesa",
+        "text": "A 14 m mesa stands between each yard and the middle, with a sand drift running up its back from the yard's side. Outcrops off its ends leave 10 m slot canyons. Silo A is on top of the NE mesa and silo C on the SW one.",
+        "eye": [
+          88.4,
+          26,
+          102.5
+        ],
+        "look": [
+          59.4,
+          14,
+          59.4
+        ]
+      }
+    ]
+  },
+  "canopy": {
+    "blurb": "The last living forest, and not quite right. Rolling ground walled by cliffs: a gorge up one flank, a knoll mid-map, and the Crown, a rise under the mother tree.",
+    "hero": {
+      "eye": [
+        30,
+        48,
+        -10
+      ],
+      "look": [
+        0,
+        33,
+        112
+      ]
+    },
+    "spots": [
+      {
+        "id": "the-knoll",
+        "name": "The Knoll",
+        "text": "A hill mid-map under a rock table, with a ramp up its south side and a pinnacle a hover above it. Two sides can hold it as an overlook against each other. The Siege AA gun and silo B are on the table.",
+        "eye": [
+          24,
+          4.7,
+          -48
+        ],
+        "look": [
+          6,
+          12,
+          -18
+        ]
+      },
+      {
+        "id": "the-gorge",
+        "name": "The Gorge",
+        "text": "A 15 m canyon with sheer walls runs up the west flank. The ways out are its ends, a breach in its east wall, and the jump pad on its floor. A fallen giant and a stone arch from the Pulpit bridge it, and silo A is on its floor by the breach.",
+        "eye": [
+          -75.4,
+          -8.5,
+          -7.3
+        ],
+        "look": [
+          -64.8,
+          8,
+          22.3
+        ]
+      },
+      {
+        "id": "the-spine",
+        "name": "The Spine",
+        "text": "A 14 m stone ridge up the east flank, its crest walkable from either end, with ledges up its sides and a 10 m wide tunnel through it. It is the east's overlook and its choke point. Silo C is at the tunnel, with its launch pad by the west mouth.",
+        "eye": [
+          51.4,
+          1.4,
+          7.4
+        ],
+        "look": [
+          76.1,
+          3.1,
+          15.7
+        ]
+      }
+    ]
+  }
+}

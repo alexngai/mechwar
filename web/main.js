@@ -15,6 +15,7 @@ import { buildArena, HIGH_ONLY, LOW_ONLY } from './arena.js';
 import { Effects, HOT, halo, hot } from './fx.js';
 import { Objectives, SENTRY, SHIP, SHIP_HULL } from './objectives.js';
 import { Preview, weaponThumbs } from './hangar.js';
+import { GLYPHS, STATS, facts as cardFacts, shown } from './cards.js';
 import { controlsHtml } from './controls.js';
 import isotope from '../maps/isotope.json';
 import foundry from '../maps/foundry.json';
@@ -565,11 +566,6 @@ const CARRY_MAX = 100;
 // launch again (or C opens the hangar sooner). `killcam` is their id, `killYaw` the camera's heading.
 let killcam = null, killYaw = 0, killcamHtml = '';
 const killEye = new THREE.Vector3();
-/** Damage a second from value lookup `v`'s primary, sustained at full spin or charge, before falloff and heat. */
-const dps = (v) => {
-  const hit = v('shot_damage') * v('pellets') * (v('charge_time') > 0 ? v('charge_damage') : 1);
-  return Math.round((hit * v('burst')) / (1 / v('fire_rate') + v('charge_time')));
-};
 // --- Hangar ----------------------------------------------------------------
 // One bay per class, each holding the loadout last picked in it (saved locally by weapon id). The
 // hangar shows before the first launch, on death and with C; Launch (or Enter) sends the shown
@@ -590,20 +586,6 @@ const unlockRow = (i, list, k) => {
   return `<div class="unlock">LOCKED · ${w.unlock} ${w.unlock === 1 ? 'POINT' : 'POINTS'} (${left} to spend)${left >= w.unlock ? `<button data-list="${list}" data-k="${k}">UNLOCK</button>` : ''}</div>`;
 };
 const preview = new Preview($('preview'), Math.max(...CLASS_KEYS.map((_, i) => classValue(i, 'mech_height'))));
-/** Stat bars per slot: label, value from a lookup like `valueOf`'s, unit. */
-const STATS = {
-  primaries: [
-    ['Damage/s', (v) => dps(v), ''],
-    ['Range', (v) => Math.min(v('weapon_range'), v('falloff_end')), ' m'],
-    ['Heat/s', (v) => (v('heat_per_shot') * v('burst')) / (1 / v('fire_rate') + v('charge_time')), ''],
-  ],
-  secondaries: [
-    ['Damage', (v) => (v('alt_beam') > 0 ? v('alt_damage') : v('alt_damage') * Math.max(v('alt_count'), 1) + v('alt_split') * v('alt_split_damage')), ''],
-    ['Blast', (v) => (v('alt_beam') > 0 ? 0 : v('alt_radius')), ' m'],
-    ['Cooldown', (v) => v('alt_cooldown'), ' s'],
-  ],
-};
-const shown = (x) => (x < 10 ? x.toFixed(1).replace(/\.0$/, '') : Math.round(x));
 /** Bars for class `cls` carrying `l`, its `slot` weapon against the rest of `list`. */
 const statBars = (cls, l, slot, list) => STATS[list].map(([label, f, unit]) => {
   const at = (k) => f((name) => valueOf(cls, { ...l, [slot]: k }, name));
@@ -614,18 +596,8 @@ const statBars = (cls, l, slot, list) => STATS[list].map(([label, f, unit]) => {
 const SLOTS = [['primary', 'primaries', 'PRIMARY', 'LMB'], ['secondary', 'secondaries', 'SECONDARY', 'RMB · MMB'], ['offensive', 'offensive', 'ITEM', 'Q'], ['support', 'support', 'SUPPORT', 'E'], ['ability', 'abilities', 'ABILITY', 'F']];
 let tab = 'primary'; // the slot whose cards show
 let thumbs = null; // weapons' side profiles by id, drawn the first time the hangar shows
-// Items and abilities have no model to draw: a glyph each instead.
-const GLYPHS = {
-  grenade: '●', limpet: '◎', smoke: '▒', mg_turret: '┳', rocket_turret: '▲', emp: '◇', orb: '⊕', dome: '◠', barrier: '▌',
-  slipstream: '»', vent: '≋', brace: '▣', cloak: '◌', power: '◆', barrage: '∴', artillery: '⊙',
-};
 /** The few numbers on entry `k`'s card: class `i` carrying it in `slot` of loadout `l`. */
-const facts = (i, l, slot, list, k) => {
-  const v = (name) => valueOf(i, { ...l, [slot]: k }, name), id = weapons[list][k].id, has = (name) => name in tuning;
-  if (STATS[list]) return STATS[list].map(([label, f, unit]) => [f(v), unit, label]).filter(([x]) => x > 0).map(([x, unit, label]) => `${shown(x)}${unit} ${label.toLowerCase()}`).join(' · ');
-  if (has(`${id}_charges`)) return `${v(`${id}_charges`)} ${v(`${id}_charges`) === 1 ? 'charge' : 'charges'} · ${v(`${id}_recharge`)} s recharge`;
-  return [has(`${id}_duration`) && `${v(`${id}_duration`)} s on`, has(`${id}_cooldown`) && `${v(`${id}_cooldown`)} s cooldown`].filter(Boolean).join(' · ');
-};
+const facts = (i, l, slot, list, k) => cardFacts(list, weapons[list][k].id, (name) => valueOf(i, { ...l, [slot]: k }, name));
 /**
  * Entry `k` of `list` as a card for class `i`: its picture, name and numbers; picked, also what it
  * does and how to use it (weapons.json's `use`, key and step; one with none, an ability, is its

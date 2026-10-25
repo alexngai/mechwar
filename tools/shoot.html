@@ -1,0 +1,148 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Map shots</title>
+<style>html, body { margin: 0; background: #000; color: #9aa; font: 12px/1.5 ui-monospace, Menlo, monospace; } canvas { display: block; max-width: 100%; } #log { margin: 8px; }</style>
+<pre id="log"></pre>
+<script type="module">
+// Renders the guide's map pictures with the game's look and saves them to guide/shots/ through the
+// dev server (its /__shots endpoint, vite.config.js). Dev only: run `npx vite` and open
+// /tools/shoot.html. Each map in guide/maps.json gets `<map>-plan.webp` (from straight above, in
+// plain light), `<map>-hero.webp` and `<map>-<spot id>.webp`.
+//   ?map=foundry,sump     only those maps
+//   ?map=foundry&view=hero  shows one shot (hero, plan, or a spot's id) on screen, saving nothing
+//   ?map=foundry&eye=x,y,z&look=x,y,z[&fog=1.5]  tries a viewpoint, saving nothing
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { buildArena, HIGH_ONLY, LOW_ONLY } from '/web/arena.js';
+import { createSky } from '/web/sky.js';
+import { HOT } from '/web/fx.js';
+import guide from '/guide/maps.json';
+
+const FILES = import.meta.glob('/maps/*.json', { import: 'default' });
+const q = new URLSearchParams(location.search), xyz = (s) => s.split(',').map(Number);
+const log = (text) => { document.getElementById('log').textContent += `${text}\n`; };
+const SIZES = { plan: [1024, 1024], hero: [1600, 900], spot: [1280, 720] };
+// The game's lights (web/main.js LIGHTS), under a map's palette.
+const LIGHTS = {
+  day: { sky: 0xdfe8f0, ground: 0x4a4238, ambient: 1.4, sun: 0xfff0d8, direct: 2.6 },
+  night: { sky: 0x6a7aa0, ground: 0x3a2a1e, ambient: 1.8, sun: 0x9fb4e8, direct: 1.6 },
+};
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+document.body.prepend(renderer.domElement);
+HOT.value = 2; // bloomed, as High draws it
+
+/** A scene of `map` with the sun along `sunDir` and `light` (sky, ground, ambient, sun, direct), its shadows covering the map. */
+function stage(map, light, sunDir) {
+  const scene = new THREE.Scene(), half = Math.max(...map.size) * 0.6;
+  scene.add(new THREE.HemisphereLight(light.sky, light.ground, light.ambient));
+  const sun = new THREE.DirectionalLight(light.sun, light.direct);
+  sun.position.copy(sunDir).multiplyScalar(400);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(4096, 4096);
+  sun.shadow.bias = -0.0004;
+  sun.shadow.normalBias = 0.04;
+  Object.assign(sun.shadow.camera, { left: -half, right: half, top: half, bottom: -half, near: 1, far: 1000 });
+  scene.add(sun);
+  return scene;
+}
+/** Frees a scene's GPU resources. */
+const clear = (scene) => scene.traverse((o) => {
+  o.geometry?.dispose();
+  for (const m of [o.material ?? []].flat()) { m.map?.dispose(); m.dispose(); }
+  if (o.isLight) o.shadow?.map?.dispose();
+});
+/** The picture on the canvas, as a WebP blob, saved as guide/shots/`name`. */
+async function save(name) {
+  const blob = await new Promise((done) => renderer.domElement.toBlob(done, 'image/webp', 0.82));
+  const res = await fetch(`/__shots/${name}`, { method: 'POST', body: blob });
+  if (!res.ok) throw new Error(`${name}: ${res.status}`);
+  log(`${name}  ${Math.round(blob.size / 1024)} KB`);
+}
+
+/** `map` from straight above in plain daylight, x right and z down, filling the square. */
+function plan(map) {
+  const scene = stage(map, LIGHTS.day, new THREE.Vector3(0.45, 0.8, 0.35).normalize()), half = Math.max(...map.size) / 2;
+  buildArena(scene, map);
+  const camera = new THREE.OrthographicCamera(-half, half, half, -half, 1, 1000);
+  camera.layers.enable(LOW_ONLY);
+  camera.position.set(0, 500, 0);
+  camera.up.set(0, 0, -1);
+  camera.lookAt(0, 0, 0);
+  renderer.setSize(...SIZES.plan, false);
+  renderer.toneMappingExposure = 1.05;
+  renderer.render(scene, camera);
+  clear(scene);
+}
+
+/** `map` as the game draws it, on High: its palette's lights, sky, fog and haze, and bloom. */
+function world(map) {
+  const light = { ...(map.night ? LIGHTS.night : LIGHTS.day), ...map.palette?.light };
+  const sunDir = new THREE.Vector3(...(map.palette?.sunDir ?? [0.45, 0.8, 0.35])).normalize();
+  const scene = stage(map, light, sunDir);
+  const sky = createSky(scene, sunDir);
+  buildArena(scene, map);
+  sky.fit(map);
+  sky.setHaze(true);
+  const fog = [scene.fog.near, scene.fog.far];
+  const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 1500);
+  camera.layers.set(0);
+  camera.layers.enable(HIGH_ONLY);
+  const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.7, 0, 1.1);
+  bloom.materialHighPassFilter.fragmentShader = bloom.materialHighPassFilter.fragmentShader.replace('luminance( texel.xyz )', 'max( texel.r, max( texel.g, texel.b ) )');
+  [1, 1, 0.6, 0.2, 0].forEach((k, i) => bloom.bloomTintColors[i].setScalar(k));
+  composer.addPass(new RenderPass(scene, camera));
+  composer.addPass(bloom);
+  composer.addPass(new OutputPass());
+  return {
+    /** Draws the view from `eye` toward `look` at `size`, its fog pushed out `fogScale` times. */
+    shoot({ eye, look, fog: fogScale = 1 }, size) {
+      [scene.fog.near, scene.fog.far] = fog.map((d) => d * fogScale);
+      renderer.setSize(...size, false);
+      renderer.toneMappingExposure = map.palette?.exposure ?? 1.05;
+      composer.setSize(...size);
+      camera.aspect = size[0] / size[1];
+      camera.updateProjectionMatrix();
+      camera.position.set(...eye);
+      camera.lookAt(...look);
+      composer.render();
+    },
+    done: () => { clear(scene); composer.dispose(); },
+  };
+}
+
+const load = async (id) => FILES[`/maps/${id}.json`]();
+const ids = q.get('map')?.split(',') ?? Object.keys(guide);
+if (q.has('eye')) {
+  const w = world(await load(ids[0]));
+  w.shoot({ eye: xyz(q.get('eye')), look: xyz(q.get('look')), fog: Number(q.get('fog') ?? 1) }, SIZES.hero);
+} else if (q.has('view')) {
+  const map = await load(ids[0]), view = q.get('view'), shot = guide[ids[0]];
+  if (view === 'plan') plan(map);
+  else world(map).shoot(view === 'hero' ? shot.hero : shot.spots.find((s) => s.id === view), view === 'hero' ? SIZES.hero : SIZES.spot);
+} else {
+  for (const id of ids) {
+    const map = await load(id), shot = guide[id];
+    plan(map);
+    await save(`${id}-plan.webp`);
+    if (!shot.hero) continue;
+    const w = world(map);
+    w.shoot(shot.hero, SIZES.hero);
+    await save(`${id}-hero.webp`);
+    for (const spot of shot.spots ?? []) {
+      w.shoot(spot, SIZES.spot);
+      await save(`${id}-${spot.id}.webp`);
+    }
+    w.done();
+  }
+  log('done');
+}
+window.done = true;
+</script>
