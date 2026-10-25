@@ -268,6 +268,29 @@ mod tests {
     }
 
     #[test]
+    fn every_kit_reads_sanely() {
+        // Every primary and secondary, in every class, against every class: finite, never
+        // negative, and a duel's shares between nothing and all.
+        let arsenal = Arsenal::new(&Tuning::default());
+        let kits: Vec<Tuning> = MechClass::ALL
+            .iter()
+            .flat_map(|&c| (0..).map_while(move |p| crate::arsenal::weapon(crate::Slot::Primary, p).map(|_| (c, p))))
+            .flat_map(|(c, p)| (0..).map_while(move |s| crate::arsenal::weapon(crate::Slot::Secondary, s).map(|_| (c, p, s))))
+            .map(|(c, p, s)| arsenal.get(c, Loadout { primary: p, secondary: s, ..Loadout::of(c) }).clone())
+            .collect();
+        for mine in &kits {
+            for theirs in kits.iter().step_by(7) {
+                for &r in &RANGES {
+                    let d = dps(mine, theirs, r);
+                    assert!(d.primary.is_finite() && d.primary >= 0.0 && d.secondary.is_finite() && d.secondary >= 0.0, "{d:?} at {r} m");
+                    let e = edge(mine, theirs, r);
+                    assert!((0.0..=1.0).contains(&e), "edge {e} at {r} m");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn heat_caps_sustained_fire() {
         // A gun that heats faster than it sheds fires only part of the time.
         let rifle = kit(MechClass::B, "pike", "piston");
