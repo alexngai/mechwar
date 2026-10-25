@@ -385,6 +385,8 @@ pub struct FoeKit {
     pub hull: f32,
     pub eye: f32,
     pub mid: f32,
+    /// How many of the bot's teammates it has a clear line to.
+    pub watching: u8,
 }
 
 /// What a bot knows of one enemy: where it was last perceived and when, whether it's in view
@@ -416,6 +418,8 @@ struct Stand {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Goal {
     Contact,
+    /// An enemy a teammate is fighting (by id): it goes to back them up (`Bot::trade`).
+    Trade(u8),
     /// An objective it's been sent to (`Bot::order`).
     Order,
     Lead,
@@ -514,6 +518,8 @@ pub enum Doing {
     FallBack,
     Mend,
     Move,
+    /// Going to back up a teammate's fight (`Bot::trade`).
+    Trade,
 }
 
 /// How a bot goes after its target this life.
@@ -568,6 +574,13 @@ pub struct Policy {
     pub target_seen: f32,
     pub target_focus: f32,
     pub target_stick: f32,
+    /// Team play by position: how much of an enemy's fire it counts as split among the teammates
+    /// it also sees (0: none, 1: evenly), how much more a post across from a teammate on the
+    /// same target is worth (`tactics::Weighing::cross`), and how near a teammate's fight must be
+    /// for it to go and back them up (0: never).
+    pub post_split: f32,
+    pub post_cross: f32,
+    pub trade_reach: f32,
     /// With nothing to do it holds within this of its lead.
     pub follow: f32,
     /// Farthest it lobs a grenade (short of its flat-ground reach).
@@ -605,6 +618,9 @@ impl Default for Policy {
             target_seen: 0.5,
             target_focus: 0.5,
             target_stick: 0.3,
+            post_split: 1.0,
+            post_cross: 0.3,
+            trade_reach: 40.0,
             follow: 10.0,
             grenade_range: 28.0,
             heat_fed: 0.1,
@@ -649,8 +665,9 @@ pub struct Bot {
     /// charged: when to let a charged shot go (`SETTLE`).
     seen_step: Vector,
     charged_at: u32,
-    /// Mending a teammate this tick.
+    /// Mending a teammate this tick; backing one up.
     mending: bool,
+    trading: bool,
     /// Target chest positions, oldest first, so aim lags by the reaction time.
     seen: VecDeque<Vector>,
     last_health: f32,
@@ -673,8 +690,14 @@ pub struct Bot {
     /// and how many teammates are alive within `MATES_NEAR`.
     pub limpet_hits: bool,
     pub mates_near: u8,
-    /// Set by the server each tick: the kits of the enemies it knows of.
+    /// Set by the server each tick: the kits of the enemies it knows of; and its teammates alive,
+    /// where they stand and whom they're fighting.
     pub foes: Vec<FoeKit>,
+    pub mates: Vec<(Vector, Option<u8>)>,
+    /// Where it goes to back up a teammate's fight (with the enemy's id), and when it weighs that
+    /// again.
+    support: Option<(Post, u8)>,
+    support_at: u32,
     /// Where it fights its target from (with the target's id), and when it weighs that again.
     post: Option<(Post, u8)>,
     post_at: u32,
@@ -727,6 +750,7 @@ impl Bot {
             seen_step: Vector::ZERO,
             charged_at: 0,
             mending: false,
+            trading: false,
             seen: VecDeque::new(),
             last_health: 0.0,
             grenade_at: 0,
@@ -741,6 +765,9 @@ impl Bot {
             limpet_hits: false,
             mates_near: 0,
             foes: Vec::new(),
+            mates: Vec::new(),
+            support: None,
+            support_at: 0,
             post: None,
             post_at: 0,
             smoke: Vec::new(),
@@ -775,7 +802,7 @@ impl Bot {
         };
         (self.path_goal, self.vantage, self.reached) = (None, None, None);
         self.cooling = false;
-        (self.focus, self.patrol, self.retreat, self.post) = (None, None, None, None);
+        (self.focus, self.patrol, self.retreat, self.post, self.support) = (None, None, None, None, None);
         self.contacts.clear();
     }
 
@@ -885,6 +912,8 @@ impl Bot {
             Doing::FallBack
         } else if self.mending {
             Doing::Mend
+        } else if self.trading {
+            Doing::Trade
         } else if self.focus.is_some() {
             Doing::Fight
         } else {
@@ -998,13 +1027,19 @@ impl Bot {
         let urgent = |c: &&Contact| !c.told && (c.seen_at.is_some() || c.hit_at.is_some() || flat(c.pos - me.pos).length() < URGENT);
         let urgent = self.contacts.iter().filter(urgent).max_by_key(|c| c.at).map(|c| c.pos);
         let fresh = self.contacts.iter().max_by_key(|c| c.at).map(|c| c.pos);
+        // The nearest enemy a teammate is fighting, if near enough to back them up.
+        let reach = self.policy.trade_reach;
+        let fought = |c: &&Contact| self.mates.iter().any(|(_, f)| *f == Some(c.id)) && flat(c.pos - me.pos).length() <= reach;
+        let trade = self.contacts.iter().filter(fought).min_by(|a, b| a.pos.distance(me.pos).total_cmp(&b.pos.distance(me.pos))).map(|c| (c.pos, c.id));
         let mut at = Features::default();
+        at.flag(Feature::HasTrade, trade.is_some());
         at.flag(Feature::HasOrder, self.order.is_some()).flag(Feature::HasUrgent, urgent.is_some()).flag(Feature::HasContact, fresh.is_some());
         at.flag(Feature::HasLead, self.lead.is_some()).set(Feature::LeadDist, self.lead.map_or(f32::MAX, |l| flat(l - me.pos).length()));
         at.set(Feature::Hull, me.health / t.health_max).set(Feature::MatesNear, f32::from(self.mates_near));
         // The first of these it wants is where it goes.
         let wants = |a: Action| self.brain.wants(a, &at);
-        let choice = [(Action::GoToOrder, self.order, Goal::Order), (Action::ChaseUrgent, urgent, Goal::Contact), (Action::Regroup, self.lead, Goal::Lead), (Action::ChaseContact, fresh, Goal::Contact), (Action::Follow, self.lead, Goal::Lead)]
+        let trading = (Action::Trade, trade.map(|(pos, _)| pos), Goal::Trade(trade.map_or(0, |(_, id)| id)));
+        let choice = [(Action::GoToOrder, self.order, Goal::Order), trading, (Action::ChaseUrgent, urgent, Goal::Contact), (Action::Regroup, self.lead, Goal::Lead), (Action::ChaseContact, fresh, Goal::Contact), (Action::Follow, self.lead, Goal::Lead)]
             .into_iter()
             .find_map(|(a, spot, goal)| spot.filter(|_| wants(a)).map(|spot| (spot, goal)));
         if let Some(choice) = choice {
@@ -1080,7 +1115,7 @@ impl Bot {
             (self.role, self.vantage, self.path_goal) = (Role::Hunt, None, None);
         }
         let idle = Input { yaw: me.yaw, pitch: me.pitch, ..Input::default() };
-        self.mending = false;
+        (self.mending, self.trading) = (false, false);
         let took_damage = me.health < self.last_health;
         self.last_health = me.health;
         if me.health <= 0.0 {
@@ -1138,6 +1173,12 @@ impl Bot {
                 return self.lob(t, me, Item::Grenade, spot, tick);
             }
             let (pos, goal) = self.goal(arena, nav, t, me, tick);
+            self.trading = matches!(goal, Goal::Trade(_));
+            if let Goal::Trade(id) = goal
+                && let Some(input) = self.trade(arena, nav, t, me, id, pos, tick)
+            {
+                return input;
+            }
             let spot = Mech { pos, ..Mech::default() };
             // At its order, or with its lead and nothing else to go on, it holds there, looking about.
             let hold = match goal {
@@ -1148,7 +1189,7 @@ impl Bot {
             if flat(pos - me.pos).length() < hold {
                 return Input { yaw: me.yaw + 0.5 * DT, pitch: me.pitch * 0.9, ..idle };
             }
-            let watch = goal == Goal::Contact && pos.distance(me.pos) < WATCH;
+            let watch = matches!(goal, Goal::Contact | Goal::Trade(_)) && pos.distance(me.pos) < WATCH;
             return self.walk(arena, nav, t, me, &spot, watch, tick);
         };
 
@@ -1400,20 +1441,7 @@ impl Bot {
         let id = self.focus?;
         if tick >= self.post_at || self.post.is_none_or(|(_, of)| of != id) {
             let current = self.post.filter(|&(_, of)| of == id).map(|(p, _)| p.spot);
-            let seen: Vec<(Vector, FoeKit)> = self
-                .foes
-                .iter()
-                .filter_map(|k| {
-                    let c = self.contacts.iter().find(|c| c.id == k.id && (c.seen || c.id == id))?;
-                    Some((if c.id == id { target.pos } else { c.pos }, *k))
-                })
-                .collect();
-            let foes: Vec<Foe> = seen.iter().map(|(pos, k)| Foe { pos: *pos, eye: *pos + Vector::Y * k.eye, chest: *pos + Vector::Y * k.mid, on_me: &k.on_me, mine: &k.mine, hull: k.hull }).collect();
-            let at = seen.iter().position(|(_, k)| k.id == id)?;
-            let p = &self.policy;
-            let w = Weighing { take: p.post_take, horizon: p.post_horizon, moving: p.post_moving, stay: p.post_stay, reach: p.post_reach };
-            let duty = crate::threat::dps(t, t, flat(target.pos - me.pos).length()).duty;
-            self.post = crate::tactics::choose(spots, arena, t, me.pos, &foes, at, duty, current, &w).map(|p| (p, id));
+            self.post = self.weigh(arena, spots, t, me, id, target.pos, current).map(|p| (p, id));
             self.post_at = tick + secs(POST_EVERY);
         }
         let (post, _) = self.post?;
@@ -1428,6 +1456,61 @@ impl Bot {
         // Out where the target sees it, it strafes about the spot; hidden in cover, or firing over
         // low cover, it stands.
         Some(Stand { at, covered: post.peek.is_some() || low, open: out })
+    }
+
+    /// The best post against enemy `id` at `pos` (`tactics::choose`), every foe it sees weighed
+    /// too, with what it knows of its teammates.
+    #[allow(clippy::too_many_arguments)]
+    fn weigh(&self, arena: &Arena, spots: &Spots, t: &Tuning, me: &Mech, id: u8, pos: Vector, current: Option<usize>) -> Option<Post> {
+        let seen: Vec<(Vector, FoeKit)> = self
+            .foes
+            .iter()
+            .filter_map(|k| {
+                let c = self.contacts.iter().find(|c| c.id == k.id && (c.seen || c.id == id))?;
+                Some((if c.id == id { pos } else { c.pos }, *k))
+            })
+            .collect();
+        let p = &self.policy;
+        let foes: Vec<Foe> = seen
+            .iter()
+            .map(|(at, k)| Foe { pos: *at, eye: *at + Vector::Y * k.eye, chest: *at + Vector::Y * k.mid, on_me: &k.on_me, mine: &k.mine, hull: k.hull, split: p.post_split * f32::from(k.watching) })
+            .collect();
+        let target = seen.iter().position(|(_, k)| k.id == id)?;
+        let allies: Vec<Vector> = self.mates.iter().filter(|(_, f)| *f == Some(id)).map(|(at, _)| *at).collect();
+        let w = Weighing { take: p.post_take, horizon: p.post_horizon, moving: p.post_moving, stay: p.post_stay, reach: p.post_reach, cross: p.post_cross };
+        let duty = crate::threat::dps(t, t, flat(pos - me.pos).length()).duty;
+        crate::tactics::choose(spots, arena, t, me.pos, &foes, target, duty, current, &allies, &w)
+    }
+
+    /// Backing up a teammate fighting enemy `id` at `pos`, out of its own sight: to a post it
+    /// can fire on the enemy from (stepped out, if it's a peek), facing it. None with none such
+    /// within reach: it walks on toward the fight.
+    #[allow(clippy::too_many_arguments)]
+    fn trade(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, id: u8, pos: Vector, tick: u32) -> Option<Input> {
+        if alt_use(t) == AltUse::Melee {
+            return None;
+        }
+        let spots = nav.spots()?;
+        if tick >= self.support_at || self.support.is_none_or(|(_, of)| of != id) {
+            let current = self.support.filter(|&(_, of)| of == id).map(|(p, _)| p.spot);
+            self.support = self.weigh(arena, spots, t, me, id, pos, current).filter(|p| p.fires).map(|p| (p, id));
+            self.support_at = tick + secs(POST_EVERY);
+        }
+        let (post, _) = self.support?;
+        let at = post.peek.map_or(spots.spots[post.spot].pos, |p| spots.spots[p].pos);
+        let max_turn = self.max_turn(t);
+        let (yaw, pitch) = look_at(me.pos + Vector::Y * t.eye_height, self.chest(t, Some(id), pos));
+        let new_yaw = me.yaw + wrap(yaw - me.yaw).clamp(-max_turn, max_turn);
+        let new_pitch = me.pitch + (pitch - me.pitch).clamp(-max_turn, max_turn);
+        let off = flat(at - me.pos);
+        let rot = Rotation::from_rotation_y(new_yaw);
+        let (move_x, move_z) = if off.length() > POST_NEAR {
+            let dir = off.normalize_or_zero();
+            (dir.dot(rot * Vector::X), dir.dot(rot * Vector::NEG_Z))
+        } else {
+            (0.0, 0.0)
+        };
+        Some(Input { move_x, move_z, yaw: new_yaw, pitch: new_pitch, ..Input::default() })
     }
 
     /// With its target out of sight but seen within POST_HOLD (cooling in its cover, say): keeps
@@ -1901,7 +1984,7 @@ mod tests {
         let mine = arsenal.get(MechClass::B, Loadout::named("pike", "rocket"));
         // In view: one with a flak gun 20 m off, and nearer, 16 m off, one with a grenade rifle.
         let (flak, lobber) = (spawn_mech(&t, Vector::new(-3.0, 0.1, 20.2)), spawn_mech(&t, Vector::new(3.0, 0.1, 24.3)));
-        let kit = |id: u8, theirs: &Tuning| FoeKit { id, on_me: Curve::of(theirs, mine), mine: Curve::of(mine, theirs), hull: theirs.health_max, eye: theirs.eye_height, mid: theirs.mech_height * 0.5 };
+        let kit = |id: u8, theirs: &Tuning| FoeKit { id, on_me: Curve::of(theirs, mine), mine: Curve::of(mine, theirs), hull: theirs.health_max, eye: theirs.eye_height, mid: theirs.mech_height * 0.5, watching: 0 };
         let foes = vec![kit(1, arsenal.get(MechClass::B, Loadout::named("squall", "rocket"))), kit(2, arsenal.get(MechClass::B, Loadout::named("hail", "rocket")))];
         let pick = |policy: Policy| {
             let mut bot = Bot { policy, ..Bot::new(1) };

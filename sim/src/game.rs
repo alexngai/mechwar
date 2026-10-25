@@ -568,6 +568,21 @@ impl Game {
             _ => None,
         };
         let mut matchups = std::mem::take(&mut self.matchups);
+        // Which enemies have a clear line to which players (eye to middle, within their weapons'
+        // reach): for bots weighing how an enemy's fire is split.
+        let up = |q: &Player| q.mech.health > 0.0 && q.respawn_at.is_none();
+        let mut lines: Vec<(u8, u8)> = Vec::new();
+        for q in self.players.iter().filter(|q| up(q)) {
+            let tq = self.arsenal.of(&q.mech);
+            let eye = q.mech.pos + Vector::Y * tq.eye_height;
+            for m in self.players.iter().filter(|m| m.team != q.team && up(m)) {
+                let mid = m.mech.pos + Vector::Y * (self.arsenal.of(&m.mech).mech_height * 0.5);
+                let d = mid - eye;
+                if d.length() <= tq.weapon_range && self.arena.cast_ray(&Ray::new(eye, d / d.length()), d.length()).is_none() {
+                    lines.push((q.id, m.id));
+                }
+            }
+        }
         for i in 0..self.players.len() {
             let me = &self.players[i];
             if me.bot.is_none() {
@@ -601,13 +616,16 @@ impl Game {
                 .filter_map(|&(id, _, _)| self.players.iter().find(|q| q.id == id))
                 .map(|q| {
                     let theirs = self.arsenal.of(&q.mech);
-                    bot::FoeKit { id: q.id, on_me: curve(&q.mech, &me.mech), mine: curve(&me.mech, &q.mech), hull: theirs.health_max, eye: theirs.eye_height, mid: theirs.mech_height * 0.5 }
+                    let watching = lines.iter().filter(|&&(from, to)| from == q.id && to != me.id).count() as u8;
+                    bot::FoeKit { id: q.id, on_me: curve(&q.mech, &me.mech), mine: curve(&me.mech, &q.mech), hull: theirs.health_max, eye: theirs.eye_height, mid: theirs.mech_height * 0.5, watching }
                 })
                 .collect();
+            let mates: Vec<(Vector, Option<u8>)> = self.players.iter().filter(|q| q.team == me.team && q.id != me.id && up(q)).map(|q| (q.mech.pos, q.bot.as_ref().and_then(Bot::focus))).collect();
             let (team, id) = (usize::from(me.team), me.id);
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
             bot.foes = foes;
+            bot.mates = mates;
             bot.engaged.clone_from(&engaged[team]);
             bot.smoke.clone_from(&self.clouds);
             bot.domes.clone_from(&self.deployables);
@@ -3166,6 +3184,33 @@ mod tests {
         assert!(covered * 2 > ticks, "a post with cover only {covered} of {ticks} ticks");
         assert!(cooling > 30 && hidden * 10 > cooling * 7, "hidden {hidden} of {cooling} ticks cooling");
         assert!(dealt > 100.0, "dealt only {dealt:.0}");
+    }
+
+    #[test]
+    fn bots_back_up_a_teammates_fight() {
+        // A human 20 m south of the 6 m block at (-5, -30), fought by a bot off to its side; a
+        // second bot stands behind the block, out of its sight. Told of the fight, it goes to a
+        // spot it can fire on the human from.
+        let t = Tuning::default();
+        let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+        game.bots = false;
+        let human = game.join().unwrap();
+        let fighter = game.add_player(1, Some(Bot::new(4)), MechClass::B).unwrap();
+        let backup = game.add_player(1, Some(Bot::new(5)), MechClass::B).unwrap();
+        for (id, pos) in [(human, Vector::new(-5.0, 0.1, -48.0)), (fighter, Vector::new(15.0, 0.1, -40.0)), (backup, Vector::new(-5.0, 0.1, -20.0))] {
+            game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = pos;
+        }
+        unshield(&mut game);
+        let in_sight = |g: &Game| bot::sees(&g.arena, &t, &mech(g, backup), &mech(g, human));
+        assert!(!in_sight(&game), "in sight to start with");
+        let (mut traded, mut sighted) = (false, false);
+        for _ in 0..secs(8.0) {
+            game.step();
+            game.players.iter_mut().find(|p| p.id == human).unwrap().mech.health = t.health_max;
+            traded |= game.players.iter().find(|p| p.id == backup).unwrap().bot.as_ref().unwrap().doing() == bot::Doing::Trade;
+            sighted |= in_sight(&game);
+        }
+        assert!(traded && sighted, "traded {traded}, got the human in sight {sighted}");
     }
 
     #[test]

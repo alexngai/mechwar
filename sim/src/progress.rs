@@ -96,7 +96,7 @@ pub struct Tally {
     /// alive spent by `bot::Doing`.
     pub uses: [u32; 5],
     pub dealt_by: [f32; 5],
-    pub doing: [u32; 4],
+    pub doing: [u32; 5],
 }
 
 impl Tally {

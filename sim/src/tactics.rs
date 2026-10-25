@@ -267,6 +267,9 @@ pub struct Foe<'a> {
     pub on_me: &'a Curve,
     pub mine: &'a Curve,
     pub hull: f32,
+    /// How many of the bot's teammates it also has a line on, as far as its fire is split
+    /// among them: its fire on the bot is 1 / (1 + split) of it.
+    pub split: f32,
 }
 
 /// Where a bot fights from: a spot, and the step out of it to fire from if it hides there.
@@ -274,6 +277,8 @@ pub struct Foe<'a> {
 pub struct Post {
     pub spot: usize,
     pub peek: Option<usize>,
+    /// Whether it fires on the target from there (or its peek).
+    pub fires: bool,
     /// What it's worth (`choose`).
     pub score: f32,
 }
@@ -292,6 +297,9 @@ pub struct Weighing {
     pub stay: f32,
     /// Farthest it looks for a spot.
     pub reach: f32,
+    /// How much more it lands from a spot across from a teammate fighting the same target (by
+    /// the sine of the angle between them at the target): a target can't face or hide from both.
+    pub cross: f32,
 }
 
 /// Most spots weighed at a time, nearest first, covered or not.
@@ -303,11 +311,16 @@ const WALKS: usize = 6;
 /// too: at each spot what it deals the target and takes from every foe that sees it, a second,
 /// as shares of hull, over the horizon less the walk there. A spot hidden from the target that
 /// it can step out of to fire (`peek`) is out only while firing (`duty`), hidden while it cools.
+/// Teammates fighting the same target stand at `allies`: a spot across from one is worth more.
 #[allow(clippy::too_many_arguments)]
-pub fn choose(spots: &Spots, arena: &Arena, t: &Tuning, me: Vector, foes: &[Foe], target: usize, duty: f32, current: Option<usize>, w: &Weighing) -> Option<Post> {
+pub fn choose(spots: &Spots, arena: &Arena, t: &Tuning, me: Vector, foes: &[Foe], target: usize, duty: f32, current: Option<usize>, allies: &[Vector], w: &Weighing) -> Option<Post> {
     let foe = foes.get(target)?;
-    let taken_at = |at: Vector| -> f32 { foes.iter().filter(|f| exposed(arena, t, at, f.eye)).map(|f| f.on_me.at(f.pos.distance(at))).sum::<f32>() / t.health_max };
-    let dealt_at = |at: Vector| foe.mine.at(foe.pos.distance(at)) / foe.hull;
+    let taken_at = |at: Vector| -> f32 { foes.iter().filter(|f| exposed(arena, t, at, f.eye)).map(|f| f.on_me.at(f.pos.distance(at)) / (1.0 + f.split)).sum::<f32>() / t.health_max };
+    let across = |at: Vector| {
+        let from = (at - foe.pos).with_y(0.0).normalize_or_zero();
+        allies.iter().map(|a| from.cross((*a - foe.pos).with_y(0.0).normalize_or_zero()).length()).fold(0.0, f32::max)
+    };
+    let dealt_at = |at: Vector| foe.mine.at(foe.pos.distance(at)) / foe.hull * (1.0 + w.cross * across(at));
     let (here_dealt, here_taken) = (if sees_from(arena, t, me, foe.chest) { dealt_at(me) } else { 0.0 }, taken_at(me));
     // Nearest first; spots with cover from the target's side, and the current post, always.
     let mut near: Vec<usize> = spots.near(me, w.reach).filter(|&i| (spots.spots[i].pos.y - me.y).abs() < 4.0).collect();
@@ -323,18 +336,18 @@ pub fn choose(spots: &Spots, arena: &Arena, t: &Tuning, me: Vector, foes: &[Foe]
         .into_iter()
         .map(|i| {
             let at = spots.spots[i].pos;
-            let (peek, dealt, taken) = if sees_from(arena, t, at, foe.chest) {
-                (None, dealt_at(at), taken_at(at))
+            let (peek, fires, dealt, taken) = if sees_from(arena, t, at, foe.chest) {
+                (None, true, dealt_at(at), taken_at(at))
             } else if let Some(p) = spots.peek(arena, t, i, foe.chest) {
                 let out = spots.spots[p].pos;
-                (Some(p), dealt_at(out), duty * taken_at(out) + (1.0 - duty) * taken_at(at))
+                (Some(p), true, dealt_at(out), duty * taken_at(out) + (1.0 - duty) * taken_at(at))
             } else {
-                (None, 0.0, taken_at(at))
+                (None, false, 0.0, taken_at(at))
             };
             let walk = at.distance(me) / t.walk_speed;
             let stay = if current == Some(i) { w.stay } else { 0.0 };
             let score = (dealt - w.take * taken) * (w.horizon - walk).max(0.0) + walk * (w.moving * here_dealt - w.take * here_taken) + stay;
-            Post { spot: i, peek, score }
+            Post { spot: i, peek, fires, score }
         })
         .collect();
     scored.sort_by(|a, b| b.score.total_cmp(&a.score));

@@ -71,6 +71,8 @@ pub enum Feature {
     TargetHull,
     /// Its post in this fight has cover from the target (it can cool there, out of sight).
     PostCovered,
+    /// With no enemy in view: a teammate is fighting one near enough to back up.
+    HasTrade,
     /// With no enemy in view: it has an order, an urgent contact (seen, felt, or heard close), any
     /// contact, a lead; and how far off its lead is (m; a long way with none).
     HasOrder,
@@ -98,8 +100,10 @@ pub enum Action {
     Dome,
     Barrier,
     // With no enemy in view, tried in this order (the first it wants is where it goes, else it
-    // patrols): its order, an urgent contact, its lead when far off, any contact, its lead.
+    // patrols): its order, a teammate's fight, an urgent contact, its lead when far off, any
+    // contact, its lead.
     GoToOrder,
+    Trade,
     ChaseUrgent,
     Regroup,
     ChaseContact,
@@ -231,9 +235,10 @@ impl Default for Brain {
             rule
         };
         let rules = [
-            // With no enemy in view: its order first; then an urgent contact; its lead if more than
-            // 30 m off; any contact; its lead.
+            // With no enemy in view: its order first; then a teammate's fight to back up; an urgent
+            // contact; its lead if more than 30 m off; any contact; its lead.
             (Action::GoToOrder, vec![vec![yes(HasOrder)]]),
+            (Action::Trade, vec![vec![yes(HasTrade)]]),
             (Action::ChaseUrgent, vec![vec![yes(HasUrgent)]]),
             (Action::Regroup, vec![vec![yes(HasLead), (LeadDist, Above(30.0))]]),
             (Action::ChaseContact, vec![vec![yes(HasContact)]]),

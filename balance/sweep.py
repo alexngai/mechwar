@@ -86,7 +86,7 @@ def main():
             rs = [r for r in mine if r['genome'].split('|')[pos] == w]
             n = max(1, len(rs))
             use[f'{slot}/{w}'] = (sum(int(r[f'uses_{slot}']) for r in rs) / n, sum(float(r[f'dealt_{slot}']) for r in rs) / n)
-    doing = {k: sum(float(r[f's_{k}']) for r in mine) / max(1, len(mine)) for k in ('fight', 'fall_back', 'mend', 'move')}
+    doing = {k: sum(float(r[f's_{k}']) for r in mine) / max(1, len(mine)) for k in ('fight', 'fall_back', 'mend', 'move', 'trade')}
     (args.out / 'ratings.json').write_text(json.dumps({'tweaks': args.tweaks, 'ideal': args.ideal, 'skill': args.skill, 'items': args.items, 'only': args.only, 'table': table, 'use': use, 'doing': doing}, indent=1))
 
     fmt = lambda m: f'{m[0]:+.2f} ± {m[1]:.2f}'
