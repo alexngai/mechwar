@@ -11,7 +11,7 @@
 // (maps/kit.mjs) adds the 180-degree twin. Much of it is laid out along the arch: `s` m from the
 // middle toward the NW town, `v` m across it toward the NE yard. Heavy is 5.8 m: streets and slots
 // 10 m+, 6.5 m+ under the arms.
-import { bases, box, cylinder, ground, heightAt, lamp, once, point, r3, sentries, siege, sign, silos, slope, solids, turned, write } from './kit.mjs';
+import { bases, box, convoy, cylinder, ground, heightAt, lamp, once, point, r3, sentries, siege, sign, silos, slope, solids, turned, write } from './kit.mjs';
 
 const SIZE = [300, 300], CELL = 4;
 const RISE = 36, REACH = 112, GAP = 12; // the arch's crest, its feet's distance out, its tips'
@@ -230,6 +230,20 @@ siege({ at: [0, 0, 0], radius: 18, band: 4 }, { at: [0, 6, 0], radius: 8, band: 
 // mesa.
 const [px, pz] = uv(10, 13);
 silos({ at: onMesa(0), radius: 10, band: 3 }, { at: [0, 0, 0], radius: 18, band: 4, pad: [px, 0, pz] });
+// Convoy: the hauler starts in the shade under the NW arm, on the arch's line, so as far from either
+// yard. North: out from under the arm across the dunes toward the NW town, back east along its edge
+// and down through the slot canyon off the NE mesa's north-west end, round the hoodoo behind it and in
+// by the NE yard's west gate. South: down the arm's length under it to its tip, round the fallen slab
+// and the Keystone's west end (clear of B's pad and the AA gun's), through the slot canyon off the SW
+// mesa's south-east end, round the hoodoo behind that and in by the SW yard's east gate. Points are
+// world (x, z) on the sand, kept off the terrain cells' edges where a ray down can miss.
+{
+  const on = (pts) => pts.map((p) => (p.length === 2 ? at(...p) : p));
+  convoy(
+    on([[-52.4, 2.6, 52.4], [-53, 53], [-47.5, 58], [-43.5, 83.5], [-23.5, 111], [-1, 82], [9, 72.5], [22.5, 59.5], [34.5, 71.5], [48.5, 85.5], [48.5, 98], [47.5, 111], [51.5, 111], [72.5, 114.5], [82.5, 118.5], [93, 121.5], [93.5, 122], [94.5, 123.5], [97.5, 125], [125, 125]]),
+    on([[-52.4, 2.6, 52.4], [-43, 43], [-21.5, 22], [-21.5, 21], [-34, 2], [-34, -3.5], [-22.5, -17.5], [-19, -19], [-17, -53.5], [-25.5, -62.5], [-35.5, -71.5], [-49, -85.5], [-47.5, -102.5], [-47.5, -111], [-58.5, -111], [-71.5, -114.5], [-82.5, -118.5], [-92.88, -121.88], [-99.5, -125.5], [-125, -125]]),
+  );
+}
 
 // --- Spawns, write ---------------------------------------------------------------------------------
 const north = [[112, 0.1, 120], [120, 0.1, 112], [128, 0.1, 128], [108, 0.1, 132]];

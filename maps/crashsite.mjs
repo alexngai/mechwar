@@ -19,7 +19,7 @@
 // Asymmetric: all of it is authored here and `write` gets both teams' spawns. The bases face the
 // wreck's two sides, each as far from the bow, the stern and the middle as the other.
 // Metrics as the other maps': 6.5 m+ clear under decks, ramps near 24 degrees, steps under 0.5 m.
-import { bases, beam, box, cylinder, decor, ground, heightAt, lamp, pad, point, r3, railing, ramp, sentries, siege, sign, silos, solids, turned, write } from './kit.mjs';
+import { bases, beam, box, convoy, cylinder, decor, flagStand, flags, ground, heightAt, lamp, pad, point, r3, railing, ramp, sentries, siege, sign, silos, solids, turned, write } from './kit.mjs';
 
 const SIZE = [300, 300], CELL = 4;
 const HALF = 140, CORNER = 60; // the playable ground: a square this far out, its corners rounded
@@ -70,6 +70,7 @@ const S = (a, c, y) => {
   return [x, r3(y), z];
 };
 const BASES = [W(0, -115), W(0, 115)]; // the salvage camp (team 0), the pumping station (team 1)
+const STANDS = [[-53, 71], [77, -51]]; // each base's flag stand, toward the wreck
 
 // The pieces, along the wreck: the bow, a gap, the midship, a gap, the stern, the engines beyond.
 const BOW = [-150, -66], MID = [-55, 55], STERN = [64, 128];
@@ -90,6 +91,7 @@ function height(x, z) {
   h += 3 * Math.exp(-((Math.abs(c) - 50) ** 2) / 60) * along * (0.6 + 0.4 * noise(a / 14, c / 14));
   h += 6 * Math.exp(-((a + 158) ** 2 + c * c) / 300);
   for (const b of BASES) h += (1.5 - h) * smoothstep(34, 22, dist(p, b)); // dry islands for the bases
+  for (const s of STANDS) h += (1.5 - h) * smoothstep(24, 14, dist(p, s)); // and for the flag stands
   // The crater's rim: banks too steep to climb, up to dead woods no hover reaches.
   const w = edge(p) + 8;
   if (w > 0) h += Math.min(w < 8 ? (w * w) / 10 : 6.4 + (w - 8) * 1.6, 18) + 3 * smoothstep(8, 14, w) * noise(x / 11, z / 11);
@@ -211,9 +213,10 @@ function snag(x, z, rand) {
   shipRamp(-18, [50, HOLD], [31, DECK], 6, HOLD);
   shipRamp(-18, [-50, DECK], [-31, TOP], 6, DECK);
   shipRamp(18, [50, DECK], [31, TOP], 6, DECK);
-  // Sides: breached to the water in the hold, doors out onto the galleries from the mid deck.
-  side(-BEAM, MID, [-1, TOP - 0.5], [[-20, -6, -1, 7], [-34, -26, DECK, 16], [10, 18, DECK, 16]]);
-  side(BEAM, MID, [-1, TOP - 0.5], [[6, 20, -1, 7], [-14, -6, DECK, 16], [26, 34, DECK, 16]]);
+  // Sides: breached to the water in the hold (7 m+ clear over its floor, for the convoy's hauler), doors
+  // out onto the galleries from the mid deck.
+  side(-BEAM, MID, [-1, TOP - 0.5], [[-20, -6, -1, 7.5], [-34, -26, DECK, 16], [10, 18, DECK, 16]]);
+  side(BEAM, MID, [-1, TOP - 0.5], [[6, 20, -1, 7.5], [-14, -6, DECK, 16], [26, 34, DECK, 16]]);
   // The fore end broke open: torn plates hang off it. The aft end: a bulkhead, a cargo door at the bottom.
   for (const [c, y] of [[-BEAM, 4], [BEAM, 12]]) slab(S(a0 - 6, c, y), S(a0 + 2, c, y + 5), 1.2, 6, 'rust');
   bulkhead(a1, [-BEAM, BEAM], [-1, TOP - 0.5], [[-8, 8, -1, 7]]);
@@ -225,7 +228,7 @@ function snag(x, z, rand) {
   crate(-30, -4, HOLD + 2.6, 'panel', 8);
   crate(0, 16, HOLD, 'metal');
   crate(28, -2, HOLD, 'panel', 8, 90);
-  crate(-6, -18, HOLD, 'rust', 8);
+  crate(-2, -18, HOLD, 'rust', 8);
   crate(14, 20, DECK, 'rust', 8);
   crate(-18, -20, DECK, 'panel', 12);
   crate(46, 2, DECK, 'metal', 8, 90);
@@ -241,7 +244,8 @@ function snag(x, z, rand) {
   for (const s of [-1, 1]) {
     block(-45, 45, s < 0 ? -BEAM - 8 : BEAM, s < 0 ? -BEAM : BEAM + 8, DECK - 0.5, DECK, 'metal');
     railing(S(-45, s * (BEAM + 8), DECK), S(45, s * (BEAM + 8), DECK));
-    for (const a of [-36, -12, 12, 36]) beam(S(a, s * (BEAM + 0.6), 5), S(a, s * (BEAM + 7), DECK - 0.5), 0.6, 0.6, 'hull'); // high enough to walk under
+    // Clear of the breach in that side, where the hauler comes through.
+    for (const a of s < 0 ? [-36, -22, 12, 36] : [-36, -12, 22, 36]) beam(S(a, s * (BEAM + 0.6), 5), S(a, s * (BEAM + 7), DECK - 0.5), 0.6, 0.6, 'hull'); // high enough to walk under
     for (let a = -40; a <= 40; a += 20) spot(a, s * (BEAM + 4), DECK);
     lamp(S(s * 20, s * (BEAM + 6), DECK));
   }
@@ -258,6 +262,7 @@ function snag(x, z, rand) {
   for (const [a, c] of [[-20, 12], [20, -12]]) beacon(S(a, c - Math.sign(c) * 0.9, DECK + 5), EMERGENCY, S(a, c * 0.6, DECK + 4));
   for (const p of [S(a0 + 1, -18, 15), S(a0 + 1, 20, 7), S(a0 + 2, 4, DECK - 1)]) sparks(p);
   spot(28, -4, BRIDGE);
+  spot(-33, 4, HOLD); // the hold's fore end, where the convoy's hauler comes through
   for (const [a, c, y] of [[-40, 0, HOLD], [0, 0, HOLD], [40, 0, HOLD], [-22, 18, DECK], [22, -18, DECK], [-40, 20, TOP], [40, -20, TOP]]) lamp(S(a, c, y));
   clear(W(a0, 0), W(a1, 0), 46);
 }
@@ -392,9 +397,11 @@ crate(-100, 30, groundAt(-100, 30) - 0.3, 'metal', 12, -15);
 {
   // The salvage camp (north-west): a crane over the water, containers stacked, a hab.
   const [x, z] = BASES[0], g = 1.5;
-  box([x + 14, g - 2, z - 26], [x + 17, g + 22, z - 23], 'metal'); // crane tower
-  beam([x + 15.5, g + 21, z - 24.5], [x + 30, g + 26, z - 40], 1, 1.2, 'metal'); // its boom, out toward the wreck
-  decor.push({ kind: 'pipe', from: [x + 30, g + 26, z - 40], to: [x + 30, g + 12, z - 40], r: 0.15 });
+  // The crane stands west of the jump pad, clear of the way in from the wreck between the pad and the
+  // flag stand.
+  box([x - 8, g - 2, z - 26], [x - 5, g + 22, z - 23], 'metal'); // crane tower
+  beam([x - 6.5, g + 21, z - 24.5], [x + 8, g + 26, z - 40], 1, 1.2, 'metal'); // its boom, out toward the wreck
+  decor.push({ kind: 'pipe', from: [x + 8, g + 26, z - 40], to: [x + 8, g + 12, z - 40], r: 0.15 });
   box([x - 22, g - 2, z - 6], [x - 8, g + 5, z + 4], 'panel'); // hab, roof a hover up
   container(x + 6, z + 14, 0, 'rust', { y: g });
   container(x + 6, z + 14, 0, 'panel', { y: g + 2.6, len: 8 });
@@ -421,6 +428,11 @@ crate(-100, 30, groundAt(-100, 30) - 0.3, 'metal', 12, -15);
   point([x + 6, g + 7, z - 8], [x - 15, g, z - 10]);
   clear(BASES[1], BASES[1], 36);
 }
+
+// Capture the Flag: each base's stand out on its island toward the wreck, its back to the base guns
+// and its doorways to the wreck. Hull plates roofed with rust.
+const stands = [0, 180].map((yaw, i) => flagStand([STANDS[i][0], 1.5, STANDS[i][1]], yaw, { wall: 'hull', roof: 'rust' }));
+for (const s of STANDS) clear(s, s, 16);
 
 // --- Jump pads: from each base onto the midship's top deck, landing with its width ahead -----------------
 function slabPad(x, z, to, apex) {
@@ -512,12 +524,27 @@ const [cx, cz] = BASES[0], [sx, sz] = BASES[1];
 bases([cx, 1.6, cz], [sx, 1.6, sz]);
 // Base guns: two on each base island, over its landings.
 sentries([[-91.5, 6.5, 77], [-70.5, 1.5, 73]], [[76, 1.5, -65], [63, 1.5, -84]]);
+flags(...stands);
 // The pads: on the bow's sloping deck (tilted with it), on the hold's floor under the hatches, and up
 // on the stern's ridge walk over the cavern.
 silos({ at: S(-78, 0, bowTop(-78)), radius: 12, band: 4 }, { at: S(0, 0, HOLD), radius: 14, band: 5 }, { at: S(96, 0, 1), radius: 14, band: 6, pad: [67.882, 15.87, 67.882] });
 // Siege: the station in the midship's hold, the AA gun on the bridge's roof (the highest place on
 // the map), the ships over the midship, clear of the bridge's mast.
 siege({ at: S(0, 0, HOLD), radius: 14, band: 5 }, { at: S(28, 0, BRIDGE), radius: 8, band: 3, pad: S(33, 5, BRIDGE) }, 60);
+// Convoy: the hauler starts in the midship's hold, at its broken fore end, on the wreck's long axis
+// (so as far from either base). Toward the salvage camp: out the fore end, across the water under the
+// fallen beam and the girder, into the bow's hold by its broken end, along it under the mid deck, out
+// its breach to port, then up the west water to the camp. Toward the pumping station: aft along the
+// hold, round the silo's pad in the middle, out the breach to starboard, round the far end of the hull
+// plate leaning over the starboard lane, and down past the flag stand to the station. Points are world
+// [x, z] on the ground or the water's bed, [x, y, z] on the holds' floors.
+{
+  const on = (pts) => pts.map((p) => (p.length === 2 ? at(...p) : p));
+  convoy(
+    on([[-33, 0.2, -33.8], [-35.5, 0.2, -35.5], [-42.5, -42.5], [-47.88, 0.2, -47.88], [-59.88, 0.2, -59.88], [-79.88, 0.2, -59.88], [-84.5, 0.2, -55], [-85.5, 0.2, -54.5], [-85.5, -53.5], [-86, -53], [-91, -49], [-102, -38.5], [-102, -34.5], [-102, -11], [-100.5, -8.5], [-102, -6.5], [-101.5, 17], [-97, 66.5], [-86.5, 71.5], [-81.5, 81]]),
+    on([[-33, 0.2, -33.8], [-18.5, 0.2, -23.5], [-7, 0.2, -13], [6.5, 0.2, -7.5], [7, 0.2, -7], [12.13, 0.2, -2.88], [17.5, 0.2, -1.5], [22, 0.2, -3.5], [30.5, -12.5], [52.5, -1.5], [56.5, 0.5], [75.5, 0.5], [77.5, 0.5], [95.5, -39.5], [93, -55.5], [91.5, -56.5], [82, -77], [82.13, -79.88], [81, -81.5]]),
+  );
+}
 write(
   new URL('./crashsite.json', import.meta.url),
   { name: 'Crash Site', size: SIZE, night: true, palette },
