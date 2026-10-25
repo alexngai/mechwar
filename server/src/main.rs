@@ -18,7 +18,7 @@
 //! and in full at its end. The record also says which weapons and items the pilot has unlocked
 //! for each mech: the room launches them with those only, and spends their points on more.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::future::IntoFuture;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use sim::game::{Game, MAX_PLAYERS, Mode};
 use sim::map::{MAPS, ROTATION};
-use sim::net::{self, ClientMsg, ServerMsg};
+use sim::net::{self, ClientMsg, ServerMsg, Snapshot};
 use sim::progress::{MatchXp, RECORD_VERSION, Record, Tally};
 use sim::{DT, Loadout, Map, TICK_HZ, Tuning};
 use tokio::net::TcpListener;
@@ -66,6 +66,10 @@ const DEV_KEY: &[u8] = b"mechwar-dev-key-not-a-secret";
 /// While a match is on, a pilot's record goes out this often with their match so far (s), so
 /// leaving early loses at most this much.
 const CHECKPOINT_SECONDS: u32 = 10;
+/// A connection whose oldest unsent message has waited this long is behind (its link fell behind
+/// or stalled): it skips the stale snapshots to the newest, so it hitches and catches up rather
+/// than playing back seconds of old state.
+const STALE: Duration = Duration::from_millis(250);
 
 /// Outgoing bytes, stamped when queued so `LAG_MS` delays every message by the same amount.
 type Outbox = mpsc::UnboundedSender<(Instant, Vec<u8>)>;
@@ -594,8 +598,22 @@ async fn connection(socket: WebSocket, cmds: mpsc::UnboundedSender<Cmd>, lag: Du
 
     let (out, mut outbox) = mpsc::unbounded_channel::<(Instant, Vec<u8>)>();
     let writer = tokio::spawn(async move {
-        while let Some((queued, bytes)) = outbox.recv().await {
-            time::sleep_until(queued + lag).await;
+        // Taken from the outbox but not sent yet, oldest first.
+        let mut queue = VecDeque::new();
+        loop {
+            if queue.is_empty() {
+                let Some(msg) = outbox.recv().await else { break };
+                queue.push_back(msg);
+            }
+            while let Ok(msg) = outbox.try_recv() {
+                queue.push_back(msg);
+            }
+            let due = queue[0].0 + lag;
+            time::sleep_until(due).await;
+            if due.elapsed() > STALE {
+                skip_stale(&mut queue, Instant::now() - lag);
+            }
+            let (_, bytes) = queue.pop_front().expect("the queue has the message just waited on");
             if sink.send(Message::Binary(bytes.into())).await.is_err() {
                 break;
             }
@@ -637,10 +655,38 @@ async fn connection(socket: WebSocket, cmds: mpsc::UnboundedSender<Cmd>, lag: Du
     writer.abort();
 }
 
+/// Collapses the snapshots in `queue` queued by `due` into the newest of them, which takes their
+/// events ahead of its own: the rest of a snapshot is the whole state, so the newest has it all.
+/// Every other message stays, in order.
+fn skip_stale(queue: &mut VecDeque<(Instant, Vec<u8>)>, due: Instant) {
+    // ponytail: decodes each stale snapshot for its events, so catching up after a long stall
+    // (hundreds queued) costs a few ms on the writer; queue `Snapshot`s unencoded if that shows.
+    let snapshots: Vec<Option<Snapshot>> = queue
+        .iter()
+        .map(|(queued, bytes)| match (*queued <= due).then(|| net::decode(bytes)) {
+            Some(Some(ServerMsg::Snapshot(s))) => Some(s),
+            _ => None,
+        })
+        .collect();
+    let Some(newest) = snapshots.iter().rposition(Option::is_some) else { return };
+    let mut events = Vec::new();
+    *queue = std::mem::take(queue)
+        .into_iter()
+        .zip(snapshots)
+        .enumerate()
+        .filter_map(|(i, (msg, s))| {
+            let Some(mut s) = s else { return Some(msg) };
+            events.append(&mut s.events);
+            (i == newest).then(|| (msg.0, net::encode(&ServerMsg::Snapshot(Snapshot { events: std::mem::take(&mut events), ..s }))))
+        })
+        .collect();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sim::Slot;
+    use sim::net::Event;
+    use sim::{Slot, Vector};
 
     fn room(code: &str, public: bool, humans: usize, seconds_left: u16, ended: bool) -> RoomInfo {
         RoomInfo { code: code.into(), name: String::new(), public, mode: "tdm", map: String::new(), humans, bots: 0, capacity: MAX_PLAYERS, seconds_left, ended, scores: [0; 2] }
@@ -726,6 +772,45 @@ mod tests {
         }
         assert_eq!(Signer::new(b"another key").verify(&token), None);
         assert_ne!(signer.guest_id(), signer.guest_id());
+    }
+
+    #[test]
+    fn a_stale_backlog_skips_to_the_newest_snapshot_with_every_event() {
+        let settings = Settings { name: String::new(), public: true, mode: Some(Mode::TeamDeathmatch), map: None, score_limit: 25, match_seconds: 600.0, bots: false, bot_skill: 0.5 };
+        let mut game = new_game(&settings, 1);
+        let id = game.join().unwrap();
+        let snapshot = |tick, events| net::encode(&ServerMsg::Snapshot(Snapshot { tick, events, ..game.snapshot(id) }));
+        let kill = Event::Kill { killer: 1, victim: 2, assists: 0 };
+        let shot = Event::Shot { shooter: 3, end: Vector::ZERO, hit: None };
+        let pulse = Event::Pulse { owner: 4, pos: Vector::ZERO, hits: 0 };
+        let roster = net::encode(&ServerMsg::Roster(game.roster()));
+        let progress = net::encode(&ServerMsg::Progress { record: "a record".into(), end: None });
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        let mut queue = VecDeque::from([
+            (at(0), snapshot(1, vec![kill])),
+            (at(10), roster.clone()),
+            (at(33), snapshot(2, vec![])),
+            (at(40), progress.clone()),
+            (at(66), snapshot(3, vec![shot])),
+            (at(99), snapshot(4, vec![])),
+            // Not due yet (as with LAG_MS): left alone.
+            (at(132), snapshot(5, vec![pulse])),
+        ]);
+        let ticks_and_events = |queue: &VecDeque<(Instant, Vec<u8>)>| -> Vec<(u32, String)> {
+            queue.iter().filter_map(|(_, bytes)| match net::decode(bytes) {
+                Some(ServerMsg::Snapshot(s)) => Some((s.tick, format!("{:?}", s.events))),
+                _ => None,
+            }).collect()
+        };
+
+        skip_stale(&mut queue, at(100));
+        assert_eq!((queue[0].1 == roster, queue[1].1 == progress, queue[2].0, queue.len()), (true, true, at(99), 4));
+        assert_eq!(ticks_and_events(&queue), [(4, format!("{:?}", [kill, shot])), (5, format!("{:?}", [pulse]))]);
+        // Still behind later: the collapsed snapshot's events carry on into the next.
+        skip_stale(&mut queue, at(200));
+        assert_eq!((queue[0].1 == roster, queue[1].1 == progress, queue.len()), (true, true, 3));
+        assert_eq!(ticks_and_events(&queue), [(5, format!("{:?}", [kill, shot, pulse]))]);
     }
 
     /// A fresh room on a server with `key`, its match `match_seconds` long, joined by one player
