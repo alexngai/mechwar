@@ -40,7 +40,8 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use sim::game::{Game, MAX_PLAYERS, Mode};
 use sim::map::{MAPS, ROTATION};
-use sim::net::{self, ClientMsg, ServerMsg};
+use sim::client::INTERP_TICKS;
+use sim::net::{self, ClientMsg, Event, ServerMsg};
 use sim::progress::{MatchXp, RECORD_VERSION, Record, Tally};
 use sim::{DT, Loadout, Map, TICK_HZ, Tuning};
 use tokio::net::TcpListener;
@@ -66,6 +67,16 @@ const DEV_KEY: &[u8] = b"mechwar-dev-key-not-a-secret";
 /// While a match is on, a pilot's record goes out this often with their match so far (s), so
 /// leaving early loses at most this much.
 const CHECKPOINT_SECONDS: u32 = 10;
+/// A player whose view runs this many ticks further behind than their link's own round trip is
+/// backed up somewhere (Fly's proxy holds what their link can't take yet; the server's socket never
+/// backs up): they get only every `TRICKLE`th snapshot until it drains, so they hitch and catch up
+/// rather than play back seconds of old state. Over 250 ms, where the client's clock snaps to a
+/// fresh snapshot, so the first one through after the drain shows them caught up.
+const BEHIND_TICKS: f32 = 8.0;
+const TRICKLE: u32 = 10;
+/// How fast a player's least lag creeps up, in ticks an input (about half a tick a second), so a
+/// route that got slower soon stops counting as behind.
+const BASE_DRIFT: f32 = 1.0 / 60.0;
 
 /// Outgoing bytes, stamped when queued so `LAG_MS` delays every message by the same amount.
 type Outbox = mpsc::UnboundedSender<(Instant, Vec<u8>)>;
@@ -105,6 +116,15 @@ struct RoomInfo {
     seconds_left: u16,
     ended: bool,
     scores: [u16; 2],
+}
+
+/// What a player's inputs say of their link: how many ticks behind the match their view runs (an
+/// input's `view_tick` against the room's tick when it's in), the least it's run (the link's own
+/// round trip), and the events of the snapshots held back from them meanwhile.
+struct Link {
+    lag: f32,
+    base: f32,
+    held: Vec<Event>,
 }
 
 struct Room {
@@ -461,6 +481,7 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
     let code = info.lock().expect("info lock").code.clone();
     let mut outboxes: Vec<(u8, Outbox)> = Vec::new();
     let mut pilots: HashMap<u8, Pilot> = HashMap::new();
+    let mut links: HashMap<u8, Link> = HashMap::new();
     let mut ended = game.match_state().ended;
     let mut roster_sent = u32::MAX;
     let mut empty_since = Some(Instant::now());
@@ -482,7 +503,12 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
                     }
                     let _ = reply.send(id);
                 }
-                Cmd::Msg(id, ClientMsg::Input(msg)) => game.push_input(id, msg),
+                Cmd::Msg(id, ClientMsg::Input(msg)) => {
+                    let link = links.entry(id).or_insert(Link { lag: 0.0, base: f32::INFINITY, held: Vec::new() });
+                    link.lag = game.tick as f32 - (msg.view_tick + INTERP_TICKS);
+                    link.base = (link.base + BASE_DRIFT).min(link.lag);
+                    game.push_input(id, msg);
+                }
                 // Only weapons and items the pilot has unlocked for that mech (its own until their
                 // record's in).
                 Cmd::Msg(id, ClientMsg::Pick(class, loadout)) => {
@@ -527,6 +553,7 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
                     game.leave(id);
                     outboxes.retain(|(i, _)| *i != id);
                     pilots.remove(&id);
+                    links.remove(&id);
                 }
             }
         }
@@ -572,7 +599,15 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
             }
         }
         for (id, out) in &outboxes {
-            let _ = out.send((now, net::encode(&ServerMsg::Snapshot(game.snapshot(*id)))));
+            let mut snapshot = game.snapshot(*id);
+            if let Some(link) = links.get_mut(id) {
+                link.held.append(&mut snapshot.events);
+                if link.lag - link.base > BEHIND_TICKS && game.tick % TRICKLE != 0 {
+                    continue;
+                }
+                std::mem::swap(&mut snapshot.events, &mut link.held);
+            }
+            let _ = out.send((now, net::encode(&ServerMsg::Snapshot(snapshot))));
         }
         (worst_late, worst_step) = (worst_late.max(late), worst_step.max(started.elapsed()));
         late_ticks += u32::from(late > Duration::from_millis(100));
@@ -640,7 +675,8 @@ async fn connection(socket: WebSocket, cmds: mpsc::UnboundedSender<Cmd>, lag: Du
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sim::Slot;
+    use sim::net::{InputMsg, Snapshot};
+    use sim::{Arsenal, Input, MechClass, Slot};
 
     fn room(code: &str, public: bool, humans: usize, seconds_left: u16, ended: bool) -> RoomInfo {
         RoomInfo { code: code.into(), name: String::new(), public, mode: "tdm", map: String::new(), humans, bots: 0, capacity: MAX_PLAYERS, seconds_left, ended, scores: [0; 2] }
@@ -843,6 +879,54 @@ mod tests {
         send(ClientMsg::Unlock { class: heavy, slot: Slot::Offensive, index: limpet });
         send(ClientMsg::Pick(heavy, wanted));
         assert_eq!(loadout_after(&mut inbox).await, Loadout { support: orb, ..own }, "carried an item it couldn't afford");
+        room.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_lagging_player_gets_every_tenth_snapshot_with_every_event_until_caught_up() {
+        let (room, send, mut inbox) = join_room(b"the server's key", 600.0, "").await;
+        let next = async |inbox: &mut mpsc::UnboundedReceiver<(Instant, Vec<u8>)>| net::decode::<ServerMsg>(&inbox.recv().await.unwrap().1).unwrap();
+        // An input whose view runs `behind` ticks behind snapshot `s` (0: just in).
+        let input = |seq, fire, s: &Snapshot, behind: f32| ClientMsg::Input(InputMsg { seq, input: Input { fire, ..Input::default() }, view_tick: s.tick as f32 - behind - INTERP_TICKS });
+        let shots = |s: &Snapshot| s.events.iter().filter(|e| matches!(e, Event::Shot { .. })).count();
+        let heavy = MechClass::C;
+        let pellets = Arsenal::new(&Tuning::default()).get(heavy, Loadout::of(heavy)).pellets as usize;
+        send(ClientMsg::Pick(heavy, Loadout::of(heavy)));
+        // Launched, halfway between trickled snapshots.
+        let s = loop {
+            if let ServerMsg::Snapshot(s) = next(&mut inbox).await
+                && s.hangar.is_none()
+                && s.tick % TRICKLE == 5
+            {
+                break s;
+            }
+        };
+
+        // In step, then 40 ticks behind and firing the flak: its pellets' snapshot is held back,
+        // and the next one through carries them. The roster for a rename isn't held.
+        send(input(1, false, &s, 0.0));
+        send(input(2, true, &s, 40.0));
+        send(ClientMsg::Name("Ace".into()));
+        let (mut held, mut renamed) = (Vec::new(), false);
+        while held.len() < 2 {
+            match next(&mut inbox).await {
+                ServerMsg::Snapshot(snapshot) => held.push(snapshot),
+                ServerMsg::Roster(roster) => renamed |= roster.iter().any(|(_, name, _)| name == "Ace"),
+                _ => {}
+            }
+        }
+        assert!(renamed);
+        assert_eq!(held.iter().map(|h| (h.tick - s.tick, shots(h))).collect::<Vec<_>>(), [(5, pellets), (15, 0)]);
+
+        // In step again: every snapshot.
+        send(input(3, false, &held[1], 0.0));
+        let mut ticks = Vec::new();
+        while ticks.len() < 3 {
+            if let ServerMsg::Snapshot(snapshot) = next(&mut inbox).await {
+                ticks.push(snapshot.tick - held[1].tick);
+            }
+        }
+        assert_eq!(ticks, [1, 2, 3]);
         room.abort();
     }
 }
