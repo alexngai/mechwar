@@ -3194,6 +3194,83 @@ mod tests {
     }
 
     #[test]
+    fn bots_lob_shells_onto_shorter_mechs() {
+        // A Heavy bot with Scatter 25 m from a Light standing in the open: the Light's head is below
+        // the Heavy's eye. Lobbed level with that eye, the pellets flew over it.
+        let t = Tuning::default();
+        let (mut pellets, mut caught) = (0, 0);
+        for seed in 1..=4 {
+            let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+            game.bots = false;
+            let human = game.join().unwrap();
+            let bot = game.add_player(1, Some(Bot::new(seed)), MechClass::C).unwrap();
+            for (id, class, pos) in [(human, MechClass::A, Vector::new(0.0, 0.1, -5.0)), (bot, MechClass::C, Vector::new(0.0, 0.1, 20.0))] {
+                let p = game.players.iter_mut().find(|p| p.id == id).unwrap();
+                p.class = class;
+                // Its guns only: no grenades or EMPs.
+                p.mech = Mech { grenades: 0, emps: 0, ..spawn(&game.arsenal, class, Loadout { ability: 2, ..Loadout::named("pike", "darts") }, pos) };
+            }
+            unshield(&mut game);
+            for _ in 0..secs(15.0) {
+                game.step();
+                for e in &game.events {
+                    if let Event::Blast { owner, primary: false, hits, .. } = *e
+                        && owner == bot
+                    {
+                        pellets += 1;
+                        caught += u32::from(hits & 1 << human != 0);
+                    }
+                }
+                let p = game.players.iter_mut().find(|p| p.id == human).unwrap();
+                p.mech.health = game.arsenal.of(&p.mech).health_max; // so it never dies
+            }
+        }
+        // Lobbed level with the eye, 13 of 149 caught it.
+        assert!(pellets >= 100 && caught * 3 >= pellets, "only {caught} of {pellets} pellets caught the Light");
+    }
+
+    #[test]
+    fn bots_fire_shells_out_to_their_fuse() {
+        // A bot held 45 m from a human standing in the open, with Scatter (pellets bursting 60 m
+        // out) and the Cluster launcher (canisters splitting 70 m out): its shells that burst, and
+        // how many caught the human.
+        let t = Tuning::default();
+        for secondary in ["darts", "splitter"] {
+            let (mut bursts, mut caught) = (0, 0);
+            for seed in 1..=3 {
+                let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+                game.bots = false;
+                let human = game.join().unwrap();
+                let bot = game.add_player(1, Some(Bot::new(seed)), MechClass::B).unwrap();
+                let at = Vector::new(0.0, 0.1, 40.0);
+                for (id, pos) in [(human, Vector::new(0.0, 0.1, -5.0)), (bot, at)] {
+                    let m = &mut game.players.iter_mut().find(|p| p.id == id).unwrap().mech;
+                    // Its guns only: no grenades or EMPs.
+                    (m.pos, m.loadout, m.grenades, m.emps) = (pos, Loadout { ability: 1, ..Loadout::named("pike", secondary) }, 0, 0);
+                }
+                unshield(&mut game);
+                for _ in 0..secs(12.0) {
+                    game.step();
+                    for e in &game.events {
+                        if let Event::Blast { owner, primary: false, n, hits, .. } = *e
+                            && owner == bot
+                            && n < projectile::BOMBLET
+                        {
+                            bursts += 1;
+                            caught += u32::from(hits & 1 << human != 0);
+                        }
+                    }
+                    game.players.iter_mut().find(|p| p.id == human).unwrap().mech.health = t.health_max; // so it never dies
+                    let m = &mut game.players.iter_mut().find(|p| p.id == bot).unwrap().mech;
+                    (m.pos, m.vel) = (at, Vector::ZERO);
+                }
+            }
+            // Held to the grenade launcher's 40 m, neither fired at all.
+            assert!(bursts >= 4 && caught * 3 >= bursts, "{secondary}: {caught} of {bursts} caught the human");
+        }
+    }
+
+    #[test]
     fn bots_close_in_and_land_the_pile_driver() {
         // A bot with an SMG and the pile driver 15 m from a human in the open, standing, then
         // strafing side to side: how many strikes it lets go, and how many land.

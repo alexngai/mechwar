@@ -283,7 +283,7 @@ const MOTION_MAX: f32 = 60.0;
 const LEAD_MAX: f32 = 0.7;
 /// How far off a pile driver's facing its target can be for it to let go: inside the lunge's cone.
 const STRIKE_CONE: f32 = 10.0 * PI / 180.0;
-/// Farthest a Heavy lobs its grenade launcher's shells.
+/// Farthest a bot lobs shells that land and wait to burst: a grenade launcher's (they bounce), mines.
 const MORTAR_RANGE: f32 = 40.0;
 /// Farthest a perch may be from the target.
 const VANTAGE_RANGE: f32 = 75.0;
@@ -1044,9 +1044,11 @@ impl Bot {
             self.misjudge.0 = (self.misjudge.0 + (self.rand() - 0.5) * speed_err * 0.3).clamp(-speed_err, speed_err);
             self.misjudge.1 = (self.misjudge.1 + (self.rand() - 0.5) * range_err * 0.3).clamp(-range_err, range_err);
             // The secondary, when ready and in its useful range, takes over the aim until it fires:
-            // led by the flight time, and lobbed along the flat-ground arc for the mortar. The gun
-            // holds meanwhile, so heat drops enough for the launch not to overheat. A beam aims
-            // where the gun does and runs alongside it; a heat-fed launcher waits to run hot.
+            // led by the flight time, and lobbed when it drops. Shells that burst in the air or on
+            // contact reach as far as they fly before their fuse runs out; ones that land and wait
+            // go no farther than a lob. The gun holds meanwhile, so heat drops enough for the
+            // launch not to overheat. A beam aims where the gun does and runs alongside it; a
+            // heat-fed launcher waits to run hot.
             let (eye, chest) = (me.pos + Vector::Y * t.eye_height, self.seen[0]);
             let dist = chest.distance(eye);
             let use_ = alt_use(t);
@@ -1056,7 +1058,7 @@ impl Bot {
                     AltUse::HeatFed => me.heat >= self.policy.heat_fed * t.heat_max && dist < 0.8 * t.alt_speed * t.alt_fuse,
                     // A pile driver winds up on the way in.
                     AltUse::Melee => dist < 2.0 * t.alt_lunge,
-                    _ => dist < if t.alt_gravity > 0.0 { MORTAR_RANGE } else { 0.8 * t.alt_speed * t.alt_fuse } && dist > t.alt_radius + 2.0,
+                    _ => dist < if t.alt_bounce > 0.0 || t.alt_stick > 0.5 { MORTAR_RANGE } else { 0.8 * t.alt_speed * t.alt_fuse } && dist > t.alt_radius + 2.0,
                 };
             let alt_cool = matches!(use_, AltUse::HeatFed | AltUse::Melee) || (!me.overheated && me.heat + t.alt_heat < t.heat_max);
             // Otherwise a grenade takes the aim the same way, every few seconds while charges last.
@@ -1090,12 +1092,16 @@ impl Bot {
             // where it saw the target (so it lags only when the target turns), and over the flight;
             // but never so far that the target has likely turned (`LEAD_MAX`).
             let ahead = (self.reaction(t) + lead).min(LEAD_MAX);
-            let (yaw, mut pitch) = look_at(eye, chest + self.seen_vel * (1.0 + self.misjudge.0) * ahead);
-            // Range d (as it judges it) on flat ground: sin(2θ) = g d / v².
+            let led = chest + self.seen_vel * (1.0 + self.misjudge.0) * ahead;
+            let (yaw, mut pitch) = look_at(eye, led);
+            // Range d as it judges it. A shell's lob passes through the led chest, however far below
+            // or above the eye (lobbed level with the eye, it flew over a shorter mech, or one below,
+            // and burst far past); a projectile primary's drop raises its aim by the flat-ground arc,
+            // sin(2θ) = g d / v².
             let judged = flat(chest - eye).length() * (1.0 + self.misjudge.1);
             let arc = |g: f32, v: f32| 0.5 * asinf((g * judged / (v * v)).min(1.0));
             match shell {
-                Some(s) if s.alt_gravity > 0.0 => pitch = arc(s.alt_gravity, s.alt_speed) - s.alt_loft_deg.to_radians(),
+                Some(s) if s.alt_gravity > 0.0 => pitch = lob_pitch(s.alt_gravity, s.alt_speed, judged, led.y - eye.y) - s.alt_loft_deg.to_radians(),
                 None if t.shot_speed > 0.0 && t.shot_gravity > 0.0 => pitch += arc(t.shot_gravity, speed),
                 _ => {}
             }
@@ -1433,6 +1439,14 @@ fn mend(t: &Tuning, me: &Mech, mate: &Mech, max_turn: f32) -> Input {
 
 fn flat(v: Vector) -> Vector {
     Vector::new(v.x, 0.0, v.z)
+}
+
+/// The pitch of the low arc at speed `v` under gravity `g` through a point `x` m across and `y` m
+/// up (45° when it can't reach it).
+fn lob_pitch(g: f32, v: f32, x: f32, y: f32) -> f32 {
+    let v2 = v * v;
+    let disc = v2 * v2 - g * (g * x * x + 2.0 * y * v2);
+    if disc < 0.0 { PI / 4.0 } else { atan2f(v2 - disc.sqrt(), g * x) }
 }
 
 /// Yaw and pitch that point from `from` at `to`, matching `aim_ray`.
