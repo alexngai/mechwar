@@ -45,7 +45,7 @@
       }
     },
     {
-      "id": "hail", "name": "Grenade rifle", "unlock": 3, "desc": "A drum-fed grenade rifle: a stream of small, bouncing grenades", "sound": "mortar", "recoil": "medium", "projectile": "shell", "use": [["LMB", "Hold to fire three grenades a second"], ["", "They drop, bounce off what they hit, and burst on a mech or after 1 s"], ["", "Bank them off walls and floors to reach behind cover"]],
+      "id": "hail", "name": "Auto-GL", "unlock": 3, "desc": "A drum-fed automatic grenade launcher: a stream of small, bouncing grenades", "sound": "mortar", "recoil": "medium", "projectile": "shell", "use": [["LMB", "Hold to fire three grenades a second"], ["", "They drop, bounce off what they hit, and burst on a mech or after 1 s"], ["", "Bank them off walls and floors to reach behind cover"]],
       "stats": {
         "fire_rate": 3, "shot_damage": 14, "heat_per_shot": 8, "spread_deg": 0.4, "bloom_per_shot": 0.3, "bloom_max": 2, "bloom_recovery": 4,
         "shot_speed": 45, "shot_gravity": 20, "shot_radius": 2.5, "shot_bounce": 0.5, "shot_fuse": 1
