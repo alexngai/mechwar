@@ -9,3 +9,4 @@ sim/pkg/
 balance/out/
 */.DS_Store
 .DS_Store
+maps/spots.json

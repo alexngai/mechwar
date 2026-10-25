@@ -7,11 +7,12 @@
 //! hides from, or sees, a given enemy is a ray (`exposed`, `sees_from`), and `peek` finds the
 //! step out from cover that sees one.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::f32::consts::TAU;
 use std::sync::OnceLock;
 
 use rapier3d::prelude::Ray;
+use serde::{Deserialize, Serialize};
 
 use crate::bot::Nav;
 use crate::map::{MAPS, Map};
@@ -33,7 +34,7 @@ pub const PEEK_STEP: f32 = 5.6;
 const FLOOR_RISE: f32 = 2.5;
 const LEDGE: f32 = 1.2;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Spot {
     /// Feet.
     pub pos: Vector,
@@ -97,14 +98,59 @@ fn clear(arena: &Arena, from: Vector, to: Vector) -> bool {
     len < 1e-3 || arena.cast_ray(&Ray::new(from, d / len), len).is_none()
 }
 
+/// Each compiled-in map's spots, once made or loaded.
+static CACHE: [OnceLock<Spots>; MAPS.len()] = [const { OnceLock::new() }; MAPS.len()];
+
+/// A map's spots as `bake_spots` writes them, with a hash of the map they came from.
+#[derive(Serialize, Deserialize)]
+struct Baked {
+    source: String,
+    spots: Vec<Spot>,
+    steps: Vec<Vec<u32>>,
+}
+
 impl Spots {
-    /// Generated for each compiled-in map on first use, and kept.
+    /// For each compiled-in map: preloaded (`preload`), or made on first use (up to 0.7 s a map
+    /// here, far longer on a shared server CPU) and kept.
     pub fn for_map(index: usize) -> &'static Spots {
-        static CACHE: [OnceLock<Spots>; MAPS.len()] = [const { OnceLock::new() }; MAPS.len()];
         CACHE[index].get_or_init(|| {
             let map = Map::load(index);
             Spots::generate(&Arena::new(&map), Nav::for_map(index), &Tuning::default())
         })
+    }
+
+    /// Keeps the spots in `bakes` (`bake_spots`'s JSON) for each map they were baked from as it
+    /// is now, so a server never makes them mid-match when bots first fight on a map. Returns how
+    /// many maps it kept.
+    pub fn preload(bakes: &str) -> usize {
+        (0..MAPS.len()).filter(|&i| Spots::baked(bakes, i).is_some_and(|s| CACHE[i].set(s).is_ok())).count()
+    }
+
+    /// Map `index`'s spots from `bakes`, if baked from the map as it is.
+    fn baked(bakes: &str, index: usize) -> Option<Spots> {
+        let (name, json) = MAPS[index];
+        let mut bakes: BTreeMap<String, Baked> = serde_json::from_str(bakes).ok()?;
+        let b = bakes.remove(name).filter(|b| b.source == crate::bot::source_hash(json))?;
+        Some(Spots::of(b.spots, b.steps))
+    }
+
+    fn of(spots: Vec<Spot>, steps: Vec<Vec<u32>>) -> Spots {
+        let mut cells: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
+        for (i, s) in spots.iter().enumerate() {
+            cells.entry(cell(s.pos)).or_default().push(i as u32);
+        }
+        Spots { spots, cells, steps }
+    }
+
+    /// Every map's spots, made as they are now, as `preload` reads them.
+    pub fn bake() -> String {
+        let bakes: BTreeMap<&str, Baked> = (0..MAPS.len())
+            .map(|i| {
+                let s = Spots::for_map(i);
+                (MAPS[i].0, Baked { source: crate::bot::source_hash(MAPS[i].1), spots: s.spots.clone(), steps: s.steps.clone() })
+            })
+            .collect();
+        serde_json::to_string(&bakes).expect("spots serialize")
     }
 
     pub fn generate(arena: &Arena, nav: &Nav, t: &Tuning) -> Spots {
@@ -169,11 +215,7 @@ impl Spots {
             }
             spots.push(Spot { pos: floor, waypoint: w, cover, over });
         }
-        let mut cells: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
-        for (i, s) in spots.iter().enumerate() {
-            cells.entry(cell(s.pos)).or_default().push(i as u32);
-        }
-        let mut found = Spots { spots, cells, steps: Vec::new() };
+        let mut found = Spots::of(spots, Vec::new());
         let steps = (0..found.spots.len())
             .map(|i| {
                 let p = found.spots[i].pos;
@@ -429,6 +471,28 @@ mod tests {
         // Free to roam, it goes to the block, out of the zone.
         let free = choose(spots, &arena, &kit, me, &foes, 0, 0.5, None, &[], None, &w).expect("no post");
         assert!(!zone.holds(spots.spots[free.spot].pos, 0.0), "free post stayed in the zone");
+    }
+
+    /// Writes maps/spots.json, every map's spots as they are now: the deploy runs it, and the server
+    /// loads it (`SPOTS`, see the Dockerfile).
+    #[test]
+    #[ignore = "bakes maps/spots.json: cargo test -p sim --release --lib bake_spots -- --ignored"]
+    fn bake_spots() {
+        std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/../maps/spots.json"), Spots::bake()).unwrap();
+    }
+
+    #[test]
+    fn baked_spots_read_back_for_their_map_only() {
+        let [blockout, isotope] = ["blockout", "isotope"].map(|name| Map::index(name).unwrap());
+        let s = Spots::for_map(blockout);
+        let one = Baked { source: crate::bot::source_hash(MAPS[blockout].1), spots: s.spots.clone(), steps: s.steps.clone() };
+        let json = serde_json::to_string(&BTreeMap::from([("blockout", one)])).unwrap();
+        let back = Spots::baked(&json, blockout).expect("didn't read back");
+        assert_eq!((back.spots.len(), &back.steps), (s.spots.len(), &s.steps));
+        assert_eq!(back.near(Vector::new(-5.0, 0.0, -26.5), 4.0).count(), s.near(Vector::new(-5.0, 0.0, -26.5), 4.0).count());
+        assert!(Spots::baked(&json, isotope).is_none(), "read back for another map");
+        // Baked from another version of the map: not used.
+        assert!(Spots::baked(&json.replace(&crate::bot::source_hash(MAPS[blockout].1), "0"), blockout).is_none());
     }
 
     #[test]

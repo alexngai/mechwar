@@ -62,7 +62,7 @@ struct Baked {
 }
 
 /// FNV-1a of a map's JSON: the same on every build.
-fn source_hash(json: &str) -> String {
+pub(crate) fn source_hash(json: &str) -> String {
     format!("{:016x}", json.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)))
 }
 
