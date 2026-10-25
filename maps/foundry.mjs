@@ -178,13 +178,15 @@ silos({ at: [-62, 0, 45], radius: 10, band: 4, pad: [-57.5, 0, 45] }, { at: [0, 
 // Siege: the station in the smelter's arcade, round its core, the AA gun on its roof (up the
 // skybridges from the bases, or the hover steps), the ships over the skybridge line.
 siege({ at: [0, 0, 0], radius: 16, band: 4 }, { at: [0, 14, 0], radius: 9, band: 3, pad: [-5, 14, 0] }, 55);
-// Convoy: the hauler starts beside the smelter's east doorway (the arcade under the ring deck is too
-// low for it, the core solid), so the middle is off the twin's center and both legs are authored: up
-// the east side of each courtyard, round its cover, in through the east gate. It starts a few meters
-// south of the doorway's middle, which evens the two legs (the south one winds more).
+// Convoy: the hauler starts down in the cooling channel, under the east lane's pipe rack, halfway
+// between the bases. North: east along the channel floor and up its ramp onto the land bridge, round
+// into the north-east yard through the gap in its row of containers, west across the courtyard south of
+// the flag stand and in through the east gate. South: west along the channel and up into the smelter's
+// east doorway, round the smelter's south face and under the skybridge, across the courtyard past the
+// west stack and in through the west gate. Both legs are authored: the middle isn't the twin's center.
 convoy(
-  [[22.5, 0, -4.5], [22.5, 0, 6], [22.5, 0, 12], [25, 0, 18], [27.5, 0, 22], [30.5, 0, 27], [31, 0, 34], [31, 0, 44], [36, 0, 50], [38, 0, 56], [38, 0, 62], [33, 0, 67], [27, 0, 70], [22, 0, 72], [20, 0, 76], [20, 0, 82], [20, 0, 88], [13, 0, 95], [4, 0, 98]],
-  [[22.5, 0, -4.5], [22.5, 0, -10], [29, 0, -21], [31, 0, -28], [31, 0, -35], [20, 0, -44], [16, 0, -50], [20.5, 0, -56], [26, 0, -59.5], [31.5, 0, -62], [32, 0, -67], [27, 0, -71], [22, 0, -72.5], [20, 0, -76], [20, 0, -82], [20, 0, -88], [13, 0, -95], [4, 0, -98]],
+  [[69.4, -5, 0], [78, -5, 0], [92, 0, 0], [106, 0, 0], [96, 0, 6.5], [94.5, 0, 28], [94.5, 0, 42], [83.5, 0, 64], [76.5, 0, 73], [55, 0, 70], [30, 0, 68], [28, 0, 69], [23.5, 0, 75], [23.5, 0, 77], [22.5, 0, 77.5], [20, 0, 82], [16.5, 0, 88.5], [14.5, 0, 89.5], [13.5, 0, 91.5], [0, 0, 100]],
+  [[69.4, -5, 0], [38, -5, 0], [24, 0, 0], [22.5, 0, -12], [22.5, 0, -19], [19.5, 0, -20], [19, 0, -20], [17, 0, -24], [14, 0, -24], [12, 0, -25], [6, 0, -26], [5, 0, -26.5], [3, 0, -25.5], [-2, 0, -26.5], [-3, 0, -27], [-3.5, 0, -30.5], [-4.5, 0, -32], [-5, 0, -32.5], [-5.5, 0, -35.5], [-22, 0, -44], [-40, 0, -50], [-40, 0, -64], [-26, 0, -71], [-24, 0, -70], [-22, 0, -76], [-22, 0, -76.5], [-21, 0, -77.5], [-20, 0, -81], [-20, 0, -82], [-16.5, 0, -88.5], [-14.5, 0, -89.5], [-13.5, 0, -91.5], [0, 0, -100]],
 );
 
 // --- Spawns, twin, write ---------------------------------------------------------------------

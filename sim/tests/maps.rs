@@ -141,7 +141,8 @@ fn flag_stands_shelter_their_flags() {
 /// the way, checked every meter along the line: ground under it (no more than half a meter over the
 /// line, or 4 m under), no step over 0.6 m from the last meter's, nothing within 4 m either side at 1,
 /// 3.5 and 6 m up nor overhead under 7 m, its side 2 m off each base gun's foot and well off the pads.
-/// It runs from team 0's base to team 1's, and starts between its ends, about as far from each base.
+/// It runs from team 0's base to team 1's, and starts between its ends, as far to walk to either base
+/// (within 10%), since the start is the middle of a tug of war.
 #[test]
 fn convoy_routes_fit_the_hauler() {
     use rapier3d::prelude::Ray;
@@ -160,8 +161,9 @@ fn convoy_routes_fit_the_hauler() {
         for (end, base) in [points[0], points[points.len() - 1]].into_iter().zip(bases) {
             assert!(flat(end - base).length() <= 6.0, "{name}: the route ends at {end}, {:.1} m from the base at {base}", flat(end - base).length());
         }
-        let [d0, d1] = bases.map(|b| flat(points[start] - b).length());
-        assert!((d0 - d1).abs() <= 15.0, "{name}: the hauler starts {d0:.0} m from team 0's base and {d1:.0} m from team 1's");
+        let walked = |p: &[Vector]| p.windows(2).map(|w| w[0].distance(w[1])).sum::<f32>();
+        let [d0, d1] = [walked(&points[..=start]), walked(&points[start..])];
+        assert!((d0 - d1).abs() <= 0.1 * d0.max(d1), "{name}: the hauler starts {d0:.0} m along its route from team 0's base and {d1:.0} m from team 1's");
 
         let arena = Arena::new(&map);
         let guns: Vec<_> = map.objectives.sentries.iter().flatten().map(|p| Vector::from_array(*p)).collect();

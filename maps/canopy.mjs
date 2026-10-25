@@ -104,7 +104,7 @@ function height(x, z) {
   for (const s of STANDS) h += (1 - h) * smoothstep(24, 14, dist(p, s)); // and under the flag stands
   // The Gorge: a level floor between walls too steep to climb, 7-14 m out, sloping up at its ends;
   // at the breach its east wall lies back to a 30 degree slope.
-  const g = along(p, GORGE), ends = smoothstep(0, 40, g.s) * smoothstep(LG, LG - 34, g.s);
+  const g = along(p, GORGE), ends = smoothstep(0, 54, g.s) * smoothstep(LG, LG - 34, g.s);
   const breach = g.side < 0 ? 1 - smoothstep(6, 16, Math.abs(g.s - BREACH)) : 0;
   h += (GORGE_FLOOR - h) * (1 - smoothstep(7, 14 + 32 * breach, g.d)) * ends;
   // The cliffs: a lip from 8 m inside the edge, then 58 degrees up, craggy, to a plateau no hover reaches.
@@ -267,7 +267,7 @@ for (let s = 24; s < LG - 16; s += 16) {
   const rand = random(515);
   // Midway between the floor's waypoints, and to one side.
   for (const s of [32, 64, 96, 128]) {
-    const { at: c, right, dir } = station(GORGE, s), p = offset(c, right, (rand() < 0.5 ? -1 : 1) * rand(3, 4.5)), half = [rand(2, 3.2), rand(1.4, 2.4), rand(2, 3.5)];
+    const { at: c, right, dir } = station(GORGE, s), p = offset(c, right, (rand() < 0.5 ? -1 : 1) * rand(7, 8)), half = [rand(2, 3.2), rand(1.4, 2.4), rand(2, 3.5)];
     turned(at(...p, half[1] * 0.4), half.map((v) => Math.round(v * 10) / 10), deg(Math.atan2(dir[0], dir[1])) + Math.round(rand(-30, 30)), 'moss', Math.round(rand(-10, 10)));
   }
 }
@@ -282,22 +282,24 @@ turned([PULPIT[0] - 6, pTop - 14, PULPIT[1] - 4], [3, 14, 4], 40, 'stone', 8);
 turned([PULPIT[0] + 2, pTop - 13, PULPIT[1] - 7], [4, 12, 2.5], -20, 'stone', -12);
 {
   const foot = [-62, 66], u = [(PULPIT[0] - foot[0]) / dist(foot, PULPIT), (PULPIT[1] - foot[1]) / dist(foot, PULPIT)];
-  const end = offset(PULPIT, u, -3), r = 2.6;
+  // Its walk ends at the pillar's edge, flush with the top (the convoy's hauler walks up it).
+  const end = offset(PULPIT, u, -7.5), r = 2.6;
   walkLog([foot[0], heightAt(...foot) - r * 0.5, foot[1]], [end[0], pTop - r - 0.05, end[1]], r, { run: 6, ends: [true, false] });
 }
 {
   // A stone arch from the Pulpit's top across the Gorge, down to its east rim, on two ribs from the walls.
-  const g = along(PULPIT, GORGE), { at: c, right, dir } = station(GORGE, g.s);
-  const a = [...offset(c, right, -(g.d - 5))], b = at(...offset(c, right, 30)), top = [a[0], pTop, a[1]];
+  // It springs from the pillar's edge, flush with the top.
+  const g = along(PULPIT, GORGE), { at: c, right, dir } = station(GORGE, g.s), edge = 7;
+  const a = [...offset(c, right, -(g.d - edge))], b = at(...offset(c, right, 30)), top = [a[0], pTop, a[1]];
   stone(top, b, 8, 2.5);
-  const over = (k) => top[1] + ((b[1] - top[1]) * (k + g.d - 5)) / (g.d - 5 + 30); // the deck's height k m past the centerline
+  const over = (k) => top[1] + ((b[1] - top[1]) * (k + g.d - edge)) / (g.d - edge + 30); // the deck's height k m past the centerline
   for (const k of [-1, 1]) stone(lift(offset(c, right, k * 12), GORGE_FLOOR + 7), [c[0], over(0) - 2.5, c[1]], 6, 2);
   for (const k of [-1, 1]) {
     const side = (p) => [p[0] + dir[0] * k * 3.8, p[1], p[2] + dir[1] * k * 3.8];
     railing(side(top), side(b));
   }
   clear([top[0], top[2]], [b[0], b[2]], 10);
-  point([c[0], over(0), c[1]], b, at(...offset(c, right, 40)));
+  point([c[0], over(0), c[1]], lift(offset(c, right, 15), r3(over(15))), b, at(...offset(c, right, 40)));
 }
 lamp([PULPIT[0] - 3, pTop, PULPIT[1] + 3]);
 point([PULPIT[0], pTop, PULPIT[1]]);
@@ -321,6 +323,11 @@ for (const [from, to] of [[0, TUNNEL - 5], [TUNNEL + 5, LS]]) {
     stone(ridgePoint(a), ridgePoint(b), 12, Math.max(crestY((a + b) / 2) - heightAt(...station(SPINE, (a + b) / 2).at) + 5, 4));
     joints.push(from + ((to - from) * (i + 1)) / n);
   }
+}
+{
+  // The crest's south end stands a step over the ground: a wedge up onto it, for the convoy's hauler.
+  const { at: c, dir } = station(SPINE, 0);
+  stone(at(...offset(c, dir, -4)), ridgePoint(0), 12, 2);
 }
 {
   // Ledges stepping up the ridge's flanks, 5 and 10 m up: a hover at a time to the crest.
@@ -454,7 +461,8 @@ for (const s of STANDS) clear(s, s, 16);
 point([136, 7, -92], at(110, -92), at(-112, -92), at(-136, -110), at(136, -110));
 
 // --- Jump pads: the Gorge's floor up onto the Pulpit, and the east base onto the Spine ----------------
-slabPad(...station(GORGE, 40).at, [PULPIT[0], pTop, PULPIT[1]], pTop + 8);
+// The Gorge's sits north of the arch, clear of the convoy's walk down the floor south of the breach.
+slabPad(...station(GORGE, 112).at, [PULPIT[0], pTop, PULPIT[1]], pTop + 8);
 {
   const s = joints.reduce((best, j) => (Math.abs(j - 36) < Math.abs(best - 36) ? j : best));
   slabPad(96, -96, ridgePoint(s), crestY(s) + 8);
@@ -552,12 +560,18 @@ siege({ at: onGround(HOLLOW), radius: 12, band: 5 }, { at: [6, 13, -18], radius:
 // Knoll's rock table, C at the Spine's tunnel (the east's flank).
 // C's launch pad is out of the tunnel, by its west mouth.
 silos({ at: [-68, -13, 13], radius: 12, band: 5 }, { at: [6, 13, -18], radius: 9, band: 3, pad: [2.5, 13, -17.5] }, { at: [76, -1, 15], radius: 12, band: 5, pad: [70.5, -1.4, 12.5] });
-// Convoy: the hauler starts in the Hollow, halfway between the bases (a little east of its middle,
-// which evens the two legs), and follows the south road out each way: west under the Gate's southern
-// roots and round the fallen log to Grove Station, east round the log and south of the Teeth, then in
-// north of Relay Station's crates. No point sits on a terrain cell's edge, where a ray down can miss.
-convoy(
-  [[5, -105.5], [-3, -108.5], [-11, -110.5], [-23, -113], [-37, -115], [-44.3, -115.2], [-51, -115.4], [-65, -114.5], [-79, -113], [-87, -111.5], [-91, -110.7], [-95, -110], [-106, -106.6], [-117, -103]].map(([x, z]) => at(x, z)),
-  [[5, -105.5], [13, -107.5], [21, -109.2], [29, -110.5], [41, -118], [51, -125], [63, -128.5], [75, -127], [82.5, -120.5], [88.5, -113.5], [99, -107.5], [110, -104.5], [117, -103]].map(([x, z]) => at(x, z)),
-);
+// Convoy: the hauler starts in the north-west, between the Gorge's head and the Crown, and each leg
+// takes a flank. West: down the Pulpit's fallen trunk, over the stone arch from its top to the east
+// rim, down the breach to the Gorge's floor (clear of A's pad), south along the floor under the fallen
+// giant and up its south end to Grove Station. East: past the giants below the Crown, up onto the Spine's north
+// end, the whole crest south over the tunnel, and down to Relay Station. Points on the terrain are
+// [x, z]; on the arch, the trunk, the Pulpit and the crest, [x, y, z]. None sits on a terrain cell's
+// edge, where a ray down can miss.
+{
+  const on = (pts) => pts.map((p) => (p.length === 2 ? at(...p) : p));
+  convoy(
+    on([[-31.9, 1.61, 68.1], [-33, 69.5], [-49, 75], [-56.5, 72.5], [-80.5, 16.57, 36.5], [-79.5, 17, 29.5], [-36.5, 13.5], [-31.5, 9.5], [-30, 7.5], [-30.5, 3.5], [-60.5, 5.5], [-71.5, 2], [-77.88, -11.38], [-94.5, -63], [-98.88, -77.38], [-106.5, -90], [-122, -102]]),
+    on([[-31.9, 1.61, 68.1], [-19.5, 51], [-1.5, 54], [30.63, 76.63], [38.5, 84.5], [40.5, 85], [42.63, 83.63], [43.13, 83.13], [43.63, 82.13], [45.5, 83], [47, 83], [49, 82], [66, 12.63, 49.5], [86, 16.31, -15.5], [92.5, 17.64, -31.5], [95, 15.64, -43], [112.5, -98], [120.5, -102], [122, -102]]),
+  );
+}
 write(new URL('./canopy.json', import.meta.url), { name: 'Canopy', size: SIZE, night: true, palette }, spawns(BASES[0], 1), spawns(BASES[1], -1));

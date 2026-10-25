@@ -230,22 +230,19 @@ siege({ at: [0, 0, 0], radius: 18, band: 4 }, { at: [0, 6, 0], radius: 8, band: 
 // mesa.
 const [px, pz] = uv(10, 13);
 silos({ at: onMesa(0), radius: 10, band: 3 }, { at: [0, 0, 0], radius: 18, band: 4, pad: [px, 0, pz] });
-// Convoy: the Keystone and its AA pad hold the middle, so the hauler starts on the sand off its
-// north-west end, under the arm's tip, and each leg runs out across the arch's line (v) through the
-// slot canyon off its mesa's north-west end and in by its yard's gate on that side, swinging wide of
-// the base gun just inside it. The halves aren't twins of each other here, so both are authored.
+// Convoy: the hauler starts in the shade under the NW arm, on the arch's line, so as far from either
+// yard. North: out from under the arm across the dunes toward the NW town, back east along its edge
+// and down through the slot canyon off the NE mesa's north-west end, round the hoodoo behind it and in
+// by the NE yard's west gate. South: down the arm's length under it to its tip, round the fallen slab
+// and the Keystone's west end (clear of B's pad and the AA gun's), through the slot canyon off the SW
+// mesa's south-east end, round the hoodoo behind that and in by the SW yard's east gate. Points are
+// world (x, z) on the sand, kept off the terrain cells' edges where a ray down can miss.
 {
-  const leg = (sv, world) => [...sv.map(([s, v]) => atUV(s, v)), ...world.map(([x, z]) => at(x, z))];
-  // In through the NE yard's west gate (world x, z); off the terrain cells' edges, where a ray down can miss.
-  const yard = [[75, 112], [82.5, 118.5], [86.5, 121.7], [93, 121.7], [95.6, 123], [99.5, 127.5], [106.5, 129.5], [114.5, 128.5], [120, 126.5]];
-  const north = leg([[20, 0], [23, 15], [24.5, 22.5], [26, 30], [26, 45], [26, 60], [26, 72], [26, 82], [26, 92], [23, 100], [20, 108], [20, 118]], yard);
-  // The SW yard's gate on that side is the NE's west gate mirrored across the arch's line: (s, v) -> (s, -v),
-  // which is the world's (x, z) -> (-z, -x).
-  const south = leg(
-    [[20, 0], [28, -9], [28, -24], [27, -38], [26, -52], [26, -59], [26, -66], [26, -76], [25.5, -83], [24.5, -90], [23, -98], [21, -105], [20, -112], [20, -118]],
-    yard.map(([x, z]) => [-z, -x]),
+  const on = (pts) => pts.map((p) => (p.length === 2 ? at(...p) : p));
+  convoy(
+    on([[-52.4, 2.6, 52.4], [-53, 53], [-47.5, 58], [-43.5, 83.5], [-23.5, 111], [-1, 82], [9, 72.5], [22.5, 59.5], [34.5, 71.5], [48.5, 85.5], [48.5, 98], [47.5, 111], [51.5, 111], [72.5, 114.5], [82.5, 118.5], [93, 121.5], [93.5, 122], [94.5, 123.5], [97.5, 125], [125, 125]]),
+    on([[-52.4, 2.6, 52.4], [-43, 43], [-21.5, 22], [-21.5, 21], [-34, 2], [-34, -3.5], [-22.5, -17.5], [-19, -19], [-17, -53.5], [-25.5, -62.5], [-35.5, -71.5], [-49, -85.5], [-47.5, -102.5], [-47.5, -111], [-58.5, -111], [-71.5, -114.5], [-82.5, -118.5], [-92.88, -121.88], [-99.5, -125.5], [-125, -125]]),
   );
-  convoy(north, south);
 }
 
 // --- Spawns, write ---------------------------------------------------------------------------------
