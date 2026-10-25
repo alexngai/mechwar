@@ -257,8 +257,9 @@ impl Default for Brain {
             (Action::Vent, vec![with(engaged(), &[yes(Overheated)]), with(engaged(), &[(Heat, AtLeast(0.8))]), with(back(), &[yes(Overheated)])]),
             // The bulwark once hurt and under fire, or hit falling back to mend.
             (Action::Brace, vec![with(engaged(), &[yes(Hit), (Hull, Below(0.75))]), with(back(), &[yes(Mending), yes(Hit)])]),
-            // Camouflage is for slipping away to mend.
-            (Action::Cloak, vec![with(back(), &[yes(Mending), no(InCover)])]),
+            // Camouflage for slipping away to mend, or for closing unseen on a target beyond the
+            // band while still in shape to fight.
+            (Action::Cloak, vec![with(back(), &[yes(Mending), no(InCover)]), with(engaged(), &[(Range, Above(1.2)), (Hull, AtLeast(0.6))])]),
             // Power up a volley as it goes (a pile driver: its strike); boost a fight on target in range.
             (Action::Power, vec![with(engaged(), &[yes(Melee), yes(Striking)]), with(engaged(), &[no(Melee), yes(AltFire)])]),
             (Action::Barrage, vec![with(engaged(), &[yes(Fire), (Range, AtMost(1.0))])]),

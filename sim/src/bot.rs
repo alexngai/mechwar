@@ -1139,7 +1139,11 @@ impl Bot {
                 }
                 return input;
             }
-            let throw = throw && on_target;
+            // Camouflaged and still beyond its band, it closes in unseen: firing or using an item
+            // would drop the camouflage.
+            let cloaking = Ability::of(me.loadout) == Ability::Cloak && (crate::ability::on(me, Ability::Cloak) || self.brain.wants(Action::Cloak, &at));
+            let hidden = cloaking && range > far;
+            let throw = throw && on_target && !hidden;
             if throw {
                 self.grenade_at = tick + secs(4.0 + 4.0 * self.rand());
             }
@@ -1171,9 +1175,10 @@ impl Bot {
             // A charged gun charges while it holds (on target or not) and lets go once full and
             // on target; a rail gun is pressed one tick and let go the next; a lock-on launcher
             // locks first, then fires once the lock holds; a pile driver winds up, then lets go.
-            let fire = shell.is_none() && !self.cooling && reaches && if t.charge_time > 0.0 { !(on_target && me.charge >= 0.85) } else { on_target };
+            let fire = shell.is_none() && !self.cooling && reaches && !hidden && if t.charge_time > 0.0 { !(on_target && me.charge >= 0.85) } else { on_target };
             let alt_fire = alt
                 && alt_cool
+                && !hidden
                 && match use_ {
                     AltUse::Lock => me.lock != 0 && me.lock_time >= t.alt_lock_time,
                     AltUse::Release => on_target && !me.alt_held,
@@ -1194,7 +1199,7 @@ impl Bot {
                 fire,
                 alt_fire,
                 aux: use_ == AltUse::Lock && alt && me.lock == 0 && !me.aux_held,
-                grenade: throw || turret,
+                grenade: throw || turret && !hidden,
                 // Wound and going in, on thrusters while there's fuel to spare.
                 boost: wound && range <= far && !self.striking && me.fuel > 0.5 * t.fuel_max,
                 hover: tick < self.hover_until,
@@ -1202,7 +1207,7 @@ impl Bot {
                 // already, and it counts: they're on thrusters (it grounds them), or we're hurt (it
                 // slows pursuit). A shield dome once hurt and under fire.
                 // Its support item and ability, as its brain has it (`Brain::default` for genome 0).
-                emp: Action::of_support(Item::of(me.loadout, false)).is_some_and(|a| self.brain.wants(a, &at)),
+                emp: !hidden && Action::of_support(Item::of(me.loadout, false)).is_some_and(|a| self.brain.wants(a, &at)),
                 ability: self.brain.wants(Action::of_ability(Ability::of(me.loadout)), &at),
                 ..Input::default()
             };
@@ -1931,6 +1936,30 @@ mod tests {
             me.beaming
         });
         assert!(mended, "never turned the torch on a hurt teammate");
+    }
+
+    #[test]
+    fn camouflaged_bots_close_in_unseen_then_fight() {
+        let blockout = Map::index("blockout").unwrap();
+        let (arena, nav) = (Arena::new(&Map::load(blockout)), Nav::for_map(blockout));
+        // A flak gun (a short band) and camouflage, 60 m from a target in the open.
+        let loadout = Loadout { ability: arsenal::index(Slot::Ability, "cloak"), ..Loadout::named("squall", "rocket") };
+        let t = Arsenal::new(&Tuning::default()).get(MechClass::A, loadout).clone();
+        let mut me = Mech { loadout, grenades: 0, emps: 0, ..spawn_mech(&t, Vector::new(0.0, 0.1, 40.0)) };
+        let target = spawn_mech(&t, Vector::new(0.0, 0.1, -20.0));
+        let (mut bot, far) = (Bot::new(2), band(&t, &Policy::default()).1);
+        let (mut cloaked, mut fired_hidden, mut fought) = (false, false, false);
+        for tick in 0..secs(10.0) {
+            let input = bot.think(&arena, nav, &t, &me, Some(&target), tick);
+            step_mech(&arena, &t, &mut me, &input);
+            let (on, range) = (crate::ability::on(&me, Ability::Cloak), flat(target.pos - me.pos).length());
+            cloaked |= on;
+            fired_hidden |= on && range > far && (input.fire || input.alt_fire);
+            fought |= range <= far && input.fire;
+        }
+        assert!(cloaked, "never cloaked to close in");
+        assert!(!fired_hidden, "fired cloaked from beyond its band");
+        assert!(fought, "never fought once in its band");
     }
 
     #[test]
