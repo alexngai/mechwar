@@ -92,7 +92,8 @@ export class Hud {
 
     // --- Target tags --------------------------------------------------------------------
     // Teammates: chevron, name, health. Enemies: brackets, health, name, distance and status; the
-    // one under the crosshair also gets a card with class, hull and status.
+    // one under the crosshair also gets a card with its class and weapons (scouting it out tells
+    // you what it carries) and status.
     g.textAlign = 'center';
     for (const t of f.tags) {
       const name = t.bot ? `${t.name} ·BOT` : t.name;
@@ -143,7 +144,7 @@ export class Hud {
       }
       if (t.focus) {
         const x = t.x + s + 12 * u, y = t.y - s;
-        const lines = [[name, 13, 'bold'], [t.label.toUpperCase(), 11, ''], [`HULL ${t.hp}/${t.hpMax}`, 11, ''], [`${Math.round(t.dist)} m`, 11, '']];
+        const lines = [[name, 13, 'bold'], [t.label.toUpperCase(), 11, ''], ...(t.weapons ?? []).map((w) => [w.toUpperCase(), 11, '']), [`${Math.round(t.dist)} m`, 11, '']];
         if (t.status) lines.push([t.status, 11, 'bold']);
         g.fillStyle = 'rgba(8,12,10,0.6)';
         g.fillRect(x - 6 * u, y - 4 * u, 130 * u, lines.length * 16 * u + 8 * u);

@@ -1587,13 +1587,13 @@ function drawGlass(now, myTeam) {
     const healthMax = classValue(e.cls, 'health_max');
     const tag = {
       ...toScreen(ndc), dist, enemy, unit: id, name: levelOf(id) ? `${nameOf(id)} ·LV${levelOf(id)}` : nameOf(id), bot: e.bot, status: statusOf(e, now), focus: false,
-      health: e.health / healthMax, hp: Math.ceil(e.health), hpMax: healthMax, label: classes[CLASS_KEYS[e.cls]].name,
+      health: e.health / healthMax, label: classes[CLASS_KEYS[e.cls]].name, weapons: [e.mech.weapons.primary.name, e.mech.weapons.secondary.name],
     };
     const angle = enemy ? look.angleTo(to.subVectors(chest, camera.position)) : Infinity;
     if (angle < focusAngle) [focusAngle, focus] = [angle, tag];
     tags.push(tag);
   }
-  // Turrets: the other side's in sight get tags (hull, and the card under the crosshair) and radar
+  // Turrets: the other side's in sight get tags (a hull bar, and the card under the crosshair) and radar
   // marks, as enemy mechs do; our side's are marked on the radar.
   const turrets = game.deployables();
   for (let i = 0; i < turrets.length; i += 10) {
@@ -1616,7 +1616,7 @@ function drawGlass(now, myTeam) {
     const tag = {
       // `unit` is its lock-on id (deploy::target_id), so the lock diamond finds it.
       ...toScreen(ndc), dist, enemy, unit: 64 + 2 * owner + (kind === 3 ? 1 : 0), name: ship ? `Enemy ${label.toLowerCase()}` : `${nameOf(owner)}'s ${label}`, bot: false, status: '', focus: false,
-      health: Math.max(hull, 0) / hullMax, hp: Math.max(Math.ceil(hull), 0), hpMax: hullMax, label,
+      health: Math.max(hull, 0) / hullMax, label,
     };
     const angle = look.angleTo(to.subVectors(chest, camera.position));
     if (angle < focusAngle) [focusAngle, focus] = [angle, tag];
