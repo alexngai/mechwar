@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::f32::consts::{PI, TAU};
 use std::sync::OnceLock;
 
-use libm::{asinf, atan2f, hypotf};
+use libm::{asinf, atan2f, cosf, hypotf};
 use rapier3d::prelude::{Ray, Rotation};
 use serde::{Deserialize, Serialize};
 
@@ -1073,6 +1073,10 @@ impl Bot {
                 None if t.shot_speed > 0.0 && t.shot_gravity > 0.0 => pitch += arc(t.shot_gravity, speed),
                 _ => {}
             }
+            // A fused projectile primary holds fire at a target its shots can't reach: farther off
+            // than they fly before their fuse runs out, or than they carry at all (v² / g).
+            let span = flat(chest + target.vel * lead - eye).length();
+            let reaches = t.shot_fuse <= 0.0 || (span <= t.shot_speed * cosf(pitch) * t.shot_fuse && t.shot_gravity * span <= t.shot_speed * t.shot_speed);
             let (want_yaw, want_pitch) = (yaw + self.wobble.0, pitch + self.wobble.1);
             let new_yaw = me.yaw + wrap(want_yaw - me.yaw).clamp(-max_turn, max_turn);
             let new_pitch = me.pitch + (want_pitch - me.pitch).clamp(-max_turn, max_turn);
@@ -1143,7 +1147,7 @@ impl Bot {
             // A charged gun charges while it holds (on target or not) and lets go once full and
             // on target; a rail gun is pressed one tick and let go the next; a lock-on launcher
             // locks first, then fires once the lock holds; a pile driver winds up, then lets go.
-            let fire = shell.is_none() && !self.cooling && if t.charge_time > 0.0 { !(on_target && me.charge >= 0.85) } else { on_target };
+            let fire = shell.is_none() && !self.cooling && reaches && if t.charge_time > 0.0 { !(on_target && me.charge >= 0.85) } else { on_target };
             let alt_fire = alt
                 && alt_cool
                 && match use_ {
@@ -2013,5 +2017,35 @@ mod tests {
         // The misses: volleys let go just as it turned.
         assert!(volleys >= 10 && hits * 4 >= volleys * 3, "{hits} of {volleys} volleys hit");
         assert!(low / (hits as f32) < 0.15, "hits struck {} m below the chest on average", low / hits as f32);
+    }
+
+    #[test]
+    fn grenade_rifles_hold_fire_until_their_grenades_reach() {
+        let (arena, nav, _) = blockout();
+        let loadout = Loadout::named("hail", "darts");
+        // Perfect aim, so a grenade that lands nowhere near the target fell short, and a 1 s fuse,
+        // so the grenades burst about 45 m out.
+        let t = Tuning { bot_aim_error_deg: 0.0, bot_reaction_s: 0.0, shot_fuse: 1.0, ..Arsenal::new(&Tuning::default()).get(MechClass::B, loadout).clone() };
+        // A target standing in the open 70 m off, past that; the bot closes in.
+        let mut me = Mech { loadout, grenades: 0, ..spawn_mech(&t, Vector::new(-36.0, 0.1, 42.0)) };
+        let target = spawn_mech(&t, Vector::new(-36.0, 0.1, -28.0));
+        let mut bot = Bot::new(1);
+        let (mut shells, mut burst, mut landed) = (Vec::new(), 0, 0);
+        for tick in 0..secs(12.0) {
+            // Only the gun.
+            me.alt_wait = 1.0;
+            let input = bot.think(&arena, nav, &t, &me, Some(&target), tick);
+            step_mech(&arena, &t, &mut me, &Input { alt_fire: false, grenade: false, emp: false, ability: false, ..input });
+            if me.shot {
+                shells.extend(crate::weapon::volley(&t, &me, 0, tick));
+            }
+            shells.retain_mut(|p| {
+                let Some(at) = projectile::fly(&arena, &t, p, |ray, max| projectile::first_mech(ray, max, [(&t, &target)])) else { return true };
+                burst += 1;
+                landed += u32::from(projectile::splash(&arena, &t, true, at, &t, &target) > 0.0);
+                false
+            });
+        }
+        assert!(burst >= 10 && landed * 10 >= burst * 9, "{landed} of {burst} grenades landed");
     }
 }
