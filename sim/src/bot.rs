@@ -271,6 +271,8 @@ const ARRIVE: f32 = 2.5;
 const BOOST_LEG: f32 = 15.0;
 /// Fire only when aim is this close to where the bot wants it.
 const AIM_TOLERANCE: f32 = 2.0 * PI / 180.0;
+/// How far toward the threat a bot falling back lobs its smoke (m).
+const SMOKE_THROW: f32 = 8.0;
 /// Faster than any mech moves (m/s): a jump in what a bot sees is a switch of target.
 const MOTION_MAX: f32 = 60.0;
 /// How far off a pile driver's facing its target can be for it to let go: inside the lunge's cone.
@@ -590,6 +592,8 @@ pub struct Bot {
     /// Falling back to cover or an orb, and the health orbs about (they glow: always known).
     retreat: Option<Retreat>,
     pub orbs: Vec<Vector>,
+    /// Set by the server each tick: an enemy stands in the blast of its limpet (if one's down).
+    pub limpet_hits: bool,
     /// Smoke about, set by the server each tick: no seeing through it.
     pub smoke: Vec<Cloud>,
     /// Shield domes about, set by the server each tick: no shot crosses one's surface, so an enemy
@@ -648,6 +652,7 @@ impl Bot {
             patrol_until: 0,
             retreat: None,
             orbs: Vec::new(),
+            limpet_hits: false,
             smoke: Vec::new(),
             domes: Vec::new(),
             lead: None,
@@ -712,8 +717,16 @@ impl Bot {
         let mut at = Features::default();
         at.flag(Feature::FallingBack, true).flag(Feature::Mending, r.why == Why::Mend).flag(Feature::InCover, here);
         at.flag(Feature::Overheated, me.overheated).flag(Feature::Hit, hit).set(Feature::Charges, f32::from(me.emps));
+        at.flag(Feature::OrbNear, self.orbs.iter().any(|o| o.distance(me.pos) < self.policy.orb_range)).flag(Feature::Exposed, seen);
+        at.set(Feature::Throws, f32::from(me.grenades)).flag(Feature::GrenadeReady, tick >= self.grenade_at);
         input.ability = self.brain.wants(Action::of_ability(Ability::of(me.loadout)), &at);
         input.emp = Action::of_support(Item::of(me.loadout, false)).is_some_and(|a| self.brain.wants(a, &at));
+        // Smoke between it and the threat, about 8 m its way: it stops to turn and lob it.
+        if let Some(m) = target.filter(|_| Item::of(me.loadout, true) == Item::Smoke && self.brain.wants(Action::Smoke, &at)) {
+            let toward = flat(m.pos - me.pos);
+            let spot = me.pos + toward.normalize_or_zero() * toward.length().min(SMOKE_THROW);
+            return Input { emp: input.emp, ability: input.ability, ..self.lob(t, me, Item::Smoke, spot, tick) };
+        }
         input
     }
 
@@ -722,8 +735,8 @@ impl Bot {
     }
 
     /// Aims a grenade's arc at `spot` and throws once on it.
-    fn lob(&mut self, t: &Tuning, me: &Mech, spot: Vector, tick: u32) -> Input {
-        let g = t.thrown(Item::Grenade);
+    fn lob(&mut self, t: &Tuning, me: &Mech, item: Item, spot: Vector, tick: u32) -> Input {
+        let g = t.thrown(item);
         let eye = me.pos + Vector::Y * t.eye_height;
         let (yaw, _) = look_at(eye, spot);
         let r = (g.alt_gravity * flat(spot - eye).length() * (1.0 + self.misjudge.1) / (g.alt_speed * g.alt_speed)).min(1.0);
@@ -922,6 +935,12 @@ impl Bot {
     pub fn think_with(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: Option<&Mech>, heal: Option<&Mech>, tick: u32) -> Input {
         self.striking = false;
         let mut input = self.decide(arena, nav, t, me, target, heal, tick);
+        // A limpet down goes off once an enemy's in its blast, whatever else the bot is about.
+        if me.limpet {
+            let mut at = Features::default();
+            at.flag(Feature::LimpetOut, true).flag(Feature::LimpetHits, self.limpet_hits);
+            input.grenade |= self.brain.wants(Action::Limpet, &at);
+        }
         // A wound pile driver stays wound until the fight lets it go to strike: let go anywhere
         // else (the target out of view, falling back), it would lunge at nothing.
         input.alt_fire |= alt_use(t) == AltUse::Melee && me.alt_held && !self.striking;
@@ -986,7 +1005,7 @@ impl Bot {
                 && Item::of(me.loadout, true) == Item::Grenade
                 && tick >= self.grenade_at
             {
-                return self.lob(t, me, spot, tick);
+                return self.lob(t, me, Item::Grenade, spot, tick);
             }
             let (pos, goal) = self.goal(arena, nav, me, tick);
             let spot = Mech { pos, ..Mech::default() };
@@ -1041,16 +1060,21 @@ impl Bot {
                 };
             let alt_cool = matches!(use_, AltUse::HeatFed | AltUse::Melee) || (!me.overheated && me.heat + t.alt_heat < t.heat_max);
             // Otherwise a grenade takes the aim the same way, every few seconds while charges last.
-            let grenade = t.thrown(Item::Grenade);
+            let offensive = Item::of(me.loadout, true);
+            let grenade = t.thrown(if offensive == Item::Limpet { Item::Limpet } else { Item::Grenade });
             // What the brain reads to decide on its items and abilities.
             let mut at = Features::default();
             at.flag(Feature::Engaged, true).set(Feature::Hull, me.health / t.health_max).set(Feature::Heat, me.heat / t.heat_max);
             at.flag(Feature::Overheated, me.overheated).flag(Feature::Hit, took_damage).set(Feature::Range, range / far);
             at.set(Feature::Throws, f32::from(me.grenades)).set(Feature::Charges, f32::from(me.emps)).flag(Feature::AltReady, alt);
             at.flag(Feature::GrenadeReady, tick >= self.grenade_at && dist < self.policy.grenade_range && dist > t.grenade_radius + 2.0);
-            at.flag(Feature::FirstSight, self.seen.len() == 1).flag(Feature::Melee, use_ == AltUse::Melee);
-            let offensive = Item::of(me.loadout, true);
-            let throw = offensive == Item::Grenade && self.brain.wants(Action::Grenade, &at);
+            at.flag(Feature::FirstSight, self.seen.len() == 1).flag(Feature::Melee, use_ == AltUse::Melee).flag(Feature::LimpetOut, me.limpet);
+            at.flag(Feature::OrbNear, self.orbs.iter().any(|o| o.distance(me.pos) < self.policy.orb_range));
+            let throw = match offensive {
+                Item::Grenade => self.brain.wants(Action::Grenade, &at),
+                Item::Limpet => self.brain.wants(Action::Limpet, &at),
+                _ => false,
+            };
             // A turret goes down as a fight starts (the first tick it's in view), or to help hold a perch.
             let turret = matches!(offensive, Item::MgTurret | Item::RocketTurret) && self.brain.wants(Action::Turret, at.flag(Feature::Perched, self.perched(nav, me)));
             let shell = if alt && !matches!(use_, AltUse::Beam | AltUse::Melee) { Some(t) } else if throw { Some(&grenade) } else { None };

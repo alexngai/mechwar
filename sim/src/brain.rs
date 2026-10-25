@@ -47,7 +47,16 @@ pub enum Feature {
     /// Starting to fall back this tick, with room for a barrier between it and the threat.
     StartingFallBack,
     BarrierRoom,
+    /// A health orb within reach (`Policy::orb_range`); the threat sees it.
+    OrbNear,
+    Exposed,
+    /// Its limpet is down, and an enemy stands in its blast.
+    LimpetOut,
+    LimpetHits,
 }
+
+/// How many features there are.
+const FEATURES: usize = Feature::LimpetHits as usize + 1;
 
 /// What a bot can do that a rule decides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -113,7 +122,7 @@ pub struct Brain(pub BTreeMap<Action, Vec<Rule>>);
 
 /// The values of every feature at one moment.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Features([f32; Feature::BarrierRoom as usize + 1]);
+pub struct Features([f32; FEATURES]);
 
 impl Features {
     pub fn set(&mut self, f: Feature, value: f32) -> &mut Self {
@@ -205,6 +214,12 @@ impl Default for Brain {
             (Action::Power, vec![with(engaged(), &[yes(Melee), yes(Striking)]), with(engaged(), &[no(Melee), yes(AltFire)])]),
             (Action::Barrage, vec![with(engaged(), &[yes(Fire), (Range, AtMost(1.0))])]),
             (Action::Artillery, vec![with(engaged(), &[yes(Fire), (Range, AtMost(1.0))])]),
+            // A Salve dropped when hurt with no orb in reach, fighting or falling back to mend.
+            (Action::Orb, vec![with(engaged(), &[(Charges, Above(0.0)), (Hull, Below(0.5)), no(OrbNear)]), with(back(), &[yes(Mending), (Charges, Above(0.0)), no(OrbNear)])]),
+            // A Pall thrown toward the threat while falling back in its sight, short of cover.
+            (Action::Smoke, vec![with(back(), &[(Throws, Above(0.0)), yes(Exposed), no(InCover), yes(GrenadeReady)])]),
+            // A limpet stuck on the target in lobbing range, then set off once an enemy's in its blast.
+            (Action::Limpet, vec![with(engaged(), &[no(AltReady), (Throws, Above(0.0)), no(LimpetOut), yes(GrenadeReady)]), vec![yes(LimpetOut), yes(LimpetHits)]]),
         ];
         Brain(rules.into_iter().collect())
     }

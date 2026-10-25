@@ -612,6 +612,12 @@ impl Game {
                 .and_then(|l| torch(me).then(|| mates().filter(|q| !torch(q)).min_by(|a, b| dist(a).total_cmp(&dist(b)))).flatten().or_else(|| mates().find(|q| q.id == l)))
                 .map(|q| q.mech.pos);
             let team = usize::from(me.team);
+            // Whether an enemy stands in the blast of its limpet, if it has one down.
+            let reach = items(&self.arsenal).limpet_radius;
+            let limpet_hits = me.mech.limpet
+                && self.projectiles.iter().filter(|f| f.p.owner == me.id && projectile::item(&f.p) == Some(Item::Limpet)).any(|f| {
+                    self.players.iter().any(|q| q.team != me.team && q.mech.health > 0.0 && (q.mech.pos + Vector::Y * (self.arsenal.of(&q.mech).mech_height * 0.5)).distance(f.p.pos) < reach)
+                });
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
             for &(from, enemy, at) in &radio[team] {
@@ -621,6 +627,7 @@ impl Game {
             }
             bot.lead = lead;
             bot.order = orders.as_ref().and_then(|o| o[i]);
+            bot.limpet_hits = limpet_hits;
             bot.orbs.clear();
             bot.orbs.extend(self.orbs.iter().filter(|o| o.dropped.is_none_or(|(_, side)| usize::from(side) == team)).map(|o| o.pos));
             let (focus, enemies) = &seen[i];
@@ -3031,6 +3038,41 @@ mod tests {
         game.step();
         let hits = game.events.iter().find_map(|e| if let Event::Blast { owner, hits, .. } = *e { Some((owner, hits)) } else { None });
         assert_eq!(hits, Some((bot, 1 << human)));
+    }
+
+    #[test]
+    fn bots_use_salve_pall_and_limpet() {
+        let t = Tuning::default();
+        // A bot 20 m south of a human standing in the open, carrying `offensive` and `support`, at
+        // `hull` of its health; the game after up to `seconds`, or as soon as `done` holds.
+        let play = |offensive: &str, support: &str, hull: f32, seconds: f32, done: &dyn Fn(&Game, u8) -> bool| {
+            let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+            game.bots = false;
+            let human = game.join().unwrap();
+            let bot = game.add_player(1, Some(Bot::new(5)), MechClass::B).unwrap();
+            let loadout = Loadout::named("pike", "rocket").with(Slot::Offensive, arsenal::index(Slot::Offensive, offensive)).with(Slot::Support, arsenal::index(Slot::Support, support));
+            for (id, pos) in [(human, Vector::new(0.0, 0.1, -5.0)), (bot, Vector::new(0.0, 0.1, 15.0))] {
+                let m = &mut game.players.iter_mut().find(|p| p.id == id).unwrap().mech;
+                (m.pos, m.loadout) = (pos, loadout);
+                item::fill(&t, m);
+            }
+            unshield(&mut game);
+            game.players.iter_mut().find(|p| p.id == bot).unwrap().mech.health = hull * t.health_max;
+            for _ in 0..secs(seconds) {
+                game.step();
+                game.players.iter_mut().find(|p| p.id == human).unwrap().mech.health = t.health_max; // so it never dies
+                if done(&game, bot) {
+                    return true;
+                }
+            }
+            false
+        };
+        // Hurt, with no orb about: it drops its Salve.
+        assert!(play("grenade", "orb", 0.45, 5.0, &|g, bot| g.orbs.iter().any(|o| o.dropped.is_some_and(|(by, _)| by == bot))), "no Salve dropped");
+        // Falling back in the human's sight: it smokes the way.
+        assert!(play("smoke", "emp", 0.3, 6.0, &|g, _| !g.clouds.is_empty()), "no Pall thrown");
+        // A limpet stuck by the human, then set off: it hurts.
+        assert!(play("limpet", "emp", 1.0, 12.0, &|g, bot| g.tally(bot).unwrap().0.dealt_by[Slot::Offensive as usize] > 0.0), "no limpet damage");
     }
 
     #[test]
