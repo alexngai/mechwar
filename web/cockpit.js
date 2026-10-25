@@ -20,6 +20,10 @@ const v = new THREE.Vector3(), q = new THREE.Quaternion();
 const DEPTH = 1; // canopy pillars sit this far ahead of the eye
 const RECOIL = 0.12; // m
 const RECOIL_RECOVER = 10; // 1/s
+// The cockpit's guns are drawn at SHRINK of their size about their arm mounts, which sit SETBACK
+// further back per class (model m), so less of them crowds the view: the Heavy's furthest, as its
+// shoulder turrets ride at eye height.
+const SHRINK = 0.8, SETBACK = { A: 0.2, B: 0.3, C: 0.6 };
 const TAU = Math.PI * 2;
 // The console, in its own flat space (x along its face, y up it from its foot, z toward the pilot):
 // it reaches SPAN either side, stands HUMP tall over the middle screen and WING over the sides, and
@@ -330,7 +334,7 @@ export class Cockpit {
   /**
    * `mech`'s weapons on class `cls`'s arms, painted with its materials (so damage scorch and
    * barrel heat glow match), at the mech's `scale`, placed where they sit relative to an eye
-   * `eyeHeight` above the feet.
+   * `eyeHeight` above the feet, shrunk and set back (see SHRINK).
    */
   setWeapons(cls, mech, eyeHeight, scale = 1) {
     this.cls = cls;
@@ -346,6 +350,8 @@ export class Cockpit {
       const pod = new THREE.Group();
       group.add(pod);
       const tip = mountWeapon(pod, cls, side, weapon.id, mech);
+      pod.scale.multiplyScalar(SHRINK);
+      pod.position.z += SETBACK[cls] ?? 0;
       clearDash(group, pod);
       return { pod, tip, rest: pod.position.clone(), kick: 0 };
     };
