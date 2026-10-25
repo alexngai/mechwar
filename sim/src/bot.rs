@@ -297,6 +297,12 @@ const POST_HOLD: f32 = 3.0;
 /// keeps going before it turns about, so a long flight is led to where it's as likely to be as
 /// anywhere, not past it.
 const LEAD_MAX: f32 = 0.7;
+/// A charged shot, ready, waits for the bot's read of its target's motion to settle: until the
+/// lead would be off by no more than `SETTLE` m as far as what it saw shows, or it has held full
+/// charge `SETTLE_WAIT` s. Its read lags a turn by about half a second, and a round a second let
+/// go then misses: a gun firing on spreads its misses over the fight instead.
+const SETTLE: f32 = 1.0;
+const SETTLE_WAIT: f32 = 1.0;
 /// How far off a pile driver's facing its target can be for it to let go: inside the lunge's cone.
 const STRIKE_CONE: f32 = 10.0 * PI / 180.0;
 /// Farthest a bot lobs shells that land and wait to burst: a grenade launcher's (they bounce), mines.
@@ -621,6 +627,10 @@ pub struct Bot {
     seen_vel: Vector,
     seen_last: Option<Vector>,
     misjudge: (f32, f32),
+    /// The motion it saw over the last tick, unsmoothed, and the last tick its gun wasn't fully
+    /// charged: when to let a charged shot go (`SETTLE`).
+    seen_step: Vector,
+    charged_at: u32,
     /// Mending a teammate this tick.
     mending: bool,
     /// Target chest positions, oldest first, so aim lags by the reaction time.
@@ -696,6 +706,8 @@ impl Bot {
             seen_vel: Vector::ZERO,
             seen_last: None,
             misjudge: (0.0, 0.0),
+            seen_step: Vector::ZERO,
+            charged_at: 0,
             mending: false,
             seen: VecDeque::new(),
             last_health: 0.0,
@@ -1063,7 +1075,7 @@ impl Bot {
             // Nothing to fight in view. One that just ducked out of view nearby gets a grenade at
             // its last spot; otherwise go where an enemy was last known to be, watching that spot
             // when it's near, or patrol.
-            (self.seen_vel, self.seen_last) = (Vector::ZERO, None);
+            (self.seen_vel, self.seen_last, self.seen_step) = (Vector::ZERO, None, Vector::ZERO);
             self.seen.clear();
             if let Some(input) = self.keep_post(nav, t, me, tick) {
                 return input;
@@ -1101,6 +1113,10 @@ impl Bot {
         let step = self.seen_last.map(|last| (self.seen[0] - last) / DT).filter(|v| v.length() < MOTION_MAX);
         let k = DT / (DT + self.reaction(t));
         self.seen_vel = step.map_or(Vector::ZERO, |v| self.seen_vel + (v - self.seen_vel) * k);
+        // How far that read is behind what it saw (the target turned), and how fast what it saw is
+        // changing (turning, or speeding up), across: what a lead on it may miss by.
+        let (lag, swerve) = step.map_or((0.0, 0.0), |v| (flat(v - self.seen_vel).length(), flat(v - self.seen_step).length() / DT));
+        self.seen_step = step.unwrap_or(Vector::ZERO);
         self.seen_last = Some(self.seen[0]);
         let range = flat(target.pos - me.pos).length();
         let (near, far) = band(t, &self.policy);
@@ -1267,10 +1283,15 @@ impl Bot {
             } else {
                 (self.strafe, if self.brain.wants(Action::BackOff, &at) { -1.0 } else { 0.0 })
             };
-            // A charged gun charges while it holds (on target or not) and lets go once full and
-            // on target; a rail gun is pressed one tick and let go the next; a lock-on launcher
-            // locks first, then fires once the lock holds; a pile driver winds up, then lets go.
-            let fire = shell.is_none() && !self.cooling && reaches && !hidden && if t.charge_time > 0.0 { !(on_target && me.charge >= 0.85) } else { on_target };
+            // A charged gun charges while it holds (on target or not) and lets go once full, on
+            // target, and sure of its lead (`SETTLE`); a rail gun is pressed one tick and let go
+            // the next; a lock-on launcher locks first, then fires once the lock holds; a pile
+            // driver winds up, then lets go.
+            if me.charge < 1.0 {
+                self.charged_at = tick;
+            }
+            let sure = lag * ahead + 0.5 * swerve * ahead * ahead <= SETTLE || tick >= self.charged_at + secs(SETTLE_WAIT);
+            let fire = shell.is_none() && !self.cooling && reaches && !hidden && if t.charge_time > 0.0 { !(on_target && me.charge >= 0.85 && sure) } else { on_target };
             let alt_fire = alt
                 && alt_cool
                 && !hidden
@@ -2241,6 +2262,50 @@ mod tests {
         // The misses: volleys let go just as it turned.
         assert!(volleys >= 10 && hits * 4 >= volleys * 3, "{hits} of {volleys} volleys hit");
         assert!(low / (hits as f32) < 0.15, "hits struck {} m below the chest on average", low / hits as f32);
+    }
+
+    #[test]
+    fn bots_let_charged_slugs_go_once_sure_of_the_lead() {
+        let (arena, nav, _) = blockout();
+        let loadout = Loadout::named("kiln", "darts");
+        let t = Arsenal::new(&Tuning::default()).get(MechClass::B, loadout).clone();
+        // A target 30 m off in the open strafing to and fro, turning about every 0.8 to 2 s as bots do.
+        let legs = [0.9, 0.9, 1.6, 1.6, 1.2, 1.2, 2.0, 2.0, 0.8, 0.8, 1.4, 1.4];
+        let (mut volleys, mut hits) = (0, 0);
+        for seed in 1..=4 {
+            let mut me = Mech { loadout, grenades: 0, ..spawn_mech(&t, Vector::new(-36.0, 0.1, -12.0)) };
+            let mut target = spawn_mech(&t, Vector::new(-36.0, 0.1, -42.0));
+            let (mut leg, mut side, mut turn_at) = (0, 1.0, secs(legs[0]));
+            let (mut bot, mut shells) = (Bot::new(seed), Vec::new());
+            for tick in 0..secs(30.0) {
+                if tick == turn_at {
+                    (leg, side) = ((leg + 1) % legs.len(), -side);
+                    turn_at += secs(legs[leg]);
+                }
+                // Only the gun: the secondary stays on cooldown, and the heat never builds.
+                (me.alt_wait, me.heat) = (1.0, 0.0);
+                let input = bot.think(&arena, nav, &t, &me, Some(&target), tick);
+                step_mech(&arena, &t, &mut me, &Input { yaw: input.yaw, pitch: input.pitch, fire: input.fire, ..Input::default() });
+                step_mech(&arena, &t, &mut target, &Input { move_x: side, ..Input::default() });
+                if me.shot {
+                    shells.extend(weapon::volley(&t, &me, 0, tick));
+                }
+                shells.retain_mut(|p| {
+                    let mut struck = false;
+                    let burst = projectile::fly(&arena, &t, p, |ray, max| {
+                        let toi = projectile::first_mech(ray, max, [(&t, &target)]);
+                        struck |= toi.is_some();
+                        toi
+                    });
+                    if burst.is_some() {
+                        (volleys, hits) = (volleys + 1, hits + u32::from(struck));
+                    }
+                    burst.is_none()
+                });
+            }
+        }
+        // Let go as soon as charged, a third hit (33 of 108): most went mid-turn, past its back.
+        assert!(hits * 5 >= volleys * 2 && hits >= 40, "{hits} of {volleys} slugs hit");
     }
 
     #[test]

@@ -535,7 +535,9 @@ fn piston_match_probe() {
 
 /// Threat probe: a Medium bot holding still at a set range from a Medium human strafing in the
 /// open, its items and ability held back, against `threat::dps`: the damage a second each weapon
-/// landed, played out and modelled. A check on the model, not a test (`--ignored`):
+/// landed, played out and modelled. A check on the model, not a test (`--ignored`). Knobs:
+/// PROBE_KIT (one weapon's rows), PROBE_STILL, PROBE_TURNS=random, PROBE_DEBUG (fire and heat; for a
+/// projectile primary, its releases and where its rounds passed the target).
 /// PROBE_SECS=<s> PROBE_SEEDS=<n> cargo test -p sim --release --lib threat_probe -- --ignored --nocapture
 #[test]
 #[ignore = "probe"]
@@ -546,8 +548,10 @@ fn threat_probe() {
     let arsenal = crate::Arsenal::new(&t0);
     let ranges = [10.0, 20.0, 30.0, 45.0, 60.0, 80.0];
     let debug = std::env::var("PROBE_DEBUG").is_ok();
-    // PROBE_STILL: the human stands still, to tell aim from leading.
+    // PROBE_STILL: the human stands still, to tell aim from leading. PROBE_TURNS=random: it turns
+    // about every 0.8 to 2 s, as bots do, not every 1.2 s (a shot that waits can lock onto that).
     let still = std::env::var("PROBE_STILL").is_ok();
+    let random = std::env::var("PROBE_TURNS").is_ok_and(|s| s == "random");
     let only = std::env::var("PROBE_KIT").ok();
     let kits: Vec<(&str, &str)> = ["stitcher", "triplet", "pike", "gyre", "squall", "kiln", "hail", "talon"].map(|p| (p, "-")).into_iter()
         .chain(["darts", "hornet", "rocket", "spindle", "furnace", "mortar", "splitter", "warren"].map(|s| ("pike", s)))
@@ -564,7 +568,13 @@ fn threat_probe() {
             let (mut gun, mut alt) = (0.0f32, 0.0f32);
             let (mut fires, mut shots, mut hot, mut focused) = (0u32, 0u32, 0.0f32, 0u32);
             let mut doing: BTreeMap<String, u32> = BTreeMap::new();
+            // PROBE_DEBUG, projectile primaries: releases (count, charge, ticks held), and each slug's
+            // closest pass by the target's middle, by how long the target had been on its leg at launch
+            // (0.3 s quarters; the last, 0.9 s or more).
+            let (mut releases, mut charge, mut held, mut holding) = (0u32, 0.0f32, 0u32, 0u32);
+            let mut legs = [(0u32, 0u32, 0.0f32, 0.0f32); 4]; // (slugs, hits, ahead of its motion (m), above (m)) of misses
             for seed in 1..=seeds {
+                let mut flying: BTreeMap<u32, (Vector, f32, Vector, u32)> = BTreeMap::new(); // seq: (last, closest, offset, leg)
                 let mut game = Game::new(t0.clone(), crate::map::Map::index("blockout").unwrap());
                 game.bots = false;
                 let human = game.join().unwrap();
@@ -587,8 +597,16 @@ fn threat_probe() {
                     p.mech.shield = 0.0;
                 }
                 let face = { let d = spot - from; libm::atan2f(-d.x, -d.z) };
+                let (mut rng, mut side, mut turned, mut turn_at) = (seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1, -1.0, 0, secs(1.2));
                 for k in 0..secs(run) {
-                    let side = if still { 0.0 } else if (k / secs(1.2)) % 2 == 0 { -1.0 } else { 1.0 };
+                    if k == turn_at {
+                        rng ^= rng << 13;
+                        rng ^= rng >> 7;
+                        rng ^= rng << 17;
+                        (side, turned) = (-side, k);
+                        turn_at += if random { secs(0.8 + 1.2 * (rng >> 40) as f32 / (1u64 << 24) as f32) } else { secs(1.2) };
+                    }
+                    let side = if still { 0.0 } else { side };
                     let tick = game.tick;
                     game.push_input(human, InputMsg { seq: tick + 1, input: crate::Input { move_x: side, yaw: face, ..crate::Input::default() }, view_tick: tick as f32 });
                     game.step();
@@ -598,6 +616,46 @@ fn threat_probe() {
                         (fires, shots, hot) = (fires + u32::from(bt.last.fire), shots + u32::from(b.mech.shot), hot + b.mech.heat / game.arsenal.of(&b.mech).heat_max);
                         *doing.entry(format!("{:?}", bt.doing())).or_insert(0u32) += 1;
                         focused += u32::from(bt.focus().is_some());
+                        holding = if bt.last.fire { holding + 1 } else { holding };
+                        if b.mech.shot {
+                            (releases, charge, held, holding) = (releases + 1, charge + b.mech.shot_charge, held + holding, 0);
+                        }
+                        let h = mech_of(&game, human);
+                        let mid = h.pos + Vector::Y * (game.arsenal.of(&h).mech_height * 0.5);
+                        let leg = ((k - turned) / secs(0.3)).min(3) as usize;
+                        let pass = |f: &mut (Vector, f32, Vector, u32), to: Vector| {
+                            let (d, at) = (to - f.0, mid - f.0);
+                            let s = (at.dot(d) / d.length_squared().max(1e-6)).clamp(0.0, 1.0);
+                            let off = f.0 + d * s - mid;
+                            if off.length() < f.1 {
+                                (f.1, f.2) = (off.length(), off * Vector::new(h.vel.x.signum(), 1.0, 1.0));
+                            }
+                            f.0 = to;
+                        };
+                        for e in &game.events {
+                            match *e {
+                                Event::Launch(p) if p.owner == bot && p.primary => {
+                                    flying.insert(p.seq, (p.pos, f32::MAX, Vector::ZERO, leg as u32));
+                                }
+                                Event::Blast { owner, seq, primary: true, pos, hits, .. } if owner == bot => {
+                                    if let Some(mut f) = flying.remove(&seq) {
+                                        pass(&mut f, pos);
+                                        let l = &mut legs[f.3 as usize];
+                                        if hits & 1 << human != 0 {
+                                            (l.0, l.1) = (l.0 + 1, l.1 + 1);
+                                        } else {
+                                            (l.0, l.2, l.3) = (l.0 + 1, l.2 + f.2.x, l.3 + f.2.y);
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        for f in game.projectiles.iter().filter(|f| f.p.owner == bot && f.p.primary) {
+                            if let Some(e) = flying.get_mut(&f.p.seq) {
+                                pass(e, f.p.pos);
+                            }
+                        }
                     }
                     for p in &mut game.players {
                         if p.id == bot {
@@ -618,6 +676,10 @@ fn threat_probe() {
             if debug {
                 let n = secs(run) as f32 * seeds as f32;
                 println!("{primary} {secondary} {range} m: fire held {:.0}%, shot {:.1}/s, heat {:.0}%, focused {:.0}%, {doing:?}", 100.0 * fires as f32 / n, shots as f32 / played, 100.0 * hot / n, 100.0 * focused as f32 / n);
+                if releases > 0 && legs.iter().any(|l| l.0 > 0) {
+                    let legs = legs.map(|(n, hit, ahead, up)| format!("{hit}/{n} hit, misses {:+.1} m ahead {:+.1} m up", ahead / (n - hit).max(1) as f32, up / (n - hit).max(1) as f32));
+                    println!("  released at {:.2} charge after {:.2} s held; slugs by quarter of the target's leg at launch: {}", charge / releases as f32, held as f32 / releases as f32 / TICK_HZ, legs.join(" | "));
+                }
             }
             let mut model = crate::threat::dps(mine, theirs, range);
             if secondary == "-" {
