@@ -25,6 +25,7 @@ lobby.hidden = false;
 // The hangar behind it all, once three.js has loaded.
 import('./backdrop.js').then(({ backdrop }) => backdrop());
 lobby.innerHTML = `
+  <a id="guide-link" href="/guide/">GUIDE</a>
   <button id="settings" title="Settings" aria-label="Settings" aria-expanded="false">${GEAR}</button>
   <div id="settings-panel" hidden>
     <h3>PILOT RECORD</h3>
