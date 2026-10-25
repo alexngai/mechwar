@@ -102,6 +102,20 @@
     #menu-actions > :hover, #menu-actions > :focus-visible { background: #7fe0ff22; outline: none; }
     #menu-actions > [hidden] { display: none; }
     #menu-body { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+    #controls { width: min(720px, 100%); box-sizing: border-box; padding: 12px 16px; background: #12161bcc; border: 1px solid #fff2; }
+    .controls-map { display: flex; gap: 28px; justify-content: center; align-items: center; flex-wrap: wrap; }
+    .keyboard { display: flex; flex-direction: column; gap: 4px; }
+    .krow { display: flex; gap: 4px; }
+    .cap { box-sizing: border-box; height: 24px; display: flex; align-items: center; justify-content: center; border: 1px solid #ffffff1c; color: #ffffff38; font-size: 10px; }
+    .cap.used { font-weight: bold; }
+    .mouse .mb { font-size: 10px; fill: #e8e4d8; text-anchor: middle; }
+    .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 8px 24px; margin-top: 12px; }
+    .cgroup { display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; align-content: start; font-size: 11px; line-height: 1.4; }
+    .cgroup h4 { grid-column: 1 / -1; margin: 0; font-size: 11px; letter-spacing: 2px; }
+    .bind { display: contents; }
+    .bind .keys { display: flex; gap: 2px; align-items: flex-start; }
+    .bind kbd { min-width: 18px; padding: 0 4px; border: 1px solid var(--c); color: var(--c); font: inherit; font-size: 10px; text-align: center; }
+    .bind i { font-style: normal; opacity: 0.6; }
     #menu #board { position: static; transform: none; }
     #callsign-row { display: flex; gap: 10px; align-items: center; letter-spacing: 2px; opacity: 0.9; }
     #callsign { font: inherit; font-size: 14px; letter-spacing: 1px; padding: 6px 8px; width: 180px; background: #0d1014; color: #ffc46a; border: 1px solid #fff3; }
@@ -206,10 +220,11 @@
     <div id="bay"><canvas id="preview"></canvas><div id="slots"></div></div>
     <div id="launch-row"><span id="picker-note"></span><button id="launch">LAUNCH</button></div>
   </div>
-  <div id="help">Click to play · WASD move · Shift+W boost · Shift+A/D dash · Shift+S turn about · Space hover · F ability · Q item · E support item · LMB fire · RMB secondary (again to burst) · MMB lock / scope · C hangar · I stats · M mute · Tab scores · R hold to repair · K respawn · Esc menu</div>
+  <div id="help">Click to play · Esc for the menu and controls</div>
   <div id="menu" hidden>
     <h2>MENU</h2>
     <div id="menu-actions"><button id="resume">RESUME</button><button id="to-hangar">HANGAR</button><a href="/">LEAVE TO LOBBY</a></div>
+    <section id="controls" aria-label="Controls"></section>
     <div id="menu-body"></div>
   </div>
   <div id="lobby" hidden></div>

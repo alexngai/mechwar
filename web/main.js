@@ -15,6 +15,7 @@ import { buildArena, HIGH_ONLY, LOW_ONLY } from './arena.js';
 import { Effects, HOT, halo, hot } from './fx.js';
 import { Objectives, SENTRY, SHIP, SHIP_HULL } from './objectives.js';
 import { Preview, weaponThumbs } from './hangar.js';
+import { controlsHtml } from './controls.js';
 import isotope from '../maps/isotope.json';
 import foundry from '../maps/foundry.json';
 import verdigris from '../maps/verdigris.json';
@@ -489,6 +490,8 @@ function setMenu(open) {
   menuOpen = open;
   $('menu').hidden = !open;
   $('to-hangar').hidden = picked === null || pickerOpen;
+  // The controls, for what's carried now.
+  if (open) $('controls').innerHTML = controlsHtml(armament(loadout), !net);
   if (open) $('menu-body').append($('board'), $('prefs'));
   else {
     $('score').after($('board'));
