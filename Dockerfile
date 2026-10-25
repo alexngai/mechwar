@@ -15,14 +15,16 @@ COPY server server
 # Bake the bots' nav fresh, whatever maps/nav.json was committed with: walking it at startup
 # instead stalls the server for minutes on Fly's shared CPU (see sim/src/bot.rs).
 RUN cargo test -p sim --release --lib bake_nav -- --ignored
+# The release profile's opt-level "s" sizes the wasm; the server builds at 3, ~1.7x faster a tick.
 RUN wasm-pack build sim --target web --release --no-pack -- --features wasm \
- && cargo build -p server --release
+ && CARGO_PROFILE_RELEASE_OPT_LEVEL=3 cargo build -p server --release
 
 FROM node:22-bookworm-slim AS web
 WORKDIR /src
 COPY package.json package-lock.json ./
 RUN npm ci
-COPY index.html tuning.json classes.json weapons.json ./
+COPY index.html vite.config.js tuning.json classes.json weapons.json ./
+COPY guide guide
 COPY maps maps
 COPY web web
 COPY --from=rust /src/sim/pkg sim/pkg

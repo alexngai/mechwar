@@ -102,7 +102,7 @@ fn main() {
         return;
     }
     let job: Job = serde_json::from_str(&std::fs::read_to_string(&arg).unwrap_or_else(|e| fail(&format!("{arg}: {e}")))).unwrap_or_else(|e| fail(&format!("{arg}: {e}")));
-    let mode = Mode::from_key(&job.mode).filter(|m| *m != Mode::Deathmatch).unwrap_or_else(|| fail("mode: tdm, ma or siege"));
+    let mode = Mode::from_key(&job.mode).filter(|m| *m != Mode::Deathmatch).unwrap_or_else(|| fail("mode: tdm, ma, siege, ctf or convoy"));
     for m in &job.matches {
         let index = map_index(&m.map);
         if !mode.fits(&map::Map::load(index)) {

@@ -15,7 +15,7 @@ const COLORS = {
   flat: 0xd3ccbb, talus: 0xb5a58e, scree: 0xab9882, cliff: 0x9f8774, cap: 0xbcae96,
   concrete: 0xa49d8f, steel: 0x8a8984, dark: 0x6e6b66, rust: 0x8c6550, tank: 0xc4bcaa, salt: 0xcbc3b0,
   street: 0x2a302d, block: 0x3a423e, blockDark: 0x2c3330,
-  moss: 0x5d6b45, hill: 0x55663f, hillTop: 0x62744a, trunk: 0x4a3d30, crown: 0x4c6e36, crownDark: 0x3c5a2c,
+  moss: 0x5d6b45, hill: 0x55663f, hillTop: 0x62744a, trunk: 0x9e9a8f, crown: 0x56634e, crownDark: 0x434f3e,
   mire: 0x4c5440, snag: 0x5c564a, scrub: 0x56603e,
 };
 // The desert's flats, mesas and domes under snow, for the 'snow' skyline.
@@ -217,15 +217,18 @@ function skylineGeometry(push, kind = 'desert', windowColors = WINDOWS, tint = 0
 
   if (kind === 'forest') {
     lathe(0, 0, [[400 + push, -0.1], [58 + push, -0.1]], [COLORS.moss], { sides: 32 });
-    // Wooded hills all round, and giant trees standing over them.
+    // Wooded hills all round, and table trees standing over them: pale trunks up to flat crowns,
+    // some with a smaller crown lower down.
     for (let i = 0; i < 30; i++) {
       const angle = ((i + rand() * 0.7) / 30) * Math.PI * 2, h = 18 + rand() * 30, r = 40 + rand() * 40;
       lathe(...at(angle, 170 + rand() * 90), [[r, 0], [r * 0.7, h * 0.5], [r * 0.35, h * 0.9], [0, h]], [COLORS.hill, COLORS.hill, COLORS.hillTop], { sides: 9, wobble: 0.2, yaw: rand() * Math.PI });
     }
+    const crown = ([x, z], r, y, hex) => lathe(x, z, [[1.5, y - r * 0.35], [r * 0.9, y - 2.4], [r, y - 1.2], [r * 0.98, y]], [COLORS.crownDark, COLORS.crownDark, hex, hex], { sides: 12, wobble: 0.06 });
     for (let i = 0; i < 70; i++) {
-      const [x, z] = at(rand() * Math.PI * 2, 150 + rand() * 120), h = 50 + rand() * 50;
+      const [x, z] = at(rand() * Math.PI * 2, 150 + rand() * 120), h = 50 + rand() * 50, r = 12 + rand() * 14, hex = rand() < 0.5 ? COLORS.crown : COLORS.crownDark;
       lathe(x, z, [[2 + rand() * 3, 0], [1.5, h]], [COLORS.trunk], { sides: 6 });
-      sphere([x, z], 12 + rand() * 14, h, rand() < 0.5 ? COLORS.crown : COLORS.crownDark);
+      crown([x, z], r, h, hex);
+      if (rand() < 0.35) crown([x, z], r * 0.55, h * (0.55 + rand() * 0.15), hex);
     }
     const geometry = build(positions, colors);
     geometry.computeVertexNormals();

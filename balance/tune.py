@@ -31,14 +31,17 @@ SPACE = {
     'post_cross': (0.0, 1.5),
     'trade_reach': (0.0, 90.0),
 }
-MAPS = {'tdm': ['foundry', 'saltworks', 'verdigris', 'riftline', 'sump', 'sinkhole', 'canopy', 'crashsite', 'ziggurat', 'span'],
+MAPS = {'tdm': ['foundry', 'isotope', 'verdigris', 'riftline', 'sump', 'sinkhole', 'canopy', 'crashsite', 'ziggurat', 'span'],
         'ma': ['foundry', 'verdigris', 'riftline', 'sinkhole', 'canopy', 'crashsite', 'ziggurat', 'span'],
-        'siege': ['foundry', 'riftline', 'canopy', 'crashsite', 'span']}
+        'siege': ['foundry', 'riftline', 'canopy', 'crashsite', 'span'],
+        'ctf': ['foundry', 'verdigris', 'riftline', 'sinkhole', 'canopy', 'crashsite'],
+        'convoy': ['foundry', 'riftline', 'canopy', 'crashsite', 'span']}
 
 
 def margins(pool, n, seed, args):
     """Each policy in `pool` (name: overrides) against today's bot over `n` matches, sides
-    swapped, on the same seeds: its margin a match (kills, or base hull in an objective mode)."""
+    swapped, on the same seeds: its margin a match (kills; base hull in Missile Assault and Siege;
+    captures in Capture the Flag; percent of the way pushed in Convoy)."""
     matches, owner = [], []
     for name in pool:
         for k in range(n):

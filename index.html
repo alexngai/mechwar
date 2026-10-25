@@ -21,6 +21,10 @@
     #score .bar i { display: block; height: 100%; background: currentColor; }
     #score .pip { display: inline-block; min-width: 20px; padding: 0 5px; border: 2px solid currentColor; border-radius: 3px; font-size: 15px; line-height: 20px; }
     #score .pip.contested { animation: blink 0.5s steps(2) infinite; }
+    #score .track { position: relative; display: inline-block; width: 240px; height: 6px; background: #ffffff24; }
+    #score .track i { position: absolute; top: -5px; width: 2px; height: 16px; margin-left: -1px; background: #ffffff70; }
+    #score .track b { position: absolute; top: 50%; transform: translate(-50%, -52%); font-size: 18px; line-height: 1; }
+    #score .track b.contested { animation: blink 0.5s steps(2) infinite; }
     @keyframes blink { 50% { opacity: 0.35; } }
     #score .state { margin-top: 4px; font-size: 13px; letter-spacing: 1px; color: #e9f1ea; }
     #banner { position: fixed; top: 30%; left: 0; right: 0; text-align: center; font-size: 28px; letter-spacing: 2px; text-shadow: 0 2px 6px #000; pointer-events: none; }
@@ -37,8 +41,8 @@
     .bay:hover { border-color: #fff8; }
     .bay.on { border-color: #7fe0ff; color: #7fe0ff; }
     #bay { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
-    #preview { width: 340px; height: 380px; border: 1px solid #fff2; background: #12161b; cursor: grab; touch-action: none; }
-    #slots { width: 360px; height: 380px; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
+    #preview { width: 340px; height: 420px; border: 1px solid #fff2; background: #12161b; cursor: grab; touch-action: none; }
+    #slots { width: 400px; height: 420px; display: flex; flex-direction: column; gap: 6px; }
     .slot { padding: 7px 10px; border: 1px solid #fff2; background: #1c2026; }
     .slot > b { display: flex; justify-content: space-between; margin-bottom: 5px; letter-spacing: 1px; }
     .slot > b span { opacity: 0.6; font-weight: normal; letter-spacing: 0; }
@@ -51,18 +55,35 @@
     #launch { padding: 8px 28px; border: 1px solid #7fe0ff; background: none; color: #7fe0ff; font: inherit; font-size: 14px; letter-spacing: 2px; cursor: pointer; }
     #launch:hover, #launch:focus-visible { background: #7fe0ff22; outline: none; }
     #launch[hidden] { display: none; }
-    .chips { display: flex; flex-wrap: wrap; gap: 4px; }
-    .chip { position: relative; padding: 2px 6px; border: 1px solid #fff3; font-size: 11px; cursor: pointer; }
-    .chip:hover { border-color: #fff8; }
-    .chip:has(:checked) { border-color: #7fe0ff; color: #7fe0ff; }
-    .chip:has(:focus-visible) { outline: 1px solid #7fe0ff; }
-    .chip input { position: absolute; opacity: 0; pointer-events: none; }
-    .chip.locked { border-style: dashed; opacity: 0.6; }
-    .chip i { margin-left: 5px; font-style: normal; color: #ffc46a; }
-    .chip i::before { content: '◆'; margin-right: 1px; font-size: 8px; }
-    .slot .unlock { display: flex; gap: 10px; align-items: center; margin-top: 4px; color: #ffc46a; font-size: 11px; letter-spacing: 1px; }
-    .slot .unlock button { padding: 2px 10px; border: 1px solid #ffc46a; background: none; color: #ffc46a; font: inherit; cursor: pointer; }
-    .slot .unlock button:hover { background: #ffc46a22; }
+    .tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 3px; }
+    .tab { padding: 4px 5px; border: 1px solid #fff2; background: #1c2026; color: inherit; font: inherit; font-size: 10px; letter-spacing: 1px; text-align: left; cursor: pointer; }
+    .tab small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; letter-spacing: 0; opacity: 0.7; }
+    .tab:hover { border-color: #fff6; }
+    .tab.on { border-color: #7fe0ff; color: #7fe0ff; }
+    .list-head { display: flex; justify-content: space-between; letter-spacing: 1px; font-size: 11px; opacity: 0.8; }
+    #cards { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+    .card { border: 1px solid #fff2; background: #1c2026; cursor: pointer; }
+    .card:hover { border-color: #fff6; }
+    .card.on { border-color: #7fe0ff; cursor: default; }
+    .card.locked .row { opacity: 0.6; }
+    .card .row { display: flex; gap: 8px; align-items: center; padding: 4px 8px 4px 4px; }
+    .card .pic { flex: none; width: 96px; height: 48px; display: flex; align-items: center; justify-content: center; background: #12161b; font-size: 22px; color: #7fe0ff; }
+    .card .pic img { width: 96px; height: 48px; }
+    .card .what { min-width: 0; }
+    .card .what b { display: block; font-size: 13px; }
+    .card.on .what b { color: #7fe0ff; }
+    .card .what i { margin-left: 6px; font-style: normal; font-size: 11px; color: #ffc46a; }
+    .card .what i::before { content: '◆'; margin-right: 1px; font-size: 8px; }
+    .card .what small { display: block; font-size: 11px; opacity: 0.7; }
+    .card .more { padding: 0 8px 8px; font-size: 12px; line-height: 1.45; }
+    .card .more p { margin: 2px 0 6px; opacity: 0.9; }
+    .use { margin: 0 0 4px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+    .use li { display: flex; gap: 8px; align-items: baseline; }
+    .use kbd { flex: none; min-width: 34px; padding: 0 4px; border: 1px solid #7fe0ff88; color: #7fe0ff; font: inherit; font-size: 10px; text-align: center; }
+    .use kbd.blank { border-color: transparent; }
+    .slot .unlock, .card .unlock { display: flex; gap: 10px; align-items: center; margin-top: 4px; color: #ffc46a; font-size: 11px; letter-spacing: 1px; }
+    .unlock button { padding: 2px 10px; border: 1px solid #ffc46a; background: none; color: #ffc46a; font: inherit; cursor: pointer; }
+    .unlock button:hover { background: #ffc46a22; }
     #launch:disabled { opacity: 0.4; cursor: not-allowed; background: none; }
     #stats { position: fixed; right: 16px; bottom: 16px; padding: 4px 8px; background: #0009; pointer-events: none; }
     #debug-log { position: fixed; left: 16px; top: 40%; margin: 0; padding: 4px 8px; background: #0009; color: #ffe070; font: 12px/1.4 monospace; pointer-events: none; }
@@ -85,6 +106,20 @@
     #menu-actions > :hover, #menu-actions > :focus-visible { background: #7fe0ff22; outline: none; }
     #menu-actions > [hidden] { display: none; }
     #menu-body { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+    #controls { width: min(720px, 100%); box-sizing: border-box; padding: 12px 16px; background: #12161bcc; border: 1px solid #fff2; }
+    .controls-map { display: flex; gap: 28px; justify-content: center; align-items: center; flex-wrap: wrap; }
+    .keyboard { display: flex; flex-direction: column; gap: 4px; }
+    .krow { display: flex; gap: 4px; }
+    .cap { box-sizing: border-box; height: 24px; display: flex; align-items: center; justify-content: center; border: 1px solid #ffffff1c; color: #ffffff38; font-size: 10px; }
+    .cap.used { font-weight: bold; }
+    .mouse .mb { font-size: 10px; fill: #e8e4d8; text-anchor: middle; }
+    .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 8px 24px; margin-top: 12px; }
+    .cgroup { display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; align-content: start; font-size: 11px; line-height: 1.4; }
+    .cgroup h4 { grid-column: 1 / -1; margin: 0; font-size: 11px; letter-spacing: 2px; }
+    .bind { display: contents; }
+    .bind .keys { display: flex; gap: 2px; align-items: flex-start; }
+    .bind kbd { min-width: 18px; padding: 0 4px; border: 1px solid var(--c); color: var(--c); font: inherit; font-size: 10px; text-align: center; }
+    .bind i { font-style: normal; opacity: 0.6; }
     #menu #board { position: static; transform: none; }
     #callsign-row { display: flex; gap: 10px; align-items: center; letter-spacing: 2px; opacity: 0.9; }
     #callsign { font: inherit; font-size: 14px; letter-spacing: 1px; padding: 6px 8px; width: 180px; background: #0d1014; color: #ffc46a; border: 1px solid #fff3; }
@@ -117,6 +152,9 @@
     /* The first screen: the title and quick play over open hangar, the rest a scroll below. */
     #lobby .hero { min-height: calc(100vh - 96px); box-sizing: border-box; padding-top: 8vh; display: flex; flex-direction: column; align-items: center; gap: 18px; flex-shrink: 0; }
     #settings { position: fixed; top: 14px; right: 16px; z-index: 2; display: flex; padding: 7px; background: rgba(10, 13, 16, 0.6); }
+    /* Beside the gear, as tall as it: the way to the guide. */
+    #lobby #guide-link { position: fixed; top: 14px; right: 72px; z-index: 2; box-sizing: border-box; height: 32px; display: flex; align-items: center; padding: 0 14px; border: 1px solid #7fe0ff; background: rgba(10, 13, 16, 0.6); letter-spacing: 2px; text-decoration: none; }
+    #lobby #guide-link:hover, #lobby #guide-link:focus-visible { background: #12303a; outline: none; }
     #settings-panel { position: fixed; top: 56px; right: 16px; z-index: 2; width: min(380px, calc(100vw - 32px)); box-sizing: border-box; padding: 12px 16px; background: rgba(10, 13, 16, 0.94); border: 1px solid #fff2; }
     #settings-panel[hidden] { display: none; }
     #lobby section { width: min(760px, 100%); box-sizing: border-box; }
@@ -189,10 +227,11 @@
     <div id="bay"><canvas id="preview"></canvas><div id="slots"></div></div>
     <div id="launch-row"><span id="picker-note"></span><button id="launch">LAUNCH</button></div>
   </div>
-  <div id="help">Click to play · WASD move · Shift+W boost · Shift+A/D dash · Shift+S turn about · Space hover · F ability · Q item · E support item · LMB fire · RMB secondary (again to burst) · MMB lock / scope · C hangar · I stats · M mute · Tab scores · R hold to repair · K respawn · Esc menu</div>
+  <div id="help">Click to play · Esc for the menu and controls</div>
   <div id="menu" hidden>
     <h2>MENU</h2>
     <div id="menu-actions"><button id="resume">RESUME</button><button id="to-hangar">HANGAR</button><a href="/">LEAVE TO LOBBY</a></div>
+    <section id="controls" aria-label="Controls"></section>
     <div id="menu-body"></div>
   </div>
   <div id="lobby" hidden></div>

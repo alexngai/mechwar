@@ -1,5 +1,5 @@
 //! Every compiled-in map: spawns are standable, the generated nav graph is connected, the twinned
-//! maps are fair (180-degree symmetric), and bots can navigate Saltworks, climb Foundry and spread
+//! maps are fair (180-degree symmetric), and bots can navigate Isotope, climb Foundry and spread
 //! over all of it.
 
 use sim::bot::{Bot, Nav, sees};
@@ -94,6 +94,115 @@ fn base_guns_stand_over_their_spawns() {
                 let gun = at + Vector::Y * sim::deploy::SENTRY_HEIGHT;
                 let sees = map.spawns[team].iter().map(|p| Vector::from_array(*p) + Vector::Y * 2.0).filter(|s| arena.cast_ray(&rapier3d::prelude::Ray::new(gun, (*s - gun).normalize()), s.distance(gun) - 0.3).is_none()).count();
                 assert!(sees >= 3, "{name}: base gun at {at} sees {sees} of its team's spawns");
+            }
+        }
+    }
+}
+
+/// Capture the Flag: each team's flag stand is on something, with room for a Heavy under its roof,
+/// hidden from its own base guns but open through its doorways, a waypoint in its zone, off its base.
+#[test]
+fn flag_stands_shelter_their_flags() {
+    use rapier3d::prelude::Ray;
+    for (index, (name, _)) in MAPS.iter().enumerate() {
+        let map = Map::load(index);
+        let Some(flags) = map.objectives.flags else {
+            assert!(!["foundry", "riftline", "canopy", "crashsite", "verdigris", "sinkhole"].contains(name), "{name}: no flag stands");
+            continue;
+        };
+        let arena = Arena::new(&map);
+        for (team, spot) in flags.iter().enumerate() {
+            let at = Vector::from_array(spot.at);
+            let what = format!("{name}: team {team}'s flag at {at}");
+            assert!(arena.cast_ray(&Ray::new(at + Vector::Y, Vector::NEG_Y), 2.0).is_some(), "{what} isn't on anything");
+            assert!(arena.cast_ray(&Ray::new(at + Vector::Y * 0.05, Vector::Y), 6.5).is_none(), "{what} has under 6.5 m of headroom");
+            for gun in map.objectives.sentries[team].iter().map(|p| Vector::from_array(*p) + Vector::Y * sim::deploy::SENTRY_HEIGHT) {
+                for p in [Vector::ZERO, Vector::X, Vector::NEG_X, Vector::Z, Vector::NEG_Z].map(|d| at + d * 3.0 + Vector::Y * 2.5) {
+                    let d = p - gun;
+                    assert!(arena.cast_ray(&Ray::new(gun, d / d.length()), d.length()).is_some(), "{what}: its base gun at {gun} sees {p}");
+                }
+            }
+            let inside = |w: &[f32; 3]| Vector::new(w[0] - at.x, 0.0, w[2] - at.z).length() <= spot.radius && (w[1] - at.y).abs() <= spot.band;
+            assert!(map.nav.iter().any(inside), "{what} has no waypoint in its zone");
+            if let Some(base) = map.objectives.bases.map(|b| b[team]) {
+                let off = Vector::new(at.x - base[0], 0.0, at.z - base[2]).length();
+                assert!(off >= 14.0, "{what} is {off:.1} m from its base");
+            }
+            let open = (0..16)
+                .map(|i| i as f32 * std::f32::consts::TAU / 16.0)
+                .filter(|a| arena.cast_ray(&Ray::new(at + Vector::Y * 1.5, Vector::new(a.cos(), 0.0, a.sin())), 10.0).is_none())
+                .count();
+            assert!(open >= 2, "{what}: only {open} of 16 ways out past 10 m");
+        }
+    }
+}
+
+/// Convoy: exactly these maps have a route for the hauler (3.5 m round, 6.5 m tall), and it fits it all
+/// the way, checked every meter along the line: ground under it (no more than half a meter over the
+/// line, or 4 m under), no step over 0.6 m from the last meter's, nothing within 4 m either side at 1,
+/// 3.5 and 6 m up nor overhead under 7 m, its side 2 m off each base gun's foot and well off the pads.
+/// It runs from team 0's base to team 1's, and starts between its ends, as far to walk to either base
+/// (within 10%), since the start is the middle of a tug of war.
+#[test]
+fn convoy_routes_fit_the_hauler() {
+    use rapier3d::prelude::Ray;
+    const CONVOY: [&str; 5] = ["span", "crashsite", "foundry", "riftline", "canopy"];
+    let flat = |v: Vector| Vector::new(v.x, 0.0, v.z);
+    for (index, (name, _)) in MAPS.iter().enumerate() {
+        let map = Map::load(index);
+        let Some(route) = &map.objectives.convoy else {
+            assert!(!CONVOY.contains(name), "{name}: no convoy route");
+            continue;
+        };
+        assert!(CONVOY.contains(name), "{name}: a convoy route on a map not in the mode");
+        let (points, start): (Vec<_>, _) = (route.points.iter().map(|p| Vector::from_array(*p)).collect(), route.start);
+        assert!(start > 0 && start + 1 < points.len(), "{name}: the hauler starts at {start} of {} points, not between the ends", points.len());
+        let bases = map.objectives.bases.expect("convoy maps have bases").map(Vector::from_array);
+        for (end, base) in [points[0], points[points.len() - 1]].into_iter().zip(bases) {
+            assert!(flat(end - base).length() <= 6.0, "{name}: the route ends at {end}, {:.1} m from the base at {base}", flat(end - base).length());
+        }
+        let walked = |p: &[Vector]| p.windows(2).map(|w| w[0].distance(w[1])).sum::<f32>();
+        let [d0, d1] = [walked(&points[..=start]), walked(&points[start..])];
+        assert!((d0 - d1).abs() <= 0.1 * d0.max(d1), "{name}: the hauler starts {d0:.0} m along its route from team 0's base and {d1:.0} m from team 1's");
+
+        let arena = Arena::new(&map);
+        let guns: Vec<_> = map.objectives.sentries.iter().flatten().map(|p| Vector::from_array(*p)).collect();
+        let o = &map.objectives;
+        let pads: Vec<_> = o.silos.iter().chain(&o.aa).map(|z| z.pad.unwrap_or(z.at)).chain(map.pads.iter().map(|p| p.at)).map(Vector::from_array).collect();
+        let mut last: Option<f32> = None;
+        for w in points.windows(2) {
+            let dir = flat(w[1] - w[0]).normalize();
+            let side = Vector::new(-dir.z, 0.0, dir.x);
+            let n = flat(w[1] - w[0]).length().ceil() as usize;
+            for k in 0..=n {
+                let p = w[0] + (w[1] - w[0]) * (k as f32 / n as f32);
+                // Down from a meter over the line. (A ray straight down a terrain cell's edge can miss it:
+                // keep points, and runs along the grid, off the cell lines.)
+                let ground = arena.cast_ray(&Ray::new(p + Vector::Y, Vector::NEG_Y), 5.0).map(|d| p.y + 1.0 - d);
+                let g = ground.unwrap_or_else(|| panic!("{name}: no ground within 4 m under the route at {p}"));
+                assert!(g <= p.y + 0.5, "{name}: the ground at {p} is {:.2} m over the route", g - p.y);
+                if let Some(h) = last {
+                    assert!((g - h).abs() <= 0.6, "{name}: a {:.2} m step under the route at {p}", (g - h).abs());
+                }
+                last = Some(g);
+                let feet = Vector::new(p.x, g, p.z);
+                for up in [1.0, 3.5, 6.0] {
+                    for s in [side, -side] {
+                        let hit = arena.cast_ray(&Ray::new(feet + Vector::Y * up, s), 4.0);
+                        assert!(hit.is_none(), "{name}: something {:.1} m beside the hauler at {feet}, {up} m up", hit.unwrap_or(0.0));
+                    }
+                }
+                let roof = arena.cast_ray(&Ray::new(feet + Vector::Y * 0.05, Vector::Y), 6.95);
+                assert!(roof.is_none(), "{name}: a roof {:.1} m over the hauler at {feet}", roof.unwrap_or(0.0) + 0.05);
+                for gun in &guns {
+                    let off = flat(feet - *gun).length();
+                    assert!(off >= 5.5, "{name}: the hauler at {feet} passes {off:.1} m from the base gun at {gun}");
+                }
+                // A silo's pad is a 7.2 m slab; jump pads and the AA gun are smaller.
+                for pad in pads.iter().filter(|q| (q.y - g).abs() < 3.0) {
+                    let off = flat(feet - *pad).length();
+                    assert!(off >= 9.0, "{name}: the hauler at {feet} passes {off:.1} m from the pad at {pad}");
+                }
             }
         }
     }
@@ -220,8 +329,8 @@ fn pad_arc_is_ballistic() {
 }
 
 #[test]
-fn bot_reaches_the_far_catwalk_on_saltworks() {
-    let index = Map::index("saltworks").unwrap();
+fn bot_reaches_the_far_catwalk_on_isotope() {
+    let index = Map::index("isotope").unwrap();
     let (arena, nav, t) = (Arena::new(&Map::load(index)), Nav::for_map(index), Tuning::default());
     let mut me = spawn_mech(&t, Vector::new(-5.0, 0.1, 53.0));
     // Standing on the south team's catwalk deck, across the map.
@@ -337,6 +446,21 @@ fn bot_climbs_out_of_the_sump() {
 #[test]
 fn sinkhole_has_six_levels() {
     has_levels("sinkhole", &[-28.0, -21.0, -14.0, -7.0, 0.0, 8.0]);
+}
+
+/// Canopy can be crossed without touching the floor: from the crown over each base, its crowns
+/// across the map and up to the mother tree's, over waypoints 20 m+ up only.
+#[test]
+fn canopy_crosses_by_its_crowns() {
+    let nav = Nav::for_map(Map::index("canopy").unwrap());
+    let crown = |x: f32, y: f32, z: f32| nav.points().iter().position(|p| p.distance(Vector::new(x, y, z)) < 0.5).expect("no waypoint on that crown");
+    let (west, east) = (crown(-78.0, 27.0, -76.0), crown(78.0, 27.0, -76.0));
+    for (from, to) in [(west, east), (east, west)] {
+        let reached = nav.reachable_over(from, |p| p.y > 20.0);
+        for goal in [to, crown(0.0, 36.0, 112.0), crown(-56.0, 30.0, 52.0), crown(92.0, 30.0, 16.0)] {
+            assert!(reached[goal], "canopy: the crown at {} can't be reached over the canopy from {}", nav.points()[goal], nav.points()[from]);
+        }
+    }
 }
 
 #[test]

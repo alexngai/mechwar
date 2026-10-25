@@ -28,6 +28,8 @@ pub const WIN_XP: u32 = 150;
 pub const CAPTURE_XP: f32 = 50.0;
 pub const EU_XP: f32 = 0.5;
 pub const SHIP_XP: f32 = 0.05;
+/// XP a second for escorting Convoy's hauler while it walks.
+pub const ESCORT_XP: f32 = 1.0;
 /// Kill credit: everyone who damaged a victim lately gets their share of that damage, and the
 /// killer this much more, so a solo kill is worth 1.25 kills and a stolen one little.
 pub const KILLER_BONUS: f32 = 0.25;
@@ -136,9 +138,14 @@ impl Tally {
         self.objective_xp += EU_XP * eu;
     }
 
-    /// Shot `hull` off an enemy battleship.
+    /// Shot `hull` off an enemy battleship, or Convoy's hauler.
     pub fn hit_ship(&mut self, hull: f32) {
         self.objective_xp += SHIP_XP * hull;
+    }
+
+    /// Escorted Convoy's hauler `seconds` while it walked.
+    pub fn escort(&mut self, seconds: f32) {
+        self.objective_xp += ESCORT_XP * seconds;
     }
 }
 

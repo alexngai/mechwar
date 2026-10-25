@@ -7,7 +7,7 @@ const MAX_DISTANCE = 150; // m: farther world sounds aren't started
 const THRUST_SLOTS = 3; // remote thruster loops, for the nearest boosting or hovering mechs
 const EXHAUST_SLOTS = 4; // exhaust loops, for the nearest rockets and darts in flight
 const WEIGHT = { A: 0.65, B: 1, C: 1.5 }; // shot and landing heft by class
-const STEP_DEPTH = { A: 1, B: 1.5, C: 2.1 }; // footsteps: even the Light stomps; the Heavy shakes the ground
+const STEP_DEPTH = { A: 1, B: 1.5, C: 2.1, hauler: 3 }; // footsteps: even the Light stomps; the Heavy shakes the ground, Convoy's hauler more
 // Primary shots past the usual level, reverb and length (0.6 s). Fast guns stay dry: at their
 // fire rate reverb smears into a wash. The slow, heavy ones ring out, and hit about as hard as
 // the rail gun; the HEAT cannon's boom rolls on longest.
@@ -27,13 +27,13 @@ const AMBIENCE_LEVEL = 0.45; // all of it, against the action
  * -39 dB, quiet places about -45, a blast 12 m off -22). See `bed` and `accent` for the kinds.
  */
 const AMBIENCE = {
-  saltpan: { gain: 1.4, beds: [['wind', 0.05, 700, 0.7], ['hum', 0.02, [55, 110.5]]], accents: [['steam', [10, 22], 0.05], ['clank', [7, 16], 0.04]] },
+  reactor: { gain: 1.3, beds: [['hum', 0.035, [60, 120.3, 180]], ['wind', 0.03, 500, 0.6]], accents: [['geiger', [2, 7], 0.05], ['steam', [9, 20], 0.05], ['clank', [10, 22], 0.035], ['siren', [45, 90], 0.02]] },
   foundry: { gain: 1.2, beds: [['roar', 0.06], ['hum', 0.035, [48, 96.4, 144]]], accents: [['clank', [3, 8], 0.06], ['steam', [6, 14], 0.05], ['rumble', [15, 30], 0.07]] },
   acidrain: { gain: 1.15, beds: [['rain', 0.05, 2500], ['hum', 0.02, [62, 124.6]]], accents: [['patter', [0.3, 1.2], 0.03], ['siren', [25, 50], 0.025]] },
   canyon: { gain: 1.5, beds: [['wind', 0.06, 320, 2.5], ['hum', 0.025, [73.4, 74.1, 110]]], accents: [['rumble', [12, 25], 0.06], ['moan', [18, 35], 0.03]] },
   undercity: { beds: [['water', 0.05], ['hum', 0.03, [50, 100.3]]], accents: [['drip', [0.4, 1.6], 0.06], ['creak', [14, 28], 0.04]] },
-  jungle: { gain: 1.3, beds: [['buzz', 0.07, 4200], ['water', 0.06]], accents: [['bird', [3, 9], 0.04], ['croak', [5, 12], 0.04]] },
-  twilight: { gain: 1.5, beds: [['wind', 0.035, 1800, 0.5], ['cricket', 0.02, 4600]], accents: [['hoot', [14, 30], 0.035], ['bird', [10, 25], 0.025]] },
+  quarry: { gain: 1.3, beds: [['wind', 0.07, 650, 0.9], ['hum', 0.025, [41, 82.3]]], accents: [['rumble', [16, 34], 0.08], ['clank', [6, 14], 0.04], ['creak', [12, 24], 0.035], ['siren', [50, 90], 0.02]] },
+  grove: { gain: 1.2, beds: [['wind', 0.03, 900, 0.6], ['hum', 0.012, [55, 55.35, 82.4]]], accents: [['moan', [25, 50], 0.018], ['creak', [16, 32], 0.025], ['hoot', [30, 60], 0.02]] },
   storm: { gain: 1.2, beds: [['rain', 0.07, 1800], ['wind', 0.05, 450, 1]], accents: [['croak', [3, 8], 0.035], ['creak', [8, 18], 0.05]] },
   desert: { gain: 1.2, beds: [['wind', 0.1, 900, 0.8], ['wind', 0.06, 3200, 1.2]], accents: [['whistle', [15, 35], 0.025]] },
   blizzard: { gain: 1.9, beds: [['howl', 0.12, 600], ['wind', 0.07, 2400, 0.7]], accents: [['creak', [12, 24], 0.035]] },
@@ -517,20 +517,6 @@ export class Sound {
       lp.connect(out);
       for (const f of a) osc('sine', f).connect(this.amp(1 / a.length)).connect(lp);
       wobble(out.gain, 0.05, level * 0.25);
-    } else if (kind === 'buzz') {
-      // Cicadas: a narrow band of noise trembling fast, the chorus swelling and fading.
-      const am = ctx.createGain();
-      am.gain.value = 0.5;
-      loop(this.long).connect(filter('bandpass', a, 10)).connect(am).connect(out);
-      wobble(am.gain, 28, 0.5);
-      wobble(out.gain, 0.06, level * 0.8);
-    } else if (kind === 'cricket') {
-      // A tone pulsed fast, in bursts: chirp, chirp.
-      const pulse = ctx.createGain(), burst = ctx.createGain();
-      pulse.gain.value = burst.gain.value = 0.5;
-      osc('sine', a).connect(pulse).connect(burst).connect(out);
-      wobble(pulse.gain, 30, 0.5, 'square');
-      wobble(burst.gain, 2.2, 0.5, 'square');
     }
   }
 
@@ -585,11 +571,6 @@ export class Sound {
       this.growl(out, 'sawtooth', r(85, 110), r(60, 75), 500, 0.4, r(1.2, 2), 0.7);
     } else if (kind === 'moan') {
       this.growl(out, 'triangle', r(170, 200), r(130, 150), 600, 1.5, 2.5, 0.7);
-    } else if (kind === 'bird') {
-      for (let k = 0, n = 2 + Math.floor(r(0, 3)); k < n; k++) {
-        const f = r(2600, 3800);
-        this.tone(out, 'sine', f, f * r(1.1, 1.35), 0.01, 0.07, 0.6, k * r(0.1, 0.16));
-      }
     } else if (kind === 'croak') {
       for (const d of [0, 0.3]) this.growl(out, 'square', r(150, 175), 135, 700, 0.01, 0.2, 0.6, d);
     } else if (kind === 'hoot') {
@@ -598,6 +579,11 @@ export class Sound {
       // Wind through the arch's gap: a long, rising note.
       this.tone(out, 'sine', r(1100, 1300), r(1400, 1600), 1.5, 2, 0.4);
       this.noise(out, 'white', 'bandpass', 1400, 1500, 1.5, 2, 0.3, 8);
+    } else if (kind === 'geiger') {
+      // A counter near something hot: a crackle of clicks at random, a few or a burst.
+      for (let k = 0, n = 3 + Math.floor(r(0, 14)), d = 0; k < n; k++, d -= Math.log(1 - Math.random()) * 0.09) {
+        this.noise(out, 'white', 'highpass', 3500, 3000, 0.0005, 0.004, r(0.5, 1), 1, d);
+      }
     }
   }
 
@@ -695,6 +681,16 @@ export class Sound {
     this.tone(out, 'sine', 220, 880, 0.02, 0.3, 0.18, 0.06);
     this.noise(out, 'white', 'bandpass', 900, 4200, 0.02, 0.3, 0.08, 2, 0.06);
     this.tone(out, 'sine', 523, 523, 0.01, 0.4, 0.16, 0.34);
+  }
+
+  /** Our flag taken: a two-tone klaxon, twice. */
+  flagAlarm() {
+    const out = this.voice(null, 1.1, this.ui);
+    if (!out) return;
+    for (let k = 0; k < 2; k++) {
+      this.tone(out, 'square', 392, 392, 0.01, 0.22, 0.1, 0.5 * k);
+      this.tone(out, 'square', 311, 311, 0.01, 0.22, 0.1, 0.5 * k + 0.25);
+    }
   }
 
   /** Our hold just filled with energy: one soft, plain tone. */

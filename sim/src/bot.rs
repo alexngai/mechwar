@@ -154,13 +154,18 @@ impl Nav {
 
     /// Which waypoints can be reached from `from`.
     pub fn reachable(&self, from: usize) -> Vec<bool> {
+        self.reachable_over(from, |_| true)
+    }
+
+    /// Which waypoints can be reached from `from` passing only through waypoints `over` takes.
+    pub fn reachable_over(&self, from: usize, over: impl Fn(Vector) -> bool) -> Vec<bool> {
         let mut seen = vec![false; self.nodes.len()];
         let mut stack = vec![from];
         while let Some(u) = stack.pop() {
             if std::mem::replace(&mut seen[u], true) {
                 continue;
             }
-            stack.extend(self.edges.iter().filter(|&&(a, _)| a == u).map(|&(_, b)| b));
+            stack.extend(self.edges.iter().filter(|&&(a, b)| a == u && over(self.nodes[b])).map(|&(_, b)| b));
         }
         seen
     }
@@ -335,8 +340,11 @@ const SEARCHED: f32 = 6.0;
 /// us within GRUDGE s as all threat.
 const GRUDGE: f32 = 3.0;
 const STICKY_M: f32 = 5.0;
-/// A bot this far or more from its order's spot is on its way there: it fights on the move.
+/// A bot this far or more from its order's spot (across, or this far up or down: on another deck
+/// or level) is on its way there: it fights on the move, and farther than CATCH_UP it boosts.
 const ERRAND: f32 = 6.0;
+const ERRAND_RISE: f32 = 3.0;
+const CATCH_UP: f32 = 20.0;
 /// A contact only told of, or only heard from farther than this, is vague: a bot far from its
 /// lead rejoins it first (`Action::Regroup`). One it saw, felt, or heard close it goes after at once.
 const URGENT: f32 = 40.0;
@@ -1381,7 +1389,10 @@ impl Bot {
                     let dir = off.normalize_or_zero();
                     (dir.dot(rot * Vector::X), dir.dot(rot * Vector::NEG_Z))
                 } else if stand.open {
-                    (self.strafe, 0.0)
+                    if !ledge_free(arena, me.pos, rot * Vector::new(self.strafe, 0.0, 0.0)) {
+                        self.strafe = -self.strafe;
+                    }
+                    (if ledge_free(arena, me.pos, rot * Vector::new(self.strafe, 0.0, 0.0)) { self.strafe } else { 0.0 }, 0.0)
                 } else {
                     (0.0, 0.0)
                 }
@@ -1390,7 +1401,15 @@ impl Bot {
                 let rot = Rotation::from_rotation_y(new_yaw);
                 (dir.dot(rot * Vector::X), dir.dot(rot * Vector::NEG_Z))
             } else {
-                (self.strafe, if self.brain.wants(Action::BackOff, &at) { -1.0 } else { 0.0 })
+                // Not off a ledge, strafing or backing off: a drop ahead turns the strafe round,
+                // and it holds its ground rather than back over one.
+                let rot = Rotation::from_rotation_y(new_yaw);
+                let ground = |x: f32, z: f32| ledge_free(arena, me.pos, rot * Vector::new(x, 0.0, -z));
+                if !ground(self.strafe, 0.0) {
+                    self.strafe = -self.strafe;
+                }
+                let back = if self.brain.wants(Action::BackOff, &at) && ground(0.0, -1.0) { -1.0 } else { 0.0 };
+                (if ground(self.strafe, 0.0) { self.strafe } else { 0.0 }, back)
             };
             // A charged gun charges while it holds (on target or not) and lets go once full, on
             // target, and sure of its lead (`SETTLE`); a rail gun is pressed one tick and let go
@@ -1425,8 +1444,11 @@ impl Bot {
                 alt_fire,
                 aux: use_ == AltUse::Lock && alt && me.lock == 0 && !me.aux_held,
                 grenade: throw || turret && !hidden,
-                // Wound and going in, on thrusters while there's fuel to spare.
-                boost: wound && range <= far && !self.striking && me.fuel > 0.5 * t.fuel_max,
+                // Wound and going in, on thrusters while there's fuel to spare; or fallen behind its
+                // order (an objective on the move, as Convoy's hauler is), catching up while the
+                // fuel lasts.
+                boost: (wound && range <= far && !self.striking && me.fuel > 0.5 * t.fuel_max)
+                    || (errand.as_ref().is_some_and(|o| flat(o.pos - me.pos).length() > CATCH_UP) && me.fuel > 0.3 * t.fuel_max),
                 hover: tick < self.hover_until,
                 // An EMP when it would land (taking the target for our size) on one not jammed
                 // already, and it counts: they're on thrusters (it grounds them), or we're hurt (it
@@ -1567,12 +1589,12 @@ impl Bot {
         Some(Input { move_x, move_z, yaw: new_yaw, pitch: new_pitch, ..Input::default() })
     }
 
-    /// Its order's spot while it's still on its way there: short of ERRAND of it, or out of the
-    /// zone it's to hold.
+    /// Its order's spot while it's still on its way there: off across or on another level, or out
+    /// of the zone it's to hold. (See `ledge_free` for the strafe's footing.)
     fn errand(&self, me: &Mech) -> Option<Mech> {
         let there = |o: &Vector| match self.order_zone {
             Some(zone) => zone.holds(me.pos, 0.0),
-            None => flat(*o - me.pos).length() <= ERRAND,
+            None => flat(*o - me.pos).length() <= ERRAND && (o.y - me.pos.y).abs() <= ERRAND_RISE,
         };
         self.order.filter(|o| !there(o)).map(|pos| Mech { pos, ..Mech::default() })
     }
@@ -1606,8 +1628,9 @@ impl Bot {
     }
 
     /// Follows the waypoint route toward `target` (by way of a vantage, for perches, flankers and
-    /// sneaks), replanning when the target moves to another waypoint out of the vantage's view;
-    /// returns the flat offset to the next waypoint (or the vantage, or the target, past the last).
+    /// sneaks without an order), replanning when the target moves to another waypoint out of the
+    /// vantage's view; returns the flat offset to the next waypoint (or the vantage, or the target,
+    /// past the last).
     fn route(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: &Mech, tick: u32) -> Vector {
         if tick < self.escape_until {
             return self.escape;
@@ -1616,13 +1639,16 @@ impl Bot {
         let moved = self.path_goal != Some(goal) && !self.vantage.is_some_and(|v| nav.overlooks(arena, t, v, chest));
         // Perched where it can't see the target after all: go straight at it instead.
         let blind = self.perched(nav, me) && !sees_at(arena, t, me, chest);
-        if self.path_goal.is_none() || moved || blind {
+        // An order is a spot to stand on, not one to overlook from a perch or come at side-on: no
+        // vantage on the way to it (nor one kept from before it came).
+        let ordered = self.order.is_some();
+        if self.path_goal.is_none() || moved || blind || (ordered && self.vantage.is_some()) {
             let (role, lane, far) = (self.role, nav.lane_x(), me.pos.distance(target.pos) > DETOUR_MIN);
             let (at, from_target) = (|i| nav.node(i), |i| nav.node(i).distance(target.pos));
             let mut vantage = None;
             self.path = nav.path(nav.nearest(arena, me.pos), |cost| {
                 vantage = match role {
-                    _ if blind => None,
+                    _ if blind || ordered => None,
                     // A perch in view of the target, near both, each metre up worth 4 of walking;
                     // the spot out in the side lane level with it, to come at it side-on; the
                     // channel spot nearest it.
@@ -1785,6 +1811,17 @@ fn mend(t: &Tuning, me: &Mech, mate: &Mech, mid: f32, max_turn: f32) -> Input {
     }
 }
 
+/// How far a strafe looks ahead for footing (m), and the drop (m) that counts as a ledge.
+const LEDGE_LOOK: f32 = 2.5;
+const LEDGE_DROP: f32 = 4.0;
+
+/// Whether a mech at `feet` moving along `dir` has ground ahead: something within LEDGE_DROP
+/// under the spot LEDGE_LOOK on (a deck's edge over a chasm doesn't).
+fn ledge_free(arena: &Arena, feet: Vector, dir: Vector) -> bool {
+    let ahead = feet + flat(dir).normalize_or_zero() * LEDGE_LOOK + Vector::Y;
+    arena.cast_ray(&Ray::new(ahead, Vector::NEG_Y), 1.0 + LEDGE_DROP).is_some()
+}
+
 fn flat(v: Vector) -> Vector {
     Vector::new(v.x, 0.0, v.z)
 }
@@ -1835,11 +1872,11 @@ mod tests {
     /// doesn't matter, the deploy bakes its own).
     #[test]
     fn nav_bake_reads_back() {
-        let [blockout, saltworks] = ["blockout", "saltworks"].map(|name| Map::index(name).unwrap());
+        let [blockout, isotope] = ["blockout", "isotope"].map(|name| Map::index(name).unwrap());
         let bakes = bake([blockout]);
         let Nav { edges, hover, .. } = Nav::walk_map(blockout);
         assert_eq!(Nav::baked(&bakes, blockout), Some((edges, hover)));
-        assert_eq!(Nav::baked(&bakes, saltworks), None);
+        assert_eq!(Nav::baked(&bakes, isotope), None);
         let edited = bakes.replace(&source_hash(MAPS[blockout].1), "0000000000000000");
         assert_eq!(Nav::baked(&edited, blockout), None, "a bake of an older blockout");
     }
@@ -1912,6 +1949,22 @@ mod tests {
     }
 
     #[test]
+    fn a_perch_goes_to_its_order_not_up_over_it() {
+        // An order is a spot to stand on (Convoy's hauler, a silo). On Canopy's crest a perch sent
+        // to the hauler had climbed to a crown overlooking it instead, and held there.
+        let canopy = Map::index("canopy").unwrap();
+        let (arena, nav, t) = (Arena::new(&Map::load(canopy)), Nav::for_map(canopy), Tuning::default());
+        let (mut me, order) = (spawn_mech(&t, Vector::new(25.0, 0.0, 30.0)), Vector::new(71.7, 13.6, 28.9));
+        let mut bot = Bot { role: Role::Perch, order: Some(order), ..Bot::new(1) };
+        let there = (0..secs(30.0)).any(|tick| {
+            let input = bot.think(&arena, nav, &t, &me, None, tick);
+            step_mech(&arena, &t, &mut me, &input);
+            bot.errand(&me).is_none()
+        });
+        assert!(there, "at {} after 30 s, not at its order", me.pos);
+    }
+
+    #[test]
     fn bots_use_items() {
         let blockout = Map::index("blockout").unwrap();
         let (arena, nav, t) = (Arena::new(&Map::load(blockout)), Nav::for_map(blockout), Tuning::default());
@@ -1945,6 +1998,34 @@ mod tests {
 
         let (_, pulsed, _) = engage(9.0);
         assert!(pulsed, "never pulsed a target 9 m away");
+    }
+
+    #[test]
+    fn bots_follow_every_convoy_route_either_way() {
+        // Waypoint to waypoint along each map's Convoy route, nav's way is no more than twice as
+        // far as the straight line, both ways: escorts walk alongside the hauler, not round. (Canopy's
+        // crest had a joint that stopped a Heavy walking up it, so nav sent escorts 250 m round by the
+        // canopy to get 14 m up the crest.)
+        for (index, (name, _)) in MAPS.iter().enumerate() {
+            let map = Map::load(index);
+            let Some(route) = &map.objectives.convoy else { continue };
+            let (arena, nav) = (Arena::new(&map), Nav::for_map(index));
+            let cost = |a: usize, b: usize| {
+                let mut c = f32::MAX;
+                nav.path(a, |d| {
+                    c = d[b];
+                    b
+                });
+                c
+            };
+            for w in route.points.windows(2) {
+                let (a, b) = (nav.nearest(&arena, Vector::from_array(w[0])), nav.nearest(&arena, Vector::from_array(w[1])));
+                let straight = nav.node(a).distance(nav.node(b));
+                for (from, to) in [(a, b), (b, a)] {
+                    assert!(cost(from, to) <= 2.0 * straight + 1.0, "{name}: {} to {} is {:.0} m by nav, {straight:.0} m straight", nav.node(from), nav.node(to), cost(from, to));
+                }
+            }
+        }
     }
 
     fn blockout() -> (Arena, &'static Nav, Tuning) {

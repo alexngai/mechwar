@@ -1,7 +1,7 @@
 //! Serves the built client, a small lobby API and the game WebSocket on one port. Every room is
 //! its own match on its own 30 Hz loop (a tokio task); each connection gets a reader and a writer
 //! task and joins one room. Env: `PORT` (9001), `STATIC_DIR` (`dist`), `LAG_MS` (one-way delay
-//! for testing), and quick play's room settings: `MODE` (`tdm`, `dm`, `ma` or `siege`; else every mode in turn),
+//! for testing), and quick play's room settings: `MODE` (`tdm`, `dm`, `ma`, `siege`, `ctf` or `convoy`; else every mode in turn),
 //! `MAP` (one map; else the rotation), `SCORE_LIMIT`, `MATCH_SECONDS`, `BOT_SKILL` (`easy`,
 //! `normal`, `hard`, or 0 to 1). And
 //! `PROGRESS_KEY`, the secret that signs progression records (a dev key stands in without it).
@@ -40,7 +40,8 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use sim::game::{Game, MAX_PLAYERS, Mode};
 use sim::map::{MAPS, ROTATION};
-use sim::net::{self, ClientMsg, ServerMsg};
+use sim::client::INTERP_TICKS;
+use sim::net::{self, ClientMsg, Event, ServerMsg};
 use sim::progress::{MatchXp, RECORD_VERSION, Record, Tally};
 use sim::{DT, Loadout, Map, TICK_HZ, Tuning};
 use tokio::net::TcpListener;
@@ -66,6 +67,16 @@ const DEV_KEY: &[u8] = b"mechwar-dev-key-not-a-secret";
 /// While a match is on, a pilot's record goes out this often with their match so far (s), so
 /// leaving early loses at most this much.
 const CHECKPOINT_SECONDS: u32 = 10;
+/// A player whose view runs this many ticks further behind than their link's own round trip is
+/// backed up somewhere (Fly's proxy holds what their link can't take yet; the server's socket never
+/// backs up): they get only every `TRICKLE`th snapshot until it drains, so they hitch and catch up
+/// rather than play back seconds of old state. Over 250 ms, where the client's clock snaps to a
+/// fresh snapshot, so the first one through after the drain shows them caught up.
+const BEHIND_TICKS: f32 = 8.0;
+const TRICKLE: u32 = 10;
+/// How fast a player's least lag creeps up, in ticks an input (about half a tick a second), so a
+/// route that got slower soon stops counting as behind.
+const BASE_DRIFT: f32 = 1.0 / 60.0;
 
 /// Outgoing bytes, stamped when queued so `LAG_MS` delays every message by the same amount.
 type Outbox = mpsc::UnboundedSender<(Instant, Vec<u8>)>;
@@ -105,6 +116,15 @@ struct RoomInfo {
     seconds_left: u16,
     ended: bool,
     scores: [u16; 2],
+}
+
+/// What a player's inputs say of their link: how many ticks behind the match their view runs (an
+/// input's `view_tick` against the room's tick when it's in), the least it's run (the link's own
+/// round trip), and the events of the snapshots held back from them meanwhile.
+struct Link {
+    lag: f32,
+    base: f32,
+    held: Vec<Event>,
 }
 
 struct Room {
@@ -172,7 +192,7 @@ async fn main() {
 
     let mut quick = Settings { name: "Quick play".into(), public: true, mode: None, map: None, score_limit: 25, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
     if let Ok(key) = env::var("MODE") {
-        quick.mode = Some(Mode::from_key(&key).expect("MODE must be tdm, dm, ma or siege"));
+        quick.mode = Some(Mode::from_key(&key).expect("MODE must be tdm, dm, ma, siege, ctf or convoy"));
     }
     if let Ok(name) = env::var("MAP") {
         quick.map = Some(Map::index(&name).expect("MAP must name a map in maps/"));
@@ -193,7 +213,13 @@ async fn main() {
     }));
     let app = App { rooms: Rooms::default(), lag, quick: Arc::new(quick), seed: Arc::new(AtomicU64::new(seed)), signer };
     let client = ServeDir::new(&static_dir).fallback(ServeFile::new(format!("{static_dir}/index.html")));
+    // The guide is one page for all its sections and pages (/guide/ itself is ServeDir's guide/index.html).
+    let guide = ServeFile::new(format!("{static_dir}/guide/index.html"));
     let router = Router::new()
+        .route_service("/guide/{section}", guide.clone())
+        .route_service("/guide/{section}/", guide.clone())
+        .route_service("/guide/{section}/{page}", guide.clone())
+        .route_service("/guide/{section}/{page}/", guide)
         .route("/ws", get(upgrade))
         .route("/api/rooms", get(list).post(create))
         .route("/api/rooms/{code}", get(lookup))
@@ -455,12 +481,16 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
     let code = info.lock().expect("info lock").code.clone();
     let mut outboxes: Vec<(u8, Outbox)> = Vec::new();
     let mut pilots: HashMap<u8, Pilot> = HashMap::new();
+    let mut links: HashMap<u8, Link> = HashMap::new();
     let mut ended = game.match_state().ended;
     let mut roster_sent = u32::MAX;
     let mut empty_since = Some(Instant::now());
     let mut interval = time::interval(Duration::from_secs_f32(DT));
+    // Health, logged every 10 s if a tick ran a whole tick late or long (Fly's shared CPU
+    // throttles): the latest tick, the longest step and sends, and how many ran over 100 ms late.
+    let (mut worst_late, mut worst_step, mut late_ticks, mut since_report) = (Duration::ZERO, Duration::ZERO, 0, Instant::now());
     loop {
-        interval.tick().await;
+        let late = interval.tick().await.elapsed();
         while let Ok(cmd) = cmds.try_recv() {
             match cmd {
                 Cmd::Join(out, reply) => {
@@ -473,7 +503,12 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
                     }
                     let _ = reply.send(id);
                 }
-                Cmd::Msg(id, ClientMsg::Input(msg)) => game.push_input(id, msg),
+                Cmd::Msg(id, ClientMsg::Input(msg)) => {
+                    let link = links.entry(id).or_insert(Link { lag: 0.0, base: f32::INFINITY, held: Vec::new() });
+                    link.lag = game.tick as f32 - (msg.view_tick + INTERP_TICKS);
+                    link.base = (link.base + BASE_DRIFT).min(link.lag);
+                    game.push_input(id, msg);
+                }
                 // Only weapons and items the pilot has unlocked for that mech (its own until their
                 // record's in).
                 Cmd::Msg(id, ClientMsg::Pick(class, loadout)) => {
@@ -518,6 +553,7 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
                     game.leave(id);
                     outboxes.retain(|(i, _)| *i != id);
                     pilots.remove(&id);
+                    links.remove(&id);
                 }
             }
         }
@@ -528,6 +564,7 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
             (false, _) => empty_since = None,
             _ => {}
         }
+        let started = Instant::now();
         game.step();
         let now = Instant::now();
         // Progression: everyone's whole match as it ends, and checkpoints while it's on.
@@ -562,7 +599,24 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
             }
         }
         for (id, out) in &outboxes {
-            let _ = out.send((now, net::encode(&ServerMsg::Snapshot(game.snapshot(*id)))));
+            let mut snapshot = game.snapshot(*id);
+            if let Some(link) = links.get_mut(id) {
+                link.held.append(&mut snapshot.events);
+                if link.lag - link.base > BEHIND_TICKS && game.tick % TRICKLE != 0 {
+                    continue;
+                }
+                std::mem::swap(&mut snapshot.events, &mut link.held);
+            }
+            let _ = out.send((now, net::encode(&ServerMsg::Snapshot(snapshot))));
+        }
+        (worst_late, worst_step) = (worst_late.max(late), worst_step.max(started.elapsed()));
+        late_ticks += u32::from(late > Duration::from_millis(100));
+        if since_report.elapsed() >= Duration::from_secs(10) {
+            if worst_late.max(worst_step) >= interval.period() {
+                let ms = |d: Duration| d.as_secs_f32() * 1e3;
+                println!("room {code}: ticks up to {:.0} ms late, steps up to {:.1} ms, {late_ticks} over 100 ms late", ms(worst_late), ms(worst_step));
+            }
+            (worst_late, worst_step, late_ticks, since_report) = (Duration::ZERO, Duration::ZERO, 0, Instant::now());
         }
         if game.tick % TICK_HZ as u32 == 0 {
             *info.lock().expect("info lock") = describe(&code, &settings, &game);
@@ -621,7 +675,8 @@ async fn connection(socket: WebSocket, cmds: mpsc::UnboundedSender<Cmd>, lag: Du
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sim::Slot;
+    use sim::net::{InputMsg, Snapshot};
+    use sim::{Arsenal, Input, MechClass, Slot};
 
     fn room(code: &str, public: bool, humans: usize, seconds_left: u16, ended: bool) -> RoomInfo {
         RoomInfo { code: code.into(), name: String::new(), public, mode: "tdm", map: String::new(), humans, bots: 0, capacity: MAX_PLAYERS, seconds_left, ended, scores: [0; 2] }
@@ -662,13 +717,18 @@ mod tests {
         assert_eq!(every.iter().filter(|(m, _)| *m == Mode::TeamDeathmatch).count(), ROTATION.len());
         // Deathmatch only on the smaller maps.
         let dm: Vec<&str> = deck(&settings(Some(Mode::Deathmatch), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
-        assert_eq!(dm, ["saltworks", "verdigris", "sump", "sinkhole", "ziggurat"]);
+        assert_eq!(dm, ["isotope", "verdigris", "sump", "sinkhole", "ziggurat"]);
         let ma: Vec<&str> = deck(&settings(Some(Mode::MissileAssault), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
         assert_eq!(ma, ["foundry", "verdigris", "riftline", "sinkhole", "canopy", "crashsite", "ziggurat", "span"]);
         let siege: Vec<&str> = deck(&settings(Some(Mode::Siege), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
         assert_eq!(siege, ["foundry", "riftline", "canopy", "crashsite", "span"]);
+        let ctf: Vec<&str> = deck(&settings(Some(Mode::CaptureTheFlag), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
+        assert_eq!(ctf, ["foundry", "verdigris", "riftline", "sinkhole", "canopy", "crashsite"]);
+        let convoy: Vec<&str> = deck(&settings(Some(Mode::Convoy), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
+        assert_eq!(convoy, ["foundry", "riftline", "canopy", "crashsite", "span"]);
         let canopy = Map::index("canopy").unwrap();
-        assert_eq!(deck(&settings(None, Some("canopy"))), [(Mode::TeamDeathmatch, canopy), (Mode::MissileAssault, canopy), (Mode::Siege, canopy)]);
+        let canopy_modes = [Mode::TeamDeathmatch, Mode::MissileAssault, Mode::Siege, Mode::CaptureTheFlag, Mode::Convoy];
+        assert_eq!(deck(&settings(None, Some("canopy"))), canopy_modes.map(|m| (m, canopy)));
         assert!(deck(&settings(Some(Mode::Deathmatch), Some("canopy"))).is_empty());
         // A room starts on a pair from its deck.
         let game = new_game(&settings(Some(Mode::Deathmatch), None), 3);
@@ -819,6 +879,54 @@ mod tests {
         send(ClientMsg::Unlock { class: heavy, slot: Slot::Offensive, index: limpet });
         send(ClientMsg::Pick(heavy, wanted));
         assert_eq!(loadout_after(&mut inbox).await, Loadout { support: orb, ..own }, "carried an item it couldn't afford");
+        room.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_lagging_player_gets_every_tenth_snapshot_with_every_event_until_caught_up() {
+        let (room, send, mut inbox) = join_room(b"the server's key", 600.0, "").await;
+        let next = async |inbox: &mut mpsc::UnboundedReceiver<(Instant, Vec<u8>)>| net::decode::<ServerMsg>(&inbox.recv().await.unwrap().1).unwrap();
+        // An input whose view runs `behind` ticks behind snapshot `s` (0: just in).
+        let input = |seq, fire, s: &Snapshot, behind: f32| ClientMsg::Input(InputMsg { seq, input: Input { fire, ..Input::default() }, view_tick: s.tick as f32 - behind - INTERP_TICKS });
+        let shots = |s: &Snapshot| s.events.iter().filter(|e| matches!(e, Event::Shot { .. })).count();
+        let heavy = MechClass::C;
+        let pellets = Arsenal::new(&Tuning::default()).get(heavy, Loadout::of(heavy)).pellets as usize;
+        send(ClientMsg::Pick(heavy, Loadout::of(heavy)));
+        // Launched, halfway between trickled snapshots.
+        let s = loop {
+            if let ServerMsg::Snapshot(s) = next(&mut inbox).await
+                && s.hangar.is_none()
+                && s.tick % TRICKLE == 5
+            {
+                break s;
+            }
+        };
+
+        // In step, then 40 ticks behind and firing the flak: its pellets' snapshot is held back,
+        // and the next one through carries them. The roster for a rename isn't held.
+        send(input(1, false, &s, 0.0));
+        send(input(2, true, &s, 40.0));
+        send(ClientMsg::Name("Ace".into()));
+        let (mut held, mut renamed) = (Vec::new(), false);
+        while held.len() < 2 {
+            match next(&mut inbox).await {
+                ServerMsg::Snapshot(snapshot) => held.push(snapshot),
+                ServerMsg::Roster(roster) => renamed |= roster.iter().any(|(_, name, _)| name == "Ace"),
+                _ => {}
+            }
+        }
+        assert!(renamed);
+        assert_eq!(held.iter().map(|h| (h.tick - s.tick, shots(h))).collect::<Vec<_>>(), [(5, pellets), (15, 0)]);
+
+        // In step again: every snapshot.
+        send(input(3, false, &held[1], 0.0));
+        let mut ticks = Vec::new();
+        while ticks.len() < 3 {
+            if let ServerMsg::Snapshot(snapshot) = next(&mut inbox).await {
+                ticks.push(snapshot.tick - held[1].tick);
+            }
+        }
+        assert_eq!(ticks, [1, 2, 3]);
         room.abort();
     }
 }

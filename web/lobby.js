@@ -25,6 +25,7 @@ lobby.hidden = false;
 // The hangar behind it all, once three.js has loaded.
 import('./backdrop.js').then(({ backdrop }) => backdrop());
 lobby.innerHTML = `
+  <a id="guide-link" href="/guide/">GUIDE</a>
   <button id="settings" title="Settings" aria-label="Settings" aria-expanded="false">${GEAR}</button>
   <div id="settings-panel" hidden>
     <h3>PILOT RECORD</h3>
@@ -37,6 +38,7 @@ lobby.innerHTML = `
     <label class="row">CALLSIGN <input id="lobby-callsign" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Pilot"></label>
     <button id="quick">QUICK PLAY</button>
     <div id="lobby-note"></div>
+    <p class="hint">New here? The <a href="/guide/">field guide</a> covers the mechs, weapons, modes and maps.</p>
     <a id="more" href="#below">MORE<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M5 9l7 7 7-7" fill="none" stroke="currentColor" stroke-width="2"/></svg></a>
   </div>
   <section id="below">
@@ -69,7 +71,7 @@ lobby.innerHTML = `
     <div class="row"><select id="practice-map"></select><button id="practice">PRACTICE</button></div>
     <p class="hint">On your own, without a server: try out a map, with every weapon unlocked.</p>
   </section>
-  <footer>© 2026 Alex Ngai · <a href="https://github.com/alexngai" target="_blank" rel="noopener">GitHub</a>${
+  <footer>© 2026 Alex Ngai · <a href="/guide/">Guide</a> · <a href="https://github.com/alexngai" target="_blank" rel="noopener">GitHub</a>${
     COFFEE ? ` · <a href="${COFFEE}" target="_blank" rel="noopener">Buy me a coffee</a>` : ''
   }</footer>`;
 

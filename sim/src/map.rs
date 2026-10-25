@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 /// Compiled-in maps. The index is what goes over the wire.
 pub const MAPS: [(&str, &str); 11] = [
-    ("saltworks", include_str!("../../maps/saltworks.json")),
+    ("isotope", include_str!("../../maps/isotope.json")),
     ("blockout", include_str!("../../maps/blockout.json")),
     ("foundry", include_str!("../../maps/foundry.json")),
     ("verdigris", include_str!("../../maps/verdigris.json")),
@@ -22,7 +22,7 @@ pub const MAPS: [(&str, &str); 11] = [
 /// Foundry.
 pub const DEFAULT: usize = 2;
 /// Maps the server rotates through between matches (blockout is a test map).
-pub const ROTATION: [&str; 10] = ["foundry", "saltworks", "verdigris", "riftline", "sump", "sinkhole", "canopy", "crashsite", "ziggurat", "span"];
+pub const ROTATION: [&str; 10] = ["foundry", "isotope", "verdigris", "riftline", "sump", "sinkhole", "canopy", "crashsite", "ziggurat", "span"];
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct Solid {
@@ -78,6 +78,14 @@ pub struct ZoneSpot {
     pub pad: Option<[f32; 3]>,
 }
 
+/// A Convoy route: points on walkable ground from team 0's base through the middle to team 1's,
+/// and the index of the one the hauler starts at (the middle).
+#[derive(Deserialize, Clone, Debug)]
+pub struct Route {
+    pub points: Vec<[f32; 3]>,
+    pub start: usize,
+}
+
 /// Where a map's objective modes play.
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct Objectives {
@@ -98,6 +106,12 @@ pub struct Objectives {
     /// Each team's base guns (team 0's first), in every team mode: where each stands.
     #[serde(default)]
     pub sentries: [Vec<[f32; 3]>; 2],
+    /// Capture the Flag: each team's flag stand (team 0's first), its zone inside the shelter.
+    #[serde(default)]
+    pub flags: Option<[ZoneSpot; 2]>,
+    /// Convoy: the hauler's route.
+    #[serde(default)]
+    pub convoy: Option<Route>,
 }
 
 #[derive(Deserialize, Clone, Debug)]

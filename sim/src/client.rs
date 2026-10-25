@@ -201,7 +201,7 @@ impl NetClient {
     }
 
     /// One predicted step: move (lunging at enemies where we last saw them), then get blocked by
-    /// other mechs there.
+    /// other mechs there, and by Convoy's hauler.
     fn predict(&mut self, input: &Input) {
         let t = self.arsenal.of(&self.mech);
         step_mech(&self.arena, t, &mut self.mech, input);
@@ -210,6 +210,11 @@ impl NetClient {
         for (_, _, other) in &self.obstacles {
             let mut other = *other;
             collide::separate(&self.arena, t, &mut self.mech, self.arsenal.of(&other), &mut other, 1.0);
+        }
+        let hauler = self.snapshots.back().and_then(|s| s.deployables.iter().find(|d| d.kind == crate::deploy::Kind::Hauler));
+        if let Some(d) = hauler {
+            let (th, mut body) = crate::deploy::hauler_body(t, d);
+            collide::separate(&self.arena, t, &mut self.mech, &th, &mut body, 1.0);
         }
     }
 
@@ -285,6 +290,16 @@ impl NetClient {
     /// Siege's stations, banks and drops as of the latest snapshot.
     pub fn siege(&self) -> Option<&SiegeNet> {
         self.snapshots.back().and_then(|s| s.siege.as_ref())
+    }
+
+    /// Capture the Flag's flags, raids and captures as of the latest snapshot.
+    pub fn ctf(&self) -> Option<&crate::ctf::CtfNet> {
+        self.snapshots.back().and_then(|s| s.ctf.as_ref())
+    }
+
+    /// Convoy's hauler as of the latest snapshot.
+    pub fn convoy(&self) -> Option<&crate::convoy::ConvoyNet> {
+        self.snapshots.back().and_then(|s| s.convoy.as_ref())
     }
 
     /// Deployables as of the latest snapshot.
@@ -414,7 +429,7 @@ impl NetClient {
                         }
                     }
                 }
-                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } | Event::TurretShot { .. } | Event::TurretHit { .. } | Event::Strike { .. } | Event::Captured { .. } | Event::Missile { .. } | Event::Ship { .. } => self.events.push(*e),
+                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } | Event::TurretShot { .. } | Event::TurretHit { .. } | Event::Strike { .. } | Event::Captured { .. } | Event::Missile { .. } | Event::Ship { .. } | Event::Flag { .. } | Event::Convoy(_) => self.events.push(*e),
             }
         }
         self.snapshots.push_back(s);

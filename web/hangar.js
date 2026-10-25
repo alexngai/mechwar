@@ -1,7 +1,7 @@
 // The hangar's turntable: the shown bay's mech on a pad under its own lights, drawn by its own
 // renderer (made the first time the hangar opens), turning slowly; drag it to turn it yourself.
 import * as THREE from 'three';
-import { Mech } from './mech.js';
+import { Mech, mountWeapon } from './mech.js';
 
 /** Stands in for the effects the preview mech would spawn: it never fires, dashes or burns. */
 export const NO_FX = new Proxy({}, { get: () => () => {} });
@@ -76,4 +76,50 @@ export class Preview {
     });
     this.renderer.render(this.scene, this.camera);
   }
+}
+
+/**
+ * Side profiles of the weapons with ids `ids` for the hangar's cards, as image URLs by id: each
+ * model alone, muzzle to the right and a little toward us, under the turntable's lights, drawn
+ * `w` by `h` px by a renderer made for it and thrown away.
+ */
+export function weaponThumbs(ids, w = 192, h = 96) {
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+  renderer.setSize(w, h, false);
+  const scene = new THREE.Scene();
+  scene.add(new THREE.HemisphereLight(0xdfe6ee, 0x2a2622, 2.2));
+  const key = new THREE.DirectionalLight(0xfff4e6, 2.4);
+  key.position.set(4, 6, -2);
+  scene.add(key);
+  // Neutral paint: what a mech's own materials would be before its team colors.
+  const lambert = (color) => new THREE.MeshLambertMaterial({ color, flatShading: true });
+  const m = { pods: lambert(0x7d8691), trim: lambert(0x3a3e44), barrels: lambert(0x2a2c30), hazard: lambert(0xc9a227), accent: new THREE.MeshBasicMaterial({ color: 0x7fe0ff }) };
+  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
+  const view = new THREE.Vector3(1, 0.3, -0.35).normalize(), box = new THREE.Box3(), mid = new THREE.Vector3(), corner = new THREE.Vector3();
+  const out = new Map();
+  for (const id of ids) {
+    const pod = new THREE.Group();
+    scene.add(pod);
+    mountWeapon(pod, 'B', 1, id, m);
+    pod.updateMatrixWorld(true);
+    box.setFromObject(pod).getCenter(mid);
+    camera.position.copy(mid).addScaledVector(view, 20);
+    camera.lookAt(mid);
+    camera.updateMatrixWorld();
+    // Frame the model's box as the camera sees it, padded, at the image's aspect.
+    let [x0, x1, y0, y1] = [Infinity, -Infinity, Infinity, -Infinity];
+    for (let c = 0; c < 8; c++) {
+      corner.set(c & 1 ? box.max.x : box.min.x, c & 2 ? box.max.y : box.min.y, c & 4 ? box.max.z : box.min.z).applyMatrix4(camera.matrixWorldInverse);
+      [x0, x1, y0, y1] = [Math.min(x0, corner.x), Math.max(x1, corner.x), Math.min(y0, corner.y), Math.max(y1, corner.y)];
+    }
+    const half = Math.max((x1 - x0) / 2, ((y1 - y0) / 2) * (w / h)) * 1.12, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    Object.assign(camera, { left: cx - half, right: cx + half, top: cy + half * (h / w), bottom: cy - half * (h / w) });
+    camera.updateProjectionMatrix();
+    renderer.render(scene, camera);
+    out.set(id, renderer.domElement.toDataURL());
+    scene.remove(pod);
+  }
+  renderer.dispose();
+  renderer.forceContextLoss();
+  return out;
 }

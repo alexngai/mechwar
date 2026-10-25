@@ -8,7 +8,7 @@
 // (maps/kit.mjs) adds the 180-degree twin. Metrics as the other maps': 9-10 m lanes and gates,
 // 6.5 m+ under decks, ramps near 24 degrees, 3 m hover ledges. Hover lasts about 5 s and a dash is
 // 8.5 m, so a 12 m gap takes a hover; there's no fall damage, so the chasm is a slow road, not a pit.
-import { bases, box, growth, lamp, once, pad, point, r3, railing, ramp, sentries, siege, sign, silos, turned, write } from './kit.mjs';
+import { bases, box, convoy, flagStand, flags, growth, lamp, once, pad, point, r3, railing, ramp, sentries, siege, sign, silos, turned, write } from './kit.mjs';
 
 const BASE = -25; // bottom of every rock mass
 const MAGENTA = '#ff6be0', LILAC = '#c9a2ff', RIFT = '#b45cff';
@@ -153,11 +153,20 @@ point([52, 0, 84], [52, 7, 57], [-15, 0, 80], [15, 0, 80], [-15, 0, 96], [15, 0,
 bases([-16, 0, 105]);
 // Base guns: one at the back of the yard, one up on the hangar roof.
 sentries([[-14, 0, 117.5], [12, 7, 107.5]]);
+// Capture the Flag: the stand outside the yard's west wall, its back to the base guns, its doorways
+// to the rim and the west gate.
+flags(flagStand([-47, 0, 90], 0));
 // B's launch pad is on the rail deck, over the road.
 silos({ at: [-84, 0, 46], radius: 10, band: 4, pad: [-84, 0, 42] }, { at: [0, 0, 0], radius: 10, band: 4, pad: [0, 10, 0] });
 // Siege: the station on the bridge's road deck, the AA gun up on the rail deck over it (the top of
 // the bridge, by the ramps at the bridgeheads), the ships over the bridge.
 siege({ at: [0, 0, 0], radius: 10, band: 4 }, { at: [0, 10, 0], radius: 8, band: 3, pad: [0, 10, 5] }, 50);
+// Convoy: the hauler starts mid-bridge on the road deck and each leg takes the high road home: off
+// the road deck onto the rim, round the foot of the bridgehead ramp and up it onto the rail deck, along
+// the rail deck over the rim (clear of B's and the AA gun's pads over the middle of the bridge), and
+// down the ramp into the yard to the base. The south leg is the twin.
+convoy([[0, 0, 0], [0.5, 0, 34.5], [16, 0, 39], [21, 0, 59.5], [13.5, 0, 70], [8.5, 9.32, 45.5], [4, 10, 42.5], [0, 10, 89], [-3.5, 0.46, 111], [-7, 0, 112], [-16, 0, 105]]);
+point([0, 5, 101], [9.5, 5, 55]); // halfway down the ramps into the yard and off the rail deck
 
 // --- Spawns, twin, write -------------------------------------------------------------------------
 const north = [[-20, 0.1, 102], [-12, 0.1, 108], [12, 0.1, 100], [20, 0.1, 96]];

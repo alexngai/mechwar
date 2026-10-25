@@ -1,7 +1,7 @@
 {
   "primaries": [
     {
-      "id": "stitcher", "name": "SMG", "unlock": 1, "desc": "Rapid fire; the spread blooms while held, and hits fade past 40 m", "sound": "vulcan", "recoil": "low",
+      "id": "stitcher", "name": "SMG", "unlock": 1, "desc": "A rapid-fire submachine gun for close fights", "sound": "vulcan", "recoil": "low", "use": [["LMB", "Hold to fire 14 rounds a second; short bursts keep the spread tight"], ["", "Hits fade past 30 m, to 40% by 70 m"]],
       "stats": {
         "fire_rate": 14, "shot_damage": 4.2, "heat_per_shot": 2,
         "spread_deg": 0.6, "bloom_per_shot": 0.4, "bloom_max": 4.5, "bloom_recovery": 3,
@@ -9,7 +9,7 @@
       }
     },
     {
-      "id": "triplet", "name": "Burst", "unlock": 1, "desc": "Three hard, accurate rounds a pull, then a beat", "sound": "burst", "recoil": "low",
+      "id": "triplet", "name": "Burst", "unlock": 1, "desc": "Three hard, accurate rounds a pull, then a beat", "sound": "burst", "recoil": "low", "use": [["LMB", "Each pull fires a three-round burst; pull again after the beat"], ["", "Accurate to mid range, fading past 40 m"]],
       "stats": {
         "fire_rate": 2.2, "burst": 3, "burst_gap": 0.07, "shot_damage": 6.4, "heat_per_shot": 3.5,
         "spread_deg": 0.25, "bloom_per_shot": 0.25, "bloom_max": 1.5, "bloom_recovery": 4,
@@ -17,11 +17,11 @@
       }
     },
     {
-      "id": "pike", "name": "Rifle", "unlock": 1, "desc": "Accurate, with mild bloom and long reach", "sound": "rifle", "recoil": "medium",
+      "id": "pike", "name": "Rifle", "unlock": 1, "desc": "Accurate, with mild bloom and long reach", "sound": "rifle", "recoil": "medium", "use": [["LMB", "Hold to fire 8 rounds a second"], ["", "Full damage out to 60 m, and still 60% at 120 m"]],
       "stats": {}
     },
     {
-      "id": "gyre", "name": "Gatling", "unlock": 2, "desc": "Spins up while held: opens fire after 0.2 s, from a chug to a torrent, and runs hot", "sound": "rotary", "recoil": "high",
+      "id": "gyre", "name": "Gatling", "unlock": 2, "desc": "A rotary cannon that spins up to a torrent, and runs hot", "sound": "rotary", "recoil": "high", "use": [["LMB", "Hold: it opens fire after 0.2 s and reaches full rate after 1.2 s"], ["", "Let go and it spins down over 0.8 s: fire long bursts, and watch your heat"]],
       "stats": {
         "fire_rate": 18, "spin_up": 1.2, "spin_down": 0.8, "spin_start": 0.2, "spin_delay": 0.2, "shot_damage": 4.1, "heat_per_shot": 2.5,
         "spread_deg": 1, "bloom_per_shot": 0.12, "bloom_max": 2.5, "bloom_recovery": 3,
@@ -29,7 +29,7 @@
       }
     },
     {
-      "id": "squall", "name": "Flak", "unlock": 2, "desc": "A shotgun: eight pellets in a wide cone, brutal up close and fading past 20 m", "sound": "shotgun", "recoil": "high",
+      "id": "squall", "name": "Flak", "unlock": 2, "desc": "A shotgun, brutal up close", "sound": "shotgun", "recoil": "high", "use": [["LMB", "Each shot is eight pellets in a wide cone"], ["", "Full damage inside 15 m, a fifth past 45 m: close in first"]],
       "stats": {
         "fire_rate": 1.5, "shot_damage": 4.5, "heat_per_shot": 22.5, "weapon_range": 80,
         "pellets": 8, "spread_deg": 3.5, "bloom_per_shot": 0, "bloom_max": 0,
@@ -37,7 +37,7 @@
       }
     },
     {
-      "id": "kiln", "name": "HEAT", "unlock": 2, "desc": "Hold to charge a burning slug that bursts on impact; charging widens the burst from 1 to 3.5 m and speeds the slug", "sound": "rail", "recoil": "medium", "projectile": "slug",
+      "id": "kiln", "name": "HEAT", "unlock": 2, "desc": "A charged cannon whose burning slug bursts on impact", "sound": "rail", "recoil": "medium", "projectile": "slug", "use": [["LMB", "Hold to charge, up to 0.9 s, and let go to fire"], ["", "Fully charged, it hits 1.5× harder, flies faster and bursts 3.5 m wide"], ["", "The slug drops a little: aim high at long range"]],
       "stats": {
         "fire_rate": 2, "charge_time": 0.675, "charge_damage": 1.5, "charge_speed": 2.5, "charge_radius": 3.5,
         "shot_damage": 18.4, "heat_per_shot": 24, "spread_deg": 0.1, "bloom_per_shot": 0, "bloom_max": 0,
@@ -45,14 +45,14 @@
       }
     },
     {
-      "id": "hail", "name": "Grenade rifle", "unlock": 3, "desc": "A drum-fed grenade rifle: three small grenades a second that drop, bounce off what they hit, and burst on a mech or after 5 s", "sound": "mortar", "recoil": "medium", "projectile": "shell",
+      "id": "hail", "name": "Auto-GL", "unlock": 3, "desc": "A drum-fed automatic grenade launcher: a stream of small, bouncing grenades", "sound": "mortar", "recoil": "medium", "projectile": "shell", "use": [["LMB", "Hold to fire about two grenades a second"], ["", "They drop, bounce off what they hit, and burst on a mech or after 1 s"], ["", "Bank them off walls and floors to reach behind cover"]],
       "stats": {
-        "fire_rate": 3, "shot_damage": 14, "heat_per_shot": 8, "spread_deg": 0.4, "bloom_per_shot": 0.3, "bloom_max": 2, "bloom_recovery": 4,
-        "shot_speed": 45, "shot_gravity": 20, "shot_radius": 2.5, "shot_bounce": 0.5, "shot_fuse": 5
+        "fire_rate": 1.95, "shot_damage": 21.5, "heat_per_shot": 12.3, "spread_deg": 0.4, "bloom_per_shot": 0.3, "bloom_max": 2, "bloom_recovery": 4,
+        "shot_speed": 45, "shot_gravity": 20, "shot_radius": 2.5, "shot_bounce": 0.5, "shot_fuse": 1
       }
     },
     {
-      "id": "talon", "name": "Homing rocket", "unlock": 2, "desc": "Single rockets that curve toward the enemy nearest your crosshair, within 3°, for as long as you keep them there; look away and they fly straight", "sound": "rocket", "recoil": "medium", "projectile": "rocket",
+      "id": "talon", "name": "Homing rocket", "unlock": 2, "desc": "Single rockets that curve onto the enemy you keep in your sights", "sound": "rocket", "recoil": "medium", "projectile": "rocket", "use": [["LMB", "Fire one rocket at a time"], ["", "Keep your crosshair within 6° of an enemy and rockets in flight turn toward it; a diamond marks it"], ["", "Look away and they fly straight; a quick dodge can shake them"]],
       "stats": {
         "fire_rate": 1.5, "shot_damage": 20.7, "heat_per_shot": 13, "spread_deg": 0, "bloom_per_shot": 0, "bloom_max": 0,
         "shot_speed": 60, "shot_gravity": 0, "shot_radius": 2, "shot_turn": 50, "shot_seek_cone": 3, "weapon_range": 150
@@ -61,14 +61,14 @@
   ],
   "secondaries": [
     {
-      "id": "darts", "name": "Scatter", "unlock": 1, "desc": "Nine slow flak pellets in a cone, each bursting on contact or at 60 m", "sound": "flak", "recoil": "high", "projectile": "flak",
+      "id": "darts", "name": "Scatter", "unlock": 1, "desc": "Nine slow flak pellets in a cone", "sound": "flak", "recoil": "high", "projectile": "flak", "use": [["RMB", "Fire nine flak pellets; each bursts on contact or at 60 m"], ["RMB", "Press again to burst them all at once"]],
       "stats": {
         "alt_cooldown": 3.5, "alt_heat": 32, "alt_count": 9, "alt_cone": 1, "alt_spread_deg": 3, "alt_speed": 110,
         "alt_loft_deg": 0, "alt_gravity": 4, "alt_bounce": 0, "alt_fuse": 0.55, "alt_damage": 6, "alt_radius": 1.5
       }
     },
     {
-      "id": "hornet", "name": "Hellfire", "unlock": 1, "desc": "Lock-on volley: middle-click locks the enemy nearest your aim within 30° and 150 m in 0.35 s, and the lock holds 2.5 s wherever you look; fire eight slow missiles that fan out wide for 0.2 s, then curve onto it, even round a corner", "sound": "hornet", "recoil": "none", "projectile": "dart",
+      "id": "hornet", "name": "Hellfire", "unlock": 1, "desc": "Lock-on missiles that curve onto their target, even round a corner", "sound": "hornet", "recoil": "none", "projectile": "dart", "use": [["MMB", "Press with an enemy near your crosshair (within 30° and 150 m), and keep it there 0.35 s to lock"], ["", "Once locked, the lock holds 2.5 s wherever you look"], ["RMB", "Fire eight missiles: they fan out, then curve onto the lock"], ["", "Fired without a lock, they fly straight and scatter"]],
       "stats": {
         "alt_lock_time": 0.35, "alt_lock_cone": 30, "alt_lock_hold": 2.5, "alt_turn": 60, "alt_home_delay": 0.2, "alt_count": 8, "alt_cone": 1, "alt_spread_deg": 18,
         "alt_speed": 33, "alt_speed_jitter": 0.15, "alt_gravity": 0, "alt_loft_deg": 6, "alt_bounce": 0, "alt_fuse": 4.55, "alt_damage": 5, "alt_radius": 2,
@@ -76,50 +76,50 @@
       }
     },
     {
-      "id": "mender", "name": "Repair torch", "unlock": 2, "desc": "Hold it on a teammate to mend 10 hp/s, or on an enemy to burn 6 hp/s, out to 28 m; runs warm while held", "sound": "mender", "recoil": "none",
+      "id": "mender", "name": "Repair torch", "unlock": 2, "desc": "A beam that mends teammates and burns enemies", "sound": "mender", "recoil": "none", "use": [["RMB", "Hold on a teammate to mend 10 hp/s, out to 28 m"], ["RMB", "Hold on an enemy to burn 6 hp/s"], ["", "It runs warm while held"]],
       "stats": { "alt_beam": 28, "alt_beam_heal": 10, "alt_damage": 6, "alt_heat": 32, "alt_cooldown": 0 }
     },
     {
-      "id": "rocket", "name": "Rocket", "unlock": 1, "desc": "Straight-flying rocket with an 8 m blast", "sound": "rocket", "recoil": "none", "projectile": "rocket",
+      "id": "rocket", "name": "Rocket", "unlock": 1, "desc": "Straight-flying rocket with an 8 m blast", "sound": "rocket", "recoil": "none", "projectile": "rocket", "use": [["RMB", "Fire a rocket: 40 damage, 8 m blast"], ["RMB", "Press again to burst it in the air"], ["", "Aim at the ground or a wall beside a target: the blast still catches it"]],
       "stats": { "alt_radius": 8 }
     },
     {
-      "id": "spindle", "name": "Rail gun", "unlock": 3, "desc": "Middle-click toggles the scope; let go of the trigger to fire one fast, flat, heavy slug that punches through shield domes and barriers, wearing them as it passes", "sound": "spindle", "recoil": "high", "projectile": "rail", "zoom": 2.5,
+      "id": "spindle", "name": "Rail gun", "unlock": 3, "desc": "One fast, flat, heavy slug that punches through shields", "sound": "spindle", "recoil": "high", "projectile": "rail", "zoom": 2.5, "use": [["MMB", "Toggle the scope"], ["RMB", "Press and let go to fire: the slug leaves on the release"], ["", "It flies through shield domes and barriers, wearing them as it passes"]],
       "stats": {
         "alt_release": 1, "alt_count": 1, "alt_speed": 1000, "alt_gravity": 0, "alt_loft_deg": 0, "alt_bounce": 0,
         "alt_fuse": 0.4, "alt_damage": 34, "alt_radius": 0.8, "alt_cooldown": 3.5, "alt_heat": 66, "alt_pierce": 1
       }
     },
     {
-      "id": "furnace", "name": "Furnace", "unlock": 2, "desc": "Heat-fed launcher: throws a fireball, bigger the hotter you run, venting a third of your heat, and fires even overheated", "sound": "furnace", "recoil": "high", "projectile": "ember",
+      "id": "furnace", "name": "Furnace", "unlock": 2, "desc": "A heat-fed launcher: the hotter you run, the bigger the fireball", "sound": "furnace", "recoil": "high", "projectile": "ember", "use": [["RMB", "Throw a fireball; it spends a third of your heat"], ["", "It fires even overheated: run hot, then throw to cool down"], ["RMB", "Press again to burst it early"]],
       "stats": {
         "alt_cooldown": 4, "alt_heat": 0, "alt_heat_fed": 0.333, "alt_count": 1, "alt_speed": 70, "alt_gravity": 6, "alt_loft_deg": 2,
         "alt_bounce": 0, "alt_fuse": 3, "alt_damage": 10, "alt_radius": 2, "alt_charge_damage": 5, "alt_charge_radius": 3
       }
     },
     {
-      "id": "mortar", "name": "Grenade launcher", "unlock": 1, "desc": "Lobbed shell that bounces once or twice, then bursts wide", "sound": "mortar", "recoil": "low", "projectile": "shell",
+      "id": "mortar", "name": "Grenade launcher", "unlock": 1, "desc": "Lobbed shell that bounces once or twice, then bursts wide", "sound": "mortar", "recoil": "low", "projectile": "shell", "use": [["RMB", "Lob a shell: 40 damage, 8 m blast"], ["", "It bounces once or twice, then bursts at 2.8 s"], ["RMB", "Press again to burst it early"]],
       "stats": {
         "alt_cooldown": 5, "alt_heat": 50, "alt_speed": 60, "alt_loft_deg": 10, "alt_gravity": 18,
         "alt_bounce": 0.45, "alt_fuse": 2.8, "alt_damage": 40, "alt_radius": 8
       }
     },
     {
-      "id": "splitter", "name": "Cluster launcher", "unlock": 2, "desc": "A canister that bursts at its fuse or on a second press into six bomblets that rain down", "sound": "mortar", "recoil": "low", "projectile": "shell",
+      "id": "splitter", "name": "Cluster launcher", "unlock": 2, "desc": "A canister that splits into six bomblets", "sound": "mortar", "recoil": "low", "projectile": "shell", "use": [["RMB", "Lob a canister"], ["RMB", "Press again, or wait 1.4 s, to split it into six bomblets that rain down"], ["", "Split it over a target or a group"]],
       "stats": {
         "alt_cooldown": 4, "alt_heat": 36, "alt_count": 1, "alt_speed": 50, "alt_gravity": 14, "alt_loft_deg": 10, "alt_bounce": 0,
         "alt_fuse": 1.4, "alt_damage": 12, "alt_radius": 2.5, "alt_split": 6, "alt_split_damage": 11, "alt_split_radius": 2.5, "alt_split_speed": 7
       }
     },
     {
-      "id": "warren", "name": "Mine layer", "unlock": 1, "desc": "A sticky mine a second that bursts when an enemy comes within 3.5 m; ten down at most, and middle-click sets them all off", "sound": "mines", "recoil": "low", "projectile": "mine",
+      "id": "warren", "name": "Mine layer", "unlock": 1, "desc": "Sticky proximity mines", "sound": "mines", "recoil": "low", "projectile": "mine", "use": [["RMB", "Lay a sticky mine, one a second, up to ten"], ["", "A mine bursts when an enemy comes within 3.5 m"], ["MMB", "Set off all your mines at once"]],
       "stats": {
         "alt_cooldown": 1, "alt_heat": 12, "alt_count": 1, "alt_spread_deg": 0, "alt_speed": 50, "alt_loft_deg": 10, "alt_gravity": 18,
         "alt_bounce": 0, "alt_stick": 1, "alt_trigger": 3.5, "alt_max": 10, "alt_fuse": 20, "alt_damage": 22, "alt_radius": 3.5
       }
     },
     {
-      "id": "piston", "name": "Pile driver", "unlock": 2, "desc": "A rocket punch: hold to spool up the spike's booster, let go to fire it. The longer the wind-up, the harder it hits (20, or 55 fully wound) and the farther the booster carries you, up to 12 m: onto an enemy ahead in that range, or else along your aim, up too if you look up. A hit throws them along your aim, a Light farthest, and a wall they slam into hurts too. It fires even overheated, but locks your guns for 0.5 s", "sound": "piston", "recoil": "high",
+      "id": "piston", "name": "Pile driver", "unlock": 2, "desc": "A rocket punch: a booster-driven spike that throws what it hits", "sound": "piston", "recoil": "high", "use": [["RMB", "Hold to spool up the booster: 0.8 s to full"], ["RMB", "Let go to punch. The longer the wind-up, the harder it hits (20 to 55) and the farther the booster carries you (up to 12 m)"], ["", "With an enemy ahead in range it homes in; otherwise it carries you along your aim, up too, as a dash"], ["", "A hit throws them along your aim, and a wall they slam into hurts. It works overheated, but locks your guns for 0.5 s"]],
       "stats": {
         "alt_melee": 3, "alt_charge_time": 0.8, "alt_lunge": 12, "alt_lunge_speed": 36, "alt_impulse": 255, "alt_charge_damage": 2.75,
         "alt_release": 1, "alt_damage": 20, "alt_cooldown": 2.5, "alt_heat": 12
@@ -127,17 +127,17 @@
     }
   ],
   "offensive": [
-    { "id": "grenade", "name": "Tumbler", "unlock": 0, "desc": "A frag grenade, lobbed: it bounces about, then bursts" },
-    { "id": "limpet", "name": "Limpet", "unlock": 2, "desc": "A remote mine: thrown, it sticks where it lands, and Q again sets it off; one down at a time" },
-    { "id": "smoke", "name": "Pall", "unlock": 1, "desc": "A smoke grenade: bursts into a cloud 16 m wide that hides whoever's in or behind it for 10 s" },
-    { "id": "mg_turret", "name": "MG turret", "unlock": 2, "desc": "A tripod gun set down ahead for 20 s: it fires short bursts at the nearest enemy it sees within 30 m, until its 25 hull is shot off" },
-    { "id": "rocket_turret", "name": "Rocket turret", "unlock": 3, "desc": "A tripod launcher set down ahead for 20 s: a rocket every 2 s at the nearest enemy it sees within 45 m, until its 25 hull is shot off" }
+    { "id": "grenade", "name": "Tumbler", "unlock": 0, "desc": "A frag grenade, lobbed: it bounces about, then bursts", "use": [["Q", "Lob it: 30 damage, 5 m blast, after 2 s of bouncing about"]] },
+    { "id": "limpet", "name": "Limpet", "unlock": 2, "desc": "A remote mine you set off yourself", "use": [["Q", "Throw it: it sticks where it lands"], ["Q", "Press again to set it off: 45 damage"], ["", "One down at a time"]] },
+    { "id": "smoke", "name": "Pall", "unlock": 1, "desc": "A smoke grenade", "use": [["Q", "Throw it: it bursts into a cloud 16 m wide for 10 s"], ["", "No one sees into or through it: break line of sight to escape, or to close in"]] },
+    { "id": "mg_turret", "name": "MG turret", "unlock": 2, "desc": "A tripod machine gun", "use": [["Q", "Set it down ahead of you for 20 s"], ["", "It fires bursts at the nearest enemy it sees within 30 m, until its 25 hull is shot off"]] },
+    { "id": "rocket_turret", "name": "Rocket turret", "unlock": 3, "desc": "A tripod rocket launcher", "use": [["Q", "Set it down ahead of you for 20 s"], ["", "It fires a rocket every 2 s at the nearest enemy it sees within 45 m, until its 25 hull is shot off"]] }
   ],
   "support": [
-    { "id": "emp", "name": "Brownout", "unlock": 0, "desc": "An EMP around you: drains enemies' fuel and jams their boost" },
-    { "id": "orb", "name": "Salve", "unlock": 2, "desc": "Drops a repair orb at your feet, like a wreck's, that only your side can heal from" },
-    { "id": "dome", "name": "Shield dome", "unlock": 2, "desc": "A half-sphere 21 m across around you for 4 s, or until enemy fire wears off its 150 hull: no shot but a rail slug crosses it either way, whoever fires it, so to hit someone under it you have to walk in or break it; mechs walk through" },
-    { "id": "barrier", "name": "Barrier", "unlock": 2, "desc": "Raises a wall 8 m wide and 8 m tall, 4 m ahead across your aim, for 5 s, or until enemy fire wears off its 200 hull: nothing but a rail slug gets through, either way" }
+    { "id": "emp", "name": "Brownout", "unlock": 0, "desc": "An EMP pulse around you", "use": [["E", "Pulse it: enemies within 14 m lose 60 fuel and can't boost for 2 s"], ["", "Ground flyers, and stop chasers"]] },
+    { "id": "orb", "name": "Salve", "unlock": 2, "desc": "A repair orb only your side can heal from", "use": [["E", "Drop it at your feet"], ["", "You and your teammates heal standing by it, until it runs dry"]] },
+    { "id": "dome", "name": "Shield dome", "unlock": 2, "desc": "A shield dome over you and your team", "use": [["E", "Raise a dome 21 m across around you for 4 s, or until 150 hull is shot off"], ["", "No shot crosses it either way but a rail slug. Mechs walk through, so fights move inside"]] },
+    { "id": "barrier", "name": "Barrier", "unlock": 2, "desc": "A wall you raise ahead of you", "use": [["E", "Raise it 4 m ahead, across your aim: 8 m wide and tall, for 5 s or until 200 hull is shot off"], ["", "Nothing but a rail slug gets through it, either way, and mechs can't pass"]] }
   ],
   "abilities": [
     { "id": "slipstream", "name": "Speed boost", "unlock": 0, "classes": ["A"], "desc": "Refills the fuel tank, then 4 s of boost that burns no fuel and runs 25% faster" },

@@ -7,3 +7,5 @@ sim/pkg/
 .claude/worktrees/
 .claude/launch.json
 balance/out/
+*/.DS_Store
+.DS_Store

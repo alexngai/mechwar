@@ -13,9 +13,11 @@ import classesText from '../classes.json?raw';
 import weaponsText from '../weapons.json?raw';
 import { buildArena, HIGH_ONLY, LOW_ONLY } from './arena.js';
 import { Effects, HOT, halo, hot } from './fx.js';
-import { Objectives, SENTRY, SHIP, SHIP_HULL } from './objectives.js';
-import { Preview } from './hangar.js';
-import saltworks from '../maps/saltworks.json';
+import { HAULER, Objectives, SENTRY, SENTRY_HEIGHT, SENTRY_SHIELD, SHIP, SHIP_HULL } from './objectives.js';
+import { Preview, weaponThumbs } from './hangar.js';
+import { GLYPHS, STATS, facts as cardFacts, shown } from './cards.js';
+import { controlsHtml } from './controls.js';
+import isotope from '../maps/isotope.json';
 import foundry from '../maps/foundry.json';
 import verdigris from '../maps/verdigris.json';
 import riftline from '../maps/riftline.json';
@@ -60,7 +62,7 @@ const sameOrigin = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${locatio
 const server = params.get('server') ?? (import.meta.env.PROD && !params.has('offline') ? sameOrigin : null);
 const net = server ? new WasmNetClient() : null;
 // Maps by name; the sim's compiled-in list gives the index. Offline, ?map=<name> picks one.
-const MAPS = { saltworks, blockout, foundry, verdigris, riftline, sump, sinkhole, canopy, crashsite, ziggurat, span };
+const MAPS = { isotope, blockout, foundry, verdigris, riftline, sump, sinkhole, canopy, crashsite, ziggurat, span };
 const mapIndex = (name) => {
   for (let i = 0; map_name(i); i++) if (map_name(i) === name) return i;
   return 0;
@@ -108,7 +110,7 @@ if (net) {
 const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, SPIN: 31, CHARGE: 32, BLOOM: 33, FIRE_WAIT: 34, LOCK: 35, LOCK_T: 36, BEAM: 37, BEAM_END: 38, SHIELD: 41, LIMPET: 42, SEEK: 43, ALT_CHARGE: 44, BURN: 45, OFFSET: 46 };
 // The HUD marks our side in blue and the other side in red, whichever team we're on.
 const FRIEND = TEAMS[0], FOE = TEAMS[1];
-const DEATHMATCH = 1, MISSILE_ASSAULT = 2, SIEGE = 3; // their indices in the sim's Mode::ALL
+const DEATHMATCH = 1, MISSILE_ASSAULT = 2, SIEGE = 3, CAPTURE_THE_FLAG = 4, CONVOY = 5; // their indices in the sim's Mode::ALL
 /** Battleships' owner ids start here, past every player's (deploy::ship_owner). */
 const SHIP_OWNERS = 8;
 /** Base guns' owner ids start here, past the ships' (deploy::sentry_owner). */
@@ -218,7 +220,7 @@ cockpit.setWeapons('B', me, T('eye_height'), T('mech_height') / me.height);
 
 // The arena is built once its map is known: right away offline, after the Welcome online, and
 // again whenever a new match is on another map.
-let arenaMap = -1, arena = Object.assign([], { vents: [], furnaces: [], sparkers: [], lights: [] });
+let arenaMap = -1, arena = Object.assign([], { vents: [], furnaces: [], sparkers: [], steam: [], lights: [] });
 const ensureArena = (index) => {
   if (index < 0 || index === arenaMap) return;
   arenaMap = index;
@@ -341,6 +343,27 @@ addEventListener('mouseup', (e) => {
   if (e.button === 1) auxHeld = false;
 });
 addEventListener('contextmenu', (e) => e.preventDefault());
+// ?capture: the page under remote control, for the guide's screen grabs (tools/capture.js): the
+// camera set anywhere, the view held still, and our mech looking, firing
+// and locking on with no mouse; keys still come in as key events. Only in dev, or a build made with
+// VITE_CAPTURE=1: never in what players get, where it would aim for them.
+const remote = (import.meta.env.DEV || import.meta.env.VITE_CAPTURE) && params.has('capture') ? (globalThis.__capture = {
+  /** null: the game's own camera. { eye, look }: there, in world metres. */
+  view: null,
+  /** While set, the last frame stays on screen. */
+  hold: false,
+  team: -1,
+  look: (y, p) => { yaw = y; pitch = p; },
+  fire: (main, alt = false) => { firing = main; altFiring = alt; },
+  lock: (on) => { auxHeld = on; aux ||= on; },
+  me: () => ({ pos: pos.toArray(), yaw, pitch, health: curr[S.HEALTH], heat: curr[S.HEAT], overheated: !!curr[S.OVERHEATED], fuel: curr[S.FUEL], lock: curr[S.LOCK] - 1, lockT: curr[S.LOCK_T] }),
+  mechs: () => [...remotes].map(([id, e]) => ({ id, team: e.team, cls: e.cls, bot: e.bot, health: e.health, pos: e.pos.toArray(), yaw: e.yaw, boosting: e.boosting, hovering: e.hovering, repairing: e.repairing, ability: e.ability && e.mech.weapons.ability.id, loadout: e.loadout })),
+  objectives: () => objectives,
+  /** How far a ray from `o` along `d` (unit) goes before it hits the arena, up to `max`. */
+  ray: (o, d, max) => game.cast_ray(...o, ...d, max),
+  /** Deployables (10 floats each: kind, team, owner, xyz...), health orbs (5 each: xyz...) and smoke clouds (5 each: xyz, radius, left). */
+  field: () => ({ deployables: [...game.deployables()], orbs: [...orbs], clouds: [...clouds] }),
+}) : null;
 addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
   if (e.code === 'Space') e.preventDefault();
@@ -363,6 +386,18 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Escape' && !locked() && performance.now() - unlockedAt > 200) setMenu(!menuOpen);
   const digit = ['Digit1', 'Digit2', 'Digit3'].indexOf(e.code);
   if (digit >= 0 && !$('picker').hidden) showBay(digit);
+  // In the hangar, up and down step through the open slot's cards, left and right through its slots.
+  if (!$('picker').hidden && /^Arrow(Up|Down|Left|Right)$/.test(e.code) && !e.target.closest?.('input, select')) {
+    e.preventDefault();
+    const step = e.code === 'ArrowDown' || e.code === 'ArrowRight' ? 1 : -1, at = SLOTS.findIndex(([s]) => s === tab);
+    if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+      tab = SLOTS[(at + step + SLOTS.length) % SLOTS.length][0];
+      showBay(bay);
+    } else {
+      const [slot, list] = SLOTS[at], order = offered(bay, list), k = order.indexOf(picks[bay][slot]);
+      pickEntry(order[Math.min(Math.max(k + step, 0), order.length - 1)]);
+    }
+  }
   if (e.code === 'Enter' && !$('picker').hidden) launch(bay);
 });
 addEventListener('keyup', (e) => {
@@ -477,6 +512,8 @@ function setMenu(open) {
   menuOpen = open;
   $('menu').hidden = !open;
   $('to-hangar').hidden = picked === null || pickerOpen;
+  // The controls, for what's carried now.
+  if (open) $('controls').innerHTML = controlsHtml(armament(loadout), !net);
   if (open) $('menu-body').append($('board'), $('prefs'));
   else {
     $('score').after($('board'));
@@ -550,11 +587,6 @@ const CARRY_MAX = 100;
 // launch again (or C opens the hangar sooner). `killcam` is their id, `killYaw` the camera's heading.
 let killcam = null, killYaw = 0, killcamHtml = '';
 const killEye = new THREE.Vector3();
-/** Damage a second from value lookup `v`'s primary, sustained at full spin or charge, before falloff and heat. */
-const dps = (v) => {
-  const hit = v('shot_damage') * v('pellets') * (v('charge_time') > 0 ? v('charge_damage') : 1);
-  return Math.round((hit * v('burst')) / (1 / v('fire_rate') + v('charge_time')));
-};
 // --- Hangar ----------------------------------------------------------------
 // One bay per class, each holding the loadout last picked in it (saved locally by weapon id). The
 // hangar shows before the first launch, on death and with C; Launch (or Enter) sends the shown
@@ -575,26 +607,42 @@ const unlockRow = (i, list, k) => {
   return `<div class="unlock">LOCKED · ${w.unlock} ${w.unlock === 1 ? 'POINT' : 'POINTS'} (${left} to spend)${left >= w.unlock ? `<button data-list="${list}" data-k="${k}">UNLOCK</button>` : ''}</div>`;
 };
 const preview = new Preview($('preview'), Math.max(...CLASS_KEYS.map((_, i) => classValue(i, 'mech_height'))));
-/** Stat bars per slot: label, value from a lookup like `valueOf`'s, unit. */
-const STATS = {
-  primaries: [
-    ['Damage/s', (v) => dps(v), ''],
-    ['Range', (v) => Math.min(v('weapon_range'), v('falloff_end')), ' m'],
-    ['Heat/s', (v) => (v('heat_per_shot') * v('burst')) / (1 / v('fire_rate') + v('charge_time')), ''],
-  ],
-  secondaries: [
-    ['Damage', (v) => (v('alt_beam') > 0 ? v('alt_damage') : v('alt_damage') * Math.max(v('alt_count'), 1) + v('alt_split') * v('alt_split_damage')), ''],
-    ['Blast', (v) => (v('alt_beam') > 0 ? 0 : v('alt_radius')), ' m'],
-    ['Cooldown', (v) => v('alt_cooldown'), ' s'],
-  ],
-};
-const shown = (x) => (x < 10 ? x.toFixed(1).replace(/\.0$/, '') : Math.round(x));
 /** Bars for class `cls` carrying `l`, its `slot` weapon against the rest of `list`. */
 const statBars = (cls, l, slot, list) => STATS[list].map(([label, f, unit]) => {
   const at = (k) => f((name) => valueOf(cls, { ...l, [slot]: k }, name));
   const x = at(l[slot]), max = Math.max(...weapons[list].map((_, k) => at(k)), 1e-6);
   return `<span>${label}</span><span class="bar"><i style="width: ${Math.round((100 * x) / max)}%"></i></span><span>${shown(x)}${unit}</span>`;
 }).join('');
+// The bay's slots, in order: each one's key in a loadout, its weapons.json list, label and controls.
+const SLOTS = [['primary', 'primaries', 'PRIMARY', 'LMB'], ['secondary', 'secondaries', 'SECONDARY', 'RMB · MMB'], ['offensive', 'offensive', 'ITEM', 'Q'], ['support', 'support', 'SUPPORT', 'E'], ['ability', 'abilities', 'ABILITY', 'F']];
+let tab = 'primary'; // the slot whose cards show
+let thumbs = null; // weapons' side profiles by id, drawn the first time the hangar shows
+/** The few numbers on entry `k`'s card: class `i` carrying it in `slot` of loadout `l`. */
+const facts = (i, l, slot, list, k) => cardFacts(list, weapons[list][k].id, (name) => valueOf(i, { ...l, [slot]: k }, name));
+/**
+ * Entry `k` of `list` as a card for class `i`: its picture, name and numbers; picked, also what it
+ * does and how to use it (weapons.json's `use`, key and step; one with none, an ability, is its
+ * description on the slot's key).
+ */
+const card = (i, l, slot, list, k) => {
+  const w = weapons[list][k], on = k === l[slot], owned = ownsWeapon(i, list, k), pic = thumbs?.get(w.id);
+  const steps = w.use ?? [[SLOTS.find(([s]) => s === slot)[3], w.desc]];
+  const use = steps.map(([key, text]) => `<li><kbd${key ? '' : ' class="blank"'}>${key}</kbd>${text}</li>`).join('');
+  const more = on ? `<div class="more">${w.use ? `<p>${w.desc}</p>` : ''}<ul class="use">${use}</ul>${STATS[list] ? `<div class="bars">${statBars(i, l, slot, list)}</div>` : ''}${unlockRow(i, list, k)}</div>` : '';
+  return `<div class="card${on ? ' on' : ''}${owned ? '' : ' locked'}" role="radio" aria-checked="${on}" data-k="${k}">`
+    + `<div class="row"><span class="pic">${pic ? `<img src="${pic}" alt="">` : GLYPHS[w.id] ?? ''}</span><span class="what"><b>${w.name}${owned ? '' : `<i>${w.unlock}</i>`}</b><small>${facts(i, l, slot, list, k)}</small></span></div>${more}</div>`;
+};
+/** The entries of `list` class `i` may carry, those it owns first (then the cheapest locked). */
+const offered = (i, list) => weapons[list].map((_, k) => k).filter((k) => fits(CLASS_KEYS[i], weapons[list][k]))
+  .sort((a, b) => ownsWeapon(i, list, b) - ownsWeapon(i, list, a) || (ownsWeapon(i, list, a) ? 0 : weapons[list][a].unlock - weapons[list][b].unlock));
+/** Picks entry `k` of the open slot's list for the shown bay, and remembers it. */
+function pickEntry(k) {
+  const [slot] = SLOTS.find(([s]) => s === tab);
+  picks[bay] = { ...picks[bay], [slot]: k };
+  const ids = Object.fromEntries(Object.entries(armament(picks[bay])).map(([s, w]) => [s, w.id]));
+  try { localStorage.setItem(`mechwar.loadout.${CLASS_KEYS[bay]}`, JSON.stringify(ids)); } catch { /* private mode */ }
+  showBay(bay);
+}
 const bays = CLASS_KEYS.map((key, i) => {
   const b = document.createElement('button');
   b.className = 'bay';
@@ -604,40 +652,43 @@ const bays = CLASS_KEYS.map((key, i) => {
 });
 function showBay(i) {
   bay = i;
-  const key = CLASS_KEYS[i], c = classes[key], l = picks[i], { primary, secondary, offensive, support, ability } = armament(l);
+  const key = CLASS_KEYS[i], c = classes[key], l = picks[i];
   bays.forEach((b, k) => {
     const w = armament(picks[k]);
     b.classList.toggle('on', k === i);
     b.innerHTML = `${k + 1} · ${classes[CLASS_KEYS[k]].name}<small>${w.primary.name} · ${w.secondary.name}</small>`;
   });
-  const chips = (slot, list) => weapons[list].map((w, k) => {
-    if (!fits(key, w)) return '';
-    const lock = ownsWeapon(i, list, k) ? '' : `<i>${w.unlock}</i>`;
-    return `<label class="chip${lock && ' locked'}"><input type="radio" name="${slot}" value="${k}"${k === l[slot] ? ' checked' : ''}>${w.name}${lock}</label>`;
-  }).join('');
+  thumbs ??= weaponThumbs([...weapons.primaries, ...weapons.secondaries].map((w) => w.id));
   const points = net && pilot ? ` · ${pointsLeft(pilot)} unlock points` : '';
+  const [slot, list, label, controls] = SLOTS.find(([s]) => s === tab), picked = armament(l);
+  // Re-drawn in place, the list keeps its scroll; opened on another slot, it shows the pick.
+  const cards = $('cards'), kept = cards?.dataset.tab === tab ? cards.scrollTop : null;
   $('slots').innerHTML = `
     <div class="slot"><b>${c.name.toUpperCase()}<span>${c.role}</span></b>HP ${classValue(i, 'health_max')} · ${classValue(i, 'walk_speed')} m/s${points}</div>
-    <div class="slot"><b>PRIMARY<span>LMB</span></b><div class="chips">${chips('primary', 'primaries')}</div><div class="bars">${statBars(i, l, 'primary', 'primaries')}</div><p>${primary.desc}</p>${unlockRow(i, 'primaries', l.primary)}</div>
-    <div class="slot"><b>SECONDARY<span>RMB · MMB</span></b><div class="chips">${chips('secondary', 'secondaries')}</div><div class="bars">${statBars(i, l, 'secondary', 'secondaries')}</div><p>${secondary.desc}</p>${unlockRow(i, 'secondaries', l.secondary)}</div>
-    <div class="slot"><b>ITEM<span>G</span></b><div class="chips">${chips('offensive', 'offensive')}</div><p>${offensive.desc}</p>${unlockRow(i, 'offensive', l.offensive)}</div>
-    <div class="slot"><b>SUPPORT ITEM<span>T</span></b><div class="chips">${chips('support', 'support')}</div><p>${support.desc}</p>${unlockRow(i, 'support', l.support)}</div>
-    <div class="slot"><b>ABILITY<span>F</span></b><div class="chips">${chips('ability', 'abilities')}</div><p>${ability.desc}</p>${unlockRow(i, 'abilities', l.ability)}</div>`;
+    <div class="tabs" role="tablist">${SLOTS.map(([s, , name]) => `<button class="tab${s === tab ? ' on' : ''}" role="tab" aria-selected="${s === tab}" data-tab="${s}">${name}<small>${picked[s].name}</small></button>`).join('')}</div>
+    <div class="list-head">${label}<span>${controls}</span></div>
+    <div id="cards" role="radiogroup" data-tab="${tab}">${offered(i, list).map((k) => card(i, l, slot, list, k)).join('')}</div>`;
+  if (kept === null) $('cards').querySelector('.card.on')?.scrollIntoView({ block: 'nearest' });
+  else $('cards').scrollTop = kept;
   preview.show(key, l, classValue(i, 'mech_height'));
 }
-$('slots').addEventListener('change', () => {
-  const at = (slot) => +$('slots').querySelector(`[name="${slot}"]:checked`).value;
-  picks[bay] = Object.fromEntries(Object.keys(LISTS).map((slot) => [slot, at(slot)]));
-  const ids = Object.fromEntries(Object.entries(armament(picks[bay])).map(([slot, w]) => [slot, w.id]));
-  try { localStorage.setItem(`mechwar.loadout.${CLASS_KEYS[bay]}`, JSON.stringify(ids)); } catch { /* private mode */ }
-  showBay(bay);
-});
 $('slots').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-list]');
-  if (!b || ws?.readyState !== WebSocket.OPEN) return;
-  ws.send(net.unlock(bay, Object.values(LISTS).indexOf(b.dataset.list), +b.dataset.k));
-  b.disabled = true;
-  b.textContent = 'UNLOCKING…';
+  if (b) {
+    if (ws?.readyState !== WebSocket.OPEN) return;
+    ws.send(net.unlock(bay, Object.values(LISTS).indexOf(b.dataset.list), +b.dataset.k));
+    b.disabled = true;
+    b.textContent = 'UNLOCKING…';
+    return;
+  }
+  const t = e.target.closest('.tab');
+  if (t) {
+    tab = t.dataset.tab;
+    showBay(bay);
+    return;
+  }
+  const c = e.target.closest('.card');
+  if (c && !c.classList.contains('on')) pickEntry(+c.dataset.k);
 });
 $('launch').addEventListener('click', () => {
   launch(bay);
@@ -693,6 +744,7 @@ const toChest = (p, cls) => { p.y += classValue(cls, 'mech_height') * 0.5; retur
 const padStands = new Map(), padAt = new THREE.Vector3();
 
 function frame(now) {
+  if (remote?.hold) return void requestAnimationFrame(frame);
   renderer.info.reset();
   const dt = Math.min((now - last) / 1000, 0.25);
   acc += dt;
@@ -752,9 +804,11 @@ function frame(now) {
   if (net) ensureArena(net.map());
   const hudState = net ? net.hud() : null;
   const [myId, myTeam] = hudState ? [hudState[0], hudState[6]] : [-1, -1];
+  if (remote) remote.team = myTeam;
   // In Deathmatch everyone's their own team: paint us blue and the rest red, as by side.
   const dm = hudState?.[20] === DEATHMATCH, assault = hudState?.[20] === MISSILE_ASSAULT, sieging = hudState?.[20] === SIEGE;
   const zones = net ? net.zones() : new Float32Array(0), siege = net ? net.siege() : new Float32Array(0);
+  const ctf = net ? net.ctf() : new Float32Array(0), top = overHead(myId), convoy = net ? net.convoy() : new Float32Array(0);
   // Objectives changing hands: a sound, and a callout.
   for (const { kind, label } of objectives.update(zones, myTeam, FRIEND.accent, FOE.accent, now)) {
     sound.zone(kind);
@@ -787,6 +841,9 @@ function frame(now) {
   // end), a buzz while it's contested, and the bar on the glass.
   const here = alive && (assault || sieging) ? objectives.standing(pos, zones, myTeam) : null;
   capture = here && !here.secure ? { ...here, name: objectiveName(here.label) } : null;
+  // In their flag's zone while it's home: the raid's progress, neutral to taken.
+  const raid = alive && ctf.length && myTeam >= 0 ? objectives.raiding(pos, ctf, myTeam) : null;
+  if (raid) capture = { share: 0.5 + 0.5 * raid.taking, contested: raid.contested, name: 'THEIR FLAG' };
   if (capture && now >= blipAt) {
     sound.capturing(capture.share, capture.contested);
     blipAt = now + (capture.contested ? 600 : 420 - 240 * capture.share);
@@ -815,7 +872,7 @@ function frame(now) {
     if (hudState?.[16] >= 0) pickerOpen = true;
   }
   chase += ((curr[S.REPAIR_T] > 0 || curr[S.STAND] > 0 ? 1 : 0) - chase) * (1 - Math.exp(-5 * dt));
-  firstPerson = chase < 0.02 && killcam === null;
+  firstPerson = chase < 0.02 && killcam === null && !remote?.view;
   me.root.visible = !firstPerson;
   // Camouflage shows us as a ghost: our mech in the chase view, our guns from the cockpit.
   const myCloak = curr[S.ABILITY_T] > 0 && armament(loadout).ability.id === 'cloak' ? CLOAK_SEEN : 0;
@@ -920,6 +977,26 @@ function frame(now) {
       else objectives.shipDown(a);
     }
     if (kind === 9) objectives.launch(a, b, now, b === myTeam ? FRIEND.accent : FOE.accent);
+    if (kind === 13) {
+      // Convoy: a team (b) took the hauler over (a 0), it stalled (1), came back (2), or b delivered it (3).
+      const ours = b === myTeam;
+      const [text, color] = [
+        [ours ? 'WE HAVE THE CONVOY MOVING' : 'ENEMY HAS THE CONVOY MOVING', ours ? FRIEND.accent : FOE.accent],
+        ['CONVOY STALLED', 0xffffff],
+        ['CONVOY BACK ONLINE', 0xffffff],
+        [ours ? 'WE DELIVERED THE CONVOY' : 'ENEMY DELIVERED THE CONVOY', ours ? FRIEND.accent : FOE.accent],
+      ][a];
+      callout = { text, color: hex(color), at: now };
+      if (a === 0 || a === 3) sound.zone(ours ? 'took' : 'lost');
+    }
+    if (kind === 12) {
+      // A flag (team a's) taken, dropped, picked up, returned or captured (b), by player x.
+      const [text, good] = flagNews(a === myTeam, b, x === myId, x >= 0 && (x === myId || remotes.get(x)?.team === myTeam));
+      callout = { text, color: hex(good ? FRIEND.accent : FOE.accent), at: now };
+      if (a === myTeam && (b === 0 || (b === 2 && !good))) sound.flagAlarm();
+      else if (a !== myTeam && b === 4) sound.deposit(true);
+      else sound.zone(good ? 'took' : 'lost');
+    }
     if (kind === 2) {
       blastAt.set(x, y, z);
       debug.blast(blastAt, b);
@@ -1046,6 +1123,8 @@ function frame(now) {
   drawDeployables(now, myTeam);
   objectives.drawShips(game.deployables(), zones, myTeam, FRIEND.accent, FOE.accent, now, dt, turretGuns);
   objectives.drawSentries(game.deployables(), myTeam, FRIEND.accent, FOE.accent, dt, turretGuns);
+  objectives.drawFlags(ctf, myTeam, FRIEND.accent, FOE.accent, top, now);
+  objectives.drawHauler(game.deployables(), convoy, myTeam, FRIEND.accent, FOE.accent, dt, now);
 
   // Look is applied at render rate for responsiveness; position is interpolated. In the cockpit
   // the view bobs with the gait and shakes when hit, but stays level (no roll).
@@ -1077,6 +1156,10 @@ function frame(now) {
     const want = offset.length();
     const room = game.cast_ray(eye.x, eye.y, eye.z, offset.x, offset.y, offset.z, want + 0.5) - 0.5;
     camera.position.addScaledVector(offset, (Math.max(room, 0.5) / want) * chase);
+  }
+  if (remote?.view) {
+    camera.position.set(...remote.view.eye);
+    camera.lookAt(...remote.view.look);
   }
   shake *= Math.exp(-6 * dt);
   // A small FOV kick while boosting sells the speed.
@@ -1163,6 +1246,7 @@ function frame(now) {
   }
   for (const p of arena.furnaces) fx.sparks(p, dt, 5);
   for (const p of arena.sparkers) if (Math.random() < dt * 0.6) fx.sparks(p, 0.25, 40); // fitful bursts of ten
+  for (const p of arena.steam) fx.steam(p, dt);
   if (arena.vents.length) fx.cinders(camera.position, dt);
   if (arena.motes) fx.motes(camera.position, dt, arena.motes);
   fx.update(dt, camera, renderer.domElement.height);
@@ -1170,6 +1254,8 @@ function frame(now) {
   hud.damage.style.opacity = hurt;
 
   $('picker').hidden = !pickerOpen;
+  // The hangar wants the mouse: however it opened (a death, C), it frees a locked one.
+  if (pickerOpen && locked()) document.exitPointerLock();
   if (pickerOpen) {
     // Out in the arena, the hangar only edits the next launch.
     const out = net && picked !== null && alive, wait = net ? Math.max(hudState[16], 0) : 0;
@@ -1180,7 +1266,7 @@ function frame(now) {
     $('picker-note').textContent = locked ? 'Unlock what’s locked, or pick another' : out ? 'Changes apply at your next launch · C to close' : 'Enter or Launch when ready';
     preview.render(dt, paint(myTeam));
   }
-  drawGlass(now, myTeam);
+  drawGlass(now, myTeam, ctf, top, convoy);
   $('killcam').hidden = !killer;
   $('glass').hidden = !!killer; // the reticle and our own hull have nothing to say about their view
   if (killer) {
@@ -1271,6 +1357,32 @@ function summaryHtml({ end, after }) {
 }
 
 /**
+ * What a flag event says on the glass, and whether it's good for us: `ours` our flag (else theirs),
+ * `what` as WasmNetClient.take_events has it (0 taken, 1 dropped, 2 picked up, 3 returned, 4
+ * captured), by us (`mine`) or our side (`byUs`).
+ */
+function flagNews(ours, what, mine, byUs) {
+  if (ours) {
+    return [
+      ['OUR FLAG TAKEN', false], ['OUR FLAG DROPPED', true], byUs ? ['OUR FLAG RECOVERED', true] : ['OUR FLAG TAKEN', false],
+      ['OUR FLAG RETURNED', true], ['ENEMY CAPTURED OUR FLAG', false],
+    ][what];
+  }
+  const have = mine ? 'YOU HAVE THEIR FLAG' : 'WE HAVE THEIR FLAG';
+  return [
+    [have, true], ['ENEMY FLAG DROPPED', false], byUs ? [have, true] : ['ENEMY FLAG RECOVERED', false],
+    ['ENEMY FLAG RETURNED', false], ['WE CAPTURED THEIR FLAG', true],
+  ][what];
+}
+
+/** Where over player `id`'s head a flag they carry flies (we're `myId`), or null if they're not out. */
+const overHead = (myId) => (id) => {
+  if (id === myId) return pos.clone().setY(pos.y + T('mech_height') + 0.3);
+  const e = remotes.get(id);
+  return e?.mech.alive ? e.pos.clone().setY(e.pos.y + classValue(e.cls, 'mech_height') + 0.3) : null;
+};
+
+/**
  * The top panel: the mode, map and clock; the score from our side (ours left in our color, theirs
  * right in theirs), as each mode keeps it; and a line under it where there's more to say: the
  * Deathmatch race, the Siege stage, who won.
@@ -1306,6 +1418,22 @@ function topPanel(hudState, myId, zones, siege, clock) {
     const aa = `<span class="pip ${color(zones.length ? zones[0] : -1)}${zones[2] ? ' contested' : ''}">AA</span>`;
     main = `<span class="us"><small>OUR BASE</small>${bar(ours)}${ours} <small>${side(team)}</small></span>${aa}<span class="them"><small>${side(1 - team)}</small> ${theirs}${bar(theirs)}<small>ENEMY BASE</small></span>`;
     state = objectives.stage(team, siege, [blue, red], carried);
+  } else if (mode === CONVOY) {
+    // The hauler on its track from our base (left) to theirs, the middle marked, in the color of
+    // whoever walks it (blinking while both sides are at it); a word on a stall or a standoff.
+    const c = net.convoy(), mine = (f) => (team === 0 ? f : 1 - f);
+    const [along, start, pusher, , contested, stall] = c.length ? c : [0.5, 0.5, -1, 0, 0, 0];
+    const marker = `<b class="${color(pusher)}${contested ? ' contested' : ''}" style="left:${(100 * mine(along)).toFixed(1)}%">◆</b>`;
+    main = `<span class="us"><small>OUR BASE</small></span><span class="track"><i style="left:${(100 * mine(start)).toFixed(1)}%"></i>${marker}</span><span class="them"><small>ENEMY BASE</small></span>`;
+    state = stall > 0 ? `CONVOY STALLED · ${Math.ceil(stall)}s` : contested ? 'CONVOY CONTESTED' : '';
+  } else if (mode === CAPTURE_THE_FLAG) {
+    // Each flag's pip: home, taken (blinking), or dropped where its carrier fell (blinking).
+    const ctf = net.ctf(), flag = (t) => ctf.length ? ctf[7 * t] : 0;
+    const pip = (t) => `<span class="pip ${t === team ? 'us' : 'them'}${flag(t) ? ' contested' : ''}">${['HOME', 'TAKEN', 'DROPPED'][flag(t)]}</span>`;
+    main = `<span class="us"><small>OUR FLAG</small> ${pip(team)} ${ours}</span><span class="dim">–</span><span class="them">${theirs} ${pip(1 - team)} <small>ENEMY FLAG</small></span>`;
+    // Only while we carry one: where to take it.
+    const carrying = [0, 1].find((t) => ctf.length && ctf[7 * t] === 1 && ctf[7 * t + 1] === myId);
+    if (carrying !== undefined) state = carrying === team ? 'YOU HAVE OUR FLAG · RETURN IT TO OUR BASE' : 'YOU HAVE THE FLAG · RETURN TO OUR BASE';
   } else {
     main = `<span class="us"><small>OUR TEAM</small> ${ours}</span><span class="dim">–</span><span class="them">${theirs} <small>ENEMY</small></span>`;
   }
@@ -1346,7 +1474,7 @@ function renderBoard(myId, hudState) {
   };
   $('board').innerHTML = hudState?.[20] === DEATHMATCH
     ? `<div class="head">DEATHMATCH · ${clock}</div><div class="teams">${table('PILOT', '', () => true)}</div>`
-    : `<div class="head">${hudState?.[20] === MISSILE_ASSAULT ? 'MISSILE ASSAULT · BASES ' : hudState?.[20] === SIEGE ? 'SIEGE · BASES ' : ''}BLUE ${blue} – ${red} RED · ${net ? clock : 'OFFLINE'}</div><div class="teams">${table('BLUE', 't0', (r) => r.team === 0)}${table('RED', 't1', (r) => r.team === 1)}</div>`;
+    : `<div class="head">${hudState?.[20] === MISSILE_ASSAULT ? 'MISSILE ASSAULT · BASES ' : hudState?.[20] === SIEGE ? 'SIEGE · BASES ' : hudState?.[20] === CAPTURE_THE_FLAG ? 'CAPTURE THE FLAG · CAPTURES ' : hudState?.[20] === CONVOY ? 'CONVOY · PUSHED % ' : ''}BLUE ${blue} – ${red} RED · ${net ? clock : 'OFFLINE'}</div><div class="teams">${table('BLUE', 't0', (r) => r.team === 0)}${table('RED', 't1', (r) => r.team === 1)}</div>`;
 }
 
 /**
@@ -1467,7 +1595,7 @@ function drawDeployables(now, myTeam) {
   turretGuns.clear();
   for (let i = 0; i < list.length; i += 10) {
     const [kind, team, owner, x, y, z, yaw, pitch, left, hull] = list.subarray(i, i + 10);
-    if (kind === SHIP || kind === SENTRY) continue; // objectives.js draws ships and base guns
+    if (kind === SHIP || kind === SENTRY || kind === HAULER) continue; // objectives.js draws ships, base guns and the hauler
     const key = `${owner}:${kind}:${x},${z}`, was = deployed.get(key);
     if (!was) sound.deploy({ x, y, z });
     let mesh = deployMeshes[kind][used[kind]++];
@@ -1562,7 +1690,7 @@ const refireTime = () => {
   return burst > 1 ? Math.max(gap, 1 / T('fire_rate') - gap * (burst - 1)) : 1 / T('fire_rate');
 };
 
-function drawGlass(now, myTeam) {
+function drawGlass(now, myTeam, ctf, top, convoy) {
   const W = glass.canvas.width, H = glass.canvas.height;
   const toScreen = (p) => ({ x: ((p.x + 1) / 2) * W, y: ((1 - p.y) / 2) * H });
   const tags = [], contacts = [];
@@ -1588,21 +1716,21 @@ function drawGlass(now, myTeam) {
     const healthMax = classValue(e.cls, 'health_max');
     const tag = {
       ...toScreen(ndc), dist, enemy, unit: id, name: levelOf(id) ? `${nameOf(id)} ·LV${levelOf(id)}` : nameOf(id), bot: e.bot, status: statusOf(e, now), focus: false,
-      health: e.health / healthMax, hp: Math.ceil(e.health), hpMax: healthMax, label: classes[CLASS_KEYS[e.cls]].name,
+      health: e.health / healthMax, label: classes[CLASS_KEYS[e.cls]].name, weapons: [e.mech.weapons.primary.name, e.mech.weapons.secondary.name],
     };
     const angle = enemy ? look.angleTo(to.subVectors(chest, camera.position)) : Infinity;
     if (angle < focusAngle) [focusAngle, focus] = [angle, tag];
     tags.push(tag);
   }
-  // Turrets: the other side's in sight get tags (hull, and the card under the crosshair) and radar
+  // Turrets: the other side's in sight get tags (a hull bar, and the card under the crosshair) and radar
   // marks, as enemy mechs do; our side's are marked on the radar.
   const turrets = game.deployables();
   for (let i = 0; i < turrets.length; i += 10) {
     const [kind, team, owner, x, y, z, , , , hull] = turrets.subarray(i, i + 10);
-    if (kind < 2 || kind === SENTRY) continue;
+    if (kind < 2 || kind === HAULER) continue; // the hauler has its own mark
     const enemy = myTeam >= 0 && team !== myTeam; // offline, all ours
-    const ship = kind === SHIP;
-    chest.set(x, y + (ship ? 0 : classValue(1, 'turret_height') * 0.6), z);
+    const ship = kind === SHIP, sentry = kind === SENTRY;
+    chest.set(x, y + (ship ? 0 : sentry ? SENTRY_HEIGHT : classValue(1, 'turret_height') * 0.6), z);
     const dist = chest.distanceTo(eye);
     let visible = false;
     if (enemy && dist <= T('weapon_range')) {
@@ -1613,11 +1741,12 @@ function drawGlass(now, myTeam) {
     if (!visible) continue;
     ndc.copy(chest).project(camera);
     if (ndc.z > 1 || Math.abs(ndc.x) > 1.1 || Math.abs(ndc.y) > 1.1) continue;
-    const hullMax = ship ? SHIP_HULL : classValue(1, 'turret_hull'), label = ship ? 'Battleship' : kind === 2 ? 'MG turret' : 'Rocket turret';
+    const hullMax = ship ? SHIP_HULL : sentry ? SENTRY_SHIELD : classValue(1, 'turret_hull');
+    const label = ship ? 'Battleship' : sentry ? 'Base gun' : kind === 2 ? 'MG turret' : 'Rocket turret';
     const tag = {
       // `unit` is its lock-on id (deploy::target_id), so the lock diamond finds it.
-      ...toScreen(ndc), dist, enemy, unit: 64 + 2 * owner + (kind === 3 ? 1 : 0), name: ship ? `Enemy ${label.toLowerCase()}` : `${nameOf(owner)}'s ${label}`, bot: false, status: '', focus: false,
-      health: Math.max(hull, 0) / hullMax, hp: Math.max(Math.ceil(hull), 0), hpMax: hullMax, label,
+      ...toScreen(ndc), dist, enemy, unit: 64 + 2 * owner + (kind === 3 ? 1 : 0), name: ship || sentry ? `Enemy ${label.toLowerCase()}` : `${nameOf(owner)}'s ${label}`, bot: false, status: sentry && hull <= 0 ? 'OFFLINE' : '', focus: false,
+      health: Math.max(hull, 0) / hullMax, label,
     };
     const angle = look.angleTo(to.subVectors(chest, camera.position));
     if (angle < focusAngle) [focusAngle, focus] = [angle, tag];
@@ -1627,7 +1756,7 @@ function drawGlass(now, myTeam) {
   while (hits.length && now - hits[0].at > 1000) hits.shift();
   // Objectives: each silo's letter over it on the glass, and on the radar, in its holder's color.
   const marks = [];
-  for (const o of objectives.markers(net ? net.zones() : [], net ? net.siege() : [])) {
+  for (const o of [...objectives.markers(net ? net.zones() : [], net ? net.siege() : []), ...objectives.flagMarks(ctf, top), ...objectives.haulerMarks(convoy)]) {
     const color = hex(o.color ?? (o.owner < 0 ? 0xd8dde6 : o.owner === myTeam ? FRIEND.accent : FOE.accent));
     contacts.push({ x: o.at.x, z: o.at.z, objective: o.label, color });
     ndc.copy(o.at).y += 12;
