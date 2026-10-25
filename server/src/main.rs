@@ -1,7 +1,7 @@
 //! Serves the built client, a small lobby API and the game WebSocket on one port. Every room is
 //! its own match on its own 30 Hz loop (a tokio task); each connection gets a reader and a writer
 //! task and joins one room. Env: `PORT` (9001), `STATIC_DIR` (`dist`), `LAG_MS` (one-way delay
-//! for testing), and quick play's room settings: `MODE` (`tdm`, `dm`, `ma`, `siege` or `ctf`; else every mode in turn),
+//! for testing), and quick play's room settings: `MODE` (`tdm`, `dm`, `ma`, `siege`, `ctf` or `convoy`; else every mode in turn),
 //! `MAP` (one map; else the rotation), `SCORE_LIMIT`, `MATCH_SECONDS`, `BOT_SKILL` (`easy`,
 //! `normal`, `hard`, or 0 to 1). And
 //! `PROGRESS_KEY`, the secret that signs progression records (a dev key stands in without it).
@@ -172,7 +172,7 @@ async fn main() {
 
     let mut quick = Settings { name: "Quick play".into(), public: true, mode: None, map: None, score_limit: 25, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
     if let Ok(key) = env::var("MODE") {
-        quick.mode = Some(Mode::from_key(&key).expect("MODE must be tdm, dm, ma, siege or ctf"));
+        quick.mode = Some(Mode::from_key(&key).expect("MODE must be tdm, dm, ma, siege, ctf or convoy"));
     }
     if let Ok(name) = env::var("MAP") {
         quick.map = Some(Map::index(&name).expect("MAP must name a map in maps/"));
@@ -669,8 +669,10 @@ mod tests {
         assert_eq!(siege, ["foundry", "riftline", "canopy", "crashsite", "span"]);
         let ctf: Vec<&str> = deck(&settings(Some(Mode::CaptureTheFlag), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
         assert_eq!(ctf, ["foundry", "verdigris", "riftline", "sinkhole", "canopy", "crashsite"]);
+        let convoy: Vec<&str> = deck(&settings(Some(Mode::Convoy), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
+        assert_eq!(convoy, ["foundry", "riftline", "canopy", "crashsite", "span"]);
         let canopy = Map::index("canopy").unwrap();
-        let canopy_modes = [Mode::TeamDeathmatch, Mode::MissileAssault, Mode::Siege, Mode::CaptureTheFlag];
+        let canopy_modes = [Mode::TeamDeathmatch, Mode::MissileAssault, Mode::Siege, Mode::CaptureTheFlag, Mode::Convoy];
         assert_eq!(deck(&settings(None, Some("canopy"))), canopy_modes.map(|m| (m, canopy)));
         assert!(deck(&settings(Some(Mode::Deathmatch), Some("canopy"))).is_empty());
         // A room starts on a pair from its deck.

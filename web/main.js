@@ -13,7 +13,7 @@ import classesText from '../classes.json?raw';
 import weaponsText from '../weapons.json?raw';
 import { buildArena, HIGH_ONLY, LOW_ONLY } from './arena.js';
 import { Effects, HOT, halo, hot } from './fx.js';
-import { Objectives, SENTRY, SENTRY_HEIGHT, SENTRY_SHIELD, SHIP, SHIP_HULL } from './objectives.js';
+import { HAULER, Objectives, SENTRY, SENTRY_HEIGHT, SENTRY_SHIELD, SHIP, SHIP_HULL } from './objectives.js';
 import { Preview } from './hangar.js';
 import saltworks from '../maps/saltworks.json';
 import foundry from '../maps/foundry.json';
@@ -107,7 +107,7 @@ if (net) {
 const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, SPIN: 31, CHARGE: 32, BLOOM: 33, FIRE_WAIT: 34, LOCK: 35, LOCK_T: 36, BEAM: 37, BEAM_END: 38, SHIELD: 41, LIMPET: 42, OFFSET: 43 };
 // The HUD marks our side in blue and the other side in red, whichever team we're on.
 const FRIEND = TEAMS[0], FOE = TEAMS[1];
-const DEATHMATCH = 1, MISSILE_ASSAULT = 2, SIEGE = 3, CAPTURE_THE_FLAG = 4; // their indices in the sim's Mode::ALL
+const DEATHMATCH = 1, MISSILE_ASSAULT = 2, SIEGE = 3, CAPTURE_THE_FLAG = 4, CONVOY = 5; // their indices in the sim's Mode::ALL
 /** Battleships' owner ids start here, past every player's (deploy::ship_owner). */
 const SHIP_OWNERS = 8;
 /** Base guns' owner ids start here, past the ships' (deploy::sentry_owner). */
@@ -744,7 +744,7 @@ function frame(now) {
   // In Deathmatch everyone's their own team: paint us blue and the rest red, as by side.
   const dm = hudState?.[20] === DEATHMATCH, assault = hudState?.[20] === MISSILE_ASSAULT, sieging = hudState?.[20] === SIEGE;
   const zones = net ? net.zones() : new Float32Array(0), siege = net ? net.siege() : new Float32Array(0);
-  const ctf = net ? net.ctf() : new Float32Array(0), top = overHead(myId);
+  const ctf = net ? net.ctf() : new Float32Array(0), top = overHead(myId), convoy = net ? net.convoy() : new Float32Array(0);
   // Objectives changing hands: a sound, and a callout.
   for (const { kind, label } of objectives.update(zones, myTeam, FRIEND.accent, FOE.accent, now)) {
     sound.zone(kind);
@@ -912,6 +912,18 @@ function frame(now) {
       else objectives.shipDown(a);
     }
     if (kind === 9) objectives.launch(a, b, now, b === myTeam ? FRIEND.accent : FOE.accent);
+    if (kind === 12) {
+      // Convoy: a team (b) took the hauler over (a 0), it stalled (1), came back (2), or b delivered it (3).
+      const ours = b === myTeam;
+      const [text, color] = [
+        [ours ? 'WE HAVE THE CONVOY MOVING' : 'ENEMY HAS THE CONVOY MOVING', ours ? FRIEND.accent : FOE.accent],
+        ['CONVOY STALLED', 0xffffff],
+        ['CONVOY BACK ONLINE', 0xffffff],
+        [ours ? 'WE DELIVERED THE CONVOY' : 'ENEMY DELIVERED THE CONVOY', ours ? FRIEND.accent : FOE.accent],
+      ][a];
+      callout = { text, color: hex(color), at: now };
+      if (a === 0 || a === 3) sound.zone(ours ? 'took' : 'lost');
+    }
     if (kind === 11) {
       // A flag (team a's) taken, dropped, picked up, returned or captured (b), by player x.
       const [text, good] = flagNews(a === myTeam, b, x === myId, x >= 0 && (x === myId || remotes.get(x)?.team === myTeam));
@@ -1032,6 +1044,7 @@ function frame(now) {
   objectives.drawShips(game.deployables(), zones, myTeam, FRIEND.accent, FOE.accent, now, dt, turretGuns);
   objectives.drawSentries(game.deployables(), myTeam, FRIEND.accent, FOE.accent, dt, turretGuns);
   objectives.drawFlags(ctf, myTeam, FRIEND.accent, FOE.accent, top, now);
+  objectives.drawHauler(game.deployables(), convoy, myTeam, FRIEND.accent, FOE.accent, dt, now);
 
   // Look is applied at render rate for responsiveness; position is interpolated. In the cockpit
   // the view bobs with the gait and shakes when hit, but stays level (no roll).
@@ -1165,7 +1178,7 @@ function frame(now) {
     $('picker-note').textContent = locked ? 'Unlock what’s locked, or pick another' : out ? 'Changes apply at your next launch · C to close' : 'Enter or Launch when ready';
     preview.render(dt, paint(myTeam));
   }
-  drawGlass(now, myTeam, ctf, top);
+  drawGlass(now, myTeam, ctf, top, convoy);
   $('killcam').hidden = !killer;
   $('glass').hidden = !!killer; // the reticle and our own hull have nothing to say about their view
   if (killer) {
@@ -1316,6 +1329,14 @@ function topPanel(hudState, myId, zones, siege, clock) {
     const aa = `<span class="pip ${color(zones.length ? zones[0] : -1)}${zones[2] ? ' contested' : ''}">AA</span>`;
     main = `<span class="us"><small>OUR BASE</small>${bar(ours)}${ours} <small>${side(team)}</small></span>${aa}<span class="them"><small>${side(1 - team)}</small> ${theirs}${bar(theirs)}<small>ENEMY BASE</small></span>`;
     state = objectives.stage(team, siege, [blue, red], carried);
+  } else if (mode === CONVOY) {
+    // The hauler on its track from our base (left) to theirs, the middle marked, in the color of
+    // whoever walks it (blinking while both sides are at it); a word on a stall or a standoff.
+    const c = net.convoy(), mine = (f) => (team === 0 ? f : 1 - f);
+    const [along, start, pusher, , contested, stall] = c.length ? c : [0.5, 0.5, -1, 0, 0, 0];
+    const marker = `<b class="${color(pusher)}${contested ? ' contested' : ''}" style="left:${(100 * mine(along)).toFixed(1)}%">◆</b>`;
+    main = `<span class="us"><small>OUR BASE</small></span><span class="track"><i style="left:${(100 * mine(start)).toFixed(1)}%"></i>${marker}</span><span class="them"><small>ENEMY BASE</small></span>`;
+    state = stall > 0 ? `CONVOY STALLED · ${Math.ceil(stall)}s` : contested ? 'CONVOY CONTESTED' : '';
   } else if (mode === CAPTURE_THE_FLAG) {
     // Each flag's pip: home, taken (blinking), or dropped where its carrier fell (blinking).
     const ctf = net.ctf(), flag = (t) => ctf.length ? ctf[7 * t] : 0;
@@ -1364,7 +1385,7 @@ function renderBoard(myId, hudState) {
   };
   $('board').innerHTML = hudState?.[20] === DEATHMATCH
     ? `<div class="head">DEATHMATCH · ${clock}</div><div class="teams">${table('PILOT', '', () => true)}</div>`
-    : `<div class="head">${hudState?.[20] === MISSILE_ASSAULT ? 'MISSILE ASSAULT · BASES ' : hudState?.[20] === SIEGE ? 'SIEGE · BASES ' : hudState?.[20] === CAPTURE_THE_FLAG ? 'CAPTURE THE FLAG · CAPTURES ' : ''}BLUE ${blue} – ${red} RED · ${net ? clock : 'OFFLINE'}</div><div class="teams">${table('BLUE', 't0', (r) => r.team === 0)}${table('RED', 't1', (r) => r.team === 1)}</div>`;
+    : `<div class="head">${hudState?.[20] === MISSILE_ASSAULT ? 'MISSILE ASSAULT · BASES ' : hudState?.[20] === SIEGE ? 'SIEGE · BASES ' : hudState?.[20] === CAPTURE_THE_FLAG ? 'CAPTURE THE FLAG · CAPTURES ' : hudState?.[20] === CONVOY ? 'CONVOY · PUSHED % ' : ''}BLUE ${blue} – ${red} RED · ${net ? clock : 'OFFLINE'}</div><div class="teams">${table('BLUE', 't0', (r) => r.team === 0)}${table('RED', 't1', (r) => r.team === 1)}</div>`;
 }
 
 /**
@@ -1485,7 +1506,7 @@ function drawDeployables(now, myTeam) {
   turretGuns.clear();
   for (let i = 0; i < list.length; i += 10) {
     const [kind, team, owner, x, y, z, yaw, pitch, left, hull] = list.subarray(i, i + 10);
-    if (kind === SHIP || kind === SENTRY) continue; // objectives.js draws ships and base guns
+    if (kind === SHIP || kind === SENTRY || kind === HAULER) continue; // objectives.js draws ships, base guns and the hauler
     const key = `${owner}:${kind}:${x},${z}`, was = deployed.get(key);
     if (!was) sound.deploy({ x, y, z });
     let mesh = deployMeshes[kind][used[kind]++];
@@ -1580,7 +1601,7 @@ const refireTime = () => {
   return burst > 1 ? Math.max(gap, 1 / T('fire_rate') - gap * (burst - 1)) : 1 / T('fire_rate');
 };
 
-function drawGlass(now, myTeam, ctf, top) {
+function drawGlass(now, myTeam, ctf, top, convoy) {
   const W = glass.canvas.width, H = glass.canvas.height;
   const toScreen = (p) => ({ x: ((p.x + 1) / 2) * W, y: ((1 - p.y) / 2) * H });
   const tags = [], contacts = [];
@@ -1617,7 +1638,7 @@ function drawGlass(now, myTeam, ctf, top) {
   const turrets = game.deployables();
   for (let i = 0; i < turrets.length; i += 10) {
     const [kind, team, owner, x, y, z, , , , hull] = turrets.subarray(i, i + 10);
-    if (kind < 2) continue;
+    if (kind < 2 || kind === HAULER) continue; // the hauler has its own mark
     const enemy = myTeam >= 0 && team !== myTeam; // offline, all ours
     const ship = kind === SHIP, sentry = kind === SENTRY;
     chest.set(x, y + (ship ? 0 : sentry ? SENTRY_HEIGHT : classValue(1, 'turret_height') * 0.6), z);
@@ -1646,7 +1667,7 @@ function drawGlass(now, myTeam, ctf, top) {
   while (hits.length && now - hits[0].at > 1000) hits.shift();
   // Objectives: each silo's letter over it on the glass, and on the radar, in its holder's color.
   const marks = [];
-  for (const o of [...objectives.markers(net ? net.zones() : [], net ? net.siege() : []), ...objectives.flagMarks(ctf, top)]) {
+  for (const o of [...objectives.markers(net ? net.zones() : [], net ? net.siege() : []), ...objectives.flagMarks(ctf, top), ...objectives.haulerMarks(convoy)]) {
     const color = hex(o.color ?? (o.owner < 0 ? 0xd8dde6 : o.owner === myTeam ? FRIEND.accent : FOE.accent));
     contacts.push({ x: o.at.x, z: o.at.z, objective: o.label, color });
     ndc.copy(o.at).y += 12;

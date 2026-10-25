@@ -18,7 +18,8 @@
 //! shot, locked onto and fought like a turret, and guns mechs down like an MG turret; `siege.rs`
 //! flies it. So are the base guns of the team modes (`Kind::Sentry`, nobody's either: see
 //! `sentry_owner`), manned like MG turrets; shot down, one goes offline a while, not away
-//! (game.rs).
+//! (game.rs). So, unarmed, is Convoy's hauler (`Kind::Hauler`, on no side: `NEUTRAL`), shot and
+//! locked onto by anyone, a body mechs bump into (`hauler_body`); shot down, it stalls a while.
 
 use rapier3d::parry::query::RayCast;
 use rapier3d::prelude::{Capsule, Collider, ColliderBuilder, ColliderHandle, Pose, Ray, Rotation};
@@ -35,6 +36,7 @@ pub enum Kind {
     RocketTurret,
     Ship,
     Sentry,
+    Hauler,
 }
 
 impl Kind {
@@ -43,6 +45,28 @@ impl Kind {
     pub fn turret(self) -> bool {
         matches!(self, Kind::MgTurret | Kind::RocketTurret | Kind::Ship | Kind::Sentry)
     }
+
+    /// Shot at and locked onto like a turret: the turrets, and the hauler.
+    pub fn shootable(self) -> bool {
+        self.turret() || self == Kind::Hauler
+    }
+}
+
+/// The team of what's on no side (Convoy's hauler): every team's shots hit it.
+pub const NEUTRAL: u8 = 2;
+
+/// Convoy's hauler: a body this wide (radius) and tall, mechs bump into and shots hit.
+pub const HAULER_RADIUS: f32 = 3.5;
+pub const HAULER_HEIGHT: f32 = 6.5;
+
+/// The hauler's owner id: past every player's, the ships' and the base guns'.
+pub fn hauler_owner() -> u8 {
+    crate::game::MAX_PLAYERS as u8 + 6
+}
+
+/// The hauler `d` as a mech to bump into: its tuning (its size) and a standing mech at its foot.
+pub fn hauler_body(t: &Tuning, d: &Deployable) -> (Tuning, Mech) {
+    (Tuning { mech_height: HAULER_HEIGHT, mech_radius: HAULER_RADIUS, ..t.clone() }, Mech { pos: d.pos, health: 1.0, ..Mech::default() })
 }
 
 /// A base gun's muzzle, this high over its foot (on its tower), and its tower's girth for shots.
@@ -129,7 +153,7 @@ pub fn place<'a>(arena: &Arena, t: &Tuning, m: &Mech, kind: Kind, team: u8, owne
         Kind::Dome => (m.pos, t.dome_seconds, t.dome_hull),
         Kind::Barrier => (ahead(t.barrier_distance, t.barrier_thickness * 0.5 + 0.1), t.barrier_seconds, t.barrier_hull),
         Kind::MgTurret | Kind::RocketTurret => (ahead(t.turret_distance, t.turret_radius + 0.1), t.turret_seconds, t.turret_hull),
-        Kind::Ship | Kind::Sentry => unreachable!("ships are launched and base guns built, not put down"),
+        Kind::Ship | Kind::Sentry | Kind::Hauler => unreachable!("ships are launched, base guns built and haulers walked, not put down"),
     };
     // The ground below, from a little over the mech's feet (so a barrier on a slope or step finds it).
     let from = Vector::new(at.x, m.pos.y + 2.0, at.z);
@@ -144,6 +168,8 @@ pub fn gun(t: &Tuning, d: &Deployable) -> Vector {
     match d.kind {
         Kind::Ship => d.pos - Vector::Y * (SHIP_RADIUS * 0.6),
         Kind::Sentry => d.pos + Vector::Y * SENTRY_HEIGHT,
+        // Its middle, for lock-on.
+        Kind::Hauler => d.pos + Vector::Y * (HAULER_HEIGHT * 0.5),
         _ => d.pos + Vector::Y * t.turret_height,
     }
 }
@@ -158,10 +184,10 @@ pub fn center(t: &Tuning, d: &Deployable) -> Vector {
     body(t, d).1
 }
 
-/// The standing turrets in `list` that `which` picks, as lock-on and homing targets: their ids,
+/// The standing turrets (and hauler) in `list` that `which` picks, as lock-on and homing targets: their ids,
 /// and their guns (aimed at the body's middle, missiles curving down onto it hit the floor short).
 pub fn targets<'a>(list: &'a [Deployable], t: &'a Tuning, which: impl Fn(&Deployable) -> bool + 'a) -> impl Iterator<Item = (u8, Vector)> + 'a {
-    list.iter().filter(move |d| d.kind.turret() && d.hull > 0.0 && which(d)).map(|d| (target_id(d), gun(t, d)))
+    list.iter().filter(move |d| d.kind.shootable() && d.hull > 0.0 && which(d)).map(|d| (target_id(d), gun(t, d)))
 }
 
 /// Turret `d`'s body, for shots to hit: a capsule up to its gun (a ship's, round its middle at
@@ -171,6 +197,7 @@ fn body(t: &Tuning, d: &Deployable) -> (Capsule, Vector) {
         Kind::Ship => return (Capsule::new_y(1.0, SHIP_RADIUS), d.pos),
         // The tower up to its head, over the muzzle.
         Kind::Sentry => return (Capsule::new_y((SENTRY_HEIGHT + 1.0) * 0.5 - SENTRY_RADIUS, SENTRY_RADIUS), d.pos + Vector::Y * ((SENTRY_HEIGHT + 1.0) * 0.5)),
+        Kind::Hauler => return (Capsule::new_y(HAULER_HEIGHT * 0.5 - HAULER_RADIUS, HAULER_RADIUS), d.pos + Vector::Y * (HAULER_HEIGHT * 0.5)),
         _ => {}
     }
     let r = t.turret_radius.min(t.turret_height * 0.5);
@@ -182,17 +209,18 @@ pub fn as_mech(t: &Tuning, d: &Deployable) -> (Tuning, Mech) {
     match d.kind {
         Kind::Ship => return (Tuning { mech_height: 2.0 * SHIP_RADIUS, mech_radius: SHIP_RADIUS, ..t.clone() }, Mech { pos: d.pos - Vector::Y * SHIP_RADIUS, ..Mech::default() }),
         Kind::Sentry => return (Tuning { mech_height: SENTRY_HEIGHT + 1.0, mech_radius: SENTRY_RADIUS, ..t.clone() }, Mech { pos: d.pos, ..Mech::default() }),
+        Kind::Hauler => return hauler_body(t, d),
         _ => {}
     }
     (Tuning { mech_height: t.turret_height, mech_radius: t.turret_radius, ..t.clone() }, Mech { pos: d.pos, ..Mech::default() })
 }
 
-/// The nearest turret of another side than `team` (and not shot down already) along `ray` within
+/// The nearest turret (or hauler) of another side than `team` (and not shot down already) along `ray` within
 /// `max`: its index in `list`, and how far.
 pub fn first_turret(list: &[Deployable], t: &Tuning, team: u8, ray: &Ray, max: f32) -> Option<(usize, f32)> {
     list.iter()
         .enumerate()
-        .filter(|(_, d)| d.kind.turret() && d.team != team && d.hull > 0.0)
+        .filter(|(_, d)| d.kind.shootable() && d.team != team && d.hull > 0.0)
         .filter_map(|(k, d)| {
             let (shape, center) = body(t, d);
             shape.cast_ray(&Pose::from_translation(center), ray, max, true).map(|toi| (k, toi))
