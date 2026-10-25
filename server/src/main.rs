@@ -465,8 +465,11 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
     let mut roster_sent = u32::MAX;
     let mut empty_since = Some(Instant::now());
     let mut interval = time::interval(Duration::from_secs_f32(DT));
+    // Health, logged every 10 s if a tick ran a whole tick late or long (Fly's shared CPU
+    // throttles): the latest tick, the longest step and sends, and how many ran over 100 ms late.
+    let (mut worst_late, mut worst_step, mut late_ticks, mut since_report) = (Duration::ZERO, Duration::ZERO, 0, Instant::now());
     loop {
-        interval.tick().await;
+        let late = interval.tick().await.elapsed();
         while let Ok(cmd) = cmds.try_recv() {
             match cmd {
                 Cmd::Join(out, reply) => {
@@ -534,6 +537,7 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
             (false, _) => empty_since = None,
             _ => {}
         }
+        let started = Instant::now();
         game.step();
         let now = Instant::now();
         // Progression: everyone's whole match as it ends, and checkpoints while it's on.
@@ -569,6 +573,15 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
         }
         for (id, out) in &outboxes {
             let _ = out.send((now, net::encode(&ServerMsg::Snapshot(game.snapshot(*id)))));
+        }
+        (worst_late, worst_step) = (worst_late.max(late), worst_step.max(started.elapsed()));
+        late_ticks += u32::from(late > Duration::from_millis(100));
+        if since_report.elapsed() >= Duration::from_secs(10) {
+            if worst_late.max(worst_step) >= interval.period() {
+                let ms = |d: Duration| d.as_secs_f32() * 1e3;
+                println!("room {code}: ticks up to {:.0} ms late, steps up to {:.1} ms, {late_ticks} over 100 ms late", ms(worst_late), ms(worst_step));
+            }
+            (worst_late, worst_step, late_ticks, since_report) = (Duration::ZERO, Duration::ZERO, 0, Instant::now());
         }
         if game.tick % TICK_HZ as u32 == 0 {
             *info.lock().expect("info lock") = describe(&code, &settings, &game);
