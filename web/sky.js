@@ -115,7 +115,7 @@ function skyMaterial(sunDir) {
           // vertical rays; one color low, another high. Whole multiples of the azimuth, so no seam.
           float az = atan(dir.x, dir.z), wave = 0.05 * sin(az * 3.0 + time * 0.018) + 0.025 * sin(az * 7.0 - time * 0.028);
           float band = exp(-pow((up - 0.55 - wave) * 9.0, 2.0)) * smoothstep(0.04, 0.2, up);
-          float rays = 0.55 + 0.45 * sin(az * 90.0 + 3.0 * sin(az * 13.0 + time * 0.075));
+          float rays = 0.55 + 0.45 * sin(az * 36.0 + 2.0 * sin(az * 5.0 + time * 0.075)); // broad rays, 36 round the sky
           col += aurora * band * rays * mix(auroraLow, auroraHigh, smoothstep(0.45, 0.8, up + wave));
         }
         // Lightning: the whole sky lit, brightest toward the strike.
