@@ -1,7 +1,7 @@
 //! Serves the built client, a small lobby API and the game WebSocket on one port. Every room is
 //! its own match on its own 30 Hz loop (a tokio task); each connection gets a reader and a writer
 //! task and joins one room. Env: `PORT` (9001), `STATIC_DIR` (`dist`), `LAG_MS` (one-way delay
-//! for testing), and quick play's room settings: `MODE` (`tdm`, `dm`, `ma`, `siege`, `ctf` or `convoy`; else every mode in turn),
+//! for testing), and quick play's room settings: `MODE` (`tdm`, `dm`, `ma`, `siege`, `ctf`, `convoy` or `defense`; else every versus mode in turn),
 //! `MAP` (one map; else the rotation), `SCORE_LIMIT`, `MATCH_SECONDS`, `BOT_SKILL` (`easy`,
 //! `normal`, `hard`, or 0 to 1). And
 //! `PROGRESS_KEY`, the secret that signs progression records (a dev key stands in without it).
@@ -172,7 +172,7 @@ async fn main() {
 
     let mut quick = Settings { name: "Quick play".into(), public: true, mode: None, map: None, score_limit: 25, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
     if let Ok(key) = env::var("MODE") {
-        quick.mode = Some(Mode::from_key(&key).expect("MODE must be tdm, dm, ma, siege, ctf or convoy"));
+        quick.mode = Some(Mode::from_key(&key).expect("MODE must be tdm, dm, ma, siege, ctf, convoy or defense"));
     }
     if let Ok(name) = env::var("MAP") {
         quick.map = Some(Map::index(&name).expect("MAP must name a map in maps/"));
@@ -408,7 +408,8 @@ fn deck(settings: &Settings) -> Vec<(Mode, usize)> {
         Some(map) => vec![map],
         None => ROTATION.iter().map(|name| Map::index(name).expect("rotation names a map")).collect(),
     };
-    let modes = settings.mode.map_or(Mode::ALL.to_vec(), |m| vec![m]);
+    // Co-op only when a room asks for it.
+    let modes = settings.mode.map_or(Mode::ALL.into_iter().filter(|m| m.versus()).collect(), |m| vec![m]);
     modes.iter().flat_map(|&mode| maps.iter().filter(move |&&map| PLAYS[map].contains(&mode)).map(move |&map| (mode, map))).collect()
 }
 

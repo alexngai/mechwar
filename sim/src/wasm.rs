@@ -31,7 +31,7 @@ fn mech_state(m: &Mech) -> Vec<f32> {
     ]
 }
 
-/// Ten floats per deployable: kind (0 dome, 1 barrier, 2 MG turret, 3 rocket turret, 4 battleship, 5 base gun, 6 Convoy's hauler), team (2 for none),
+/// Ten floats per deployable: kind (0 dome, 1 barrier, 2 MG turret, 3 rocket turret, 4 battleship, 5 base gun, 6 Convoy's hauler, 7 co-op's walker), team (2 for none),
 /// owner, base xyz, facing yaw and pitch, seconds left as of tick `now`, and hull left (infinite
 /// for a dome or barrier).
 fn deployable_floats(list: &[Deployable], now: u32) -> Vec<f32> {
@@ -324,6 +324,13 @@ impl WasmNetClient {
         })
     }
 
+    /// A co-op run as of the latest snapshot: the wave (on, or next), the waves in all, the seconds
+    /// left of the break before it (-1 while it's on), the reactor's hull, and the walkers still
+    /// to come or standing. Empty outside Co-op Defense.
+    pub fn defense(&self) -> Vec<f32> {
+        self.0.defense().map_or_else(Vec::new, |d| vec![f32::from(d.wave), f32::from(d.waves), d.break_left.unwrap_or(-1.0), d.hull, f32::from(d.left)])
+    }
+
     /// Index of the server's map, or -1 before the Welcome.
     pub fn map(&self) -> i32 {
         self.0.map.map_or(-1, |m| m as i32)
@@ -376,6 +383,8 @@ impl WasmNetClient {
     /// flag's team, b = what happened to it (0 taken, 1 dropped, 2 picked up, 3 returned, 4
     /// captured), x = by whom (an id, or -1). Convoy (kind 13): a = what (0 a team took it over,
     /// 1 stalled, 2 back up, 3 delivered), b = the team (that took it over, or delivered it; else -1).
+    /// Co-op (kind 14): a = what (0 a wave comes: b = which, x = how many; 1 b is cleared; 2 a
+    /// walker reached the reactor).
     pub fn take_events(&mut self) -> Vec<f32> {
         let mut out = Vec::new();
         for e in std::mem::take(&mut self.0.events) {
@@ -402,6 +411,14 @@ impl WasmNetClient {
                         News::Delivered(t) => (3.0, f32::from(t)),
                     };
                     out.extend([13.0, what, team, 0.0, 0.0, 0.0]);
+                }
+                Event::Defense(news) => {
+                    use crate::defense::News;
+                    out.extend(match news {
+                        News::Wave { n, count } => [14.0, 0.0, f32::from(n), f32::from(count), 0.0, 0.0],
+                        News::Cleared(n) => [14.0, 1.0, f32::from(n), 0.0, 0.0, 0.0],
+                        News::Hit => [14.0, 2.0, 0.0, 0.0, 0.0, 0.0],
+                    });
                 }
                 // The client turns these into the blasts and hits below.
                 Event::Launch(_) | Event::Blast { .. } => {}

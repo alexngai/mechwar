@@ -37,13 +37,15 @@ pub enum Kind {
     Ship,
     Sentry,
     Hauler,
+    /// Co-op Defense's infested walker (`defense.rs`), on the enemy team.
+    Walker,
 }
 
 impl Kind {
     /// Shot at, locked onto and fought like a turret, and manned: trains on enemies and fires
     /// (`Game::man_turrets`).
     pub fn turret(self) -> bool {
-        matches!(self, Kind::MgTurret | Kind::RocketTurret | Kind::Ship | Kind::Sentry)
+        matches!(self, Kind::MgTurret | Kind::RocketTurret | Kind::Ship | Kind::Sentry | Kind::Walker)
     }
 
     /// Shot at and locked onto like a turret: the turrets, and the hauler.
@@ -58,6 +60,11 @@ pub const NEUTRAL: u8 = 2;
 /// Convoy's hauler: a body this wide (radius) and tall, mechs bump into and shots hit.
 pub const HAULER_RADIUS: f32 = 3.5;
 pub const HAULER_HEIGHT: f32 = 6.5;
+
+/// Co-op Defense's walker: a body this wide (radius) and tall, its gun this high on it.
+pub const WALKER_RADIUS: f32 = 1.6;
+pub const WALKER_HEIGHT: f32 = 3.4;
+const WALKER_GUN: f32 = 2.8;
 
 /// The hauler's owner id: past every player's, the ships' and the base guns'.
 pub fn hauler_owner() -> u8 {
@@ -153,7 +160,7 @@ pub fn place<'a>(arena: &Arena, t: &Tuning, m: &Mech, kind: Kind, team: u8, owne
         Kind::Dome => (m.pos, t.dome_seconds, t.dome_hull),
         Kind::Barrier => (ahead(t.barrier_distance, t.barrier_thickness * 0.5 + 0.1), t.barrier_seconds, t.barrier_hull),
         Kind::MgTurret | Kind::RocketTurret => (ahead(t.turret_distance, t.turret_radius + 0.1), t.turret_seconds, t.turret_hull),
-        Kind::Ship | Kind::Sentry | Kind::Hauler => unreachable!("ships are launched, base guns built and haulers walked, not put down"),
+        Kind::Ship | Kind::Sentry | Kind::Hauler | Kind::Walker => unreachable!("ships are launched, base guns built and haulers and walkers walked, not put down"),
     };
     // The ground below, from a little over the mech's feet (so a barrier on a slope or step finds it).
     let from = Vector::new(at.x, m.pos.y + 2.0, at.z);
@@ -170,6 +177,7 @@ pub fn gun(t: &Tuning, d: &Deployable) -> Vector {
         Kind::Sentry => d.pos + Vector::Y * SENTRY_HEIGHT,
         // Its middle, for lock-on.
         Kind::Hauler => d.pos + Vector::Y * (HAULER_HEIGHT * 0.5),
+        Kind::Walker => d.pos + Vector::Y * WALKER_GUN,
         _ => d.pos + Vector::Y * t.turret_height,
     }
 }
@@ -198,6 +206,7 @@ fn body(t: &Tuning, d: &Deployable) -> (Capsule, Vector) {
         // The tower up to its head, over the muzzle.
         Kind::Sentry => return (Capsule::new_y((SENTRY_HEIGHT + 1.0) * 0.5 - SENTRY_RADIUS, SENTRY_RADIUS), d.pos + Vector::Y * ((SENTRY_HEIGHT + 1.0) * 0.5)),
         Kind::Hauler => return (Capsule::new_y(HAULER_HEIGHT * 0.5 - HAULER_RADIUS, HAULER_RADIUS), d.pos + Vector::Y * (HAULER_HEIGHT * 0.5)),
+        Kind::Walker => return (Capsule::new_y(WALKER_HEIGHT * 0.5 - WALKER_RADIUS, WALKER_RADIUS), d.pos + Vector::Y * (WALKER_HEIGHT * 0.5)),
         _ => {}
     }
     let r = t.turret_radius.min(t.turret_height * 0.5);
@@ -210,6 +219,7 @@ pub fn as_mech(t: &Tuning, d: &Deployable) -> (Tuning, Mech) {
         Kind::Ship => return (Tuning { mech_height: 2.0 * SHIP_RADIUS, mech_radius: SHIP_RADIUS, ..t.clone() }, Mech { pos: d.pos - Vector::Y * SHIP_RADIUS, ..Mech::default() }),
         Kind::Sentry => return (Tuning { mech_height: SENTRY_HEIGHT + 1.0, mech_radius: SENTRY_RADIUS, ..t.clone() }, Mech { pos: d.pos, ..Mech::default() }),
         Kind::Hauler => return hauler_body(t, d),
+        Kind::Walker => return (Tuning { mech_height: WALKER_HEIGHT, mech_radius: WALKER_RADIUS, ..t.clone() }, Mech { pos: d.pos, health: 1.0, ..Mech::default() }),
         _ => {}
     }
     (Tuning { mech_height: t.turret_height, mech_radius: t.turret_radius, ..t.clone() }, Mech { pos: d.pos, ..Mech::default() })

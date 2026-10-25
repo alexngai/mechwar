@@ -12,6 +12,7 @@ pub mod client;
 pub mod collide;
 pub mod convoy;
 pub mod ctf;
+pub mod defense;
 pub mod deploy;
 pub mod game;
 pub mod item;

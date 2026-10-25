@@ -86,6 +86,26 @@ pub struct Route {
     pub start: usize,
 }
 
+/// Co-op Defense: the reactor the team holds (its middle, and how near across an enemy has to come
+/// to hit it), the gates enemies come through, and the lanes they walk: a network of paths toward
+/// the reactor (points, and edges from, to and weight, so a fork splits the walkers by weight), or
+/// none, for each gate's lane to be the bots' route from it.
+#[derive(Deserialize, Clone, Debug)]
+pub struct DefenseSpots {
+    pub reactor: [f32; 3],
+    pub radius: f32,
+    pub gates: Vec<[f32; 3]>,
+    #[serde(default)]
+    pub lanes: Lanes,
+}
+
+/// Co-op Defense's lanes: points on walkable ground, and edges between them (from, to, weight).
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct Lanes {
+    pub points: Vec<[f32; 3]>,
+    pub edges: Vec<(usize, usize, f32)>,
+}
+
 /// Where a map's objective modes play.
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct Objectives {
@@ -112,6 +132,9 @@ pub struct Objectives {
     /// Convoy: the hauler's route.
     #[serde(default)]
     pub convoy: Option<Route>,
+    /// Co-op Defense: the reactor, gates and lanes.
+    #[serde(default)]
+    pub defense: Option<DefenseSpots>,
 }
 
 #[derive(Deserialize, Clone, Debug)]

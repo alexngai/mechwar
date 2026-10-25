@@ -230,6 +230,15 @@ export function convoy(north, south = north.map(flip)) {
 const ROUTE_GAP = 8;
 
 /**
+ * Co-op Defense: the reactor (`{ at, radius }`: how near across an enemy has to come to hit it),
+ * the `gates` enemies come through, and their `lanes` (`{ points, edges }`, each edge from, to and
+ * weight); without lanes, each gate's lane is the bots' route from it to the reactor.
+ */
+export function defense(reactor, gates, lanes) {
+  objectives.defense = { reactor: reactor.at, radius: reactor.radius, gates, ...(lanes && { lanes }) };
+}
+
+/**
  * Siege: the energy station's zone `station` (`{ at, radius, band }`: one, mid-map, for the teams
  * to fight over), the anti-air gun's capture zone `aa` (the same shape, plus `pad`: where the gun
  * stands, on a surface under open sky), and `sky`, how high the battleships cruise.

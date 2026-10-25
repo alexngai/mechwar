@@ -29,7 +29,10 @@ export const SHIP_HULL = 3000;
 /** The AA gun fires a burst of AA_BURST rounds AA_GAP ms apart every AA_EVERY ms, while firing; it turns at AA_TURN rad/s. */
 const AA_BURST = 4, AA_GAP = 110, AA_EVERY = 1000, AA_TURN = 1.6;
 /** The deployable kinds of a battleship, and of a team mode's base gun. */
-export const SHIP = 4, SENTRY = 5, HAULER = 6;
+export const SHIP = 4, SENTRY = 5, HAULER = 6, WALKER = 7;
+/** Match defense.rs: the reactor's hull, and a walker's in wave `n`. */
+export const REACTOR_HULL = 2000;
+export const walkerHull = (n) => 100 + 12 * n;
 /** Match game.rs SENTRY_SHIELD: a base gun's shield. */
 export const SENTRY_SHIELD = 400;
 /** A base gun's muzzles, this high over its foot (deploy::SENTRY_HEIGHT). */
@@ -38,7 +41,7 @@ export const SENTRY_HEIGHT = 5.5;
 export class Objectives {
   /** `cast(ox, oy, oz, dx, dy, dz, max)`: how far a ray goes into the arena, up to `max`. */
   constructor(scene, fx, sound, cast) {
-    Object.assign(this, { scene, fx, sound, cast, silos: [], aa: [], zones: [], labels: [], stations: [], dropZones: [], bases: [], missiles: [], ships: new Map(), sentries: new Map(), drops: [], stands: [], flags: [], fire: {}, seen: null });
+    Object.assign(this, { scene, fx, sound, cast, silos: [], aa: [], zones: [], labels: [], stations: [], dropZones: [], bases: [], missiles: [], ships: new Map(), sentries: new Map(), drops: [], stands: [], flags: [], walkers: new Map(), gates: [], reactor: null, fire: {}, seen: null });
     this.dropGeometry = new THREE.OctahedronGeometry(0.6);
     this.dropMaterial = hot(new THREE.MeshBasicMaterial({ color: ENERGY }));
   }
@@ -54,6 +57,17 @@ export class Objectives {
     for (const s of [...this.ships.values(), ...this.sentries.values()]) gone(s.group);
     if (this.hauler) gone(this.hauler.group);
     this.hauler = null;
+    for (const w of this.walkers?.values() ?? []) gone(w.group);
+    this.walkers = new Map();
+    for (const g of [...(this.gates ?? []), ...(this.reactor ? [this.reactor] : [])]) gone(g.group);
+    // Co-op Defense: the reactor, and the gates the walkers come out of, fungus round their mouths.
+    const d = map.objectives?.defense;
+    this.reactor = d ? { group: reactorMesh(), at: new THREE.Vector3(...d.reactor) } : null;
+    if (this.reactor) {
+      this.reactor.group.position.copy(this.reactor.at);
+      this.scene.add(this.reactor.group);
+    }
+    this.gates = (d?.gates ?? []).map((at) => ({ ...marker(this.scene, at, 5, FUNGUS), shown: null }));
     for (const m of [...this.missiles.map((m) => m.mesh), ...this.drops]) this.scene.remove(m);
     Object.assign(this, { missiles: [], ships: new Map(), sentries: new Map(), drops: [] });
     const o = map.objectives ?? {};
@@ -180,6 +194,79 @@ export class Objectives {
     const blink = contested && Math.floor(now / 300) % 2;
     const color = stalled ? 0x1a1c20 : blink ? 0xffb347 : pusher < 0 || pusher === undefined ? NEUTRAL : pusher === myTeam ? friend : foe;
     for (const a of group.userData.accents) a.material.color.setHex(color);
+  }
+
+  /**
+   * Co-op Defense from `defense` (see WasmNetClient.defense): the reactor glowing as its hull
+   * holds (cold blue, guttering to red as it goes), and the gates' fungus pulsing, brighter during
+   * a wave. Hidden in other modes.
+   */
+  drawDefense(defense, now) {
+    const on = defense.length >= 5;
+    if (this.reactor) this.reactor.group.visible = on;
+    for (const g of this.gates) g.group.visible = on;
+    if (!on) return;
+    const [, , breakLeft, hull] = defense, health = Math.max(hull, 0) / REACTOR_HULL;
+    const core = this.reactor?.group.userData.core;
+    if (core) {
+      core.material.color.setRGB(0.3 + 0.7 * (1 - health), 0.5 * health + 0.1, 0.9 * health + 0.1);
+      core.scale.setScalar(0.9 + 0.1 * Math.sin(now / (120 + 400 * health)));
+    }
+    const pulse = 0.5 + 0.5 * Math.sin(now / (breakLeft < 0 ? 180 : 600));
+    for (const g of this.gates) for (const m of [g.ring, g.fill, g.beacon]) m.material.opacity = 0.25 + 0.5 * pulse;
+  }
+
+  /**
+   * Co-op's infested walkers from `list` (deployable floats): bodies eased to where the server has
+   * them, faced the way they walk, legs striding; gun pods trained as the server has them (their
+   * muzzles into `guns`, for shot effects); fungus pulsing on their hulls.
+   */
+  drawWalkers(list, dt, now, guns) {
+    const live = new Set();
+    for (let i = 0; i < list.length; i += 10) {
+      if (list[i] !== WALKER) continue;
+      const [, , owner, x, y, z, yaw] = list.subarray(i, i + 7);
+      let w = this.walkers.get(owner);
+      if (!w) {
+        w = { group: walkerMesh(), heading: 0, gait: 0, lift: [0, 0, 0, 0], aim: yaw };
+        w.group.position.set(x, y, z);
+        this.scene.add(w.group);
+        this.walkers.set(owner, w);
+      }
+      live.add(owner);
+      const { group } = w, before = group.position.clone();
+      group.position.lerp(new THREE.Vector3(x, y, z), 1 - Math.exp(-12 * dt));
+      const dx = group.position.x - before.x, dz = group.position.z - before.z, moved = Math.hypot(dx, dz);
+      if (moved > 1e-3) w.heading += Math.atan2(Math.sin(Math.atan2(-dx, -dz) - w.heading), Math.cos(Math.atan2(-dx, -dz) - w.heading)) * (1 - Math.exp(-6 * dt));
+      group.rotation.y = w.heading;
+      w.gait += (moved / WALKER_STRIDE) * Math.PI;
+      group.userData.legs.forEach((leg, k) => {
+        const p = w.gait + (k === 0 || k === 3 ? 0 : Math.PI), lift = Math.max(0, Math.sin(p)) * 0.5;
+        leg.foot.set(leg.rest.x, lift, leg.rest.z + Math.cos(p) * WALKER_STRIDE * 0.5);
+        pose(leg);
+      });
+      // The gun pod turns on its own, toward what the server has it aimed at.
+      w.aim += Math.atan2(Math.sin(yaw - w.aim), Math.cos(yaw - w.aim)) * (1 - Math.exp(-14 * dt));
+      group.userData.pod.rotation.y = w.aim - w.heading;
+      for (const [k, f] of group.userData.fungus.entries()) f.scale.setScalar(1 + 0.18 * Math.sin(now / 260 + k * 1.7));
+      guns.set(`${owner}:2`, group.userData.muzzle.getWorldPosition(new THREE.Vector3()));
+    }
+    for (const [owner, w] of this.walkers) {
+      if (live.has(owner)) continue;
+      // Gone: shot down (a burst and spores), or walked into the reactor.
+      const at = w.group.position.clone().setY(w.group.position.y + 1.5);
+      if (!this.reactor || at.distanceTo(this.reactor.at) > 14) {
+        this.fx.explosion(at, 0.7);
+        this.sound.blast(4, at);
+      }
+      this.scene.remove(w.group);
+      this.walkers.delete(owner);
+    }
+  }
+
+  /** The reactor as a mark for the glass and radar, in co-op. */
+  defenseMarks(defense) {
+    return this.reactor && defense.length >= 5 ? [{ label: 'REACTOR', at: this.reactor.at, owner: this.myTeam ?? 0, contested: false }] : [];
   }
 
   /** The hauler as a mark for the glass and radar, in the color of the side walking it, blinking while contested. */
@@ -775,10 +862,10 @@ const HAULER_LEG = 3.4;
 
 /** Sets `leg`'s thigh and shin between its hip, a knee bent up and out, and its foot (in the walker's frame). */
 function pose(leg) {
-  const { hip, foot, thigh, shin } = leg;
+  const { hip, foot, thigh, shin } = leg, len = leg.len ?? HAULER_LEG;
   const mid = hip.clone().add(foot).multiplyScalar(0.5), half = hip.distanceTo(foot) / 2;
-  const knee = mid.addScaledVector(UP, Math.sqrt(Math.max(HAULER_LEG ** 2 - half ** 2, 0.25)));
-  knee.x += Math.sign(hip.x) * 0.6;
+  const knee = mid.addScaledVector(UP, Math.sqrt(Math.max(len ** 2 - half ** 2, 0.25)));
+  knee.x += Math.sign(hip.x) * 0.18 * len;
   for (const [mesh, a, b] of [[thigh, hip, knee], [shin, knee, foot]]) {
     mesh.position.copy(a).add(b).multiplyScalar(0.5);
     mesh.quaternion.setFromUnitVectors(UP, b.clone().sub(a).normalize());
@@ -832,6 +919,77 @@ function haulerMesh() {
     return leg;
   });
   group.userData = { legs, accents };
+  return group;
+}
+
+/** Co-op's fungus, glowing orange; a walker's stride. */
+const FUNGUS = 0xff7a1f;
+const WALKER_STRIDE = 1.4;
+
+/**
+ * Co-op's infested walker, walking along -Z: a rusted industrial chassis on four jointed legs
+ * (`userData.legs`), a gun pod on top that turns on its own (`userData.pod`, its `muzzle`), and
+ * orange fungus bulging from its seams (`userData.fungus`), the hive mind's mark on it.
+ */
+function walkerMesh() {
+  const group = new THREE.Group();
+  const paint = new THREE.MeshStandardMaterial({ color: 0x8a6a2a, roughness: 0.8, metalness: 0.3 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x2a2622, roughness: 0.6, metalness: 0.5 });
+  const glow = hot(new THREE.MeshBasicMaterial({ color: FUNGUS }));
+  const add = (parent, geometry, material, x, y, z) => {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(x, y, z);
+    parent.add(mesh);
+    return mesh;
+  };
+  add(group, new THREE.BoxGeometry(2.0, 0.9, 2.5), paint, 0, 2.0, 0);
+  add(group, new THREE.BoxGeometry(1.6, 0.4, 2.0), dark, 0, 1.45, 0);
+  const pod = new THREE.Group();
+  pod.position.set(0, 2.75, -0.2);
+  group.add(pod);
+  add(pod, new THREE.BoxGeometry(0.9, 0.6, 1.1), dark, 0, 0, 0);
+  add(pod, new THREE.CylinderGeometry(0.09, 0.09, 1.3, 8), dark, 0, 0, -1.0).rotation.x = Math.PI / 2;
+  const muzzle = new THREE.Object3D();
+  muzzle.position.set(0, 0, -1.7);
+  pod.add(muzzle);
+  add(pod, new THREE.SphereGeometry(0.12, 8, 6), glow, 0, 0.12, -0.56); // its eye, taken over
+  const fungus = [[0.8, 2.5, 0.6, 0.32], [-0.9, 2.3, -0.4, 0.26], [0.3, 2.5, 1.1, 0.22], [-0.5, 1.6, 0.9, 0.2], [1.0, 1.9, -0.9, 0.18], [-0.2, 3.1, 0.3, 0.16]]
+    .map(([x, y, z, r]) => add(group, new THREE.SphereGeometry(r, 10, 8), glow, x, y, z));
+  const segment = new THREE.CylinderGeometry(0.16, 0.12, 1, 6);
+  const legs = [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([sx, sz]) => {
+    const hip = new THREE.Vector3(sx * 0.9, 1.8, sz * 1.0), rest = new THREE.Vector3(sx * 2.0, 0, sz * 1.7);
+    const leg = { hip, rest, foot: rest.clone(), len: 1.6, thigh: add(group, segment, paint, 0, 0, 0), shin: add(group, segment, dark, 0, 0, 0) };
+    pose(leg);
+    return leg;
+  });
+  group.userData = { legs, pod, muzzle, fungus };
+  return group;
+}
+
+/**
+ * Co-op's reactor, its foot at y 0: a squat plant drum, a glowing core column (`userData.core`)
+ * inside four struts, and rings round it.
+ */
+function reactorMesh() {
+  const group = new THREE.Group();
+  const steel = new THREE.MeshStandardMaterial({ color: 0x4a5058, roughness: 0.5, metalness: 0.6 });
+  const drum = new THREE.Mesh(new THREE.CylinderGeometry(5, 5.5, 3, 24), steel);
+  drum.position.y = 1.5;
+  const core = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.4, 11, 16), hot(new THREE.MeshBasicMaterial({ color: 0x66ccff })));
+  core.position.y = 8.5;
+  group.add(drum, core);
+  for (let k = 0; k < 4; k++) {
+    const a = (k * Math.PI) / 2, strut = new THREE.Mesh(new THREE.BoxGeometry(0.5, 12, 0.5), steel);
+    strut.position.set(2.6 * Math.cos(a), 9, 2.6 * Math.sin(a));
+    group.add(strut);
+  }
+  for (const y of [5, 9, 13]) {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(2.6, 0.18, 8, 24), steel);
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = y;
+    group.add(ring);
+  }
+  group.userData = { core };
   return group;
 }
 
