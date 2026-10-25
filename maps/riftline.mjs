@@ -1,16 +1,17 @@
-// Riftline: a 240 m lavender canyon. A chasm splits the map east-west between the two bases:
-// rims at 0, cliff terraces at -8 and -16, the floor at -24, and a three-deck bridge across it
-// (service gantry -8, road 0, rail +10) whose rail deck runs on to both bases as the high road.
+// Riftline: a 240 m lavender canyon. A chasm splits the map east-west between the two bases, a
+// fissure glowing violet down its floor: rims at 0, cliff terraces at -8 and -16, the floor at -24,
+// and a three-deck bridge across it (service gantry -8, road 0, rail +10) whose rail deck runs on
+// to both bases as the high road.
 // Writes riftline.json next to this file; rerun `node maps/riftline.mjs` after editing.
 //
 // The north wall and rim (z > 0) and pieces straddling z = 0 are authored here; `write`
 // (maps/kit.mjs) adds the 180-degree twin. Metrics as the other maps': 9-10 m lanes and gates,
 // 6.5 m+ under decks, ramps near 24 degrees, 3 m hover ledges. Hover lasts about 5 s and a dash is
 // 8.5 m, so a 12 m gap takes a hover; there's no fall damage, so the chasm is a slow road, not a pit.
-import { bases, box, growth, lamp, once, pad, point, railing, ramp, sentries, siege, sign, silos, turned, write } from './kit.mjs';
+import { bases, box, growth, lamp, once, pad, point, r3, railing, ramp, sentries, siege, sign, silos, turned, write } from './kit.mjs';
 
 const BASE = -25; // bottom of every rock mass
-const MAGENTA = '#ff6be0', LILAC = '#c9a2ff';
+const MAGENTA = '#ff6be0', LILAC = '#c9a2ff', RIFT = '#b45cff';
 // Switchback stairs up the north wall start at these x: floor -> -16 -> -8 -> rim.
 const STAIRS = [-62, 34];
 
@@ -28,6 +29,22 @@ rock([-120, 36], [120, 120], 0); // north rim plateau
 rock([-120, 28], [120, 36], -8); // terrace -8
 rock([-120, 20], [120, 28], -16); // terrace -16
 once(() => box([-120, BASE, -20], [120, -24, 20], 'ground')); // chasm floor
+// The rift itself: a fissure zigzagging down the floor's middle, glowing violet up out of the deep
+// and lighting the chasm (a prop: it's walked over). The east half; the twin is the west's.
+{
+  let [x, z] = [0, 0];
+  for (let k = 0; x < 118; k++) {
+    const step = 9 + 4 * Math.abs(Math.sin(k * 2.3)), nz = (k % 2 ? 1 : -1) * (1.5 + 2.5 * Math.abs(Math.sin(k * 1.7)));
+    const [x1, z1] = [Math.min(x + step, 118), nz];
+    // Each leg as short axis-aligned slabs along it (props can't turn).
+    for (let t = 0; t < 1; t += 0.25) {
+      const [ax, az] = [x + (x1 - x) * t, z + (z1 - z) * t], [bx, bz] = [x + (x1 - x) * (t + 0.25), z + (z1 - z) * (t + 0.25)];
+      const w = 0.5 + 0.4 * Math.abs(Math.sin(k * 3.1 + t * 7));
+      sign([r3(Math.min(ax, bx)), -24.02, r3(Math.min(az, bz) - w)], [r3(Math.max(ax, bx)), -23.95, r3(Math.max(az, bz) + w)], [r3((ax + bx) / 2), -21, r3((az + bz) / 2)], RIFT);
+    }
+    [x, z] = [x1, z1];
+  }
+}
 for (const a of STAIRS) {
   ramp([a, -24, 16.5], [a + 18, -16, 16.5], 7, 'metal', true); // floor -> -16, then a landing
   rock([a + 18, 12], [a + 28, 20], -16);
@@ -151,5 +168,9 @@ const palette = {
   light: { sky: '#b6a6e6', ground: '#3a2c4a', ambient: 1.7, sun: '#ffc6e6', direct: 1.5 },
   lamp: '#f0b8ff',
   tint: '#c3bad8',
+  // Wisps rising out of the rift: born low in the chasm (anywhere else that low is inside rock).
+  motes: { color: [[0.85, 0.55, 1], [0.5, 0.25, 0.9]], rate: 70, size: 0.2, drift: 0.3, rise: 1.6, life: 6, band: [-24, -17], range: 45 },
+  aurora: { strength: 0.45, colors: ['#4dffb0', '#b066ff'] }, // curtains over the canyon, green going violet
+  ambience: 'canyon', // its sound bed and accents (web/audio.js)
 };
 write(new URL('./riftline.json', import.meta.url), { name: 'Riftline', size: [240, 240], night: true, palette }, north);

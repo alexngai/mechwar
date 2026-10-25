@@ -14,9 +14,11 @@ const COLORS = {
   trim: 0x55585b, rail: 0xd3a23a, pipe: 0x7d7262, pole: 0x3a3c3f, rust: 0x8a5634, soot: 0x4f4c49, stack: 0x6e5a4c,
   tower: 0x6c7470, rock: 0x7f7c8c, bark: 0x5b4a3a, moss: 0x6b7a4f, stone: 0x8f8b7b, hull: 0x7b7e74, deadwood: 0x6e675a,
   snow: 0xe8edf1, ice: 0xa9c6d8, sand: 0xdcbf86, sandstone: 0xc49a5c,
+  // Salt-works brine pans, colored by what lives in each.
+  pink: 0xd9508f, coral: 0xe9805e, teal: 0x3fae9f, ochre: 0xd6a443,
 };
 // Ground, rock and wood: no trim, ribs or beams on these.
-const NATURAL = new Set(['ground', 'rock', 'stone', 'moss', 'bark', 'deadwood', 'snow', 'ice', 'sand', 'sandstone']);
+const NATURAL = new Set(['ground', 'rock', 'stone', 'moss', 'bark', 'deadwood', 'snow', 'ice', 'sand', 'sandstone', 'pink', 'coral', 'teal', 'ochre']);
 // Tree crowns and undergrowth, unless the palette's `leaf` names its own.
 const LEAVES = ['#4d7834', '#5d8a3b', '#3e6a2f', '#6c9844'];
 const REEDS = ['#7a7a48', '#6a6e40', '#8a7e50', '#5e6238'];
@@ -232,6 +234,13 @@ function decorParts(d, parts, glow, lamp) {
     glow.lamps.push(new THREE.Vector3(x, y + 3.1, z));
     // Its light shaft, down to the deck it stands on.
     glow.shafts.push(paint(new THREE.CylinderGeometry(0.3, 2.6, 3.1, 16, 1, true).translate(x, y + 1.55, z), lamp.light, 0.25, true));
+  } else if (d.kind === 'slab') {
+    // A flat box of `mat` from corner `from` to `to` that nothing collides with: paint on a floor
+    // (brine pans, a salt crust) that mustn't trip anyone.
+    const a = new THREE.Vector3(...d.from), b = new THREE.Vector3(...d.to);
+    const g = new THREE.BoxGeometry(...new THREE.Vector3().subVectors(b, a).toArray().map(Math.abs));
+    g.translate(...a.add(b).multiplyScalar(0.5).toArray());
+    parts.push(paint(g, COLORS[d.mat] ?? COLORS.concrete));
   } else if (d.kind === 'sparks') {
     glow.sparkers.push(new THREE.Vector3(...d.at)); // a broken cable or fitting spitting sparks: only fx
   } else if (d.kind === 'canopy') {

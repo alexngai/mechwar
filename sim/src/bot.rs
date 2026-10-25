@@ -272,6 +272,8 @@ const BOOST_LEG: f32 = 15.0;
 const AIM_TOLERANCE: f32 = 2.0 * PI / 180.0;
 /// Faster than any mech moves (m/s): a jump in what a bot sees is a switch of target.
 const MOTION_MAX: f32 = 60.0;
+/// How far off a pile driver's facing its target can be for it to let go: inside the lunge's cone.
+const STRIKE_CONE: f32 = 10.0 * PI / 180.0;
 /// Farthest a Heavy lobs its grenade launcher's shells.
 const MORTAR_RANGE: f32 = 40.0;
 /// Farthest a perch may be from the target.
@@ -412,10 +414,28 @@ fn preferred_range(t: &Tuning) -> f32 {
 }
 
 /// Engagement band around the preferred range: close in beyond `.1`, back off inside `.0`. A
-/// pile driver's carrier fights inside its lunge.
+/// pile driver's carrier fights inside its lunge, no farther off than it carries.
 fn band(t: &Tuning, p: &Policy) -> (f32, f32) {
-    let r = if alt_use(t) == AltUse::Melee { preferred_range(t).min(t.alt_lunge) } else { preferred_range(t) };
+    if alt_use(t) == AltUse::Melee {
+        let r = preferred_range(t).min(t.alt_lunge);
+        return (p.band_near * r, r);
+    }
+    let r = preferred_range(t);
     (p.band_near * r, p.band_far * r)
+}
+
+/// Whether a pile driver wound `charge` (0-1) and let go now lunges onto `target`: in the lunge's
+/// reach with nothing in the way (low cover it sees over would stop the dash), and the target not
+/// moving off more than the strike reaches in the time the lunge takes to get where it stands (a
+/// dash a dodge's drag eases off, as `melee::lunge`'s).
+fn lunge_lands(arena: &Arena, t: &Tuning, me: &Mech, target: &Mech, charge: f32) -> bool {
+    let gap = (flat(target.pos - me.pos).length() - 2.0 * t.mech_radius).max(0.0);
+    let flight = (2.0 * gap / t.dodge_drag.max(1.0)).sqrt();
+    // Along both flanks of the hull, so it doesn't clip a corner.
+    let d = target.pos - me.pos;
+    let side = Vector::new(-d.z, 0.0, d.x).normalize_or_zero() * t.mech_radius;
+    let clear = || [side, -side].iter().all(|&s| arena.cast_ray(&Ray::new(me.pos + s + Vector::Y * (0.3 * t.mech_height), d.normalize_or_zero()), d.length()).is_none());
+    gap <= t.alt_lunge * charge && flat(target.vel).length() * flight <= t.alt_melee && clear()
 }
 
 /// Guardrails on a random build: a repair torch wants a gun that reaches well past its beam (it
@@ -567,6 +587,8 @@ pub struct Bot {
     grenade_at: u32,
     /// Holding fire to cool: set near the overheat lockout, cleared once heat is well down.
     cooling: bool,
+    /// Letting a wound pile driver go this tick, to strike; otherwise it stays wound.
+    striking: bool,
     /// Enemies it knows of (see `perceive`), the one it's fighting, and the waypoint it's
     /// patrolling to (and until when) with none known.
     contacts: Vec<Contact>,
@@ -625,6 +647,7 @@ impl Bot {
             last_health: 0.0,
             grenade_at: 0,
             cooling: false,
+            striking: false,
             contacts: Vec::new(),
             focus: None,
             patrol: None,
@@ -904,6 +927,20 @@ impl Bot {
     /// `think`, with a hurt teammate a repair torch could mend: it does when no enemy is in sight.
     #[allow(clippy::too_many_arguments)]
     pub fn think_with(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: Option<&Mech>, heal: Option<&Mech>, tick: u32) -> Input {
+        self.striking = false;
+        let mut input = self.decide(arena, nav, t, me, target, heal, tick);
+        // A wound pile driver stays wound until the fight lets it go to strike: let go anywhere
+        // else (the target out of view, falling back), it would lunge at nothing.
+        input.alt_fire |= alt_use(t) == AltUse::Melee && me.alt_held && !self.striking;
+        input
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn decide(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: Option<&Mech>, heal: Option<&Mech>, tick: u32) -> Input {
+        // A pile driver can't strike down off a perch: its carrier goes straight in instead.
+        if self.role == Role::Perch && alt_use(t) == AltUse::Melee {
+            (self.role, self.vantage, self.path_goal) = (Role::Hunt, None, None);
+        }
         let idle = Input { yaw: me.yaw, pitch: me.pitch, ..Input::default() };
         self.mending = false;
         let took_damage = me.health < self.last_health;
@@ -1005,8 +1042,8 @@ impl Bot {
                 && match use_ {
                     AltUse::Beam => dist < t.alt_beam,
                     AltUse::HeatFed => me.heat >= self.policy.heat_fed * t.heat_max && dist < 0.8 * t.alt_speed * t.alt_fuse,
-                    // A pile driver let go at 85% wound carries that far.
-                    AltUse::Melee => dist < 0.85 * t.alt_lunge + 2.0 * t.mech_radius,
+                    // A pile driver winds up on the way in.
+                    AltUse::Melee => dist < 2.0 * t.alt_lunge,
                     _ => dist < if t.alt_gravity > 0.0 { MORTAR_RANGE } else { 0.8 * t.alt_speed * t.alt_fuse } && dist > t.alt_radius + 2.0,
                 };
             let alt_cool = matches!(use_, AltUse::HeatFed | AltUse::Melee) || (!me.overheated && me.heat + t.alt_heat < t.heat_max);
@@ -1087,7 +1124,16 @@ impl Bot {
             // On its way to an order, it keeps going there, firing as it goes.
             let perch = self.role == Role::Perch && self.vantage.is_some();
             let errand = self.errand(me);
-            let (move_x, move_z) = if range > far || perch || self.cooling || errand.is_some() {
+            // A pile driver fully wound goes straight in, and lets go, facing the target so the
+            // lunge goes for it, once the lunge would land; it steers the lunge onto it as it flies.
+            let to = flat(target.pos - me.pos);
+            let wound = use_ == AltUse::Melee && me.alt_held && me.alt_charge >= 1.0;
+            let lunging = use_ == AltUse::Melee && me.strike > 0.0;
+            self.striking = wound && wrap(atan2f(-to.x, -to.z) - new_yaw).abs() < STRIKE_CONE && lunge_lands(arena, t, me, target, me.alt_charge);
+            let (move_x, move_z) = if (wound && range <= far) || lunging {
+                let (dir, rot) = (to.normalize_or_zero(), Rotation::from_rotation_y(new_yaw));
+                (dir.dot(rot * Vector::X), dir.dot(rot * Vector::NEG_Z))
+            } else if range > far || perch || self.cooling || errand.is_some() {
                 let dir = self.route(arena, nav, t, me, errand.as_ref().unwrap_or(target), tick).normalize_or_zero();
                 let rot = Rotation::from_rotation_y(new_yaw);
                 (dir.dot(rot * Vector::X), dir.dot(rot * Vector::NEG_Z))
@@ -1103,7 +1149,7 @@ impl Bot {
                 && match use_ {
                     AltUse::Lock => me.lock != 0 && me.lock_time >= t.alt_lock_time,
                     AltUse::Release => on_target && !me.alt_held,
-                    AltUse::Melee => !(on_target && me.alt_charge >= 0.85),
+                    AltUse::Melee => !self.striking,
                     _ => on_target,
                 };
             return Input {
@@ -1111,11 +1157,13 @@ impl Bot {
                 move_z,
                 yaw: new_yaw,
                 pitch: new_pitch,
-                dodge: if dodge && !self.perched(nav, me) { self.strafe as i8 } else { 0 },
+                dodge: if dodge && !self.perched(nav, me) && !lunging { self.strafe as i8 } else { 0 },
                 fire,
                 alt_fire,
                 aux: use_ == AltUse::Lock && alt && me.lock == 0 && !me.aux_held,
                 grenade: throw || turret,
+                // Wound and going in, on thrusters while there's fuel to spare.
+                boost: wound && range <= far && !self.striking && me.fuel > 0.5 * t.fuel_max,
                 hover: tick < self.hover_until,
                 // An EMP when it would land (taking the target for our size) on one not jammed
                 // already, and it counts: they're on thrusters (it grounds them), or we're hurt (it
@@ -1137,7 +1185,7 @@ impl Bot {
                     Ability::Slipstream => range > far,
                     Ability::Vent => me.overheated || me.heat >= self.policy.vent_heat * t.heat_max,
                     Ability::Brace => took_damage && me.health < self.policy.brace_hull * t.health_max,
-                    Ability::Power => alt_fire,
+                    Ability::Power => if use_ == AltUse::Melee { self.striking } else { alt_fire },
                     Ability::Barrage | Ability::Artillery => fire && range <= far,
                     Ability::Cloak => false,
                 },

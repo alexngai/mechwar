@@ -251,5 +251,6 @@ const palette = {
   mirage: 0.85,
   heat: 1,
   exposure: 1.12,
+  ambience: 'desert', // its sound bed and accents (web/audio.js)
 };
 write(new URL('./span.json', import.meta.url), { name: 'Span', size: SIZE, night: false, palette }, north);

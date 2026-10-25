@@ -1,4 +1,5 @@
-// Verdigris: a 180 m green-lit city on four levels (drains -7, streets 0, roofs 7, viaduct 14).
+// Verdigris: a 180 m green-lit city on four levels (drains -7, streets 0, roofs 7, viaduct 14),
+// under acid rain: neon running down the towers, the rain green in it.
 // Writes verdigris.json next to this file; rerun `node maps/verdigris.mjs` after editing.
 //
 // The north half (z > 0), the east district (straddling z = 0) and the center are authored here;
@@ -104,6 +105,14 @@ railing([52.5, 7, -8], [64, 7, -8]);
 sign([73.8, 8, 20], [74, 12, 30], [71, 6, 25], GREEN);
 sign([73.8, 10, -30], [74, 13, -20], [71, 6, -25], TEAL);
 sign([45.8, 14, 26], [46, 17, 34], [43, 8, 30], MAGENTA);
+// More neon through the rain: tall strips down the towers' street faces and a billboard over the
+// plaza (the twin adds the west's and south's).
+sign([31.8, 8, 70], [32, 22, 72], [29, 10, 71], MAGENTA);
+sign([44, 10, 71.8], [46, 26, 72], [45, 8, 69], TEAL);
+sign([73.8, 12, 32], [74, 26, 34], [71, 10, 33], MAGENTA);
+sign([48, 6, 23.8], [52, 9, 24], [50, 5, 21], GREEN);
+sign([47, 8, -24], [49, 20, -23.8], [48, 7, -21], TEAL);
+sign([-20, 20, 89.8], [-8, 26, 90], [-14, 14, 84], MAGENTA);
 lamp([66, 0, 12]);
 lamp([66, 0, -20]);
 box([78, 0, -6], [84, 3, 0], 'rust'); // crates in the pocket
@@ -140,5 +149,8 @@ const palette = {
   tint: '#9fb3a8',
   skyline: 'city',
   windows: ['#c8ffd8', '#7fffb0', '#ffe2a0', '#7fe8ff'],
+  // Acid rain, green in the neon, slanting in on the wind.
+  motes: { color: [[0.45, 0.9, 0.55]], alpha: 0.4, streak: 0.045, rate: 1400, drift: 0.4, rise: -22, life: 1.2, wind: [5, 2], range: 24 },
+  ambience: 'acidrain', // its sound bed and accents (web/audio.js)
 };
 write(new URL('./verdigris.json', import.meta.url), { name: 'Verdigris', size: [180, 180], night: true, palette }, north);

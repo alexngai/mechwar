@@ -2,7 +2,7 @@
   "name": "Crash Site",
   "size": [300, 300],
   "night": true,
-  "palette": {"sunDir":[0.55, 0.55, -0.63], "sky":{"horizon":"#3a5676", "zenith":"#081226", "sun":"#cfe2ff", "stars":0.6}, "fog":[35, 230], "haze":["#5a7a9e", 0.035, 3.5], "light":{"sky":"#7f9cc8", "ground":"#18222e", "ambient":1.7, "sun":"#a8c4ff", "direct":1.4}, "lamp":"#9fe6ff", "tint":"#b9c8dc", "terrain":["#3e4a44", "#55585a", "#4a4a3c"], "leaf":["#3e5248", "#46584a", "#52604e", "#3a4a40"], "undergrowth":0.6, "reeds":1, "water":{"level":0, "color":"#1e3448", "opacity":0.8}, "cover":0.65, "skyline":"swamp", "motes":{"color":[[0.6, 0.95, 1], [0.15, 0.45, 1]], "rate":70, "size":0.22, "drift":0.4, "rise":0.25, "life":6}},
+  "palette": {"sunDir":[0.55, 0.55, -0.63], "sky":{"horizon":"#3a5676", "zenith":"#081226", "sun":"#cfe2ff", "stars":0.6}, "fog":[35, 230], "haze":["#5a7a9e", 0.035, 3.5], "light":{"sky":"#7f9cc8", "ground":"#18222e", "ambient":1.7, "sun":"#a8c4ff", "direct":1.4}, "lamp":"#9fe6ff", "tint":"#b9c8dc", "terrain":["#3e4a44", "#55585a", "#4a4a3c"], "leaf":["#3e5248", "#46584a", "#52604e", "#3a4a40"], "undergrowth":0.6, "reeds":1, "water":{"level":0, "color":"#1e3448", "opacity":0.8}, "cover":0.65, "skyline":"swamp", "motes":[{"color":[[0.6, 0.95, 1], [0.15, 0.45, 1]], "rate":70, "size":0.22, "drift":0.4, "rise":0.25, "life":6}, {"color":[[0.62, 0.7, 0.82]], "alpha":0.35, "streak":0.04, "rate":1800, "drift":0.5, "rise":-26, "life":1.1, "wind":[7, 3], "range":26}], "lightning":{"every":[6, 15], "strength":1}, "ambience":"storm"},
   "solids": [
     {"box":[0,-0.05,0],"half":[26,0.25,55],"yaw":45,"mat":"metal"},
     {"box":[-36.416,8.75,-36.416],"half":[26,0.25,3.5],"yaw":45,"mat":"metal"},

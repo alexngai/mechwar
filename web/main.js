@@ -232,6 +232,7 @@ const ensureArena = (index) => {
   arena = buildArena(scene, map);
   aimSun(map.palette?.sunDir ?? SUN_AT);
   sky.fit(map);
+  sound.setAmbience(map.palette?.ambience);
   shimmer.setMap(map);
   renderer.toneMappingExposure = map.palette?.exposure ?? EXPOSURE;
   glass.setMap(map);

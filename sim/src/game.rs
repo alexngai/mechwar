@@ -3066,4 +3066,37 @@ mod tests {
         assert!(splits * 3 >= canisters * 2, "only {splits} of {canisters} canisters split");
         assert!(bomblet_hits * 2 >= bomblets, "only {bomblet_hits} of {bomblets} bomblets hit");
     }
+
+    #[test]
+    fn bots_close_in_and_land_the_pile_driver() {
+        // A bot with an SMG and the pile driver 15 m from a human in the open, standing, then
+        // strafing side to side: how many strikes it lets go, and how many land.
+        let t = Tuning::default();
+        let (mut released, mut landed) = (0, 0);
+        for (seed, strafe) in (1..=4).flat_map(|seed| [(seed, false), (seed, true)]) {
+            let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+            game.bots = false;
+            let human = game.join().unwrap();
+            let bot = game.add_player(1, Some(Bot::new(seed)), MechClass::B).unwrap();
+            for (id, pos) in [(human, Vector::new(0.0, 0.1, -5.0)), (bot, Vector::new(0.0, 0.1, 10.0))] {
+                let m = &mut game.players.iter_mut().find(|p| p.id == id).unwrap().mech;
+                // Its guns only: no grenades or EMPs.
+                (m.pos, m.loadout, m.grenades, m.emps) = (pos, Loadout { ability: 1, ..Loadout::named("stitcher", "piston") }, 0, 0);
+            }
+            unshield(&mut game);
+            for k in 0..secs(20.0) {
+                let side = if !strafe { 0.0 } else if k / secs(1.2) % 2 == 0 { 1.0 } else { -1.0 };
+                send(&mut game, human, Input { move_x: side, ..Input::default() });
+                game.step();
+                released += u32::from(mech(&game, bot).launched);
+                landed += game.events.iter().filter(|e| matches!(**e, Event::Strike { owner, hit, .. } if owner == bot && hit == human)).count() as u32;
+                let p = game.players.iter_mut().find(|p| p.id == human).unwrap();
+                // So it never dies, nor slams into anything for a second Strike.
+                (p.mech.health, p.knock) = (t.health_max, None);
+            }
+        }
+        // 160 s in all: a strike landed every 5 s or so, and nearly every one let go lands.
+        assert!(landed >= 30, "only {landed} strikes landed (of {released})");
+        assert!(landed * 10 >= released * 9, "only {landed} of {released} strikes landed");
+    }
 }
