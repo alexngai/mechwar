@@ -557,7 +557,7 @@ impl Game {
                 Some(s.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.eu)).collect::<Vec<_>>(), ships))
             }
             (_, _, Some(c), _) => Some(c.orders(&self.players.iter().map(|p| (p.id, p.team, p.mech.pos, p.bot.is_some() && p.mech.health > 0.0)).collect::<Vec<_>>())),
-            (.., Some((c, at))) => Some(c.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some() && p.mech.health > 0.0)).collect::<Vec<_>>(), at)),
+            (.., Some((c, at))) => Some(c.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.mech.health > 0.0)).collect::<Vec<_>>(), at)),
             _ => None,
         };
         for i in 0..self.players.len() {

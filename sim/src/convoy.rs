@@ -23,6 +23,14 @@ pub const SHIELD: f32 = 1500.0;
 pub const STALL_SECONDS: f32 = 8.0;
 /// It's in a base, delivered, this far from its route's end there: the base's zone (as Siege's).
 const BASE_REACH: f32 = 14.0;
+/// Bots at it take cover this far back along the route from its middle, toward their own base, in
+/// lanes this far across the route (inside the clearance it walks in), so it stands between the
+/// two sides. A side with SPARE more mechs at it than the other sends a bot SCOUT ahead of it,
+/// toward the other base.
+const COVER: f32 = 8.0;
+const LANES: [f32; 4] = [0.0, 3.0, -3.0, 1.5];
+const SPARE: usize = 2;
+const SCOUT: f32 = 35.0;
 
 /// What players see of the convoy: where the hauler is along its route and where it started
 /// (0 at team 0's base, 1 at team 1's), who's pushing it and by how many more mechs, whether both
@@ -133,16 +141,30 @@ impl Convoy {
         ConvoyNet { along: self.along / len, start: self.start / len, pusher: self.pusher, escorts: self.escorts as u8, contested: self.contested, stall }
     }
 
-    /// Where each of `mechs` (team, feet, whether it's a bot) should head with the hauler at
-    /// `hauler`: every bot to it but the one of each team furthest from it, who roams (None), as
-    /// do humans.
-    pub fn orders(&self, mechs: &[(u8, Vector, bool)], hauler: Vector) -> Vec<Option<Vector>> {
-        let mut out: Vec<Option<Vector>> = mechs.iter().map(|m| m.2.then_some(hauler)).collect();
+    /// Where each of `mechs` (team, feet, whether it's a bot, whether it's alive) should head
+    /// with the hauler at `hauler`: each living bot to a spot in cover behind it, on its own
+    /// base's side, nearest first into the middle lane; but while its side has SPARE more mechs
+    /// at the hauler than the other, the one furthest from it scouts ahead. Humans get None.
+    pub fn orders(&self, mechs: &[(u8, Vector, bool, bool)], hauler: Vector) -> Vec<Option<Vector>> {
+        let near = |m: &&(u8, Vector, bool, bool)| m.3 && (m.1 - hauler).with_y(0.0).length() <= ESCORT_RANGE && (m.1.y - hauler.y).abs() <= ESCORT_BAND;
+        let count = [0, 1].map(|t| mechs.iter().filter(|m| m.0 == t).filter(near).count());
+        // Across the route here, for the lanes.
+        let (a, b) = (self.at(self.along - 1.0).0, self.at(self.along + 1.0).0);
+        let ahead = (b - a).with_y(0.0).normalize_or(Vector::NEG_Z);
+        let across = Vector::new(-ahead.z, 0.0, ahead.x);
+        let mut out = vec![None; mechs.len()];
         for team in 0..2u8 {
-            let bots = (0..mechs.len()).filter(|&i| mechs[i].0 == team && mechs[i].2);
-            if bots.clone().count() > 1 {
-                let far = bots.max_by(|&a, &b| mechs[a].1.distance(hauler).total_cmp(&mechs[b].1.distance(hauler)));
-                out[far.unwrap()] = None;
+            // Our base is back down the route (team 0's at its start), theirs on up it.
+            let home = if team == 0 { -1.0 } else { 1.0 };
+            let mut bots: Vec<usize> = (0..mechs.len()).filter(|&i| mechs[i].0 == team && mechs[i].2 && mechs[i].3).collect();
+            bots.sort_by(|&x, &y| mechs[x].1.distance(hauler).total_cmp(&mechs[y].1.distance(hauler)));
+            if count[usize::from(team)] >= count[usize::from(1 - team)] + SPARE && bots.len() > 1 {
+                let scout = bots.pop().expect("more than one");
+                out[scout] = Some(self.at(self.along - home * SCOUT).0);
+            }
+            let behind = self.at(self.along + home * COVER).0;
+            for (k, &i) in bots.iter().enumerate() {
+                out[i] = Some(behind + across * LANES[k % LANES.len()]);
             }
         }
         out
@@ -213,11 +235,21 @@ mod tests {
     }
 
     #[test]
-    fn bots_go_to_it_but_one_a_side_roams() {
+    fn bots_take_cover_behind_it_on_their_own_side_and_spare_ones_scout_ahead() {
         let c = convoy();
-        let at = |z: f32| Vector::new(0.0, 0.0, z);
-        let mechs = [(0, at(10.0), true), (0, at(60.0), true), (1, at(-10.0), true), (1, at(-5.0), false)];
         let hauler = c.at(c.along).0;
-        assert_eq!(c.orders(&mechs, hauler), [Some(hauler), None, Some(hauler), None]);
+        let mech = |team: u8, z: f32, bot: bool| (team, Vector::new(0.0, 0.0, z), bot, true);
+        // One a side at it: each behind it toward its own base (team 0's at +z), none spare.
+        let mechs = [mech(0, 5.0, true), mech(0, 60.0, true), mech(1, -5.0, true), (1, Vector::new(0.0, 0.0, -9.0), true, false), mech(1, -4.0, false)];
+        let orders = c.orders(&mechs, hauler);
+        assert_eq!(orders[0], Some(Vector::new(0.0, 0.0, COVER)));
+        assert_eq!(orders[1], Some(Vector::new(LANES[1], 0.0, COVER)), "the next in the next lane");
+        assert_eq!(orders[2], Some(Vector::new(0.0, 0.0, -COVER)));
+        assert_eq!((orders[3], orders[4]), (None, None), "the dead and humans get none");
+        // Three of team 0 at it to one of team 1: its furthest bot scouts on toward team 1's base.
+        let mechs = [mech(0, 5.0, true), mech(0, 6.0, false), mech(0, 7.0, true), mech(0, 80.0, true), mech(1, -5.0, true)];
+        let orders = c.orders(&mechs, hauler);
+        assert_eq!(orders[3], Some(Vector::new(0.0, 0.0, -SCOUT)));
+        assert!(orders[0].is_some_and(|o| o.z > 0.0) && orders[2].is_some_and(|o| o.z > 0.0));
     }
 }
