@@ -450,8 +450,8 @@ const KITS = {
     pod.userData.loaded = [put(pod, cyl(0, 0.17, 0.36, warheadMat), 0, 0.05, -1.95, -ALONG_Z)]; // warhead
     return put(pod, new THREE.Object3D(), 0, 0.05, -1.85);
   } },
-  // Mid range: a grenade rifle, a big revolving drum of chambers slung under a short barrel, with a
-  // hazard-striped round in each.
+  // Mid range: an automatic grenade launcher, a big revolving drum of chambers slung under a short
+  // barrel, with a hazard-striped round in each.
   hail: { home: 'B', build(pod, m) {
     pod.add(box(0.55, 0.6, 1.0, m.pods)); // receiver
     put(pod, cyl(0.52, 0.52, 0.65, m.trim), 0, -0.3, -0.75, ALONG_Z); // drum
