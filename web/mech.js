@@ -316,191 +316,211 @@ export const CLASSES = { A: WISP, B: LANCER, C: BULWARK };
 // Weapon models by weapons.json id, each built in a pod facing -Z and returning its muzzle. Each is
 // sized for a `home` class and scaled to fit any other, and set so its bore (the barrel's line:
 // its muzzle, or a raised tube's pivot, `bore`) runs through its class's arm mount, so every
-// weapon on an arm sits at the same height.
+// weapon on an arm sits at the same height. Any class carries any weapon and at range an arm is a
+// dozen pixels, so each kit leads with one outline no other on its arm shares: a length, a bulk, a
+// drum, a dish, a spike, a box, or a tube raised, lowered or run out the back.
 const KITS = {
-  // A long rifle on a slim forearm.
+  // Close range: a stubby gun with a long magazine hanging straight down from its receiver.
   stitcher: { home: 'A', build(pod, m) {
     pod.add(box(0.34, 0.34, 0.34, jointMat)); // shoulder
-    put(pod, box(0.28, 0.36, 1.1, m.pods), 0.04, -0.12, -0.45); // forearm
-    put(pod, box(0.08, 0.12, 0.55, m.trim), 0.04, 0.12, -0.7); // scope
-    put(pod, cyl(0.055, 0.075, 1.0, m.barrels), 0.04, -0.12, -1.45, ALONG_Z); // barrel
-    put(pod, box(0.15, 0.15, 0.25, m.trim), 0.04, -0.12, -2.0); // muzzle brake
-    return put(pod, new THREE.Object3D(), 0.04, -0.12, -2.15);
+    put(pod, box(0.28, 0.36, 0.8, m.pods), 0.04, -0.12, -0.35); // forearm
+    put(pod, box(0.26, 0.3, 0.45, m.trim), 0.04, -0.12, -0.95); // receiver
+    put(pod, box(0.14, 0.85, 0.26, m.trim), 0.04, -0.68, -0.95, 0.12); // magazine, raked forward
+    put(pod, box(0.16, 0.16, 0.35, m.barrels), 0.04, -0.12, -1.35); // barrel shroud
+    put(pod, cyl(0.05, 0.06, 0.2, m.barrels), 0.04, -0.12, -1.6, ALONG_Z); // barrel
+    return put(pod, new THREE.Object3D(), 0.04, -0.12, -1.7);
   } },
-  // Three short barrels stacked over a receiver on a slim forearm.
+  // Mid range: three barrels stacked a hand apart in a tall frame out of a small receiver, a
+  // hammerhead muzzle.
   triplet: { home: 'A', build(pod, m) {
     pod.add(box(0.34, 0.34, 0.34, jointMat)); // shoulder
     put(pod, box(0.28, 0.36, 0.8, m.pods), 0.04, -0.12, -0.35); // forearm
     put(pod, box(0.22, 0.34, 0.5, m.trim), 0.04, -0.06, -0.9); // receiver
-    for (const y of [-0.16, -0.06, 0.04]) put(pod, cyl(0.035, 0.04, 0.75, m.barrels), 0.04, y, -1.45, ALONG_Z); // barrels
-    put(pod, box(0.18, 0.34, 0.1, m.trim), 0.04, -0.06, -1.8); // muzzle shroud
-    return put(pod, new THREE.Object3D(), 0.04, -0.06, -1.9);
+    for (const y of [-0.3, -0.06, 0.18]) put(pod, cyl(0.04, 0.045, 0.9, m.barrels), 0.04, y, -1.5, ALONG_Z); // barrels
+    for (const z of [-1.5, -1.9]) put(pod, box(0.16, 0.72, 0.08, m.trim), 0.04, -0.06, z); // frame
+    return put(pod, new THREE.Object3D(), 0.04, -0.06, -1.95);
   } },
-  // A gun pod with one tapered barrel.
+  // Long range: a gun pod with the longest barrel of any primary, tapered, ending in a muzzle brake.
   pike: { home: 'B', build(pod, m) {
     pod.add(box(0.55, 0.6, 1.3, m.pods));
-    put(pod, cyl(0.1, 0.13, 1.4, m.barrels), 0, -0.05, -1.3, ALONG_Z);
-    return put(pod, new THREE.Object3D(), 0, -0.05, -2.0);
+    put(pod, cyl(0.12, 0.08, 2.6, m.barrels), 0, -0.05, -1.95, ALONG_Z); // barrel
+    put(pod, cyl(0.16, 0.16, 0.12, m.trim), 0, -0.05, -1.3, ALONG_Z); // collar
+    put(pod, box(0.26, 0.2, 0.4, m.trim), 0, -0.05, -3.35); // muzzle brake
+    return put(pod, new THREE.Object3D(), 0, -0.05, -3.55);
   } },
-  // Six barrels round a spinner (`userData.spinner`, turned by `windUp`), out of a gun pod.
+  // Close range: six barrels round a spinner (`userData.spinner`, turned by `windUp`), a bundle
+  // fatter than the gun pod it comes out of, blunt to the end.
   gyre: { home: 'B', build(pod, m) {
     pod.add(box(0.55, 0.6, 1.0, m.pods));
     const spinner = put(pod, new THREE.Group(), 0, -0.05, -0.5);
     for (let k = 0; k < 6; k++) {
       const a = (k / 6) * Math.PI * 2;
-      put(spinner, cyl(0.045, 0.045, 1.3, m.barrels), Math.cos(a) * 0.12, Math.sin(a) * 0.12, -0.65, ALONG_Z);
+      put(spinner, cyl(0.08, 0.08, 1.6, m.barrels), Math.cos(a) * 0.28, Math.sin(a) * 0.28, -0.8, ALONG_Z);
     }
-    for (const z of [-0.1, -1.2]) put(spinner, cyl(0.19, 0.19, 0.08, m.trim), 0, 0, z, ALONG_Z); // collars
+    for (const z of [-0.1, -0.85, -1.5]) put(spinner, cyl(0.4, 0.4, 0.12, m.trim), 0, 0, z, ALONG_Z); // collars
     pod.userData.spinner = spinner;
-    return put(pod, new THREE.Object3D(), 0, -0.05, -1.85);
+    return put(pod, new THREE.Object3D(), 0, -0.05, -2.15);
   } },
-  // A cannon on a shoulder turret.
+  // Close range: a short, fat barrel flaring into a wide bell, a blunderbuss on a shoulder turret.
   squall: { home: 'C', build(pod, m) {
     put(pod, box(0.5, 0.4, 0.6, jointMat), 0, -0.3, 0.1); // turret ring
-    put(pod, box(0.85, 0.7, 1.9, m.pods), 0, 0.1, -0.1); // housing
-    put(pod, cyl(0.17, 0.21, 1.7, m.barrels), 0, 0.1, -1.85, ALONG_Z); // barrel
-    put(pod, box(0.5, 0.5, 0.4, m.trim), 0, 0.1, -2.75); // muzzle block
-    return put(pod, new THREE.Object3D(), 0, 0.1, -3.0);
+    put(pod, box(0.85, 0.7, 1.5, m.pods), 0, 0.1, -0.05); // housing
+    put(pod, cyl(0.24, 0.26, 0.6, m.barrels), 0, 0.1, -1.05, ALONG_Z); // barrel
+    put(pod, cyl(0.26, 0.47, 0.7, m.barrels), 0, 0.1, -1.7, ALONG_Z); // bell, wide at the front
+    put(pod, cyl(0.5, 0.5, 0.08, m.trim), 0, 0.1, -2.05, ALONG_Z); // its lip
+    return put(pod, new THREE.Object3D(), 0, 0.1, -2.1);
   } },
-  // A long barrel through coils that glow as it charges (`userData.charge`, lit by `windUp`), on a
-  // shoulder turret.
+  // Long range: a long barrel through coils that stand out round it like ribs and glow as it
+  // charges (`userData.charge`, lit by `windUp`), on a shoulder turret.
   kiln: { home: 'C', build(pod, m) {
     put(pod, box(0.5, 0.4, 0.6, jointMat), 0, -0.3, 0.1); // turret ring
     put(pod, box(0.8, 0.65, 1.5, m.pods), 0, 0.1, 0); // housing
-    put(pod, cyl(0.13, 0.15, 2.0, m.barrels), 0, 0.1, -1.7, ALONG_Z); // barrel
+    put(pod, cyl(0.13, 0.15, 2.6, m.barrels), 0, 0.1, -2.0, ALONG_Z); // barrel
     const glow = hot(new THREE.MeshBasicMaterial({ color: COILS_COLD }));
-    for (const z of [-1.0, -1.35, -1.7, -2.05]) {
-      put(pod, cyl(0.26, 0.26, 0.09, m.trim), 0, 0.1, z, ALONG_Z); // coil
-      put(pod, cyl(0.22, 0.22, 0.14, glow), 0, 0.1, z - 0.15, ALONG_Z); // its glow
+    for (const z of [-1.0, -1.55, -2.1, -2.65]) {
+      put(pod, cyl(0.4, 0.4, 0.12, m.trim), 0, 0.1, z, ALONG_Z); // coil
+      put(pod, cyl(0.33, 0.33, 0.16, glow), 0, 0.1, z - 0.14, ALONG_Z); // its glow
     }
-    put(pod, box(0.36, 0.36, 0.25, m.trim), 0, 0.1, -2.8); // muzzle
+    put(pod, box(0.36, 0.36, 0.3, m.trim), 0, 0.1, -3.35); // muzzle
     pod.userData.charge = glow;
-    return put(pod, new THREE.Object3D(), 0, 0.1, -2.95);
+    return put(pod, new THREE.Object3D(), 0, 0.1, -3.5);
   } },
-  // Three tubes splayed on a slim forearm, the Scatter's flak barrels, each with a round's tip in
-  // its mouth while the rack's loaded (`userData.loaded`).
+  // Burst: five flak tubes fanned wide from one breech on a slim forearm, the Scatter's barrels,
+  // out and up and down (away from the pilot's view), each with a round's tip in its mouth while
+  // the rack's loaded (`userData.loaded`).
   darts: { home: 'A', build(pod, m) {
     pod.add(box(0.34, 0.34, 0.34, jointMat)); // shoulder
     put(pod, box(0.28, 0.36, 0.9, m.pods), -0.04, -0.12, -0.4); // forearm
-    put(pod, box(0.42, 0.1, 0.8, m.trim), -0.04, 0.06, -0.65); // rack bed
+    put(pod, cyl(0.17, 0.17, 0.3, m.trim), -0.04, 0.2, -0.45, ALONG_Z); // breech
     const loaded = [];
-    for (const [x, fan] of [[-0.15, 0.06], [-0.04, 0], [0.07, -0.06]]) {
-      const tube = put(pod, new THREE.Group(), x, 0.16, -0.3);
-      tube.rotation.y = fan;
-      put(tube, cyl(0.045, 0.045, 1.05, m.barrels), 0, 0, -0.525, ALONG_Z); // tube
-      put(tube, cyl(0.058, 0.058, 0.05, m.trim), 0, 0, -1.05, ALONG_Z); // muzzle ring
-      loaded.push(put(tube, cyl(0, 0.035, 0.16, dartMat), 0, 0, -1.1, -ALONG_Z)); // dart tip
+    for (let k = 0; k < 5; k++) {
+      const a = ((k - 2) / 4) * Math.PI; // half a ring, facing out
+      const tube = put(pod, new THREE.Group(), -0.04 + Math.cos(a) * 0.09, 0.2 + Math.sin(a) * 0.09, -0.55);
+      tube.rotation.set(Math.sin(a) * 0.28, -Math.cos(a) * 0.28, 0); // splayed out from the breech
+      put(tube, cyl(0.05, 0.05, 1.0, m.barrels), 0, 0, -0.5, ALONG_Z); // tube
+      put(tube, cyl(0.065, 0.065, 0.06, m.trim), 0, 0, -1.0, ALONG_Z); // muzzle ring
+      loaded.push(put(tube, cyl(0, 0.04, 0.16, dartMat), 0, 0, -1.06, -ALONG_Z)); // dart tip
     }
-    put(pod, box(0.06, 0.1, 0.25, m.accent), -0.04, 0.26, -0.15); // sight
+    put(pod, box(0.06, 0.1, 0.25, m.accent), -0.04, 0.42, -0.2); // sight
     pod.userData.loaded = loaded;
-    return put(pod, new THREE.Object3D(), -0.04, 0.16, -1.4);
+    return put(pod, new THREE.Object3D(), -0.04, 0.2, -1.5);
   } },
-  // A two-by-four missile pod on a slim forearm under a lock-on sensor; the missiles' noses show in
-  // its cells while it's loaded.
+  // Lock-on: a tall two-by-four missile box on a slim forearm, standing level with the canopy, under
+  // a lock-on sensor; the missiles' noses show in its cells while it's loaded.
   hornet: { home: 'A', build(pod, m) {
     pod.add(box(0.34, 0.34, 0.34, jointMat)); // shoulder
     put(pod, box(0.28, 0.36, 0.9, m.pods), -0.04, -0.12, -0.4); // forearm
-    put(pod, box(0.44, 0.84, 1.0, m.trim), -0.04, 0.4, -0.85); // missile pod
+    put(pod, box(0.5, 1.15, 0.9, m.trim), -0.04, 0.55, -0.75); // missile box
+    put(pod, box(0.56, 0.08, 0.96, m.hazard), -0.04, 1.15, -0.75); // its lid
     const loaded = [];
-    for (const x of [-0.14, 0.06]) {
-      for (const y of [0.1, 0.3, 0.5, 0.7]) {
-        put(pod, cyl(0.075, 0.075, 0.06, m.barrels), x, y, -1.36, ALONG_Z); // cell mouth
-        loaded.push(put(pod, cyl(0, 0.06, 0.16, warheadMat), x, y, -1.42, -ALONG_Z)); // missile nose
+    for (const x of [-0.16, 0.08]) {
+      for (const y of [0.16, 0.42, 0.68, 0.94]) {
+        put(pod, cyl(0.08, 0.08, 0.06, m.barrels), x, y, -1.21, ALONG_Z); // cell mouth
+        loaded.push(put(pod, cyl(0, 0.065, 0.16, warheadMat), x, y, -1.27, -ALONG_Z)); // missile nose
       }
     }
-    put(pod, box(0.14, 0.1, 0.14, m.accent), -0.04, 0.87, -0.6); // lock-on sensor
+    put(pod, box(0.14, 0.1, 0.14, m.accent), -0.04, 1.24, -0.5); // lock-on sensor
     pod.userData.loaded = loaded;
-    return put(pod, new THREE.Object3D(), -0.04, 0.4, -1.45);
+    return put(pod, new THREE.Object3D(), -0.04, 0.55, -1.3);
   } },
-  // A beam projector on the forearm: a tapered housing ending in a dish between two prongs, its
-  // lens glowing the mending green.
+  // Support: a beam projector on the forearm, a slim housing ending in a wide dish ringed by three
+  // prongs, its lens glowing the mending green.
   mender: { home: 'A', build(pod, m) {
     pod.add(box(0.34, 0.34, 0.34, jointMat)); // shoulder
     put(pod, box(0.28, 0.36, 0.9, m.pods), -0.04, -0.12, -0.4); // forearm
-    put(pod, cyl(0.2, 0.15, 0.8, m.trim), -0.04, 0.16, -0.8, ALONG_Z); // housing, wide at the back
-    put(pod, cyl(0.14, 0.28, 0.14, m.barrels), -0.04, 0.16, -1.25, ALONG_Z); // dish, wide at the front
-    put(pod, new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 6), mendLensMat), -0.04, 0.16, -1.28); // lens
-    for (const x of [-0.24, 0.16]) put(pod, box(0.04, 0.04, 0.32, m.accent), x, 0.16, -1.42); // prongs
-    return put(pod, new THREE.Object3D(), -0.04, 0.16, -1.45);
+    put(pod, cyl(0.16, 0.11, 0.7, m.trim), -0.04, 0.16, -0.75, ALONG_Z); // housing, wide at the back
+    put(pod, cyl(0.12, 0.5, 0.25, m.barrels), -0.04, 0.16, -1.2, ALONG_Z); // dish, wide at the front
+    put(pod, new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 6), mendLensMat), -0.04, 0.16, -1.32); // lens
+    for (let k = 0; k < 3; k++) {
+      const a = Math.PI / 2 + (k / 3) * Math.PI * 2;
+      put(pod, box(0.05, 0.05, 0.4, m.accent), -0.04 + Math.cos(a) * 0.4, 0.16 + Math.sin(a) * 0.4, -1.5); // prong
+    }
+    return put(pod, new THREE.Object3D(), -0.04, 0.16, -1.5);
   } },
-  // A long launch tube through a pod, flared at the back to vent the blast and banded with hazard
-  // stripes, under a sight; the rocket's warhead shows in its mouth while it's loaded.
+  // Burst: a long launch tube right through a pod and out the back, flared there to vent the blast
+  // and banded with hazard stripes, under a sight; the rocket's warhead shows in its mouth while
+  // it's loaded.
   rocket: { home: 'B', build(pod, m) {
     pod.add(box(0.55, 0.6, 1.0, m.pods));
-    put(pod, cyl(0.17, 0.17, 1.5, m.barrels), 0, 0.05, -0.75, ALONG_Z); // tube
-    put(pod, cyl(0.27, 0.18, 0.3, m.trim), 0, 0.05, 0.6, ALONG_Z); // back-blast vent, wide at the back
-    put(pod, cyl(0.19, 0.19, 0.14, m.hazard), 0, 0.05, -1.1, ALONG_Z); // hazard band
-    put(pod, cyl(0.22, 0.22, 0.1, m.trim), 0, 0.05, -1.5, ALONG_Z); // muzzle collar
-    put(pod, box(0.08, 0.14, 0.35, m.trim), 0.18, 0.42, -0.35); // sight
-    pod.userData.loaded = [put(pod, cyl(0, 0.15, 0.32, warheadMat), 0, 0.05, -1.6, -ALONG_Z)]; // warhead
-    return put(pod, new THREE.Object3D(), 0, 0.05, -1.65);
+    put(pod, cyl(0.2, 0.2, 3.4, m.barrels), 0, 0.05, -0.1, ALONG_Z); // tube
+    put(pod, cyl(0.42, 0.22, 0.45, m.trim), 0, 0.05, 1.75, ALONG_Z); // back-blast vent, wide at the back
+    put(pod, cyl(0.23, 0.23, 0.16, m.hazard), 0, 0.05, -1.1, ALONG_Z); // hazard band
+    put(pod, cyl(0.25, 0.25, 0.12, m.trim), 0, 0.05, -1.75, ALONG_Z); // muzzle collar
+    put(pod, box(0.08, 0.14, 0.35, m.trim), 0.22, 0.45, -0.35); // sight
+    pod.userData.loaded = [put(pod, cyl(0, 0.17, 0.36, warheadMat), 0, 0.05, -1.95, -ALONG_Z)]; // warhead
+    return put(pod, new THREE.Object3D(), 0, 0.05, -1.85);
   } },
-  // A grenade rifle: a revolving drum of chambers, hazard-striped rounds in each, under a short,
-  // wide barrel out of a receiver.
+  // Mid range: an automatic grenade launcher, a big revolving drum of chambers slung under a short
+  // barrel, with a hazard-striped round in each.
   hail: { home: 'B', build(pod, m) {
     pod.add(box(0.55, 0.6, 1.0, m.pods)); // receiver
-    put(pod, cyl(0.3, 0.3, 0.45, m.trim), 0, -0.25, -0.6, ALONG_Z); // drum
+    put(pod, cyl(0.52, 0.52, 0.65, m.trim), 0, -0.3, -0.75, ALONG_Z); // drum
     for (let k = 0; k < 6; k++) {
       const a = (k / 6) * Math.PI * 2;
-      put(pod, cyl(0.07, 0.07, 0.47, m.hazard), Math.cos(a) * 0.2, -0.25 + Math.sin(a) * 0.2, -0.6, ALONG_Z); // a round in its chamber
+      put(pod, cyl(0.11, 0.11, 0.67, m.hazard), Math.cos(a) * 0.34, -0.3 + Math.sin(a) * 0.34, -0.75, ALONG_Z); // a round in its chamber
     }
-    put(pod, cyl(0.14, 0.16, 1.0, m.barrels), 0, 0.05, -1.2, ALONG_Z); // barrel
-    put(pod, cyl(0.19, 0.19, 0.12, m.trim), 0, 0.05, -1.7, ALONG_Z); // muzzle ring
-    return put(pod, new THREE.Object3D(), 0, 0.05, -1.8);
+    put(pod, cyl(0.14, 0.16, 0.9, m.barrels), 0, 0.05, -1.4, ALONG_Z); // barrel
+    put(pod, cyl(0.19, 0.19, 0.12, m.trim), 0, 0.05, -1.85, ALONG_Z); // muzzle ring
+    return put(pod, new THREE.Object3D(), 0, 0.05, -1.95);
   } },
-  // A homing rocket's single launch tube, banded, under the tracker whose eye marks what the rockets
-  // turn toward.
+  // Mid range: a homing rocket's single launch tube, banded, under the tracker whose eye marks what
+  // the rockets turn toward, raised high on a mast.
   talon: { home: 'B', build(pod, m) {
     pod.add(box(0.55, 0.6, 1.0, m.pods));
-    put(pod, cyl(0.15, 0.15, 1.3, m.barrels), 0, 0.05, -0.85, ALONG_Z); // launch tube
-    put(pod, cyl(0.19, 0.19, 0.12, m.hazard), 0, 0.05, -1.2, ALONG_Z); // band
-    put(pod, cyl(0.19, 0.19, 0.1, m.trim), 0, 0.05, -1.5, ALONG_Z); // muzzle collar
-    put(pod, box(0.18, 0.16, 0.3, m.trim), 0, 0.42, -0.45); // tracker
-    put(pod, box(0.1, 0.06, 0.04, m.accent), 0, 0.42, -0.61); // its eye
-    return put(pod, new THREE.Object3D(), 0, 0.05, -1.55);
+    put(pod, cyl(0.17, 0.17, 1.4, m.barrels), 0, 0.05, -0.9, ALONG_Z); // launch tube
+    put(pod, cyl(0.21, 0.21, 0.14, m.hazard), 0, 0.05, -1.2, ALONG_Z); // band
+    put(pod, cyl(0.21, 0.21, 0.1, m.trim), 0, 0.05, -1.6, ALONG_Z); // muzzle collar
+    put(pod, box(0.1, 0.7, 0.12, m.trim), 0, 0.6, -0.2); // mast
+    put(pod, box(0.36, 0.26, 0.44, m.trim), 0, 1.02, -0.3); // tracker
+    put(pod, box(0.22, 0.1, 0.04, m.accent), 0, 1.02, -0.53); // its eye
+    return put(pod, new THREE.Object3D(), 0, 0.05, -1.65);
   } },
-  // A pile driver: a spike on a ram (`userData.ram`, driven out by `launch`) out of a housing,
-  // under the booster rocket that throws it, whose throat glows as it spools up
+  // Melee: a pile driver, a long spike on a ram (`userData.ram`, driven out by `launch`) out of a
+  // housing, under the booster rocket that throws it, whose throat glows as it spools up
   // (`userData.charge`) and whose bell (`userData.exhaust`) burns through a punch.
   piston: { home: 'B', bore: [0, -0.05], build(pod, m) {
     pod.add(box(0.6, 0.65, 1.3, m.pods)); // housing
-    put(pod, cyl(0.22, 0.22, 0.14, m.hazard), 0, -0.05, -0.68, ALONG_Z); // hazard collar at its mouth
+    put(pod, cyl(0.24, 0.24, 0.14, m.hazard), 0, -0.05, -0.68, ALONG_Z); // hazard collar at its mouth
     const ram = put(pod, new THREE.Group(), 0, -0.05, -0.6);
-    put(ram, cyl(0.11, 0.11, 0.8, m.trim), 0, 0, -0.3, ALONG_Z); // ram rod
-    put(ram, cyl(0.24, 0.24, 0.18, m.barrels), 0, 0, -0.75, ALONG_Z); // ram head
-    put(ram, cyl(0, 0.2, 0.7, m.barrels), 0, 0, -1.2, -ALONG_Z); // spike
+    put(ram, cyl(0.12, 0.12, 0.8, m.trim), 0, 0, -0.3, ALONG_Z); // ram rod
+    put(ram, cyl(0.32, 0.32, 0.2, m.barrels), 0, 0, -0.78, ALONG_Z); // ram head
+    put(ram, cyl(0, 0.3, 1.3, m.barrels), 0, 0, -1.53, -ALONG_Z); // spike
     put(pod, cyl(0.2, 0.2, 1.1, m.trim), 0, 0.5, -0.1, ALONG_Z); // booster motor along the top
     put(pod, cyl(0.23, 0.23, 0.12, m.hazard), 0, 0.5, -0.55, ALONG_Z); // its band
     put(pod, cyl(0.3, 0.2, 0.3, m.barrels), 0, 0.5, 0.6, ALONG_Z); // bell, wide at the back
     const glow = hot(new THREE.MeshBasicMaterial({ color: COILS_COLD }));
     put(pod, cyl(0.18, 0.18, 0.05, glow), 0, 0.5, 0.74, ALONG_Z); // its throat
     Object.assign(pod.userData, { ram, charge: glow, exhaust: put(pod, new THREE.Object3D(), 0, 0.5, 0.8) });
-    return put(ram, new THREE.Object3D(), 0, 0, -1.55);
+    return put(ram, new THREE.Object3D(), 0, 0, -2.2);
   } },
-  // A long, slim barrel between two rails out of a pod, under a scope: a long-range shot.
+  // Burst: a long-range shot, a slim barrel between two rails that run on past its muzzle, longer
+  // than any other weapon, out of a pod under a scope.
   spindle: { home: 'B', build(pod, m) {
     pod.add(box(0.5, 0.55, 1.1, m.pods));
-    put(pod, cyl(0.06, 0.08, 1.9, m.barrels), 0, 0, -1.4, ALONG_Z); // barrel
-    for (const y of [-0.13, 0.13]) put(pod, box(0.06, 0.05, 1.8, m.trim), 0, y, -1.35); // rails
-    put(pod, box(0.18, 0.32, 0.1, m.trim), 0, 0, -2.3); // muzzle block
-    put(pod, box(0.12, 0.14, 0.5, m.trim), 0, 0.36, -0.25); // scope
-    put(pod, box(0.08, 0.06, 0.04, m.accent), 0, 0.36, -0.51); // its lens
-    return put(pod, new THREE.Object3D(), 0, 0, -2.4);
+    put(pod, cyl(0.06, 0.08, 2.6, m.barrels), 0, 0, -1.85, ALONG_Z); // barrel
+    for (const y of [-0.18, 0.18]) put(pod, box(0.07, 0.08, 3.4, m.trim), 0, y, -2.0); // rails
+    for (const z of [-1.0, -2.4]) put(pod, box(0.16, 0.44, 0.1, m.trim), 0, 0, z); // rail braces
+    put(pod, box(0.12, 0.14, 0.6, m.trim), 0, 0.38, -0.25); // scope
+    put(pod, box(0.08, 0.06, 0.04, m.accent), 0, 0.38, -0.56); // its lens
+    return put(pod, new THREE.Object3D(), 0, 0, -3.2);
   } },
-  // A squat launcher with a wide barrel, finned to shed heat, over a core behind a grille that
-  // glows with the mech's heat (`userData.core`, lit by `stoke`): what it'll throw.
+  // Burst: a squat launcher with a short, wide barrel, finned to shed heat, over a core behind a
+  // grille that glows with the mech's heat (`userData.core`, lit by `stoke`): what it'll throw. A
+  // smokestack stands up off its back.
   furnace: { home: 'B', build(pod, m) {
-    pod.add(box(0.6, 0.65, 1.2, m.pods));
-    put(pod, cyl(0.24, 0.26, 1.3, m.barrels), 0, 0.05, -1.1, ALONG_Z); // barrel
-    put(pod, cyl(0.3, 0.3, 0.12, m.trim), 0, 0.05, -1.75, ALONG_Z); // muzzle ring
+    pod.add(box(0.65, 0.7, 1.2, m.pods));
+    put(pod, cyl(0.3, 0.32, 1.0, m.barrels), 0, 0.05, -1.0, ALONG_Z); // barrel
+    put(pod, cyl(0.36, 0.36, 0.14, m.trim), 0, 0.05, -1.5, ALONG_Z); // muzzle ring
     const core = hot(new THREE.MeshBasicMaterial({ color: CORE_COLD }));
-    put(pod, box(0.5, 0.1, 0.7, core), 0, 0.35, 0.05); // core window
-    for (const z of [-0.2, 0.05, 0.3]) put(pod, box(0.54, 0.04, 0.04, m.trim), 0, 0.42, z); // grille
-    for (const side of [-1, 1]) for (const z of [-0.3, 0, 0.3]) put(pod, box(0.05, 0.45, 0.12, m.trim), side * 0.33, 0, z); // fins
+    put(pod, box(0.5, 0.1, 0.6, core), 0, 0.37, -0.15); // core window
+    for (const z of [-0.35, -0.15, 0.05]) put(pod, box(0.54, 0.04, 0.04, m.trim), 0, 0.44, z); // grille
+    for (const side of [-1, 1]) for (const z of [-0.3, 0, 0.3]) put(pod, box(0.05, 0.45, 0.12, m.trim), side * 0.36, 0, z); // fins
+    put(pod, cyl(0.15, 0.18, 1.0, m.barrels), 0, 0.85, 0.35); // smokestack
+    put(pod, cyl(0.2, 0.2, 0.1, m.trim), 0, 1.35, 0.35); // its cap
     pod.userData.core = core;
-    return put(pod, new THREE.Object3D(), 0, 0.05, -1.85);
+    return put(pod, new THREE.Object3D(), 0, 0.05, -1.6);
   } },
-  // A short, fat tube raised 0.3 rad on a turret to lob, its mouth flared, banded and braced by
+  // Lobbed: a short, fat tube raised steeply on a turret, its mouth flared, banded and braced by
   // recoil springs, with spare shells racked down the housing's side; a shell's nose shows in the
   // mouth while it's loaded.
   mortar: { home: 'C', bore: [0, 0.15], build(pod, m) {
@@ -511,47 +531,49 @@ const KITS = {
       put(pod, cyl(0.04, 0.1, 0.1, warheadMat), 0.52, 0.26, z); // its nose
     }
     const tube = put(pod, new THREE.Group(), 0, 0.15, -0.9);
-    tube.rotation.x = 0.3;
-    put(tube, cyl(0.3, 0.27, 1.1, m.barrels), 0, 0, -0.55, ALONG_Z); // tube
-    put(tube, cyl(0.33, 0.33, 0.12, m.hazard), 0, 0, -0.7, ALONG_Z); // band
-    put(tube, cyl(0.29, 0.37, 0.2, m.trim), 0, 0, -1.12, ALONG_Z); // flared mouth
-    for (const x of [-0.28, 0.28]) put(tube, cyl(0.05, 0.05, 0.75, m.trim), x, -0.2, -0.3, ALONG_Z); // recoil springs
-    const shell = put(tube, new THREE.Mesh(new THREE.SphereGeometry(0.21, 10, 6), warheadMat), 0, 0, -1.12);
+    tube.rotation.x = 0.6;
+    put(tube, cyl(0.32, 0.28, 1.3, m.barrels), 0, 0, -0.65, ALONG_Z); // tube
+    put(tube, cyl(0.35, 0.35, 0.12, m.hazard), 0, 0, -0.8, ALONG_Z); // band
+    put(tube, cyl(0.31, 0.4, 0.2, m.trim), 0, 0, -1.32, ALONG_Z); // flared mouth
+    for (const x of [-0.3, 0.3]) put(tube, cyl(0.05, 0.05, 0.85, m.trim), x, -0.2, -0.35, ALONG_Z); // recoil springs
+    const shell = put(tube, new THREE.Mesh(new THREE.SphereGeometry(0.23, 10, 6), warheadMat), 0, 0, -1.32);
     shell.scale.z = 1.4;
     pod.userData.loaded = [shell];
-    return put(tube, new THREE.Object3D(), 0, 0, -1.25);
+    return put(tube, new THREE.Object3D(), 0, 0, -1.45);
   } },
-  // A fat canister tube on a turret, ringed at the mouth with the bomblets it scatters; the
-  // canister's nose shows while it's loaded.
+  // Lobbed: a canister tube as wide as the turret it rides, ringed at the mouth with the bomblets it
+  // scatters; the canister's nose shows while it's loaded.
   splitter: { home: 'C', build(pod, m) {
     put(pod, box(0.5, 0.4, 0.6, jointMat), 0, -0.3, 0.1); // turret ring
-    put(pod, box(0.85, 0.7, 1.6, m.pods), 0, 0.05, -0.1); // housing
-    put(pod, cyl(0.32, 0.32, 1.5, m.barrels), 0, 0.05, -1.5, ALONG_Z); // canister tube
-    put(pod, cyl(0.36, 0.36, 0.14, m.hazard), 0, 0.05, -1.2, ALONG_Z); // band
-    put(pod, cyl(0.46, 0.46, 0.12, m.trim), 0, 0.05, -2.1, ALONG_Z); // collar at the mouth, holding the bomblets
-    for (let k = 0; k < 6; k++) {
-      const a = (k / 6) * Math.PI * 2;
-      put(pod, new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 4), warheadMat), Math.cos(a) * 0.39, 0.05 + Math.sin(a) * 0.39, -2.17); // bomblet, half sunk in the collar
+    put(pod, box(0.85, 0.7, 1.5, m.pods), 0, 0.05, -0.05); // housing
+    put(pod, cyl(0.52, 0.52, 1.1, m.barrels), 0, 0.05, -1.3, ALONG_Z); // canister tube
+    put(pod, cyl(0.56, 0.56, 0.14, m.hazard), 0, 0.05, -1.05, ALONG_Z); // band
+    put(pod, cyl(0.62, 0.62, 0.14, m.trim), 0, 0.05, -1.8, ALONG_Z); // collar at the mouth, holding the bomblets
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2;
+      put(pod, new THREE.Mesh(new THREE.SphereGeometry(0.1, 6, 4), warheadMat), Math.cos(a) * 0.55, 0.05 + Math.sin(a) * 0.55, -1.87); // bomblet, half sunk in the collar
     }
-    const nose = put(pod, new THREE.Mesh(new THREE.SphereGeometry(0.26, 10, 6), warheadMat), 0, 0.05, -2.25);
-    nose.scale.z = 0.8;
+    const nose = put(pod, new THREE.Mesh(new THREE.SphereGeometry(0.4, 10, 6), warheadMat), 0, 0.05, -1.87);
+    nose.scale.z = 0.6;
     pod.userData.loaded = [nose];
-    return put(pod, new THREE.Object3D(), 0, 0.05, -2.4);
+    return put(pod, new THREE.Object3D(), 0, 0.05, -2.05);
   } },
-  // A flat launch chute with a hazard-banded mouth on a turret, under a cassette of mine discs,
-  // their lamps lit while the layer's loaded.
-  warren: { home: 'C', build(pod, m) {
+  // Trap: a wide, flat launch chute angled down at the ground from a turret, its mouth hazard
+  // banded, under a cassette of mine discs, their lamps lit while the layer's loaded.
+  warren: { home: 'C', bore: [0, 0.05], build(pod, m) {
     put(pod, box(0.5, 0.4, 0.6, jointMat), 0, -0.3, 0.1); // turret ring
     put(pod, box(0.85, 0.6, 1.8, m.pods), 0, 0.05, -0.1); // housing
-    put(pod, box(0.7, 0.3, 1.4, m.barrels), 0, 0.05, -1.5); // chute
-    put(pod, box(0.78, 0.38, 0.12, m.hazard), 0, 0.05, -2.2); // its mouth
+    const chute = put(pod, new THREE.Group(), 0, 0.05, -0.9);
+    chute.rotation.x = -0.35;
+    put(chute, box(1.1, 0.26, 1.3, m.barrels), 0.35, 0, -0.55); // chute, wide to the outside
+    put(chute, box(1.18, 0.34, 0.12, m.hazard), 0.35, 0, -1.2); // its mouth
     const loaded = [];
     for (const z of [-0.5, -0.1, 0.3]) {
-      put(pod, cyl(0.28, 0.28, 0.1, m.trim), 0, 0.4, z); // mine disc
-      loaded.push(put(pod, cyl(0.05, 0.05, 0.03, mineLampMat), 0, 0.46, z)); // its lamp
+      put(pod, cyl(0.34, 0.34, 0.1, m.trim), 0, 0.4, z); // mine disc
+      loaded.push(put(pod, cyl(0.06, 0.06, 0.03, mineLampMat), 0, 0.46, z)); // its lamp
     }
     pod.userData.loaded = loaded;
-    return put(pod, new THREE.Object3D(), 0, 0.05, -2.3);
+    return put(chute, new THREE.Object3D(), 0, 0, -1.3);
   } },
 };
 

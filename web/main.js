@@ -14,7 +14,7 @@ import weaponsText from '../weapons.json?raw';
 import { buildArena, HIGH_ONLY, LOW_ONLY } from './arena.js';
 import { Effects, HOT, halo, hot } from './fx.js';
 import { HAULER, Objectives, SENTRY, SENTRY_HEIGHT, SENTRY_SHIELD, SHIP, SHIP_HULL } from './objectives.js';
-import { Preview } from './hangar.js';
+import { Preview, weaponThumbs } from './hangar.js';
 import isotope from '../maps/isotope.json';
 import foundry from '../maps/foundry.json';
 import verdigris from '../maps/verdigris.json';
@@ -363,6 +363,18 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Escape' && !locked() && performance.now() - unlockedAt > 200) setMenu(!menuOpen);
   const digit = ['Digit1', 'Digit2', 'Digit3'].indexOf(e.code);
   if (digit >= 0 && !$('picker').hidden) showBay(digit);
+  // In the hangar, up and down step through the open slot's cards, left and right through its slots.
+  if (!$('picker').hidden && /^Arrow(Up|Down|Left|Right)$/.test(e.code) && !e.target.closest?.('input, select')) {
+    e.preventDefault();
+    const step = e.code === 'ArrowDown' || e.code === 'ArrowRight' ? 1 : -1, at = SLOTS.findIndex(([s]) => s === tab);
+    if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+      tab = SLOTS[(at + step + SLOTS.length) % SLOTS.length][0];
+      showBay(bay);
+    } else {
+      const [slot, list] = SLOTS[at], order = offered(bay, list), k = order.indexOf(picks[bay][slot]);
+      pickEntry(order[Math.min(Math.max(k + step, 0), order.length - 1)]);
+    }
+  }
   if (e.code === 'Enter' && !$('picker').hidden) launch(bay);
 });
 addEventListener('keyup', (e) => {
@@ -595,6 +607,46 @@ const statBars = (cls, l, slot, list) => STATS[list].map(([label, f, unit]) => {
   const x = at(l[slot]), max = Math.max(...weapons[list].map((_, k) => at(k)), 1e-6);
   return `<span>${label}</span><span class="bar"><i style="width: ${Math.round((100 * x) / max)}%"></i></span><span>${shown(x)}${unit}</span>`;
 }).join('');
+// The bay's slots, in order: each one's key in a loadout, its weapons.json list, label and controls.
+const SLOTS = [['primary', 'primaries', 'PRIMARY', 'LMB'], ['secondary', 'secondaries', 'SECONDARY', 'RMB · MMB'], ['offensive', 'offensive', 'ITEM', 'Q'], ['support', 'support', 'SUPPORT', 'E'], ['ability', 'abilities', 'ABILITY', 'F']];
+let tab = 'primary'; // the slot whose cards show
+let thumbs = null; // weapons' side profiles by id, drawn the first time the hangar shows
+// Items and abilities have no model to draw: a glyph each instead.
+const GLYPHS = {
+  grenade: '●', limpet: '◎', smoke: '▒', mg_turret: '┳', rocket_turret: '▲', emp: '◇', orb: '⊕', dome: '◠', barrier: '▌',
+  slipstream: '»', vent: '≋', brace: '▣', cloak: '◌', power: '◆', barrage: '∴', artillery: '⊙',
+};
+/** The few numbers on entry `k`'s card: class `i` carrying it in `slot` of loadout `l`. */
+const facts = (i, l, slot, list, k) => {
+  const v = (name) => valueOf(i, { ...l, [slot]: k }, name), id = weapons[list][k].id, has = (name) => name in tuning;
+  if (STATS[list]) return STATS[list].map(([label, f, unit]) => [f(v), unit, label]).filter(([x]) => x > 0).map(([x, unit, label]) => `${shown(x)}${unit} ${label.toLowerCase()}`).join(' · ');
+  if (has(`${id}_charges`)) return `${v(`${id}_charges`)} ${v(`${id}_charges`) === 1 ? 'charge' : 'charges'} · ${v(`${id}_recharge`)} s recharge`;
+  return [has(`${id}_duration`) && `${v(`${id}_duration`)} s on`, has(`${id}_cooldown`) && `${v(`${id}_cooldown`)} s cooldown`].filter(Boolean).join(' · ');
+};
+/**
+ * Entry `k` of `list` as a card for class `i`: its picture, name and numbers; picked, also what it
+ * does and how to use it (weapons.json's `use`, key and step; one with none, an ability, is its
+ * description on the slot's key).
+ */
+const card = (i, l, slot, list, k) => {
+  const w = weapons[list][k], on = k === l[slot], owned = ownsWeapon(i, list, k), pic = thumbs?.get(w.id);
+  const steps = w.use ?? [[SLOTS.find(([s]) => s === slot)[3], w.desc]];
+  const use = steps.map(([key, text]) => `<li><kbd${key ? '' : ' class="blank"'}>${key}</kbd>${text}</li>`).join('');
+  const more = on ? `<div class="more">${w.use ? `<p>${w.desc}</p>` : ''}<ul class="use">${use}</ul>${STATS[list] ? `<div class="bars">${statBars(i, l, slot, list)}</div>` : ''}${unlockRow(i, list, k)}</div>` : '';
+  return `<div class="card${on ? ' on' : ''}${owned ? '' : ' locked'}" role="radio" aria-checked="${on}" data-k="${k}">`
+    + `<div class="row"><span class="pic">${pic ? `<img src="${pic}" alt="">` : GLYPHS[w.id] ?? ''}</span><span class="what"><b>${w.name}${owned ? '' : `<i>${w.unlock}</i>`}</b><small>${facts(i, l, slot, list, k)}</small></span></div>${more}</div>`;
+};
+/** The entries of `list` class `i` may carry, those it owns first (then the cheapest locked). */
+const offered = (i, list) => weapons[list].map((_, k) => k).filter((k) => fits(CLASS_KEYS[i], weapons[list][k]))
+  .sort((a, b) => ownsWeapon(i, list, b) - ownsWeapon(i, list, a) || (ownsWeapon(i, list, a) ? 0 : weapons[list][a].unlock - weapons[list][b].unlock));
+/** Picks entry `k` of the open slot's list for the shown bay, and remembers it. */
+function pickEntry(k) {
+  const [slot] = SLOTS.find(([s]) => s === tab);
+  picks[bay] = { ...picks[bay], [slot]: k };
+  const ids = Object.fromEntries(Object.entries(armament(picks[bay])).map(([s, w]) => [s, w.id]));
+  try { localStorage.setItem(`mechwar.loadout.${CLASS_KEYS[bay]}`, JSON.stringify(ids)); } catch { /* private mode */ }
+  showBay(bay);
+}
 const bays = CLASS_KEYS.map((key, i) => {
   const b = document.createElement('button');
   b.className = 'bay';
@@ -604,40 +656,43 @@ const bays = CLASS_KEYS.map((key, i) => {
 });
 function showBay(i) {
   bay = i;
-  const key = CLASS_KEYS[i], c = classes[key], l = picks[i], { primary, secondary, offensive, support, ability } = armament(l);
+  const key = CLASS_KEYS[i], c = classes[key], l = picks[i];
   bays.forEach((b, k) => {
     const w = armament(picks[k]);
     b.classList.toggle('on', k === i);
     b.innerHTML = `${k + 1} · ${classes[CLASS_KEYS[k]].name}<small>${w.primary.name} · ${w.secondary.name}</small>`;
   });
-  const chips = (slot, list) => weapons[list].map((w, k) => {
-    if (!fits(key, w)) return '';
-    const lock = ownsWeapon(i, list, k) ? '' : `<i>${w.unlock}</i>`;
-    return `<label class="chip${lock && ' locked'}"><input type="radio" name="${slot}" value="${k}"${k === l[slot] ? ' checked' : ''}>${w.name}${lock}</label>`;
-  }).join('');
+  thumbs ??= weaponThumbs([...weapons.primaries, ...weapons.secondaries].map((w) => w.id));
   const points = net && pilot ? ` · ${pointsLeft(pilot)} unlock points` : '';
+  const [slot, list, label, controls] = SLOTS.find(([s]) => s === tab), picked = armament(l);
+  // Re-drawn in place, the list keeps its scroll; opened on another slot, it shows the pick.
+  const cards = $('cards'), kept = cards?.dataset.tab === tab ? cards.scrollTop : null;
   $('slots').innerHTML = `
     <div class="slot"><b>${c.name.toUpperCase()}<span>${c.role}</span></b>HP ${classValue(i, 'health_max')} · ${classValue(i, 'walk_speed')} m/s${points}</div>
-    <div class="slot"><b>PRIMARY<span>LMB</span></b><div class="chips">${chips('primary', 'primaries')}</div><div class="bars">${statBars(i, l, 'primary', 'primaries')}</div><p>${primary.desc}</p>${unlockRow(i, 'primaries', l.primary)}</div>
-    <div class="slot"><b>SECONDARY<span>RMB · MMB</span></b><div class="chips">${chips('secondary', 'secondaries')}</div><div class="bars">${statBars(i, l, 'secondary', 'secondaries')}</div><p>${secondary.desc}</p>${unlockRow(i, 'secondaries', l.secondary)}</div>
-    <div class="slot"><b>ITEM<span>G</span></b><div class="chips">${chips('offensive', 'offensive')}</div><p>${offensive.desc}</p>${unlockRow(i, 'offensive', l.offensive)}</div>
-    <div class="slot"><b>SUPPORT ITEM<span>T</span></b><div class="chips">${chips('support', 'support')}</div><p>${support.desc}</p>${unlockRow(i, 'support', l.support)}</div>
-    <div class="slot"><b>ABILITY<span>F</span></b><div class="chips">${chips('ability', 'abilities')}</div><p>${ability.desc}</p>${unlockRow(i, 'abilities', l.ability)}</div>`;
+    <div class="tabs" role="tablist">${SLOTS.map(([s, , name]) => `<button class="tab${s === tab ? ' on' : ''}" role="tab" aria-selected="${s === tab}" data-tab="${s}">${name}<small>${picked[s].name}</small></button>`).join('')}</div>
+    <div class="list-head">${label}<span>${controls}</span></div>
+    <div id="cards" role="radiogroup" data-tab="${tab}">${offered(i, list).map((k) => card(i, l, slot, list, k)).join('')}</div>`;
+  if (kept === null) $('cards').querySelector('.card.on')?.scrollIntoView({ block: 'nearest' });
+  else $('cards').scrollTop = kept;
   preview.show(key, l, classValue(i, 'mech_height'));
 }
-$('slots').addEventListener('change', () => {
-  const at = (slot) => +$('slots').querySelector(`[name="${slot}"]:checked`).value;
-  picks[bay] = Object.fromEntries(Object.keys(LISTS).map((slot) => [slot, at(slot)]));
-  const ids = Object.fromEntries(Object.entries(armament(picks[bay])).map(([slot, w]) => [slot, w.id]));
-  try { localStorage.setItem(`mechwar.loadout.${CLASS_KEYS[bay]}`, JSON.stringify(ids)); } catch { /* private mode */ }
-  showBay(bay);
-});
 $('slots').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-list]');
-  if (!b || ws?.readyState !== WebSocket.OPEN) return;
-  ws.send(net.unlock(bay, Object.values(LISTS).indexOf(b.dataset.list), +b.dataset.k));
-  b.disabled = true;
-  b.textContent = 'UNLOCKING…';
+  if (b) {
+    if (ws?.readyState !== WebSocket.OPEN) return;
+    ws.send(net.unlock(bay, Object.values(LISTS).indexOf(b.dataset.list), +b.dataset.k));
+    b.disabled = true;
+    b.textContent = 'UNLOCKING…';
+    return;
+  }
+  const t = e.target.closest('.tab');
+  if (t) {
+    tab = t.dataset.tab;
+    showBay(bay);
+    return;
+  }
+  const c = e.target.closest('.card');
+  if (c && !c.classList.contains('on')) pickEntry(+c.dataset.k);
 });
 $('launch').addEventListener('click', () => {
   launch(bay);
@@ -1195,6 +1250,8 @@ function frame(now) {
   hud.damage.style.opacity = hurt;
 
   $('picker').hidden = !pickerOpen;
+  // The hangar wants the mouse: however it opened (a death, C), it frees a locked one.
+  if (pickerOpen && locked()) document.exitPointerLock();
   if (pickerOpen) {
     // Out in the arena, the hangar only edits the next launch.
     const out = net && picked !== null && alive, wait = net ? Math.max(hudState[16], 0) : 0;
@@ -1655,13 +1712,13 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
     const healthMax = classValue(e.cls, 'health_max');
     const tag = {
       ...toScreen(ndc), dist, enemy, unit: id, name: levelOf(id) ? `${nameOf(id)} ·LV${levelOf(id)}` : nameOf(id), bot: e.bot, status: statusOf(e, now), focus: false,
-      health: e.health / healthMax, hp: Math.ceil(e.health), hpMax: healthMax, label: classes[CLASS_KEYS[e.cls]].name,
+      health: e.health / healthMax, label: classes[CLASS_KEYS[e.cls]].name, weapons: [e.mech.weapons.primary.name, e.mech.weapons.secondary.name],
     };
     const angle = enemy ? look.angleTo(to.subVectors(chest, camera.position)) : Infinity;
     if (angle < focusAngle) [focusAngle, focus] = [angle, tag];
     tags.push(tag);
   }
-  // Turrets: the other side's in sight get tags (hull, and the card under the crosshair) and radar
+  // Turrets: the other side's in sight get tags (a hull bar, and the card under the crosshair) and radar
   // marks, as enemy mechs do; our side's are marked on the radar.
   const turrets = game.deployables();
   for (let i = 0; i < turrets.length; i += 10) {
@@ -1685,7 +1742,7 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
     const tag = {
       // `unit` is its lock-on id (deploy::target_id), so the lock diamond finds it.
       ...toScreen(ndc), dist, enemy, unit: 64 + 2 * owner + (kind === 3 ? 1 : 0), name: ship || sentry ? `Enemy ${label.toLowerCase()}` : `${nameOf(owner)}'s ${label}`, bot: false, status: sentry && hull <= 0 ? 'OFFLINE' : '', focus: false,
-      health: Math.max(hull, 0) / hullMax, hp: Math.max(Math.ceil(hull), 0), hpMax: hullMax, label,
+      health: Math.max(hull, 0) / hullMax, label,
     };
     const angle = look.angleTo(to.subVectors(chest, camera.position));
     if (angle < focusAngle) [focusAngle, focus] = [angle, tag];
