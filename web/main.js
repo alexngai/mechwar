@@ -343,6 +343,27 @@ addEventListener('mouseup', (e) => {
   if (e.button === 1) auxHeld = false;
 });
 addEventListener('contextmenu', (e) => e.preventDefault());
+// ?capture: the page under remote control, for the guide's screen grabs (tools/capture.js): the
+// camera set anywhere, the view held still, and our mech looking, firing
+// and locking on with no mouse; keys still come in as key events. Only in dev, or a build made with
+// VITE_CAPTURE=1: never in what players get, where it would aim for them.
+const remote = (import.meta.env.DEV || import.meta.env.VITE_CAPTURE) && params.has('capture') ? (globalThis.__capture = {
+  /** null: the game's own camera. { eye, look }: there, in world metres. */
+  view: null,
+  /** While set, the last frame stays on screen. */
+  hold: false,
+  team: -1,
+  look: (y, p) => { yaw = y; pitch = p; },
+  fire: (main, alt = false) => { firing = main; altFiring = alt; },
+  lock: (on) => { auxHeld = on; aux ||= on; },
+  me: () => ({ pos: pos.toArray(), yaw, pitch, health: curr[S.HEALTH], heat: curr[S.HEAT], overheated: !!curr[S.OVERHEATED], fuel: curr[S.FUEL], lock: curr[S.LOCK] - 1, lockT: curr[S.LOCK_T] }),
+  mechs: () => [...remotes].map(([id, e]) => ({ id, team: e.team, cls: e.cls, bot: e.bot, health: e.health, pos: e.pos.toArray(), yaw: e.yaw, boosting: e.boosting, hovering: e.hovering, repairing: e.repairing, ability: e.ability && e.mech.weapons.ability.id, loadout: e.loadout })),
+  objectives: () => objectives,
+  /** How far a ray from `o` along `d` (unit) goes before it hits the arena, up to `max`. */
+  ray: (o, d, max) => game.cast_ray(...o, ...d, max),
+  /** Deployables (10 floats each: kind, team, owner, xyz...), health orbs (5 each: xyz...) and smoke clouds (5 each: xyz, radius, left). */
+  field: () => ({ deployables: [...game.deployables()], orbs: [...orbs], clouds: [...clouds] }),
+}) : null;
 addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
   if (e.code === 'Space') e.preventDefault();
@@ -721,6 +742,7 @@ const toChest = (p, cls) => { p.y += classValue(cls, 'mech_height') * 0.5; retur
 const padStands = new Map(), padAt = new THREE.Vector3();
 
 function frame(now) {
+  if (remote?.hold) return void requestAnimationFrame(frame);
   renderer.info.reset();
   const dt = Math.min((now - last) / 1000, 0.25);
   acc += dt;
@@ -780,6 +802,7 @@ function frame(now) {
   if (net) ensureArena(net.map());
   const hudState = net ? net.hud() : null;
   const [myId, myTeam] = hudState ? [hudState[0], hudState[6]] : [-1, -1];
+  if (remote) remote.team = myTeam;
   // In Deathmatch everyone's their own team: paint us blue and the rest red, as by side.
   const dm = hudState?.[20] === DEATHMATCH, assault = hudState?.[20] === MISSILE_ASSAULT, sieging = hudState?.[20] === SIEGE;
   const zones = net ? net.zones() : new Float32Array(0), siege = net ? net.siege() : new Float32Array(0);
@@ -847,7 +870,7 @@ function frame(now) {
     if (hudState?.[16] >= 0) pickerOpen = true;
   }
   chase += ((curr[S.REPAIR_T] > 0 || curr[S.STAND] > 0 ? 1 : 0) - chase) * (1 - Math.exp(-5 * dt));
-  firstPerson = chase < 0.02 && killcam === null;
+  firstPerson = chase < 0.02 && killcam === null && !remote?.view;
   me.root.visible = !firstPerson;
   // Camouflage shows us as a ghost: our mech in the chase view, our guns from the cockpit.
   const myCloak = curr[S.ABILITY_T] > 0 && armament(loadout).ability.id === 'cloak' ? CLOAK_SEEN : 0;
@@ -1131,6 +1154,10 @@ function frame(now) {
     const want = offset.length();
     const room = game.cast_ray(eye.x, eye.y, eye.z, offset.x, offset.y, offset.z, want + 0.5) - 0.5;
     camera.position.addScaledVector(offset, (Math.max(room, 0.5) / want) * chase);
+  }
+  if (remote?.view) {
+    camera.position.set(...remote.view.eye);
+    camera.lookAt(...remote.view.look);
   }
   shake *= Math.exp(-6 * dt);
   // A small FOV kick while boosting sells the speed.

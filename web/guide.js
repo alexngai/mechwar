@@ -83,6 +83,7 @@ function overview() {
       <li>Downed, you can launch again after ${T('respawn_delay')} s, and change your build in the hangar first. A fresh launch is shielded for ${T('spawn_shield')} s, until you move or fire.</li>
       <li>Every match earns XP. Each level brings ${POINTS_PER_LEVEL} unlock points to spend in the hangar on more weapons, items and abilities, one mech at a time.</li>
     </ol>
+    ${figure('start-hangar', "The hangar: a bay for each mech, its five slots in tabs, and every pick's numbers and controls.")}
     <h2>CONTROLS <small>MOUSE SHOWN FOR THE MEDIUM'S STOCK LOADOUT</small></h2>
     <section id="controls">${controlsHtml(own, false)}</section>
     <h2>IN THIS GUIDE</h2>
@@ -250,10 +251,19 @@ async function modes() {
       `Escorts score ${SIM.ESCORT_POINTS} points a second while it walks for them.`,
     ],
   };
+  const GRABS = {
+    tdm: 'A blue mech trades fire with a red one across Foundry. The panel up top keeps the team score.',
+    dm: 'Every pilot for themselves in Sump. The panel shows your place and points, the target, and the leader.',
+    ma: "Silo A, held by red, launches its missile at the blue base. The panel shows each base's hull, and who holds A, B and C.",
+    siege: "The red battleship crosses Riftline as the blue base guns open up on it. The panel shows each bank's energy, the AA, and the ship's hull.",
+    ctf: 'A red mech runs the blue flag through Verdigris under fire. The panel shows each flag: home, taken or dropped.',
+    convoy: 'The hauler walks across Span, its lights red for the side pushing it. The marker in the panel shows how far it has gone, and which way.',
+  };
   return `
     <h1>MODES</h1>
     <p class="lede">A match runs ${SIM.MATCH_SECONDS / 60} minutes and the next starts ${SIM.POST_MATCH_SECONDS} s after. Bots fill any empty seat, unless the game was opened without them. The team modes give each base two guns (see <a href="/guide/mechanics#base-guns">base guns</a>).</p>
-    ${MODES.map(([id, name, fit]) => `<section class="card" id="${id}" style="margin-bottom: 12px">
+    ${MODES.map(([id, name, fit]) => `<section class="card mode" id="${id}">
+      ${figure(`mode-${id}`, GRABS[id])}
       <h3>${name.toUpperCase()}</h3><ul class="rules">${RULES[id].map((r) => `<li>${r}</li>`).join('')}</ul>
       <h4>MAPS</h4>${where(fit)}</section>`).join('')}
     <h2>QUICK PLAY AND OPEN GAMES</h2>
@@ -265,6 +275,8 @@ const picture = (name, alt) => {
   const url = SHOTS[`../guide/shots/${name}.webp`];
   return url ? `<img src="${url}" alt="${alt}" loading="lazy">` : '<div class="wait">NO PICTURE YET</div>';
 };
+/** A screen grab from a live match (tools/capture.js) and what it shows; nothing if there's none yet. */
+const figure = (name, caption) => (SHOTS[`../guide/shots/${name}.webp`] ? `<figure class="grab"><div class="shot">${picture(name, caption)}</div><figcaption>${caption}</figcaption></figure>` : '');
 const modesOf = (m) => MODES.filter(([, , fit]) => fit(m));
 async function mapList() {
   const maps = await loadMaps();
@@ -342,6 +354,7 @@ function mechanics() {
     <p class="lede">The rules under every fight. Where the classes differ, the Medium's number comes first; the <a href="/guide/mechs">mechs</a> page has each class's.</p>
 
     <h2 id="movement">MOVEMENT</h2>
+    ${figure('mech-movement', 'A mech hovers off the deck on its jets.')}
     <p>WASD walks, at ${T('walk_speed')} m/s on a Medium. One fuel tank of ${T('fuel_max')} feeds everything faster:</p>
     <ul>
       <li><b>Boost</b> (Shift+W) runs at ${T('boost_speed')} m/s, forward only, burning ${T('boost_drain')} fuel a second.</li>
@@ -352,6 +365,7 @@ function mechanics() {
     <p>Fuel refills at ${T('fuel_regen')} a second once you've spent none for ${T('fuel_regen_delay')} s. Jump pads throw you along a set arc: you can't steer or boost on it, but a dash or hover breaks out. There's no fall damage. Mechs block each other, and the heavier one shoves the lighter aside; a hovering mech passes over.</p>
 
     <h2 id="heat">HEAT</h2>
+    ${figure('mech-heat', 'Running hot, from the cockpit: heat fills the arcs round the sight in red, and the barrel glows. One more burst and the guns lock.')}
     <p>Your primary and secondary share one heat meter of ${T('heat_max')}${heavy('heat_max')}. Every shot adds to it (each primary's card shows its heat a second; a secondary's use says when it runs hot). It starts draining ${T('heat_decay_delay')} s after your last shot, fastest when you're cool (${T('heat_decay') * T('heat_decay_cool')} a second) and slowest near the top (${T('heat_decay')}).</p>
     <p>Fill it and you overheat: your guns lock while heat drains at ${T('overheat_decay')} a second, until it's down to ${T('overheat_release')}, about ${lockout('B')} s from full (${lockout('C')} s on a Heavy). Fire in bursts to stay under it. The ${link('furnace')} and ${link('piston')} still fire overheated, and the Medium's ${link('vent')} dumps all your heat at once.</p>
 
@@ -364,15 +378,18 @@ function mechanics() {
     </ul>
 
     <h2 id="repair">REPAIR</h2>
+    ${figure('mech-repair', 'A mech shut down to repair, crouched low under its repair light.')}
     <p>Hold R to shut down and repair: after ${T('repair_windup')} s you heal ${T('repair_rate')} hp a second until you're full, you let go, or anything hits you, then take ${T('repair_standup')} s to stand back up. Shut down, you crouch lower and can look about, but can't move, fire or use items. Find cover first.</p>
 
     <h2 id="orbs">HEALTH ORBS</h2>
+    ${figure('mech-orbs', 'The health orb a downed mech leaves behind.')}
     <p>Every downed mech leaves an orb holding ${SIM.ORB_HEALTH} hp for anyone, on either side, within ${SIM.ORB_RADIUS} m of it, healing ${SIM.ORB_RATE} hp a second, until it's dry or ${SIM.ORB_SECONDS} s pass. The ${link('orb')} drops one only your side can use.</p>
 
     <h2 id="respawn">RESPAWN</h2>
     <p>Downed, you're back in the hangar, and can launch again after ${T('respawn_delay')} s; you spawn at your team's spawn farthest from the nearest enemy. A fresh launch is shielded for ${T('spawn_shield')} s: no damage, no EMP, and turrets and base guns ignore you, until you move or fire.</p>
 
     <h2 id="lock-on">LOCK-ONS AND COUNTERS</h2>
+    ${figure('mech-lock-on', 'A Hellfire lock from the cockpit: the diamond turns white and says LOCKED, the card under the crosshair names the target\'s class and weapons, and the time the lock has left counts down below.')}
     <ul>
       <li>The ${link('hornet')} locks on: press MMB with an enemy within ${hellfire('alt_lock_cone')}° of your crosshair and about ${Math.round(hellfire('alt_speed') * hellfire('alt_fuse') / 10) * 10} m, and keep it there ${hellfire('alt_lock_time')} s. The lock then holds ${hellfire('alt_lock_hold')} s wherever you look. Turrets, battleships, base guns and the Convoy hauler can all be locked.</li>
       <li>The ${link('talon')} doesn't lock: its rockets turn toward the enemy nearest your crosshair, within ${stat(byId.talon)('shot_seek_cone')}°, while you keep it there.</li>
@@ -382,10 +399,12 @@ function mechanics() {
     </ul>
 
     <h2 id="base-guns">BASE GUNS</h2>
+    ${figure('mech-base-guns', 'A blue base gun fires on a red mech sheltering under its shield dome.')}
     <p>In the team modes each base has two guns. They open up ${SIM.SENTRY_ACQUIRE} s after an enemy mech shows within ${SIM.SENTRY_RANGE} m, in ${SIM.SENTRY_BURST}-round bursts of ${SIM.SENTRY_ROUND} damage a round, and in Siege fire on an enemy ship within ${SIM.SENTRY_SHIP_RANGE} m. They can't see through walls, smoke or shield domes, or spot a shielded or camouflaged mech.</p>
     <p>Each has a ${SIM.SENTRY_SHIELD} shield that regains ${SIM.SENTRY_REGEN} a second. Shoot it through and the gun goes offline for ${SIM.SENTRY_OFFLINE} s, then comes back full and can't be hurt for ${SIM.SENTRY_IMMUNE} s: a window to push a base, or to get a flag out.</p>
 
     <h2 id="deployables">TURRETS, DOMES AND BARRIERS</h2>
+    ${figure('mech-deployables', 'A red shield dome. No shot crosses it but a rail slug; mechs walk straight through.')}
     <p>You can have one of each out at a time; setting down another takes the first away. Each has hull you can shoot off (its card says how much), and the ${link('spindle')}'s slug punches straight through domes and barriers.</p>
 
     <h2 id="progression">PROGRESSION</h2>
