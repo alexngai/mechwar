@@ -915,9 +915,10 @@ impl Bot {
             } else if shell.is_none() && t.shot_gravity > 0.0 && t.shot_speed > 0.0 {
                 pitch += 0.5 * asinf((t.shot_gravity * flat(chest - eye).length() / (t.shot_speed * t.shot_speed)).min(1.0));
             }
-            // A fused projectile primary's shots burst in the air short of a target farther off
-            // than they fly before their fuse runs out, so it holds fire at one.
-            let reaches = t.shot_fuse <= 0.0 || flat(chest + target.vel * lead - eye).length() <= t.shot_speed * cosf(pitch) * t.shot_fuse;
+            // A fused projectile primary holds fire at a target its shots can't reach: farther off
+            // than they fly before their fuse runs out, or than they carry at all (v² / g).
+            let span = flat(chest + target.vel * lead - eye).length();
+            let reaches = t.shot_fuse <= 0.0 || (span <= t.shot_speed * cosf(pitch) * t.shot_fuse && t.shot_gravity * span <= t.shot_speed * t.shot_speed);
             let (want_yaw, want_pitch) = (yaw + self.wobble.0, pitch + self.wobble.1);
             let new_yaw = me.yaw + wrap(want_yaw - me.yaw).clamp(-max_turn, max_turn);
             let new_pitch = me.pitch + (want_pitch - me.pitch).clamp(-max_turn, max_turn);
@@ -1777,10 +1778,10 @@ mod tests {
     fn grenade_rifles_hold_fire_until_their_grenades_reach() {
         let (arena, nav, _) = blockout();
         let loadout = Loadout::named("hail", "darts");
-        // Perfect aim, so a grenade that lands nowhere near the target fell short.
-        let t = Tuning { bot_aim_error_deg: 0.0, bot_reaction_s: 0.0, ..Arsenal::new(&Tuning::default()).get(MechClass::B, loadout).clone() };
-        assert!(t.shot_fuse > 0.0 && t.shot_speed * t.shot_fuse < 65.0, "the grenade rifle reaches 70 m off now");
-        // A target standing in the open 70 m off, past where the grenades burst; the bot closes in.
+        // Perfect aim, so a grenade that lands nowhere near the target fell short, and a 1 s fuse,
+        // so the grenades burst about 45 m out.
+        let t = Tuning { bot_aim_error_deg: 0.0, bot_reaction_s: 0.0, shot_fuse: 1.0, ..Arsenal::new(&Tuning::default()).get(MechClass::B, loadout).clone() };
+        // A target standing in the open 70 m off, past that; the bot closes in.
         let mut me = Mech { loadout, grenades: 0, ..spawn_mech(&t, Vector::new(-36.0, 0.1, 42.0)) };
         let target = spawn_mech(&t, Vector::new(-36.0, 0.1, -28.0));
         let mut bot = Bot::new(1);
