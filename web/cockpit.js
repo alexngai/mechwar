@@ -20,10 +20,10 @@ const v = new THREE.Vector3(), q = new THREE.Quaternion();
 const DEPTH = 1; // canopy pillars sit this far ahead of the eye
 const RECOIL = 0.12; // m
 const RECOIL_RECOVER = 10; // 1/s
-// The cockpit's guns are drawn at SHRINK of their size about their arm mounts, which sit SETBACK
-// further back per class (model m), so less of them crowds the view: the Heavy's furthest, as its
-// shoulder turrets ride at eye height.
-const SHRINK = 0.8, SETBACK = { A: 0.2, B: 0.3, C: 0.6 };
+// The cockpit's guns are drawn at SHRINK of their size about their arm mounts, so they take less of
+// the view's width and reach less far into it; the Heavy's, whose shoulder turrets ride at eye
+// height, also sit SETBACK (model m) further back.
+const SHRINK = 0.6, SETBACK = { C: 0.3 };
 const TAU = Math.PI * 2;
 // The console, in its own flat space (x along its face, y up it from its foot, z toward the pilot):
 // it reaches SPAN either side, stands HUMP tall over the middle screen and WING over the sides, and
