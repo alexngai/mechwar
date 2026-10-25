@@ -111,12 +111,12 @@ function skyMaterial(sunDir) {
         float star = step(0.9985, fract(sin(dot(floor(dir * 300.0), vec3(12.9898, 78.233, 45.164))) * 43758.5453));
         col += stars * star * smoothstep(0.03, 0.3, up) * vec3(0.85, 0.9, 1.0);
         if (aurora > 0.0) {
-          // Curtains: a narrow band about 17 degrees up, waving slowly round the sky, in fine
+          // Curtains: a narrow band about 33 degrees up, waving slowly round the sky, in fine
           // vertical rays; one color low, another high. Whole multiples of the azimuth, so no seam.
           float az = atan(dir.x, dir.z), wave = 0.05 * sin(az * 3.0 + time * 0.018) + 0.025 * sin(az * 7.0 - time * 0.028);
-          float band = exp(-pow((up - 0.3 - wave) * 9.0, 2.0)) * smoothstep(0.04, 0.2, up);
+          float band = exp(-pow((up - 0.55 - wave) * 9.0, 2.0)) * smoothstep(0.04, 0.2, up);
           float rays = 0.55 + 0.45 * sin(az * 90.0 + 3.0 * sin(az * 13.0 + time * 0.075));
-          col += aurora * band * rays * mix(auroraLow, auroraHigh, smoothstep(0.2, 0.55, up + wave));
+          col += aurora * band * rays * mix(auroraLow, auroraHigh, smoothstep(0.45, 0.8, up + wave));
         }
         // Lightning: the whole sky lit, brightest toward the strike.
         col += flash * (vec3(0.55, 0.6, 0.75) + vec3(1.6, 1.7, 2.0) * pow(max(dot(dir, flashDir), 0.0), 6.0));
