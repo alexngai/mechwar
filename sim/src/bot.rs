@@ -1380,8 +1380,9 @@ impl Bot {
             let (move_x, move_z) = if (wound && range <= far) || lunging {
                 let (dir, rot) = (to.normalize_or_zero(), Rotation::from_rotation_y(new_yaw));
                 (dir.dot(rot * Vector::X), dir.dot(rot * Vector::NEG_Z))
-            } else if let Some(stand) = post.filter(|_| !perch && errand.is_none()) {
-                // At its post: there, in its cover or stepped out of it; on an open one, strafing
+            } else if let Some(stand) = post.filter(|_| !perch && errand.is_none() && range <= far) {
+                // In range, at its post (beyond it, it walks on: a flanker keeps to its lane): there,
+                // in its cover or stepped out of it; on an open one, strafing
                 // about it.
                 let off = flat(stand.at - me.pos);
                 let rot = Rotation::from_rotation_y(new_yaw);
@@ -1519,7 +1520,9 @@ impl Bot {
         let allies: Vec<Vector> = self.mates.iter().filter(|(_, f)| *f == Some(id)).map(|(at, _)| *at).collect();
         let w = Weighing { take: p.post_take, horizon: p.post_horizon, moving: p.post_moving, stay: p.post_stay, reach: p.post_reach, cross: p.post_cross };
         let duty = crate::threat::dps(t, t, flat(pos - me.pos).length()).duty;
-        let hold = self.order_zone.filter(|_| self.order.is_some());
+        // At an order it holds its ground there: within the zone it's to hold, or ERRAND of the
+        // spot (behind a hauler, by a flag).
+        let hold = self.order.map(|at| self.order_zone.unwrap_or(Hold { at, radius: ERRAND, band: ERRAND_RISE }));
         crate::tactics::choose(spots, arena, t, me.pos, &foes, target, duty, current, &allies, hold, &w)
     }
 
