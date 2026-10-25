@@ -27,7 +27,7 @@ const AMBIENCE_LEVEL = 0.45; // all of it, against the action
  * -39 dB, quiet places about -45, a blast 12 m off -22). See `bed` and `accent` for the kinds.
  */
 const AMBIENCE = {
-  saltpan: { gain: 1.4, beds: [['wind', 0.05, 700, 0.7], ['hum', 0.02, [55, 110.5]]], accents: [['steam', [10, 22], 0.05], ['clank', [7, 16], 0.04]] },
+  reactor: { gain: 1.3, beds: [['hum', 0.035, [60, 120.3, 180]], ['wind', 0.03, 500, 0.6]], accents: [['geiger', [2, 7], 0.05], ['steam', [9, 20], 0.05], ['clank', [10, 22], 0.035], ['siren', [45, 90], 0.02]] },
   foundry: { gain: 1.2, beds: [['roar', 0.06], ['hum', 0.035, [48, 96.4, 144]]], accents: [['clank', [3, 8], 0.06], ['steam', [6, 14], 0.05], ['rumble', [15, 30], 0.07]] },
   acidrain: { gain: 1.15, beds: [['rain', 0.05, 2500], ['hum', 0.02, [62, 124.6]]], accents: [['patter', [0.3, 1.2], 0.03], ['siren', [25, 50], 0.025]] },
   canyon: { gain: 1.5, beds: [['wind', 0.06, 320, 2.5], ['hum', 0.025, [73.4, 74.1, 110]]], accents: [['rumble', [12, 25], 0.06], ['moan', [18, 35], 0.03]] },
@@ -598,6 +598,11 @@ export class Sound {
       // Wind through the arch's gap: a long, rising note.
       this.tone(out, 'sine', r(1100, 1300), r(1400, 1600), 1.5, 2, 0.4);
       this.noise(out, 'white', 'bandpass', 1400, 1500, 1.5, 2, 0.3, 8);
+    } else if (kind === 'geiger') {
+      // A counter near something hot: a crackle of clicks at random, a few or a burst.
+      for (let k = 0, n = 3 + Math.floor(r(0, 14)), d = 0; k < n; k++, d -= Math.log(1 - Math.random()) * 0.09) {
+        this.noise(out, 'white', 'highpass', 3500, 3000, 0.0005, 0.004, r(0.5, 1), 1, d);
+      }
     }
   }
 

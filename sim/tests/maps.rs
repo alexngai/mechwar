@@ -1,5 +1,5 @@
 //! Every compiled-in map: spawns are standable, the generated nav graph is connected, the twinned
-//! maps are fair (180-degree symmetric), and bots can navigate Saltworks, climb Foundry and spread
+//! maps are fair (180-degree symmetric), and bots can navigate Isotope, climb Foundry and spread
 //! over all of it.
 
 use sim::bot::{Bot, Nav, sees};
@@ -220,8 +220,8 @@ fn pad_arc_is_ballistic() {
 }
 
 #[test]
-fn bot_reaches_the_far_catwalk_on_saltworks() {
-    let index = Map::index("saltworks").unwrap();
+fn bot_reaches_the_far_catwalk_on_isotope() {
+    let index = Map::index("isotope").unwrap();
     let (arena, nav, t) = (Arena::new(&Map::load(index)), Nav::for_map(index), Tuning::default());
     let mut me = spawn_mech(&t, Vector::new(-5.0, 0.1, 53.0));
     // Standing on the south team's catwalk deck, across the map.

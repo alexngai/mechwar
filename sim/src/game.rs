@@ -1775,7 +1775,7 @@ mod tests {
             }
         }
         // Modes in turn too, some maps in two: each pair still comes round about once a deck.
-        let small = ["saltworks", "sump", "sinkhole"].map(|name| (Mode::Deathmatch, Map::index(name).unwrap()));
+        let small = ["isotope", "sump", "sinkhole"].map(|name| (Mode::Deathmatch, Map::index(name).unwrap()));
         let mixed: Vec<(Mode, usize)> = maps.iter().copied().chain(small).collect();
         for seed in [1, 42, 0xdead_beef] {
             let played = deal(&mixed, seed, 6);
@@ -1788,7 +1788,7 @@ mod tests {
 
     #[test]
     fn matches_rotate_to_another_map() {
-        let (foundry, saltworks) = (Map::index("foundry").unwrap(), Map::index("saltworks").unwrap());
+        let (foundry, isotope) = (Map::index("foundry").unwrap(), Map::index("isotope").unwrap());
         let mut game = Game::new(Tuning::default(), foundry);
         game.bots = false;
         let id = game.join().unwrap();
@@ -1797,15 +1797,15 @@ mod tests {
         (0..=secs(POST_MATCH_SECONDS)).for_each(|_| game.step());
         assert_eq!(game.map, foundry);
 
-        game.rotate(vec![(Mode::TeamDeathmatch, foundry), (Mode::TeamDeathmatch, saltworks)], 42);
+        game.rotate(vec![(Mode::TeamDeathmatch, foundry), (Mode::TeamDeathmatch, isotope)], 42);
         game.end_match();
         let s = game.snapshot(id).state;
-        assert_eq!((s.map, s.next_map), (foundry as u8, saltworks as u8), "the next map isn't announced");
+        assert_eq!((s.map, s.next_map), (foundry as u8, isotope as u8), "the next map isn't announced");
         (0..=secs(POST_MATCH_SECONDS)).for_each(|_| game.step());
-        assert_eq!((game.map, game.snapshot(id).state.map), (saltworks, saltworks as u8));
+        assert_eq!((game.map, game.snapshot(id).state.map), (isotope, isotope as u8));
         let pos = mech(&game, id).pos;
-        let spawns = Map::load(saltworks).spawns;
-        assert!(spawns.iter().flatten().any(|p| Vector::from_array(*p).distance(pos) < 1.0), "not on a Saltworks spawn: {pos}");
+        let spawns = Map::load(isotope).spawns;
+        assert!(spawns.iter().flatten().any(|p| Vector::from_array(*p).distance(pos) < 1.0), "not on an Isotope spawn: {pos}");
     }
 
     #[test]

@@ -15,7 +15,7 @@ import { buildArena, HIGH_ONLY, LOW_ONLY } from './arena.js';
 import { Effects, HOT, halo, hot } from './fx.js';
 import { Objectives, SENTRY, SHIP, SHIP_HULL } from './objectives.js';
 import { Preview } from './hangar.js';
-import saltworks from '../maps/saltworks.json';
+import isotope from '../maps/isotope.json';
 import foundry from '../maps/foundry.json';
 import verdigris from '../maps/verdigris.json';
 import riftline from '../maps/riftline.json';
@@ -60,7 +60,7 @@ const sameOrigin = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${locatio
 const server = params.get('server') ?? (import.meta.env.PROD && !params.has('offline') ? sameOrigin : null);
 const net = server ? new WasmNetClient() : null;
 // Maps by name; the sim's compiled-in list gives the index. Offline, ?map=<name> picks one.
-const MAPS = { saltworks, blockout, foundry, verdigris, riftline, sump, sinkhole, canopy, crashsite, ziggurat, span };
+const MAPS = { isotope, blockout, foundry, verdigris, riftline, sump, sinkhole, canopy, crashsite, ziggurat, span };
 const mapIndex = (name) => {
   for (let i = 0; map_name(i); i++) if (map_name(i) === name) return i;
   return 0;
@@ -218,7 +218,7 @@ cockpit.setWeapons('B', me, T('eye_height'), T('mech_height') / me.height);
 
 // The arena is built once its map is known: right away offline, after the Welcome online, and
 // again whenever a new match is on another map.
-let arenaMap = -1, arena = Object.assign([], { vents: [], furnaces: [], sparkers: [], lights: [] });
+let arenaMap = -1, arena = Object.assign([], { vents: [], furnaces: [], sparkers: [], steam: [], lights: [] });
 const ensureArena = (index) => {
   if (index < 0 || index === arenaMap) return;
   arenaMap = index;
@@ -1161,6 +1161,7 @@ function frame(now) {
   }
   for (const p of arena.furnaces) fx.sparks(p, dt, 5);
   for (const p of arena.sparkers) if (Math.random() < dt * 0.6) fx.sparks(p, 0.25, 40); // fitful bursts of ten
+  for (const p of arena.steam) fx.steam(p, dt);
   if (arena.vents.length) fx.cinders(camera.position, dt);
   if (arena.motes) fx.motes(camera.position, dt, arena.motes);
   fx.update(dt, camera, renderer.domElement.height);

@@ -1278,11 +1278,11 @@ mod tests {
     /// doesn't matter, the deploy bakes its own).
     #[test]
     fn nav_bake_reads_back() {
-        let [blockout, saltworks] = ["blockout", "saltworks"].map(|name| Map::index(name).unwrap());
+        let [blockout, isotope] = ["blockout", "isotope"].map(|name| Map::index(name).unwrap());
         let bakes = bake([blockout]);
         let Nav { edges, hover, .. } = Nav::walk_map(blockout);
         assert_eq!(Nav::baked(&bakes, blockout), Some((edges, hover)));
-        assert_eq!(Nav::baked(&bakes, saltworks), None);
+        assert_eq!(Nav::baked(&bakes, isotope), None);
         let edited = bakes.replace(&source_hash(MAPS[blockout].1), "0000000000000000");
         assert_eq!(Nav::baked(&edited, blockout), None, "a bake of an older blockout");
     }
