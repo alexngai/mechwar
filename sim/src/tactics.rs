@@ -302,6 +302,25 @@ pub struct Weighing {
     pub cross: f32,
 }
 
+/// A zone a bot is holding: its middle, radius and band (as `objective::Zone::holds`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Hold {
+    pub at: Vector,
+    pub radius: f32,
+    pub band: f32,
+}
+
+impl Hold {
+    /// Whether feet at `feet` stand in it, `margin` inside its edge.
+    pub fn holds(&self, feet: Vector, margin: f32) -> bool {
+        let off = feet - self.at;
+        off.x.hypot(off.z) <= self.radius - margin && off.y.abs() <= self.band
+    }
+}
+
+/// How far inside a held zone's edge its posts and peeks lie (m).
+const HOLD_MARGIN: f32 = 1.5;
+
 /// Most spots weighed at a time, nearest first, covered or not.
 const WEIGHED: usize = 48;
 /// Of the best few, the first it can walk straight to is the one.
@@ -312,8 +331,10 @@ const WALKS: usize = 6;
 /// as shares of hull, over the horizon less the walk there. A spot hidden from the target that
 /// it can step out of to fire (`peek`) is out only while firing (`duty`), hidden while it cools.
 /// Teammates fighting the same target stand at `allies`: a spot across from one is worth more.
+/// Holding a zone (`hold`), it weighs only spots in it, stepping out to fire only within it too.
 #[allow(clippy::too_many_arguments)]
-pub fn choose(spots: &Spots, arena: &Arena, t: &Tuning, me: Vector, foes: &[Foe], target: usize, duty: f32, current: Option<usize>, allies: &[Vector], w: &Weighing) -> Option<Post> {
+pub fn choose(spots: &Spots, arena: &Arena, t: &Tuning, me: Vector, foes: &[Foe], target: usize, duty: f32, current: Option<usize>, allies: &[Vector], hold: Option<Hold>, w: &Weighing) -> Option<Post> {
+    let inside = |i: usize| hold.is_none_or(|h| h.holds(spots.spots[i].pos, HOLD_MARGIN));
     let foe = foes.get(target)?;
     let taken_at = |at: Vector| -> f32 { foes.iter().filter(|f| exposed(arena, t, at, f.eye)).map(|f| f.on_me.at(f.pos.distance(at)) / (1.0 + f.split)).sum::<f32>() / t.health_max };
     let across = |at: Vector| {
@@ -323,13 +344,13 @@ pub fn choose(spots: &Spots, arena: &Arena, t: &Tuning, me: Vector, foes: &[Foe]
     let dealt_at = |at: Vector| foe.mine.at(foe.pos.distance(at)) / foe.hull * (1.0 + w.cross * across(at));
     let (here_dealt, here_taken) = (if sees_from(arena, t, me, foe.chest) { dealt_at(me) } else { 0.0 }, taken_at(me));
     // Nearest first; spots with cover from the target's side, and the current post, always.
-    let mut near: Vec<usize> = spots.near(me, w.reach).filter(|&i| (spots.spots[i].pos.y - me.y).abs() < 4.0).collect();
+    let mut near: Vec<usize> = spots.near(me, w.reach).filter(|&i| (spots.spots[i].pos.y - me.y).abs() < 4.0 && inside(i)).collect();
     near.sort_by(|&a, &b| spots.spots[a].pos.distance(me).total_cmp(&spots.spots[b].pos.distance(me)));
     let class = class_of(t);
     let mut picked: Vec<usize> = near.iter().copied().filter(|&i| spots.spots[i].covered(class, foe.pos - spots.spots[i].pos)).take(WEIGHED / 2).collect();
     let open: Vec<usize> = near.iter().copied().filter(|i| !picked.contains(i)).take(WEIGHED - picked.len()).collect();
     picked.extend(open);
-    if let Some(c) = current.filter(|c| !picked.contains(c)) {
+    if let Some(c) = current.filter(|&c| !picked.contains(&c) && inside(c)) {
         picked.push(c);
     }
     let mut scored: Vec<Post> = picked
@@ -338,7 +359,7 @@ pub fn choose(spots: &Spots, arena: &Arena, t: &Tuning, me: Vector, foes: &[Foe]
             let at = spots.spots[i].pos;
             let (peek, fires, dealt, taken) = if sees_from(arena, t, at, foe.chest) {
                 (None, true, dealt_at(at), taken_at(at))
-            } else if let Some(p) = spots.peek(arena, t, i, foe.chest) {
+            } else if let Some(p) = spots.peek(arena, t, i, foe.chest).filter(|&p| inside(p)) {
                 let out = spots.spots[p].pos;
                 (Some(p), true, dealt_at(out), duty * taken_at(out) + (1.0 - duty) * taken_at(at))
             } else {
@@ -386,6 +407,28 @@ mod tests {
             }
             println!("{name:10} {:5} spots, {covered:5} covered, {over:4} with low cover, {:.1} steps each, {:.0} ms", spots.spots.len(), steps as f32 / spots.spots.len() as f32, at.elapsed().as_secs_f32() * 1e3);
         }
+    }
+
+    #[test]
+    fn posts_held_to_a_zone_stay_in_it() {
+        let index = Map::index("blockout").unwrap();
+        let (map, t) = (Map::load(index), Tuning::default());
+        let arena = Arena::new(&map);
+        let spots = Spots::for_map(index);
+        // A rifle against a rifle 30 m south of a zone around the block at (-5, -30)'s north side.
+        let kit = crate::Arsenal::new(&t).get(MechClass::B, crate::Loadout::named("pike", "rocket")).clone();
+        let curve = Curve::of(&kit, &kit);
+        let foe_at = Vector::new(-5.0, 0.1, -48.0);
+        let foes = [Foe { pos: foe_at, eye: foe_at + Vector::Y * kit.eye_height, chest: foe_at + Vector::Y * (kit.mech_height * 0.5), on_me: &curve, mine: &curve, hull: kit.health_max, split: 0.0 }];
+        let w = Weighing { take: 1.0, horizon: 6.0, moving: 0.5, stay: 0.05, reach: 24.0, cross: 0.0 };
+        let me = Vector::new(-5.0, 0.1, -12.0);
+        let zone = Hold { at: Vector::new(-5.0, 0.0, -12.0), radius: 8.0, band: 3.0 };
+        let held = choose(spots, &arena, &kit, me, &foes, 0, 0.5, None, &[], Some(zone), &w).expect("no post in the zone");
+        assert!(zone.holds(spots.spots[held.spot].pos, 0.0), "post out of the zone");
+        assert!(held.peek.is_none_or(|p| zone.holds(spots.spots[p].pos, 0.0)), "peek out of the zone");
+        // Free to roam, it goes to the block, out of the zone.
+        let free = choose(spots, &arena, &kit, me, &foes, 0, 0.5, None, &[], None, &w).expect("no post");
+        assert!(!zone.holds(spots.spots[free.spot].pos, 0.0), "free post stayed in the zone");
     }
 
     #[test]

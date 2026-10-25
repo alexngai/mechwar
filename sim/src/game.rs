@@ -678,6 +678,9 @@ impl Game {
             }
             bot.lead = lead;
             bot.order = orders.as_ref().and_then(|o| o[i]);
+            // The zone that order is in, if it's one to hold.
+            let zones = self.assault.iter().flat_map(|a| a.silos.iter()).chain(self.siege.iter().flat_map(|s| std::iter::once(&s.aa).chain(s.stations.iter().map(|(z, _)| z))));
+            bot.order_zone = bot.order.and_then(|o| zones.clone().find(|z| z.holds(o))).map(|z| crate::tactics::Hold { at: z.at, radius: z.radius, band: z.band });
             bot.limpet_hits = limpet_hits;
             bot.orbs.clear();
             bot.orbs.extend(self.orbs.iter().filter(|o| o.dropped.is_none_or(|(_, side)| usize::from(side) == team)).map(|o| o.pos));

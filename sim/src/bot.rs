@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ability::Ability;
 use crate::brain::{Action, Brain, Feature, Features};
-use crate::tactics::{Foe, Post, Spots, Weighing, exposed};
+use crate::tactics::{Foe, Hold, Post, Spots, Weighing, exposed};
 use crate::threat::Curve;
 use crate::arsenal;
 use crate::deploy::{self, Deployable};
@@ -690,6 +690,10 @@ pub struct Bot {
     /// and how many teammates are alive within `MATES_NEAR`.
     pub limpet_hits: bool,
     pub mates_near: u8,
+    /// Set by the server each tick with its order: the zone it's to hold there, if it's one (a
+    /// silo, a station, the anti-air gun). Inside it, it fights from posts in it; outside, it
+    /// heads in.
+    pub order_zone: Option<Hold>,
     /// Set by the server each tick: the kits of the enemies it knows of; and its teammates alive,
     /// where they stand and whom they're fighting.
     pub foes: Vec<FoeKit>,
@@ -764,6 +768,7 @@ impl Bot {
             orbs: Vec::new(),
             limpet_hits: false,
             mates_near: 0,
+            order_zone: None,
             foes: Vec::new(),
             mates: Vec::new(),
             support: None,
@@ -1486,7 +1491,8 @@ impl Bot {
         let allies: Vec<Vector> = self.mates.iter().filter(|(_, f)| *f == Some(id)).map(|(at, _)| *at).collect();
         let w = Weighing { take: p.post_take, horizon: p.post_horizon, moving: p.post_moving, stay: p.post_stay, reach: p.post_reach, cross: p.post_cross };
         let duty = crate::threat::dps(t, t, flat(pos - me.pos).length()).duty;
-        crate::tactics::choose(spots, arena, t, me.pos, &foes, target, duty, current, &allies, &w)
+        let hold = self.order_zone.filter(|_| self.order.is_some());
+        crate::tactics::choose(spots, arena, t, me.pos, &foes, target, duty, current, &allies, hold, &w)
     }
 
     /// Backing up a teammate fighting enemy `id` at `pos`, out of its own sight: to a post it
@@ -1555,9 +1561,14 @@ impl Bot {
         Some(Input { move_x, move_z, yaw: new_yaw, pitch: new_pitch, ..Input::default() })
     }
 
-    /// Its order's spot while it's still on its way there.
+    /// Its order's spot while it's still on its way there: short of ERRAND of it, or out of the
+    /// zone it's to hold.
     fn errand(&self, me: &Mech) -> Option<Mech> {
-        self.order.filter(|o| flat(*o - me.pos).length() > ERRAND).map(|pos| Mech { pos, ..Mech::default() })
+        let there = |o: &Vector| match self.order_zone {
+            Some(zone) => zone.holds(me.pos, 0.0),
+            None => flat(*o - me.pos).length() <= ERRAND,
+        };
+        self.order.filter(|o| !there(o)).map(|pos| Mech { pos, ..Mech::default() })
     }
 
     /// Walking the waypoint graph toward `target` (a mech, or just a spot), out of the fight:
