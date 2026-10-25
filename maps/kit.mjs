@@ -219,8 +219,12 @@ export function flags(north, south = { ...north, at: flip(north.at) }) {
  * twins.
  */
 export function convoy(north, south = north.map(flip)) {
-  objectives.convoy = { points: [...north].reverse().concat(south.slice(1)), start: north.length - 1 };
+  const points = [...north].reverse().concat(south.slice(1));
+  objectives.convoy = { points, start: north.length - 1 };
 }
+
+/** A Convoy route's points with no waypoint within this (m) become waypoints (see `write`). */
+const ROUTE_GAP = 8;
 
 /**
  * Siege: the energy station's zone `station` (`{ at, radius, band }`: one, mid-map, for the teams
@@ -247,6 +251,13 @@ export function write(file, meta, north, south) {
     for (const p of [...nav]) if (!single.has(p)) nav.push(flip(p));
     for (const p of [...pads]) pads.push({ at: flip(p.at), to: flip(p.to), apex: p.apex });
     south = north.map(flip);
+  }
+  // Where the Convoy route runs beyond the waypoints (over decks, crests and bridges), its points
+  // join them, so bots can follow the hauler there. Only there: more on ground the graph already
+  // covers would draw patrols onto it in every mode.
+  const graph = [...nav];
+  for (const p of objectives.convoy?.points ?? []) {
+    if (!graph.some((w) => Math.hypot(w[0] - p[0], w[1] - p[1], w[2] - p[2]) < ROUTE_GAP)) nav.push(p);
   }
   // Ramps and turned boxes keep a yaw; the twin's is 180 more. Untilted boxes need no yaw at all.
   for (const s of solids) if (s.yaw === 0 || s.yaw === undefined) delete s.yaw;

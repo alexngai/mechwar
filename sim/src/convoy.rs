@@ -10,10 +10,11 @@ use serde::{Deserialize, Serialize};
 use crate::map::Objectives;
 use crate::{DT, Vector};
 
-/// Its walk (m/s) with a lead of two escorts. A lead of one walks it at ESCORT_SPEEDS[0] of that,
-/// each more at the next, the full team unopposed at the last. (Tuned in bot-only matches: at
-/// 6.5 m/s and ESCORT_RANGE 30 m about 2 in 5 end in a delivery.)
-pub const SPEED: f32 = 6.5;
+/// Its walk (m/s) with a lead of two escorts, the same on every map. A lead of one walks it at
+/// ESCORT_SPEEDS[0] of that, each more at the next, the full team unopposed at the last: 12 m/s,
+/// a Medium's walk, so escorts on foot keep up. (Raised from 6.5 when routes took the long way
+/// through each map's features.)
+pub const SPEED: f32 = 8.0;
 const ESCORT_SPEEDS: [f32; 4] = [0.75, 1.0, 1.25, 1.5];
 /// Mechs this near (across, and up or down within ESCORT_BAND) escort it, or hold it back.
 pub const ESCORT_RANGE: f32 = 30.0;
@@ -21,6 +22,9 @@ const ESCORT_BAND: f32 = 6.0;
 /// Its shield; shot through, it stalls this long, then comes back full.
 pub const SHIELD: f32 = 1500.0;
 pub const STALL_SECONDS: f32 = 8.0;
+/// A team that takes it over is told of once it's walked it this far (m), so a standoff on the
+/// edge of ESCORT_RANGE, flicking one way and the other, isn't news every tick.
+const TAKEOVER: f32 = 5.0;
 /// It's in a base, delivered, this far from its route's end there: the base's zone (as Siege's).
 const BASE_REACH: f32 = 14.0;
 /// Bots at it take cover this far back along the route from its middle, toward their own base, in
@@ -68,9 +72,12 @@ pub struct Convoy {
     pub pusher: Option<u8>,
     pub escorts: usize,
     pub contested: bool,
-    /// The last team that had it moving (for news when another takes over), and whether it was
-    /// stalled as of the last tick (for news when it stalls).
+    /// The last team told of having it moving (for news when another takes over), the team walking
+    /// it now and how far it has since it took over, and whether it was stalled as of the last
+    /// tick (for news when it stalls).
     last: Option<u8>,
+    walker: Option<u8>,
+    walked: f32,
     pub stalled: bool,
 }
 
@@ -85,7 +92,7 @@ impl Convoy {
             marks.push(marks.last().unwrap() + w[0].distance(w[1]));
         }
         let start = marks[route.start];
-        Some(Convoy { points, marks, start, along: start, pusher: None, escorts: 0, contested: false, last: None, stalled: false })
+        Some(Convoy { points, marks, start, along: start, pusher: None, escorts: 0, contested: false, last: None, walker: None, walked: 0.0, stalled: false })
     }
 
     /// The route's length.
@@ -119,8 +126,14 @@ impl Convoy {
         if self.along >= self.length() - BASE_REACH || self.along <= BASE_REACH {
             return Some(News::Delivered(team));
         }
-        let took = self.last != Some(team);
-        self.last = Some(team);
+        if self.walker != Some(team) {
+            (self.walker, self.walked) = (Some(team), 0.0);
+        }
+        self.walked += step.abs();
+        let took = self.last != Some(team) && self.walked >= TAKEOVER;
+        if took {
+            self.last = Some(team);
+        }
         took.then_some(News::Pushing(team))
     }
 
