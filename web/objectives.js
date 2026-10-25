@@ -29,10 +29,13 @@ export const SHIP_HULL = 3000;
 /** The AA gun fires a burst of AA_BURST rounds AA_GAP ms apart every AA_EVERY ms, while firing; it turns at AA_TURN rad/s. */
 const AA_BURST = 4, AA_GAP = 110, AA_EVERY = 1000, AA_TURN = 1.6;
 /** The deployable kinds of a battleship, and of a team mode's base gun. */
-export const SHIP = 4, SENTRY = 5, HAULER = 6, WALKER = 7, ARC = 8, PULSE = 9;
+export const SHIP = 4, SENTRY = 5, HAULER = 6, WALKER = 7, ARC = 8, PULSE = 9, CRAWLER = 10, BRUTE = 11;
 /** Match defense.rs: the reactor's hull, and a walker's in wave `n`. */
 export const REACTOR_HULL = 2000;
 export const walkerHull = (n) => 100 + 12 * n;
+/** Match defense.rs `species`: a lane enemy's hull in wave `n`, and (here) how high its middle is. */
+export const foeHull = (kind, n) => (kind === CRAWLER ? 30 + 3 * n : kind === BRUTE ? 600 + 50 * n : walkerHull(n));
+export const foeMiddle = (kind) => (kind === CRAWLER ? 0.6 : kind === BRUTE ? 2.5 : 2);
 /** Match defense.rs: what pilots build (`TOWERS`, in Build::Place's order), their prices, their reach at tier 1 (m: tuning's turret ranges, game.rs's ARC_RANGE and PULSE_RADIUS) and how it grows a tier. */
 export const TOWER_NAMES = ['MG tower', 'Rocket tower', 'Arc pylon', 'Pulse pylon'];
 export const TOWER_PRICES = [100, 150, 175, 200];
@@ -229,14 +232,15 @@ export class Objectives {
    * them, faced the way they walk, legs striding; gun pods trained as the server has them (their
    * muzzles into `guns`, for shot effects); fungus pulsing on their hulls.
    */
-  drawWalkers(list, dt, now, guns) {
+  drawWalkers(list, dt, now, guns, wave = 1) {
     const live = new Set();
     for (let i = 0; i < list.length; i += 10) {
-      if (list[i] !== WALKER) continue;
-      const [, , owner, x, y, z, yaw] = list.subarray(i, i + 7);
+      const kind = list[i];
+      if (kind !== WALKER && kind !== CRAWLER && kind !== BRUTE) continue;
+      const [, , owner, x, y, z, yaw, pitch] = list.subarray(i, i + 8);
       let w = this.walkers.get(owner);
       if (!w) {
-        w = { group: walkerMesh(), heading: 0, gait: 0, lift: [0, 0, 0, 0], aim: yaw };
+        w = { kind, group: (kind === CRAWLER ? crawlerMesh : kind === BRUTE ? bruteMesh : walkerMesh)(), heading: 0, gait: 0, aim: yaw, rear: 0 };
         w.group.position.set(x, y, z);
         this.scene.add(w.group);
         this.walkers.set(owner, w);
@@ -247,25 +251,36 @@ export class Objectives {
       const dx = group.position.x - before.x, dz = group.position.z - before.z, moved = Math.hypot(dx, dz);
       if (moved > 1e-3) w.heading += Math.atan2(Math.sin(Math.atan2(-dx, -dz) - w.heading), Math.cos(Math.atan2(-dx, -dz) - w.heading)) * (1 - Math.exp(-6 * dt));
       group.rotation.y = w.heading;
-      w.gait += (moved / WALKER_STRIDE) * Math.PI;
-      group.userData.legs.forEach((leg, k) => {
-        const p = w.gait + (k === 0 || k === 3 ? 0 : Math.PI), lift = Math.max(0, Math.sin(p)) * 0.5;
-        leg.foot.set(leg.rest.x, lift, leg.rest.z + Math.cos(p) * WALKER_STRIDE * 0.5);
+      const { legs, stride, phases, pod, muzzle, body, fungus } = group.userData;
+      w.gait += (moved / stride) * Math.PI;
+      legs.forEach((leg, k) => {
+        const p = w.gait + phases[k], lift = Math.max(0, Math.sin(p)) * stride * 0.35;
+        leg.foot.set(leg.rest.x, lift, leg.rest.z + Math.cos(p) * stride * 0.5);
         pose(leg);
       });
-      // The gun pod turns on its own, toward what the server has it aimed at.
-      w.aim += Math.atan2(Math.sin(yaw - w.aim), Math.cos(yaw - w.aim)) * (1 - Math.exp(-14 * dt));
-      group.userData.pod.rotation.y = w.aim - w.heading;
-      for (const [k, f] of group.userData.fungus.entries()) f.scale.setScalar(1 + 0.18 * Math.sin(now / 260 + k * 1.7));
-      guns.set(`${owner}:2`, group.userData.muzzle.getWorldPosition(new THREE.Vector3()));
+      // A walker's gun pod turns on its own, toward what the server has it aimed at; a brute
+      // rears up (the server's pitch 1) before it smashes down.
+      if (pod) {
+        w.aim += Math.atan2(Math.sin(yaw - w.aim), Math.cos(yaw - w.aim)) * (1 - Math.exp(-14 * dt));
+        pod.rotation.y = w.aim - w.heading;
+        guns.set(`${owner}:2`, muzzle.getWorldPosition(new THREE.Vector3()));
+      }
+      if (body) {
+        w.rear += (pitch - w.rear) * (1 - Math.exp(-(pitch > w.rear ? 4 : 18) * dt));
+        body.rotation.x = 0.45 * w.rear;
+      }
+      // The hive's fungus pulses on it, thicker each wave.
+      const grown = 0.8 + 0.05 * wave;
+      for (const [k, f] of fungus.entries()) f.scale.setScalar((f.userData.r ?? 1) * grown * (1 + 0.18 * Math.sin(now / 260 + k * 1.7)));
     }
     for (const [owner, w] of this.walkers) {
       if (live.has(owner)) continue;
       // Gone: shot down (a burst and spores), or walked into the reactor.
       const at = w.group.position.clone().setY(w.group.position.y + 1.5);
       if (!this.reactor || at.distanceTo(this.reactor.at) > 14) {
-        this.fx.explosion(at, 0.7);
-        this.sound.blast(4, at);
+        const big = w.kind === BRUTE ? 1.6 : w.kind === CRAWLER ? 1 : 0.7;
+        this.fx.explosion(at, big);
+        this.sound.blast(4 * big, at);
       }
       this.scene.remove(w.group);
       this.walkers.delete(owner);
@@ -1045,7 +1060,86 @@ function walkerMesh() {
     pose(leg);
     return leg;
   });
-  group.userData = { legs, pod, muzzle, fungus };
+  group.userData = { legs, pod, muzzle, fungus, stride: WALKER_STRIDE, phases: [0, Math.PI, Math.PI, 0] };
+  return group;
+}
+
+/** A lane enemy's parts: rusted paint, dark steel and the glowing fungus (shared). */
+const foePaint = new THREE.MeshStandardMaterial({ color: 0x8a6a2a, roughness: 0.8, metalness: 0.3 });
+const foeDark = new THREE.MeshStandardMaterial({ color: 0x2a2622, roughness: 0.6, metalness: 0.5 });
+const foeHazard = new THREE.MeshStandardMaterial({ color: 0xc9a227, roughness: 0.7, metalness: 0.3 });
+const foeGlow = hot(new THREE.MeshBasicMaterial({ color: FUNGUS }));
+const ball = new THREE.SphereGeometry(1, 10, 8);
+function part(parent, geometry, material, x, y, z) {
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(x, y, z);
+  parent.add(mesh);
+  return mesh;
+}
+/** Fungus blobs `[x, y, z, r]` on `parent`. */
+function blobs(parent, spots) {
+  return spots.map(([x, y, z, r]) => {
+    const blob = part(parent, ball, foeGlow, x, y, z);
+    blob.userData.r = r;
+    blob.scale.setScalar(r);
+    return blob;
+  });
+}
+/** Jointed legs from hips `[x, y, z]` to rest feet `[x, z]`, `len` a segment, `thick` round. */
+function legsOf(group, hips, feet, len, thick) {
+  const segment = new THREE.CylinderGeometry(thick, thick * 0.75, 1, 6);
+  return hips.map(([x, y, z], k) => {
+    const leg = { hip: new THREE.Vector3(x, y, z), rest: new THREE.Vector3(feet[k][0], 0, feet[k][1]), foot: new THREE.Vector3(feet[k][0], 0, feet[k][1]), len, thigh: part(group, segment, foePaint, 0, 0, 0), shin: part(group, segment, foeDark, 0, 0, 0) };
+    pose(leg);
+    return leg;
+  });
+}
+
+/**
+ * Co-op's crawler, along -Z: a knee-high spider drone, a flat body on six scuttling legs (in two
+ * tripods), its back one swollen fungal blister about to burst, two taken-over eyes.
+ */
+function crawlerMesh() {
+  const group = new THREE.Group();
+  part(group, new THREE.BoxGeometry(1.1, 0.35, 1.3), foeDark, 0, 0.75, 0);
+  part(group, new THREE.BoxGeometry(0.9, 0.12, 1.0), foePaint, 0, 0.98, 0);
+  for (const x of [-0.22, 0.22]) part(group, ball, foeGlow, x, 0.8, -0.66).scale.setScalar(0.08);
+  const fungus = blobs(group, [[0, 1.15, 0.1, 0.42], [0.35, 1.05, 0.4, 0.18], [-0.3, 1.0, -0.3, 0.14]]);
+  const rows = [-0.45, 0, 0.45];
+  const hips = rows.flatMap((z) => [[-0.5, 0.75, z], [0.5, 0.75, z]]);
+  const feet = rows.flatMap((z) => [[-1.15, z * 1.6], [1.15, z * 1.6]]);
+  const legs = legsOf(group, hips, feet, 0.75, 0.06);
+  // Tripods: front and back on one side with the middle on the other.
+  const phases = [0, Math.PI, Math.PI, 0, 0, Math.PI];
+  group.userData = { legs, fungus, stride: 0.8, phases };
+  return group;
+}
+
+/**
+ * Co-op's ore brute, along -Z: a squat ore hauler on four thick legs, a great hazard-striped plow
+ * plate across its front, a cab on top; its body (`userData.body`) rears back to smash down.
+ * Fungus bulges from its seams.
+ */
+function bruteMesh() {
+  const group = new THREE.Group(), body = new THREE.Group();
+  body.position.y = 2.4;
+  group.add(body);
+  part(body, new THREE.BoxGeometry(3.8, 2.0, 4.2), foePaint, 0, 0.4, 0.3);
+  part(body, new THREE.BoxGeometry(3.4, 0.6, 3.6), foeDark, 0, -0.8, 0.3);
+  part(body, new THREE.BoxGeometry(1.8, 1.2, 1.6), foeDark, -0.6, 1.9, 0.9); // the cab
+  part(body, ball, foeGlow, -0.6, 2.0, 0.08).scale.set(0.5, 0.18, 0.05); // its window, taken over
+  // The plow: a plate leaning forward, striped.
+  const plow = new THREE.Group();
+  plow.position.set(0, 0, -2.1);
+  plow.rotation.x = -0.25;
+  body.add(plow);
+  part(plow, new THREE.BoxGeometry(5.2, 2.6, 0.35), foeHazard, 0, 0, 0);
+  for (let k = -2; k <= 2; k++) part(plow, new THREE.BoxGeometry(0.45, 2.62, 0.37), foeDark, k * 1.05, 0, 0).rotation.z = 0.5;
+  const fungus = blobs(body, [[1.6, 1.3, 1.6, 0.55], [-1.7, 0.9, 1.9, 0.45], [1.2, 1.5, -1.2, 0.35], [-1.0, 1.4, -1.5, 0.3], [0.2, 1.5, 2.3, 0.4], [1.95, -0.2, 0.2, 0.3]]);
+  const hips = [[-1.6, 2.0, -1.4], [1.6, 2.0, -1.4], [-1.6, 2.0, 1.8], [1.6, 2.0, 1.8]];
+  const feet = [[-2.8, -1.8], [2.8, -1.8], [-2.8, 2.4], [2.8, 2.4]];
+  const legs = legsOf(group, hips, feet, 1.9, 0.32);
+  group.userData = { legs, body, fungus, stride: 2.2, phases: [0, Math.PI, Math.PI, 0] };
   return group;
 }
 

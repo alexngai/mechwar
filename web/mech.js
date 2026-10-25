@@ -11,6 +11,8 @@ export const TEAMS = {
   '-1': { accent: 0x7fe0ff, paint: 0x6f7552 },
   0: { accent: 0x4fb4ff, paint: 0x3d6894 },
   1: { accent: 0xff5a36, paint: 0x9c4538 },
+  // Co-op's infested mechs: the hive's orange in their lights.
+  infested: { accent: 0xff7a1f, paint: 0x5e4120 },
 };
 // Muted two-tone schemes with no blues or reds, so the accents carry the side.
 const SCHEMES = [
@@ -777,6 +779,35 @@ export class Mech {
     const t = TEAMS[team] ?? TEAMS[-1];
     this.pods.color.setHex(t.paint);
     this.lit = -1; // repaint the accents on the next update
+  }
+
+  /**
+   * Co-op's infested mech, once (after `setUnit`): a rusted, scabbed hull, and the hive's fungus
+   * bulging glowing from its body.
+   */
+  infest() {
+    if (this.infested) return;
+    this.infested = true;
+    const u = this.hull.userData.uniforms;
+    this.hull.color.setHex(0x7a5c2e);
+    u.uSecond.value.setHex(0x3e2c18);
+    u.uPattern.value = PATTERNS.camo;
+    // The body's reach each way, so the blobs sit on its skin whatever its class.
+    let reach = [0, 0, 0];
+    this.body.traverse((o) => {
+      if (!o.isMesh || o === this.body) return;
+      o.geometry.computeBoundingBox();
+      const { min, max } = o.geometry.boundingBox;
+      reach = [Math.max(reach[0], Math.abs(o.position.x) + max.x), Math.max(reach[1], o.position.y + max.y), Math.max(reach[2], Math.abs(o.position.z) + Math.max(max.z, -min.z))];
+    });
+    const [x, y, z] = reach, size = Math.min(x, y);
+    const glow = hot(new THREE.MeshBasicMaterial({ color: 0xff7a1f })), ball = new THREE.SphereGeometry(1, 10, 8);
+    for (const [fx, fy, fz, r] of [[0.35, 1, 0.2, 0.2], [-0.95, 0.6, -0.2, 0.16], [0.95, 0.4, 0.35, 0.14], [-0.4, 0.95, -0.6, 0.12], [0.1, 0.5, 1, 0.13]]) {
+      const blob = new THREE.Mesh(ball, glow);
+      blob.position.set(fx * x, fy * y, fz * z);
+      blob.scale.setScalar(r * size);
+      this.body.add(blob);
+    }
   }
 
   /** Paint scheme, pattern offset and stencilled number from the player id (-1 offline). */

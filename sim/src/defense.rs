@@ -24,18 +24,68 @@ pub const LEAK: f32 = 100.0;
 pub const WAVES: u8 = 10;
 const FIRST_BREAK: f32 = 60.0;
 const BREAK: f32 = 30.0;
-/// A wave's walkers: WAVE_BASE + WAVE_STEP a wave for a full team, SOLO_SHARE of that for one
-/// pilot and evenly between; coming through the gates in turn SPAWN_GAP apart.
-const WAVE_BASE: f32 = 4.0;
-const WAVE_STEP: f32 = 2.0;
+/// Each wave's foes for a full team (walkers, crawlers, brutes, infested mechs), each new kind
+/// coming in on a wave of its own; SOLO_SHARE of them for one pilot and evenly between (at least
+/// one of a kind the wave has). They come through the gates in turn, SPAWN_GAP apart, a pack of
+/// crawlers CRAWLER_GAP apart.
+const WAVE_TABLE: [[u16; 4]; WAVES as usize] = [
+    [6, 0, 0, 0],
+    [8, 0, 0, 0],
+    [6, 8, 0, 0],
+    [8, 6, 1, 0],
+    [8, 12, 1, 0],
+    [8, 8, 1, 1],
+    [10, 14, 2, 1],
+    [10, 16, 2, 2],
+    [12, 20, 3, 2],
+    [14, 24, 3, 3],
+];
 const SOLO_SHARE: f32 = 0.6;
 const SPAWN_GAP: f32 = 1.2;
-/// A walker's hull (WALKER_HULL, WALKER_HULL_STEP more each wave), its walk (m/s), and how far
-/// off its lane's line it keeps (either side, so a wave doesn't walk in single file).
-const WALKER_HULL: f32 = 100.0;
-const WALKER_HULL_STEP: f32 = 12.0;
-const WALKER_SPEED: f32 = 4.5;
-const SPREAD: f32 = 2.0;
+const CRAWLER_GAP: f32 = 0.35;
+/// An infested mech that reaches the reactor takes this off it (and is gone).
+pub const ELITE_LEAK: f32 = 200.0;
+/// A plated foe's hits each lose its `armor`, but at least ARMOR_FLOOR of each gets through.
+const ARMOR_FLOOR: f32 = 0.25;
+
+/// Who comes in a wave: a lane enemy, or an infested mech (a bot on team 1, `Game`'s to make).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Foe {
+    Lane(Kind),
+    Elite,
+}
+
+/// A lane enemy's make: its hull in wave 0 and more each wave, its walk (m/s), how far off its
+/// lane's line it keeps (either side, so a wave doesn't walk in single file), what it takes off
+/// the reactor reaching it, and its plating (see ARMOR_FLOOR).
+pub struct Species {
+    hull: f32,
+    hull_step: f32,
+    speed: f32,
+    spread: f32,
+    pub leak: f32,
+    pub armor: f32,
+}
+
+pub fn species(kind: Kind) -> Species {
+    match kind {
+        Kind::Crawler => Species { hull: 30.0, hull_step: 3.0, speed: 8.5, spread: 3.5, leak: 25.0, armor: 0.0 },
+        Kind::Brute => Species { hull: 600.0, hull_step: 50.0, speed: 2.8, spread: 0.5, leak: 300.0, armor: 5.0 },
+        _ => Species { hull: 100.0, hull_step: 12.0, speed: 4.5, spread: 2.0, leak: LEAK, armor: 0.0 },
+    }
+}
+
+/// A lane enemy's hull in wave `n`.
+pub fn hull(kind: Kind, n: u8) -> f32 {
+    let s = species(kind);
+    s.hull + s.hull_step * f32::from(n)
+}
+
+/// What `amount` of damage does to a `kind` (its plating taken off).
+pub fn armored(kind: Kind, amount: f32) -> f32 {
+    let armor = species(kind).armor;
+    if armor > 0.0 { (amount - armor).max(ARMOR_FLOOR * amount) } else { amount }
+}
 /// Walkers' owner ids, then towers' (for lock-on: `deploy::target_id` must stay a u8): past every
 /// player's, ship's, base gun's and the hauler's, up to the last that fits.
 const FIRST_OWNER: u8 = 16;
@@ -171,22 +221,25 @@ pub enum Stage {
     Won,
 }
 
-/// A walker on its lanes: the edge it's on and how far along (m), its place across the lane, and
-/// the tick it's stunned till.
+/// A lane enemy on its lanes: its kind, the edge it's on and how far along (m), its place across
+/// the lane, and the tick it's stunned till.
 #[derive(Clone, Copy, Debug)]
 struct Walker {
     owner: u8,
+    kind: Kind,
     edge: usize,
     along: f32,
     offset: f32,
     stunned: u32,
 }
 
-/// What a tick asks of `Game`: walkers to put down (owner, where, hull), walkers to move (owner,
-/// where on the lane, facing), walkers that reached the reactor (gone), news, and the end.
+/// What a tick asks of `Game`: lane enemies to put down (owner, kind, where, hull), infested mechs
+/// to put down (where), lane enemies to move (owner, where on the lane, facing), lane enemies that
+/// reached the reactor (gone), news, and the end.
 #[derive(Debug, Default)]
 pub struct Tick {
-    pub spawn: Vec<(u8, Vector, f32)>,
+    pub spawn: Vec<(u8, Kind, Vector, f32)>,
+    pub elites: Vec<Vector>,
     pub moves: Vec<(u8, Vector, f32)>,
     pub leaked: Vec<u8>,
     pub news: Vec<News>,
@@ -203,12 +256,13 @@ pub struct Defense {
     pub reactor: Vector,
     pub radius: f32,
     pub hull: f32,
-    /// The wave on (or next), and how many of its walkers have come and are to come.
+    /// The wave on (or next), its foes still to come (the next last), its lane enemies standing,
+    /// and its infested mechs alive (`Game`'s count).
     pub wave: u8,
     pub stage: Stage,
-    spawned: u16,
-    total: u16,
+    queue: Vec<Foe>,
     walkers: Vec<Walker>,
+    elites: usize,
     /// Picks walkers' branches and places, run to run the same (xorshift).
     rng: u32,
     /// Each player's scrap, by id; the towers standing.
@@ -252,9 +306,9 @@ impl Defense {
             hull: REACTOR_HULL,
             wave: 1,
             stage: Stage::Break { until: tick + (FIRST_BREAK * TICK_HZ) as u32 },
-            spawned: 0,
-            total: 0,
+            queue: Vec::new(),
             walkers: Vec::new(),
+            elites: 0,
             rng: 0x9e37_79b9,
             scrap: [START_SCRAP; MAX_PLAYERS],
             towers: Vec::new(),
@@ -331,65 +385,95 @@ impl Defense {
             _ => None,
         };
         let left = match self.stage {
-            Stage::Wave { .. } => self.total - self.spawned + self.walkers.len() as u16,
+            Stage::Wave { .. } => (self.queue.len() + self.walkers.len() + self.elites) as u16,
             _ => 0,
         };
         let scrap = self.scrap.iter().map(|s| s.round() as u16).collect();
         DefenseNet { wave: self.wave, waves: WAVES, break_left, hull: self.hull, left, scrap, towers: self.towers.clone() }
     }
 
-    /// Where each of the team's mechs (whether each is a living bot) should head with `walkers`
-    /// standing: every bot to the walker nearest the reactor; with none, round the reactor, each
-    /// to its own spot on a ring just out of the reactor's reach.
-    pub fn orders(&self, bots: &[bool], walkers: &[Vector]) -> Vec<Option<Vector>> {
+    /// Where each mech (its team, whether it's a living bot) should head with lane enemies standing
+    /// at `walkers`: every pilots' bot to the one nearest the reactor; with none, round the
+    /// reactor, each to its own spot on a ring just out of the reactor's reach.
+    pub fn orders(&self, mechs: &[(u8, bool)], walkers: &[Vector]) -> Vec<Option<Vector>> {
         let front = walkers.iter().copied().min_by(|a, b| a.distance(self.reactor).total_cmp(&b.distance(self.reactor)));
         let ring = |k: usize| {
-            let a = k as f32 * std::f32::consts::TAU / bots.len().max(1) as f32;
+            let a = k as f32 * std::f32::consts::TAU / mechs.len().max(1) as f32;
             self.reactor + Vector::new(a.cos(), 0.0, a.sin()) * (self.radius + 8.0)
         };
-        (0..bots.len()).map(|k| bots[k].then(|| front.unwrap_or_else(|| ring(k)))).collect()
+        // Infested mechs make for the reactor, fighting whoever they meet.
+        (0..mechs.len()).map(|k| mechs[k].1.then(|| if mechs[k].0 == 1 { self.reactor } else { front.unwrap_or_else(|| ring(k)) })).collect()
     }
 
     /// Wave `n`'s walkers with `pilots` on the team.
     pub fn count(n: u8, pilots: usize) -> u16 {
+        Defense::foes(n, pilots).len() as u16
+    }
+
+    /// Wave `n`'s foes with `pilots` on the team, in the order they come: a couple of walkers,
+    /// a pack of crawlers, a brute, an infested mech, and again, till all have come.
+    pub fn foes(n: u8, pilots: usize) -> Vec<Foe> {
         let full = crate::game::TEAM_SIZE;
         let share = SOLO_SHARE + (1.0 - SOLO_SHARE) * (pilots.clamp(1, full) - 1) as f32 / (full - 1) as f32;
-        ((WAVE_BASE + WAVE_STEP * f32::from(n)) * share).round().max(1.0) as u16
+        let row = WAVE_TABLE[usize::from(n.clamp(1, WAVES) - 1)];
+        let mut left = row.map(|c| if c == 0 { 0 } else { ((f32::from(c) * share).round() as u16).max(1) });
+        let kinds = [Foe::Lane(Kind::Walker), Foe::Lane(Kind::Crawler), Foe::Lane(Kind::Brute), Foe::Elite];
+        let mut out = Vec::new();
+        while left.iter().any(|&c| c > 0) {
+            for (k, take) in [(0, 2), (1, 4), (2, 1), (3, 1)] {
+                let n = left[k].min(take);
+                out.extend(std::iter::repeat_n(kinds[k], usize::from(n)));
+                left[k] -= n;
+            }
+        }
+        out
     }
 
-    /// A walker's hull in wave `n`.
-    pub fn walker_hull(n: u8) -> f32 {
-        WALKER_HULL + WALKER_HULL_STEP * f32::from(n)
-    }
-
-    /// One tick at `tick` with `pilots` (their ids) on the team, and the walkers and towers still
-    /// standing (their owners; any not among them fell): breaks and waves (and scrap for each
-    /// pilot for each beaten), walkers coming through the gates, walking their lanes (the next
-    /// edge picked by weight at each fork) unless stunned, and reaching the reactor.
-    pub fn step(&mut self, tick: u32, pilots: &[u8], standing: &[u8]) -> Tick {
+    /// One tick at `tick` with `pilots` (their ids) on the team, the lane enemies and towers still
+    /// standing (their owners; any not among them fell), and the infested mechs alive: breaks and
+    /// waves (and scrap for each pilot for each beaten), foes coming through the gates in turn,
+    /// lane enemies walking their lanes (the next edge picked by weight at each fork) unless
+    /// stunned, and reaching the reactor.
+    pub fn step(&mut self, tick: u32, pilots: &[u8], standing: &[u8], elites: usize) -> Tick {
         let mut out = Tick::default();
         self.walkers.retain(|w| standing.contains(&w.owner));
         self.towers.retain(|t| standing.contains(&t.owner));
+        self.elites = elites;
         match self.stage {
             Stage::Break { until } if tick >= until => {
-                self.total = Defense::count(self.wave, pilots.len());
-                self.spawned = 0;
+                self.queue = Defense::foes(self.wave, pilots.len());
+                self.queue.reverse();
                 self.stage = Stage::Wave { next_at: tick };
-                out.news.push(News::Wave { n: self.wave, count: self.total });
+                out.news.push(News::Wave { n: self.wave, count: self.queue.len() as u16 });
             }
-            Stage::Wave { next_at } if tick >= next_at && self.spawned < self.total => {
-                if let Some(owner) = (FIRST_OWNER..=LAST_OWNER).find(|o| !standing.contains(o) && !self.walkers.iter().any(|w| w.owner == *o)) {
-                    let gate = self.gates[usize::from(self.spawned) % self.gates.len()];
-                    let offset = SPREAD * (2.0 * self.rand() - 1.0);
-                    if let Some(edge) = self.fork(gate) {
-                        self.walkers.push(Walker { owner, edge, along: 0.0, offset, stunned: 0 });
-                        out.spawn.push((owner, self.points[gate], Defense::walker_hull(self.wave)));
-                        self.spawned += 1;
+            Stage::Wave { next_at } if tick >= next_at && !self.queue.is_empty() => {
+                let gate = self.gates[self.queue.len() % self.gates.len()];
+                let came = match *self.queue.last().unwrap() {
+                    Foe::Elite => {
+                        out.elites.push(self.points[gate]);
+                        true
                     }
+                    Foe::Lane(kind) => {
+                        let owner = (FIRST_OWNER..=LAST_OWNER).find(|o| !standing.contains(o) && !self.walkers.iter().any(|w| w.owner == *o));
+                        let offset = species(kind).spread * (2.0 * self.rand() - 1.0);
+                        match (owner, self.fork(gate)) {
+                            (Some(owner), Some(edge)) => {
+                                self.walkers.push(Walker { owner, kind, edge, along: 0.0, offset, stunned: 0 });
+                                out.spawn.push((owner, kind, self.points[gate], hull(kind, self.wave)));
+                                true
+                            }
+                            // No room for another: next tick.
+                            _ => false,
+                        }
+                    }
+                };
+                if came {
+                    let foe = self.queue.pop();
+                    let pack = foe == Some(Foe::Lane(Kind::Crawler)) && self.queue.last() == foe.as_ref();
+                    self.stage = Stage::Wave { next_at: tick + (if pack { CRAWLER_GAP } else { SPAWN_GAP } * TICK_HZ) as u32 };
                 }
-                self.stage = Stage::Wave { next_at: tick + (SPAWN_GAP * TICK_HZ) as u32 };
             }
-            Stage::Wave { .. } if self.spawned >= self.total && self.walkers.is_empty() => {
+            Stage::Wave { .. } if self.queue.is_empty() && self.walkers.is_empty() && elites == 0 => {
                 out.news.push(News::Cleared(self.wave));
                 for &id in pilots {
                     self.earn(id, WAVE_BONUS / SCRAP_PER_HULL);
@@ -409,7 +493,7 @@ impl Defense {
         for i in 0..self.walkers.len() {
             let mut w = self.walkers[i];
             if tick >= w.stunned {
-                w.along += WALKER_SPEED * DT;
+                w.along += species(w.kind).speed * DT;
             }
             loop {
                 let (a, b, _) = self.edges[w.edge];
@@ -431,19 +515,24 @@ impl Defense {
             let at = self.points[a] + dir * w.along + across * w.offset;
             self.walkers[i] = w;
             if (at - self.reactor).with_y(0.0).length() <= self.radius {
-                gone.push(w.owner);
+                gone.push((w.owner, w.kind));
             } else {
                 out.moves.push((w.owner, at, (-dir.x).atan2(-dir.z)));
             }
         }
-        for owner in gone {
+        for (owner, kind) in gone {
             self.walkers.retain(|w| w.owner != owner);
-            self.hull = (self.hull - LEAK).max(0.0);
+            self.leak(species(kind).leak);
             out.leaked.push(owner);
             out.news.push(News::Hit);
         }
         out.lost = self.hull <= 0.0;
         out
+    }
+
+    /// The reactor hit for `amount`.
+    pub fn leak(&mut self, amount: f32) {
+        self.hull = (self.hull - amount).max(0.0);
     }
 
     /// The edge out of point `p` a walker takes, by weight (None at a lane's end).
@@ -485,16 +574,31 @@ mod tests {
         let mut out = Vec::new();
         for t in from..from + (seconds * TICK_HZ) as u32 {
             let standing: Vec<u8> = d.walkers.iter().map(|w| w.owner).collect();
-            out.push(d.step(t, &[0, 1, 2, 3], &standing));
+            out.push(d.step(t, &[0, 1, 2, 3], &standing, 0));
         }
         out
     }
 
     #[test]
     fn waves_grow_and_scale_with_the_team() {
-        assert_eq!((Defense::count(1, 4), Defense::count(10, 4)), (6, 24));
+        assert_eq!((Defense::count(1, 4), Defense::count(10, 4)), (6, 44));
         assert!(Defense::count(5, 1) < Defense::count(5, 4));
-        assert!(Defense::walker_hull(10) > Defense::walker_hull(1));
+        assert!(hull(Kind::Walker, 10) > hull(Kind::Walker, 1));
+        // Each kind first on a wave of its own, then mixed in: walkers in pairs, crawlers in packs.
+        let first = |foe| (1..=WAVES).find(|&n| Defense::foes(n, 4).contains(&foe)).unwrap();
+        assert_eq!([Kind::Walker, Kind::Crawler, Kind::Brute].map(|k| first(Foe::Lane(k))), [1, 3, 4]);
+        assert_eq!(first(Foe::Elite), 6);
+        assert_eq!(Defense::foes(3, 4)[..6], [Foe::Lane(Kind::Walker), Foe::Lane(Kind::Walker), Foe::Lane(Kind::Crawler), Foe::Lane(Kind::Crawler), Foe::Lane(Kind::Crawler), Foe::Lane(Kind::Crawler)]);
+        // A lone pilot still meets at least one of each kind a wave has.
+        assert!(Defense::foes(6, 1).contains(&Foe::Elite));
+    }
+
+    #[test]
+    fn plating_takes_a_bite_out_of_each_hit_but_not_all_of_it() {
+        let armor = species(Kind::Brute).armor;
+        assert_eq!(armored(Kind::Walker, 3.0), 3.0);
+        assert_eq!(armored(Kind::Brute, 40.0), 40.0 - armor);
+        assert_eq!(armored(Kind::Brute, 2.0), ARMOR_FLOOR * 2.0);
     }
 
     #[test]
@@ -504,12 +608,13 @@ mod tests {
         assert!(steps(&mut d, 0, FIRST_BREAK - 0.1).iter().all(|t| t.spawn.is_empty()));
         let ticks = steps(&mut d, t0 - 3, 3.0);
         assert!(ticks.iter().any(|t| t.news.contains(&News::Wave { n: 1, count: 6 })));
-        let spawned: Vec<Vector> = ticks.iter().flat_map(|t| t.spawn.iter().map(|s| s.1)).collect();
+        let spawned: Vec<Vector> = ticks.iter().flat_map(|t| t.spawn.iter().map(|s| s.2)).collect();
         assert_eq!(spawned[..2], [Vector::new(0.0, 0.0, -100.0), Vector::new(100.0, 0.0, 0.0)], "the gates in turn");
-        // They close on it at WALKER_SPEED.
+        // They close on it at a walker's walk.
+        let (speed, spread) = (species(Kind::Walker).speed, species(Kind::Walker).spread);
         let ticks = steps(&mut d, t0 + 90, 1.0);
         let first = ticks.last().unwrap().moves.iter().find(|m| m.0 == FIRST_OWNER).unwrap().1;
-        assert!(first.z > -100.0 + WALKER_SPEED * 3.0 && first.x.abs() <= SPREAD + 1e-3, "{first}");
+        assert!(first.z > -100.0 + speed * 3.0 && first.x.abs() <= spread + 1e-3, "{first}");
     }
 
     #[test]
@@ -533,7 +638,7 @@ mod tests {
         let mut won = false;
         while t < ((FIRST_BREAK + 60.0) * TICK_HZ) as u32 && !won {
             // Every walker falls as soon as it comes.
-            let out = d.step(t, &[0, 1, 2, 3], &[]);
+            let out = d.step(t, &[0, 1, 2, 3], &[], 0);
             won = out.won;
             t += 1;
         }

@@ -13,7 +13,7 @@ import classesText from '../classes.json?raw';
 import weaponsText from '../weapons.json?raw';
 import { buildArena, HIGH_ONLY, LOW_ONLY } from './arena.js';
 import { Effects, HOT, halo, hot } from './fx.js';
-import { ARC, HAULER, Objectives, PULSE, TOWER_NAMES, TOWER_PRICES, REACTOR_HULL, WALKER, walkerHull, SENTRY, SENTRY_HEIGHT, SENTRY_SHIELD, SHIP, SHIP_HULL } from './objectives.js';
+import { ARC, BRUTE, CRAWLER, HAULER, Objectives, foeHull, foeMiddle, PULSE, TOWER_NAMES, TOWER_PRICES, REACTOR_HULL, WALKER, SENTRY, SENTRY_HEIGHT, SENTRY_SHIELD, SHIP, SHIP_HULL } from './objectives.js';
 import { Preview, weaponThumbs } from './hangar.js';
 import { GLYPHS, STATS, facts as cardFacts, shown } from './cards.js';
 import { controlsHtml } from './controls.js';
@@ -910,8 +910,11 @@ function frame(now) {
       // around it either); a teammate shows as a ghost.
       e.cloaked = !!abilityOn && e.mech.weapons.ability.id === 'cloak';
       e.hidden = e.cloaked && team !== myTeam;
-      e.mech.setTeam(paint(team));
+      // In co-op, the other side are the hive's infested mechs.
+      const infested = coop() && team === 1;
+      e.mech.setTeam(infested ? 'infested' : paint(team));
       e.mech.setUnit(id);
+      if (infested) e.mech.infest();
       e.mech.update(dt, {
         pos: e.pos, yaw: ryaw, pitch: rpitch, scale: classValue(cls, 'mech_height') / e.mech.height, vel: e.vel,
         grounded: !hovering && Math.abs(e.vel.y) < 1.5, boosting: !!boosting, hovering: !!hovering, health,
@@ -1150,7 +1153,7 @@ function frame(now) {
   objectives.drawSentries(game.deployables(), myTeam, FRIEND.accent, FOE.accent, dt, turretGuns);
   objectives.drawFlags(ctf, myTeam, FRIEND.accent, FOE.accent, top, now);
   objectives.drawHauler(game.deployables(), convoy, myTeam, FRIEND.accent, FOE.accent, dt, now);
-  objectives.drawWalkers(game.deployables(), dt, now, turretGuns);
+  objectives.drawWalkers(game.deployables(), dt, now, turretGuns, (net ? net.defense()[0] : 0) || 1);
   objectives.drawDefense(net ? net.defense() : [], now);
   drawBuild(now, alive, myId);
 
@@ -1676,7 +1679,7 @@ function drawDeployables(now, myTeam) {
   turretGuns.clear();
   for (let i = 0; i < list.length; i += 10) {
     const [kind, team, owner, x, y, z, yaw, pitch, left, hull] = list.subarray(i, i + 10);
-    if (kind === SHIP || kind === SENTRY || kind === HAULER || kind === WALKER || kind === ARC || kind === PULSE) continue; // objectives.js draws ships, base guns, the hauler and co-op's walkers and pylons
+    if (kind === SHIP || kind === SENTRY || kind === HAULER || kind === WALKER || kind === CRAWLER || kind === BRUTE || kind === ARC || kind === PULSE) continue; // objectives.js draws ships, base guns, the hauler and co-op's walkers and pylons
     const key = `${owner}:${kind}:${x},${z}`, was = deployed.get(key);
     if (!was) sound.deploy({ x, y, z });
     let mesh = deployMeshes[kind][used[kind]++];
@@ -1811,8 +1814,8 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
     const [kind, team, owner, x, y, z, , , , hull] = turrets.subarray(i, i + 10);
     if (kind < 2 || kind === HAULER) continue; // the hauler has its own mark
     const enemy = myTeam >= 0 && team !== myTeam; // offline, all ours
-    const ship = kind === SHIP, sentry = kind === SENTRY, walker = kind === WALKER;
-    chest.set(x, y + (ship ? 0 : sentry ? SENTRY_HEIGHT : walker ? 2 : classValue(1, 'turret_height') * 0.6), z);
+    const ship = kind === SHIP, sentry = kind === SENTRY, walker = kind === WALKER || kind === CRAWLER || kind === BRUTE;
+    chest.set(x, y + (ship ? 0 : sentry ? SENTRY_HEIGHT : walker ? foeMiddle(kind) : classValue(1, 'turret_height') * 0.6), z);
     const dist = chest.distanceTo(eye);
     let visible = false;
     if (enemy && dist <= T('weapon_range')) {
@@ -1824,8 +1827,8 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
     ndc.copy(chest).project(camera);
     if (ndc.z > 1 || Math.abs(ndc.x) > 1.1 || Math.abs(ndc.y) > 1.1) continue;
     const wave = (net ? net.defense()[0] : 0) || 1; // (co-op's walkers grow each wave)
-    const hullMax = ship ? SHIP_HULL : sentry ? SENTRY_SHIELD : walker ? walkerHull(wave) : classValue(1, 'turret_hull');
-    const label = ship ? 'Battleship' : sentry ? 'Base gun' : walker ? 'Infested walker' : kind === 2 ? 'MG turret' : 'Rocket turret';
+    const hullMax = ship ? SHIP_HULL : sentry ? SENTRY_SHIELD : walker ? foeHull(kind, wave) : classValue(1, 'turret_hull');
+    const label = ship ? 'Battleship' : sentry ? 'Base gun' : kind === CRAWLER ? 'Crawler' : kind === BRUTE ? 'Ore brute' : walker ? 'Infested walker' : kind === 2 ? 'MG turret' : 'Rocket turret';
     const tag = {
       // `unit` is its lock-on id (deploy::target_id), so the lock diamond finds it.
       ...toScreen(ndc), dist, enemy, unit: 64 + 2 * owner + (kind === 3 ? 1 : 0), name: ship || sentry ? `Enemy ${label.toLowerCase()}` : walker ? label : `${nameOf(owner)}'s ${label}`, bot: false, status: sentry && hull <= 0 ? 'OFFLINE' : '', focus: false,

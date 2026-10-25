@@ -51,6 +51,19 @@ const WALKER_RATE: f32 = 6.0;
 const WALKER_PAUSE: f32 = 1.5;
 const WALKER_ROUND: f32 = 3.0;
 const WALKER_WARMUP: f32 = 1.0;
+/// Co-op's crawler and brute (see `lane_enemies_strike`), and infested mechs: scrap for each point
+/// of health shot off one, and how long a downed one's wreck lies (s).
+const CRAWLER_TRIGGER: f32 = 3.0;
+const CRAWLER_BLAST: f32 = 5.0;
+const CRAWLER_DAMAGE: f32 = 60.0;
+const CRAWLER_PILOT: f32 = 25.0;
+const BRUTE_REACH: f32 = 8.0;
+const BRUTE_WINDUP: f32 = 1.2;
+const BRUTE_SMASH: f32 = 150.0;
+const BRUTE_PILOT: f32 = 40.0;
+const BRUTE_COOLDOWN: f32 = 4.0;
+const ELITE_SCRAP: f32 = 1.5;
+const ELITE_WRECK: f32 = 2.0;
 /// Co-op's reactor as a torch meets it: a ball REACTOR_BODY round, REACTOR_MIDDLE over its foot.
 const REACTOR_MIDDLE: f32 = 6.0;
 const REACTOR_BODY: f32 = 6.0;
@@ -618,8 +631,8 @@ impl Game {
             (_, _, Some(c), _) => Some(c.orders(&self.players.iter().map(|p| (p.id, p.team, p.mech.pos, p.bot.is_some() && p.mech.health > 0.0)).collect::<Vec<_>>())),
             (.., Some((c, at))) => Some(c.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.mech.health > 0.0)).collect::<Vec<_>>(), at)),
             _ => self.defense.as_ref().map(|d| {
-                let walkers: Vec<Vector> = self.deployables.iter().filter(|w| w.kind == Kind::Walker).map(|w| w.pos).collect();
-                d.orders(&self.players.iter().map(|p| p.bot.is_some() && p.mech.health > 0.0).collect::<Vec<_>>(), &walkers)
+                let walkers: Vec<Vector> = self.deployables.iter().filter(|w| w.kind.lane_enemy()).map(|w| w.pos).collect();
+                d.orders(&self.players.iter().map(|p| (p.team, p.bot.is_some() && p.mech.health > 0.0)).collect::<Vec<_>>(), &walkers)
             }),
         };
         for i in 0..self.players.len() {
@@ -641,13 +654,14 @@ impl Game {
             let sizes = items(&self.arsenal);
             // Convoy's hauler only while the other side's walking it at us.
             let pushed_at_us = self.convoy.as_ref().is_some_and(|c| c.pusher == Some(1 - me.team));
-            let foe = |d: &&Deployable| d.kind.turret() || (d.kind == Kind::Hauler && pushed_at_us);
+            let foe = |d: &&Deployable| (d.kind.shootable() && d.kind != Kind::Hauler) || (d.kind == Kind::Hauler && pushed_at_us);
             enemies.extend(self.deployables.iter().filter(|d| d.hull > 0.0 && d.team != me.team).filter(foe).map(|d| {
                 let at = deploy::center(sizes, d) - Vector::Y * (t.mech_height * 0.5);
                 let full = match d.kind {
                     Kind::Sentry => SENTRY_SHIELD,
                     Kind::Hauler => convoy::SHIELD,
-                    Kind::Walker => Defense::walker_hull(defense::WAVES),
+                    Kind::Walker | Kind::Crawler | Kind::Brute => defense::hull(d.kind, defense::WAVES),
+                    Kind::Arc | Kind::Pulse => defense::tower_hull(defense::TIERS),
                     _ => sizes.turret_hull,
                 };
                 (deploy::target_id(d), Mech { pos: at, health: d.hull, ..Mech::default() }, d.hull / full)
@@ -823,7 +837,7 @@ impl Game {
             }
         }
         // And the hauler and co-op's walkers block them all, unmoved.
-        for d in self.deployables.iter().filter(|d| matches!(d.kind, Kind::Hauler | Kind::Walker)) {
+        for d in self.deployables.iter().filter(|d| d.kind == Kind::Hauler || d.kind.lane_enemy()) {
             let (th, mut body) = deploy::as_mech(items(&self.arsenal), d);
             for p in &mut self.players {
                 collide::separate(&self.arena, self.arsenal.of(&p.mech), &mut p.mech, &th, &mut body, 1.0);
@@ -1405,7 +1419,7 @@ impl Game {
                 // In co-op, walkers fire on the team's towers too, and towers on walkers.
                 .chain(
                     (deployables.iter())
-                        .filter(|e| e.team != d.team && e.hull > 0.0 && e.kind.shootable() && (d.kind == Kind::Walker) != (e.kind == Kind::Walker))
+                        .filter(|e| e.team != d.team && e.hull > 0.0 && e.kind.shootable() && d.kind.lane_enemy() != e.kind.lane_enemy())
                         .map(|e| (deploy::center(t, e), Vector::ZERO)),
                 )
                 .filter(|&(chest, _)| sighted(chest, range))
@@ -1484,7 +1498,8 @@ impl Game {
             _ => t.mg_turret_damage,
         };
         self.events.push(Event::TurretShot { owner: d.owner, end: ray.point_at(best), hit: hit.map(|j| self.players[j].id) });
-        let owner = self.players.iter().position(|q| q.id == d.owner);
+        let by = self.defense.as_ref().map_or(d.owner, |df| df.credit(d.owner));
+        let owner = self.players.iter().position(|q| q.id == by);
         if let Some(j) = hit {
             self.apply_damage_by(owner, j, damage, Cause::Weapon { slot: Slot::Offensive, index: Item::MgTurret.index() });
         }
@@ -1505,13 +1520,14 @@ impl Game {
             return;
         }
         let standing = d.hull > 0.0;
+        let amount = defense::armored(d.kind, amount);
         let dealt = amount.min(d.hull.max(0.0));
         d.hull -= amount;
         // (Points and XP for the hull shot off a ship, the hauler or a walker; in co-op, scrap for
         // a walker's, a tower's going to its builder.)
-        let ship = matches!(d.kind, Kind::Ship | Kind::Hauler | Kind::Walker);
+        let ship = matches!(d.kind, Kind::Ship | Kind::Hauler) || d.kind.lane_enemy();
         let attacker = self.defense.as_ref().map_or(attacker, |df| df.credit(attacker));
-        if d.kind == Kind::Walker
+        if d.kind.lane_enemy()
             && let Some(df) = self.defense.as_mut()
         {
             df.earn(attacker, dealt);
@@ -1620,6 +1636,10 @@ impl Game {
         // Assist shares count the health a hit took, not its overkill.
         if let Some((id, _)) = from {
             target.ledger.push((id, damage.min(target.mech.health), tick));
+        }
+        // In co-op, scrap for the health shot off an infested mech.
+        if let (Some(df), Some((id, _)), 1) = (self.defense.as_mut(), from, target.team) {
+            df.earn(id, ELITE_SCRAP * damage.min(target.mech.health));
         }
         target.mech.health -= damage;
         if target.mech.health > 0.0 {
@@ -1955,26 +1975,57 @@ impl Game {
             Defense::new(self.spots.defense.as_ref()?, tick, |a, b| nav.route(arena, a, b))
         });
         let Some(mut d) = made else { return };
+        // Infested mechs that reached the reactor hit it and are gone; downed ones go before they'd
+        // relaunch.
+        let mut news = Vec::new();
+        let (reactor, reach) = (d.reactor, d.radius);
+        let arsenal = &self.arsenal;
+        let before = self.players.len();
+        self.players.retain(|p| {
+            let leaked = p.team == 1 && p.mech.health > 0.0 && (p.mech.pos - reactor).with_y(0.0).length() <= reach;
+            let downed = p.team == 1 && p.respawn_at.is_some_and(|at| tick + secs(arsenal.of(&p.mech).respawn_delay - ELITE_WRECK) >= at);
+            if leaked {
+                d.leak(defense::ELITE_LEAK);
+                news.push(defense::News::Hit);
+            }
+            !(leaked || downed)
+        });
+        if self.players.len() != before {
+            self.roster_version += 1;
+        }
         let pilots: Vec<u8> = self.players.iter().filter(|p| p.team == 0).map(|p| p.id).collect();
+        let elites = self.players.iter().filter(|p| p.team == 1).count();
         let standing: Vec<u8> = self.deployables.iter().filter(|w| w.hull > 0.0).map(|w| w.owner).collect();
-        let out = d.step(tick, &pilots, &standing);
-        for (owner, at, hull) in out.spawn {
+        let mut out = d.step(tick, &pilots, &standing, elites);
+        out.news.extend(news);
+        out.lost |= d.hull <= 0.0;
+        for (owner, kind, at, hull) in out.spawn {
             let pos = self.ground(at);
             let ready = tick + secs(WALKER_WARMUP);
-            self.deployables.push(Deployable { kind: Kind::Walker, team: 1, owner, pos, yaw: 0.0, pitch: 0.0, hull, placed: tick, expires: u32::MAX, ready, burst: 0 });
+            self.deployables.push(Deployable { kind, team: 1, owner, pos, yaw: 0.0, pitch: 0.0, hull, placed: tick, expires: u32::MAX, ready, burst: 0 });
+        }
+        for at in out.elites {
+            let seed = u64::from(tick) << 8 | 0x5a;
+            let class = MechClass::ALL[(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33) as usize % 3];
+            if let Some(id) = self.add_player(1, Some(Bot::with_skill(seed, self.bot_skill)), class) {
+                let feet = self.ground(at);
+                let p = self.players.iter_mut().find(|p| p.id == id).unwrap();
+                p.mech.pos = feet;
+            }
         }
         // (Their facing is their gun's, trained by `man_turrets`; the client faces their bodies
         // the way they walk.)
         for (owner, at, _) in out.moves {
             let pos = self.ground(at);
-            if let Some(w) = self.deployables.iter_mut().find(|w| w.kind == Kind::Walker && w.owner == owner) {
+            if let Some(w) = self.deployables.iter_mut().find(|w| w.kind.lane_enemy() && w.owner == owner) {
                 w.pos = pos;
             }
         }
-        self.deployables.retain(|w| w.kind != Kind::Walker || !out.leaked.contains(&w.owner));
+        self.deployables.retain(|w| !w.kind.lane_enemy() || !out.leaked.contains(&w.owner));
         self.events.extend(out.news.iter().map(|&n| Event::Defense(n)));
         self.defense = Some(d);
         self.power_pylons();
+        self.lane_enemies_strike();
         if out.lost || out.won {
             self.end_match();
         }
@@ -2047,6 +2098,54 @@ impl Game {
         }
     }
 
+    /// Co-op's unarmed lane enemies close in: a crawler with a tower or pilot within CRAWLER_TRIGGER
+    /// blows up, CRAWLER_DAMAGE to every tower within CRAWLER_BLAST and CRAWLER_PILOT to every
+    /// pilot (no scrap for it); a brute with a tower within BRUTE_REACH rears up (its pitch 1, for
+    /// all to see) and BRUTE_WINDUP later smashes the ground, BRUTE_SMASH to every tower and
+    /// BRUTE_PILOT to every pilot within its reach, then again after BRUTE_COOLDOWN.
+    fn lane_enemies_strike(&mut self) {
+        let tick = self.tick;
+        let towers: Vec<usize> = (0..self.deployables.len()).filter(|&k| self.defense.as_ref().unwrap().tower(self.deployables[k].owner).is_some()).collect();
+        let near = |a: Vector, b: Vector, r: f32| (a - b).with_y(0.0).length() <= r && (a.y - b.y).abs() < 4.0;
+        for k in 0..self.deployables.len() {
+            let e = self.deployables[k];
+            if e.hull <= 0.0 || tick < e.ready {
+                continue;
+            }
+            let (trigger, reach) = match e.kind {
+                Kind::Crawler => (CRAWLER_TRIGGER, CRAWLER_BLAST),
+                Kind::Brute => (BRUTE_REACH, BRUTE_REACH),
+                _ => continue,
+            };
+            let pilots: Vec<usize> = (0..self.players.len()).filter(|&j| self.players[j].team == 0 && self.players[j].mech.health > 0.0).collect();
+            let close = towers.iter().any(|&t| near(self.deployables[t].pos, e.pos, trigger)) || (e.kind == Kind::Crawler && pilots.iter().any(|&j| near(self.players[j].mech.pos, e.pos, trigger)));
+            let (tower_damage, pilot_damage) = match e.kind {
+                Kind::Crawler if close => (CRAWLER_DAMAGE, CRAWLER_PILOT),
+                // A brute reared up comes down now; one that isn't yet rears up.
+                Kind::Brute if e.pitch > 0.0 => (BRUTE_SMASH, BRUTE_PILOT),
+                Kind::Brute if close => {
+                    let b = &mut self.deployables[k];
+                    (b.pitch, b.ready) = (1.0, tick + secs(BRUTE_WINDUP));
+                    continue;
+                }
+                _ => continue,
+            };
+            let hit_towers: Vec<usize> = towers.iter().copied().filter(|&t| near(self.deployables[t].pos, e.pos, reach)).collect();
+            let hit_pilots: Vec<usize> = pilots.into_iter().filter(|&j| near(self.players[j].mech.pos, e.pos, reach)).collect();
+            for t in hit_towers {
+                self.wear(t, tower_damage, e.owner);
+            }
+            for j in hit_pilots {
+                self.apply_damage_by(None, j, pilot_damage, Cause::Unknown);
+            }
+            let e = &mut self.deployables[k];
+            match e.kind {
+                Kind::Crawler => e.hull = 0.0,
+                _ => (e.pitch, e.ready) = (0.0, tick + secs(BRUTE_COOLDOWN)),
+            }
+        }
+    }
+
     /// Co-op's pylons: each ready one with a walker in reach lets go (see ARC_RANGE, PULSE_RADIUS).
     fn power_pylons(&mut self) {
         let tick = self.tick;
@@ -2059,8 +2158,8 @@ impl Game {
             let top = p.pos + Vector::Y * PYLON_TOP;
             let arena = &self.arena;
             let walkers: Vec<(usize, Vector)> = (self.deployables.iter().enumerate())
-                .filter(|(_, w)| w.kind == Kind::Walker && w.hull > 0.0)
-                .map(|(j, w)| (j, w.pos + Vector::Y * (deploy::WALKER_HEIGHT * 0.5)))
+                .filter(|(_, w)| w.kind.lane_enemy() && w.hull > 0.0)
+                .map(|(j, w)| (j, w.pos + Vector::Y * (w.kind.lane_body().1 * 0.5)))
                 .filter(|&(_, c)| arena.cast_ray(&Ray::new(top, (c - top).normalize_or_zero()), c.distance(top)).is_none())
                 .collect();
             if p.kind == Kind::Arc {
@@ -2608,7 +2707,7 @@ mod tests {
     }
 
     fn walkers(game: &Game) -> Vec<Deployable> {
-        game.deployables.iter().filter(|d| d.kind == Kind::Walker).copied().collect()
+        game.deployables.iter().filter(|d| d.kind.lane_enemy() && d.hull > 0.0).copied().collect()
     }
 
     #[test]
@@ -2653,7 +2752,7 @@ mod tests {
         for _ in 0..secs(1.2 * f32::from(total) + 1.0) {
             game.step();
             // Each walker shot down as it comes.
-            let standing: Vec<usize> = (0..game.deployables.len()).filter(|&k| game.deployables[k].kind == Kind::Walker).collect();
+            let standing: Vec<usize> = (0..game.deployables.len()).filter(|&k| game.deployables[k].kind.lane_enemy()).collect();
             for k in standing {
                 game.wear(k, 1e4, id);
             }
@@ -2852,6 +2951,108 @@ mod tests {
         assert!(game.defense.as_ref().unwrap().hull > 1000.0);
     }
 
+    /// Puts a lane enemy of `kind` down at `pos` (no lane: it stands there).
+    fn lane_enemy(game: &mut Game, kind: Kind, pos: Vector) -> usize {
+        let hull = defense::hull(kind, 1);
+        game.deployables.push(Deployable { kind, team: 1, owner: 40, pos, yaw: 0.0, pitch: 0.0, hull, placed: 0, expires: u32::MAX, ready: 0, burst: 0 });
+        game.deployables.len() - 1
+    }
+
+    #[test]
+    fn a_crawler_blows_up_against_a_tower() {
+        let (mut game, id) = co_op(false);
+        let reactor = game.defense.as_ref().unwrap().reactor;
+        aim_to_build(&mut game, id, reactor, 14.0);
+        game.build(id, defense::Build::Place(0));
+        game.dock(id);
+        let tower = towers(&game)[0];
+        lane_enemy(&mut game, Kind::Crawler, tower.pos + Vector::new(2.0, 0.0, 0.0));
+        game.step();
+        assert_eq!(towers(&game)[0].hull, defense::TOWER_HULL - CRAWLER_DAMAGE);
+        assert!(walkers(&game).is_empty(), "it's gone");
+        assert_eq!(scrap(&game, id), 250.0 - defense::PRICES[0], "no scrap for it");
+    }
+
+    #[test]
+    fn a_brute_rears_up_then_smashes_towers_by_the_lane_and_plating_blunts_small_hits() {
+        let (mut game, id) = co_op(false);
+        let reactor = game.defense.as_ref().unwrap().reactor;
+        aim_to_build(&mut game, id, reactor, 14.0);
+        game.build(id, defense::Build::Place(0));
+        game.dock(id);
+        let tower = towers(&game)[0];
+        let k = lane_enemy(&mut game, Kind::Brute, tower.pos + Vector::new(6.0, 0.0, 0.0));
+        game.step();
+        assert_eq!(game.deployables[k].pitch, 1.0, "rears up first");
+        assert_eq!(towers(&game)[0].hull, defense::TOWER_HULL);
+        for _ in 0..secs(BRUTE_WINDUP) {
+            game.step();
+        }
+        assert_eq!(towers(&game)[0].hull, defense::TOWER_HULL - BRUTE_SMASH);
+        assert_eq!(game.deployables[k].pitch, 0.0);
+        // A rifle round barely scratches it; a rocket gets through.
+        let hull = game.deployables[k].hull;
+        game.wear(k, 6.0, id);
+        assert!((hull - game.deployables[k].hull - 1.5).abs() < 1e-3);
+        game.wear(k, 60.0, id);
+        assert!((hull - game.deployables[k].hull - 1.5 - 55.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn infested_mechs_come_through_the_gates_and_hold_the_wave_till_downed() {
+        let (mut game, id) = co_op(false);
+        game.dock(id);
+        game.defense.as_mut().unwrap().wave = 6;
+        skip_break(&mut game);
+        let gates: Vec<Vector> = game.spots.defense.as_ref().unwrap().gates.iter().map(|g| Vector::from_array(*g)).collect();
+        let mut elite = None;
+        for _ in 0..secs(30.0) {
+            game.step();
+            // The lane enemies all go down as they come.
+            for k in (0..game.deployables.len()).filter(|&k| game.deployables[k].kind.lane_enemy()).collect::<Vec<_>>() {
+                game.wear(k, 1e4, id);
+            }
+            if let Some(p) = game.players.iter().find(|p| p.team == 1) {
+                assert!(p.bot.is_some() && gates.iter().any(|g| g.with_y(0.0).distance(p.mech.pos.with_y(0.0)) < 3.0), "at a gate");
+                elite = Some(p.id);
+                break;
+            }
+        }
+        let elite = elite.expect("no infested mech came");
+        // The rest of the wave through.
+        for _ in 0..secs(8.0) {
+            game.step();
+            for k in (0..game.deployables.len()).filter(|&k| game.deployables[k].kind.lane_enemy()).collect::<Vec<_>>() {
+                game.wear(k, 1e4, id);
+            }
+        }
+        let d = game.defense.as_ref().unwrap();
+        assert!(matches!(d.stage, defense::Stage::Wave { .. }) && d.net(game.tick).left >= 1, "the wave waits on it");
+        // Downed, it's paid for, then gone, and the wave's beaten.
+        let j = game.players.iter().position(|p| p.id == elite).unwrap();
+        let i = game.players.iter().position(|p| p.id == id).unwrap();
+        let before = scrap(&game, id);
+        game.apply_damage_by(Some(i), j, 1e4, Cause::Unknown);
+        assert!(scrap(&game, id) > before);
+        for _ in 0..secs(10.0) {
+            game.step();
+        }
+        assert!(game.players.iter().all(|p| p.team == 0), "still here");
+        assert_eq!(game.defense.as_ref().unwrap().wave, 7);
+    }
+
+    #[test]
+    fn an_infested_mech_that_reaches_the_reactor_hits_it_hard() {
+        let (mut game, id) = co_op(false);
+        game.dock(id);
+        let reactor = game.defense.as_ref().unwrap().reactor;
+        let elite = game.add_player(1, Some(Bot::new(3)), MechClass::B).unwrap();
+        game.players.iter_mut().find(|p| p.id == elite).unwrap().mech.pos = reactor;
+        game.step();
+        assert!(game.players.iter().all(|p| p.id != elite));
+        assert_eq!(game.defense.as_ref().unwrap().hull, defense::REACTOR_HULL - defense::ELITE_LEAK);
+    }
+
     #[test]
     fn a_beaten_wave_pays_every_pilot() {
         let (mut game, id) = co_op(false);
@@ -2859,7 +3060,7 @@ mod tests {
         skip_break(&mut game);
         for _ in 0..secs(1.2 * f32::from(Defense::count(1, 1)) + 1.0) {
             game.step();
-            let standing: Vec<usize> = (0..game.deployables.len()).filter(|&k| game.deployables[k].kind == Kind::Walker).collect();
+            let standing: Vec<usize> = (0..game.deployables.len()).filter(|&k| game.deployables[k].kind.lane_enemy()).collect();
             for k in standing {
                 game.wear(k, 1e4, 200);
             }
