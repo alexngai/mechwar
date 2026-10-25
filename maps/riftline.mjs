@@ -161,9 +161,12 @@ silos({ at: [-84, 0, 46], radius: 10, band: 4, pad: [-84, 0, 42] }, { at: [0, 0,
 // Siege: the station on the bridge's road deck, the AA gun up on the rail deck over it (the top of
 // the bridge, by the ramps at the bridgeheads), the ships over the bridge.
 siege({ at: [0, 0, 0], radius: 10, band: 4 }, { at: [0, 10, 0], radius: 8, band: 3, pad: [0, 10, 5] }, 50);
-// Convoy: the hauler crosses on the road deck, under the rail deck, then up the rim west of the rail
-// deck's pillars and in through the west gate.
-convoy([[0, 0, 0], [0, 0, 12], [0, 0, 24], [0, 0, 36], [-3, 0, 44], [-6, 0, 52], [-6, 0, 64], [-9, 0, 72], [-15, 0, 79], [-15, 0, 88], [-15, 0, 96], [-16, 0, 103]]);
+// Convoy: the hauler starts mid-bridge on the road deck and each leg takes the high road home: off
+// the road deck onto the rim, round the foot of the bridgehead ramp and up it onto the rail deck, along
+// the rail deck over the rim (clear of B's and the AA gun's pads over the middle of the bridge), and
+// down the ramp into the yard to the base. The south leg is the twin.
+convoy([[0, 0, 0], [0.5, 0, 34.5], [16, 0, 39], [21, 0, 59.5], [13.5, 0, 70], [8.5, 9.32, 45.5], [4, 10, 42.5], [0, 10, 89], [-3.5, 0.46, 111], [-7, 0, 112], [-16, 0, 105]]);
+point([0, 5, 101], [9.5, 5, 55]); // halfway down the ramps into the yard and off the rail deck
 
 // --- Spawns, twin, write -------------------------------------------------------------------------
 const north = [[-20, 0.1, 102], [-12, 0.1, 108], [12, 0.1, 100], [20, 0.1, 96]];

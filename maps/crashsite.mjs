@@ -262,6 +262,7 @@ function snag(x, z, rand) {
   for (const [a, c] of [[-20, 12], [20, -12]]) beacon(S(a, c - Math.sign(c) * 0.9, DECK + 5), EMERGENCY, S(a, c * 0.6, DECK + 4));
   for (const p of [S(a0 + 1, -18, 15), S(a0 + 1, 20, 7), S(a0 + 2, 4, DECK - 1)]) sparks(p);
   spot(28, -4, BRIDGE);
+  spot(-33, 4, HOLD); // the hold's fore end, where the convoy's hauler comes through
   for (const [a, c, y] of [[-40, 0, HOLD], [0, 0, HOLD], [40, 0, HOLD], [-22, 18, DECK], [22, -18, DECK], [-40, 20, TOP], [40, -20, TOP]]) lamp(S(a, c, y));
   clear(W(a0, 0), W(a1, 0), 46);
 }
@@ -396,8 +397,8 @@ crate(-100, 30, groundAt(-100, 30) - 0.3, 'metal', 12, -15);
 {
   // The salvage camp (north-west): a crane over the water, containers stacked, a hab.
   const [x, z] = BASES[0], g = 1.5;
-  // The crane stands west of the jump pad, so the way in from the wreck between the pad and the flag stand
-  // is wide enough for the convoy's hauler.
+  // The crane stands west of the jump pad, clear of the way in from the wreck between the pad and the
+  // flag stand.
   box([x - 8, g - 2, z - 26], [x - 5, g + 22, z - 23], 'metal'); // crane tower
   beam([x - 6.5, g + 21, z - 24.5], [x + 8, g + 26, z - 40], 1, 1.2, 'metal'); // its boom, out toward the wreck
   decor.push({ kind: 'pipe', from: [x + 8, g + 26, z - 40], to: [x + 8, g + 12, z - 40], r: 0.15 });
@@ -530,15 +531,18 @@ silos({ at: S(-78, 0, bowTop(-78)), radius: 12, band: 4 }, { at: S(0, 0, HOLD), 
 // Siege: the station in the midship's hold, the AA gun on the bridge's roof (the highest place on
 // the map), the ships over the midship, clear of the bridge's mast.
 siege({ at: S(0, 0, HOLD), radius: 14, band: 5 }, { at: S(28, 0, BRIDGE), radius: 8, band: 3, pad: S(33, 5, BRIDGE) }, 60);
-// Convoy: the hauler crosses through the midship's hold, in by one breach and out by the other, round
-// the silo's pad in the middle, then out over the water to each base's island: past the propped deck
-// slab and in between the jump pad and the flag stand to the salvage camp, and in past the stand to
-// the pumping station. Points are [a, c] in the wreck's frame.
+// Convoy: the hauler starts in the midship's hold, at its broken fore end, on the wreck's long axis
+// (so as far from either base). Toward the salvage camp: out the fore end, across the water under the
+// fallen beam and the girder, into the bow's hold by its broken end, along it under the mid deck, out
+// its breach to port, then up the west water to the camp. Toward the pumping station: aft along the
+// hold, round the silo's pad in the middle, out the breach to starboard, round the far end of the hull
+// plate leaning over the starboard lane, and down past the flag stand to the station. Points are world
+// [x, z] on the ground or the water's bed, [x, y, z] on the holds' floors.
 {
-  const on = (pts) => pts.map(([a, c]) => (Math.abs(c) <= BEAM && Math.abs(a) < 40 ? S(a, c, HOLD) : S(a, c, r3(groundAt(a, c)))));
+  const on = (pts) => pts.map((p) => (p.length === 2 ? at(...p) : p));
   convoy(
-    on([[-9, 6.3], [-11, 4], [-11, -6], [-11, -16], [-11, -26], [-11, -36], [-8, -46], [-5.5, -51], [-4.2, -53.5], [-3, -56], [-2, -66], [-2, -76], [-3.5, -86], [-4.5, -96], [-4.5, -104], [-3, -111]]),
-    on([[-9, 6.3], [-6, 9.8], [6, 9.8], [11, 10.5], [11, 18], [11, 26], [11, 32], [11, 38], [7, 47], [4, 51], [0, 56], [-2, 66], [-2, 76], [-2, 86], [-2, 91], [-2, 96], [-2, 104], [-1, 111]]),
+    on([[-33, 0.2, -33.8], [-35.5, 0.2, -35.5], [-42.5, -42.5], [-47.88, 0.2, -47.88], [-59.88, 0.2, -59.88], [-79.88, 0.2, -59.88], [-84.5, 0.2, -55], [-85.5, 0.2, -54.5], [-85.5, -53.5], [-86, -53], [-91, -49], [-102, -38.5], [-102, -34.5], [-102, -11], [-100.5, -8.5], [-102, -6.5], [-101.5, 17], [-97, 66.5], [-86.5, 71.5], [-81.5, 81]]),
+    on([[-33, 0.2, -33.8], [-18.5, 0.2, -23.5], [-7, 0.2, -13], [6.5, 0.2, -7.5], [7, 0.2, -7], [12.13, 0.2, -2.88], [17.5, 0.2, -1.5], [22, 0.2, -3.5], [30.5, -12.5], [52.5, -1.5], [56.5, 0.5], [75.5, 0.5], [77.5, 0.5], [95.5, -39.5], [93, -55.5], [91.5, -56.5], [82, -77], [82.13, -79.88], [81, -81.5]]),
   );
 }
 write(
