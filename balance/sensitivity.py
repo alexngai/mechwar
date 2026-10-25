@@ -55,7 +55,7 @@ def main():
     just = set(args.just.split(',')) if args.just else None
     names = {w['id']: w['name'] for lst in ev.WEAPONS.values() for w in lst}
     lines = [f'# Stat sensitivity, skill {args.skill}', '',
-             f'Rating change for its key stat 20% better, per 10% (team-margin plus-minus per match), ± one standard error; {args.appear} matches per build. Flagged: under 0.1 per 10%, or within two standard errors of nothing.', '',
+             f'Rating change for its key stat 20% better, per 10% (team-margin plus-minus per match), ± one standard error; {args.appear} matches per build. Flagged insensitive: under 0.1 per 10% even at two standard errors up; unclear: within two standard errors of nothing, but not surely under 0.1.', '',
              '| Slot | What | Key stat | Rating | Per 10% better | Uses / match | Flag |', '| --- | --- | --- | --- | --- | --- | --- |']
     results = []
     for slot, w, tweaks, key in checks():
@@ -70,7 +70,7 @@ def main():
         (cm, cse), (tm, tse) = c['table'][f'{slot}/{w}/all'], t['table'][f'{slot}/{w}/all']
         per10, se = (tm - cm) / 2, math.hypot(cse, tse) / 2
         uses = c['use'][f'{slot}/{w}'][0]
-        flag = 'bots can\'t use it' if uses < 0.1 else ('insensitive' if per10 < 0.1 or abs(per10) < 2 * se else '')
+        flag = 'bots can\'t use it' if uses < 0.1 else 'insensitive' if per10 + 2 * se < 0.1 else 'unclear: more matches' if abs(per10) < 2 * se else ''
         results.append((slot, w, key, cm, per10, se, uses, flag))
         print(f'{slot:9s} {w:14s} {cm:+.2f} per10 {per10:+.2f} ± {se:.2f} uses {uses:.1f} {flag}', flush=True)
     for slot, w, key, cm, per10, se, uses, flag in results:
