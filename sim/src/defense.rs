@@ -82,6 +82,18 @@ impl Theme {
 const SOLO_SHARE: f32 = 0.6;
 /// The bosses, and the waves they come on.
 const BOSS_WAVES: [(u8, Kind); 2] = [(5, Kind::Excavator), (10, Kind::Hive)];
+/// Seeded variations: the gates open over the run (one for waves up to GATES_ONE, two up to
+/// GATES_TWO, then all), in a seeded order; each fork's weights each times 0.5-1.5 for the run;
+/// the Bloom seals SEALS_AT_START of the routes it can at the start, and after each wave beaten,
+/// BLOOM_CHANGE of the time, seals another or bursts one open (never cutting a gate off); and each
+/// break CACHES supply caches lie out at spots away from the reactor, CACHE_SCRAP each to whoever
+/// picks one up.
+const GATES_ONE: u8 = 2;
+const GATES_TWO: u8 = 5;
+const SEALS_AT_START: usize = 1;
+const BLOOM_CHANGE: f32 = 0.7;
+const CACHES: usize = 2;
+pub const CACHE_SCRAP: f32 = 60.0;
 /// Lane enemies this wide (radius) or more keep off narrow lanes (`Lanes::narrow`).
 pub const BIG: f32 = 2.5;
 /// A lane enemy rushing (`rush`: a boss burrowing) walks this many times its pace.
@@ -334,6 +346,11 @@ pub struct DefenseNet {
     /// In a break, the wave to come: its theme, and how many of each foe.
     pub theme: Theme,
     pub next: Vec<(Foe, u16)>,
+    /// The gates open this wave (or the next, in a break), by index; the routes the Bloom has
+    /// sealed (by index among the map's seals); the supply caches lying out.
+    pub open: Vec<u8>,
+    pub sealed: Vec<u8>,
+    pub caches: Vec<Vector>,
 }
 
 /// What happened in a run.
@@ -347,6 +364,10 @@ pub enum News {
     Hit,
     /// A boss came through a gate.
     Boss(Kind),
+    /// The Bloom sealed (or burst open) route `seal` (by index among the map's seals).
+    Bloom { seal: u8, sealed: bool },
+    /// Player `id` picked up a supply cache.
+    Cache { id: u8 },
     /// Player `id` picked up salvage (`rare`: a boss's): a draft to pick from.
     Salvage { id: u8, rare: bool },
     /// Player `id`'s build order didn't go through.
@@ -397,6 +418,14 @@ pub struct Defense {
     edges: Vec<(usize, usize, f32)>,
     narrow: Vec<usize>,
     gates: Vec<usize>,
+    /// The routes the Bloom can seal (edges, by index, and names), those it has (by index among
+    /// them), and the order the gates open in (by index).
+    seals: Vec<(usize, String)>,
+    sealed: Vec<usize>,
+    gate_order: Vec<usize>,
+    /// Supply caches lying out, and where they can (`cache_spots`).
+    pub caches: Vec<Vector>,
+    cache_spots: Vec<Vector>,
     pub reactor: Vector,
     pub radius: f32,
     pub hull: f32,
@@ -458,11 +487,18 @@ impl Defense {
             let nearest = |g: Vector| (0..points.len()).min_by(|&a, &b| points[a].distance(g).total_cmp(&points[b].distance(g))).unwrap_or(0);
             starts = gates.into_iter().map(nearest).collect();
         }
-        Some(Defense {
+        let seals = spots.lanes.seals.clone();
+        let gate_order = (0..starts.len()).collect();
+        let mut d = Defense {
             points,
             edges,
             narrow,
             gates: starts,
+            seals,
+            sealed: Vec::new(),
+            gate_order,
+            caches: Vec::new(),
+            cache_spots: Vec::new(),
             reactor,
             radius: spots.radius,
             hull: REACTOR_HULL,
@@ -483,7 +519,90 @@ impl Defense {
             offers: Vec::new(),
             perks: [[0; PERKS.len()]; MAX_PLAYERS],
             cores: Vec::new(),
+        };
+        d.vary();
+        Some(d)
+    }
+
+    /// The run's variations, from its seed: the order the gates open in, each fork's weights, and
+    /// the routes sealed to start with.
+    fn vary(&mut self) {
+        for k in (1..self.gate_order.len()).rev() {
+            let j = (self.rand() * (k + 1) as f32) as usize % (k + 1);
+            self.gate_order.swap(k, j);
+        }
+        for p in 0..self.points.len() {
+            let out: Vec<usize> = (0..self.edges.len()).filter(|&e| self.edges[e].0 == p).collect();
+            if out.len() > 1 {
+                for e in out {
+                    self.edges[e].2 *= 0.5 + self.rand();
+                }
+            }
+        }
+        for _ in 0..SEALS_AT_START {
+            self.bloom(true);
+        }
+    }
+
+    /// Where supply caches can lie out (`Game`'s pick of waypoints, away from the reactor).
+    pub fn set_cache_spots(&mut self, spots: Vec<Vector>) {
+        self.cache_spots = spots;
+    }
+
+    /// The Bloom seals a route it can (`seal`, keeping every gate's way to the reactor) or bursts
+    /// a sealed one open; which, if any.
+    fn bloom(&mut self, seal: bool) -> Option<News> {
+        let choices: Vec<usize> = if seal {
+            (0..self.seals.len()).filter(|k| !self.sealed.contains(k)).filter(|&k| self.reaches(&[self.sealed_edges(), vec![self.seals[k].0]].concat())).collect()
+        } else {
+            self.sealed.clone()
+        };
+        if choices.is_empty() {
+            return None;
+        }
+        let pick = choices[(self.rand() * choices.len() as f32) as usize % choices.len()];
+        if seal {
+            self.sealed.push(pick);
+        } else {
+            self.sealed.retain(|&k| k != pick);
+        }
+        Some(News::Bloom { seal: pick as u8, sealed: seal })
+    }
+
+    /// The edges sealed.
+    fn sealed_edges(&self) -> Vec<usize> {
+        self.sealed.iter().map(|&k| self.seals[k].0).collect()
+    }
+
+    /// Whether every gate still has a way to the reactor with `sealed` edges shut.
+    fn reaches(&self, sealed: &[usize]) -> bool {
+        self.gates.iter().all(|&start| {
+            let mut seen = vec![false; self.points.len()];
+            let mut todo = vec![start];
+            while let Some(p) = todo.pop() {
+                if std::mem::replace(&mut seen[p], true) {
+                    continue;
+                }
+                if (self.points[p] - self.reactor).with_y(0.0).length() <= self.radius {
+                    return true;
+                }
+                todo.extend((0..self.edges.len()).filter(|e| self.edges[*e].0 == p && !sealed.contains(e)).map(|e| self.edges[e].1));
+            }
+            false
         })
+    }
+
+    /// The gates open on wave `n` (by index): the first of the run's order, more as it goes.
+    pub fn open_gates(&self, n: u8) -> Vec<usize> {
+        let k = if n <= GATES_ONE { 1 } else if n <= GATES_TWO { 2 } else { self.gate_order.len() };
+        self.gate_order.iter().copied().take(k.max(1)).collect()
+    }
+
+    /// A route the Bloom can seal: its edge's ends, whether it's narrow, and its name.
+    pub fn seal(&self, k: usize) -> Option<(Vector, Vector, bool, &str)> {
+        let (e, name) = self.seals.get(k)?;
+        let (a, b, _) = self.edges.get(*e)?;
+        Some((self.points[*a], self.points[*b], self.narrow.contains(e), name))
     }
 
     /// Where a tower would go for a pilot aiming along `aim` (from the eye) with towers at `towers`
@@ -640,7 +759,9 @@ impl Defense {
                 }
             }
         }
-        DefenseNet { wave: self.wave, waves: WAVES, break_left, hull: self.hull, left, scrap, towers: self.towers.clone(), offers, perks, cores: self.cores.clone(), theme: self.theme, next }
+        let open = self.open_gates(self.wave).into_iter().map(|g| g as u8).collect();
+        let sealed = self.sealed.iter().map(|&k| k as u8).collect();
+        DefenseNet { wave: self.wave, waves: WAVES, break_left, hull: self.hull, left, scrap, towers: self.towers.clone(), offers, perks, cores: self.cores.clone(), theme: self.theme, next, open, sealed, caches: self.caches.clone() }
     }
 
     /// Where each mech (its id, its team, whether it's a living bot) should head with lane enemies standing
@@ -710,14 +831,15 @@ impl Defense {
         if let Some(&(_, boss)) = BOSS_WAVES.iter().find(|(w, _)| *w == n) {
             foes.insert(foes.len() / 3, Foe::Lane(boss));
         }
-        let gates = self.gates.len().max(1);
+        let open = self.open_gates(n);
+        let gates = open.len().max(1);
         let main = (self.rand() * gates as f32) as usize % gates;
         let out = foes
             .into_iter()
             .enumerate()
             .map(|(k, foe)| {
                 let gate = if theme == Theme::Flank { if self.rand() < FLANK { main } else { (self.rand() * gates as f32) as usize % gates } } else { k % gates };
-                (foe, gate)
+                (foe, open.get(gate).copied().unwrap_or(0))
             })
             .collect();
         (theme, out)
@@ -740,11 +862,19 @@ impl Defense {
         self.walkers.retain(|w| standing.contains(&w.owner));
         self.towers.retain(|t| standing.contains(&t.owner));
         self.elites = elites;
-        // A break begun: the next wave drawn up, to see coming.
+        // A break begun: the next wave drawn up, to see coming, and supply caches put out.
         if matches!(self.stage, Stage::Break { .. }) && self.drawn != self.wave {
             let (theme, mut queue) = self.compose(self.wave, pilots.len());
             queue.reverse();
             (self.theme, self.queue, self.drawn, self.share) = (theme, queue, self.wave, Defense::share(pilots.len()));
+            self.caches.clear();
+            for _ in 0..CACHES.min(self.cache_spots.len()) {
+                let k = (self.rand() * self.cache_spots.len() as f32) as usize % self.cache_spots.len();
+                let at = self.cache_spots[k];
+                if !self.caches.contains(&at) {
+                    self.caches.push(at);
+                }
+            }
         }
         match self.stage {
             Stage::Break { until } if tick >= until => {
@@ -796,6 +926,11 @@ impl Defense {
                 } else {
                     self.wave += 1;
                     self.stage = Stage::Break { until: tick + (BREAK * TICK_HZ) as u32 };
+                    // The Bloom shifts: a route sealed, or one burst open.
+                    if self.rand() < BLOOM_CHANGE {
+                        let seal = self.sealed.is_empty() || self.rand() < 0.5;
+                        out.news.extend(self.bloom(seal).or_else(|| self.bloom(!seal)));
+                    }
                 }
             }
             _ => {}
@@ -893,6 +1028,10 @@ impl Defense {
     /// one (a brute or boss) not a narrow one, where there's another.
     fn fork(&mut self, p: usize, kind: Kind) -> Option<usize> {
         let mut out: Vec<usize> = (0..self.edges.len()).filter(|&e| self.edges[e].0 == p).collect();
+        let sealed = self.sealed_edges();
+        if out.iter().any(|e| !sealed.contains(e)) {
+            out.retain(|e| !sealed.contains(e));
+        }
         if kind.lane_body().0 >= BIG && out.iter().any(|e| !self.narrow.contains(e)) {
             out.retain(|e| !self.narrow.contains(e));
         }
@@ -969,6 +1108,39 @@ mod tests {
     }
 
     #[test]
+    fn gates_open_over_the_run_and_the_bloom_seals_routes_without_cutting_a_gate_off() {
+        // Gates: one, then two, then all three, in the run's order.
+        let lanes = Lanes {
+            // Three gates' lanes into a hub, then two ways on to the reactor: a seal on either alone
+            // is fine, but never both.
+            points: vec![[0.0, 0.0, -100.0], [50.0, 0.0, -100.0], [-50.0, 0.0, -100.0], [0.0, 0.0, -50.0], [20.0, 0.0, -20.0], [-20.0, 0.0, -20.0], [0.0, 0.0, 0.0]],
+            edges: vec![(0, 3, 1.0), (1, 3, 1.0), (2, 3, 1.0), (3, 4, 1.0), (3, 5, 1.0), (4, 6, 1.0), (5, 6, 1.0)],
+            narrow: vec![],
+            seals: vec![(3, "the east way".into()), (4, "the west way".into())],
+        };
+        let spots = DefenseSpots { reactor: [0.0; 3], radius: 6.0, gates: vec![[0.0, 0.0, -100.0], [50.0, 0.0, -100.0], [-50.0, 0.0, -100.0]], lanes };
+        for seed in 0..20 {
+            let mut d = Defense::new(&spots, seed, |_, _| Vec::new()).unwrap();
+            assert_eq!([1, 3, 6, 10].map(|n| d.open_gates(n).len()), [1, 2, 3, 3]);
+            assert!(d.open_gates(3).starts_with(&d.open_gates(1)));
+            for n in 1..=WAVES {
+                let open = d.open_gates(n);
+                assert!(d.compose(n, 4).1.iter().all(|(_, g)| open.contains(g)));
+            }
+            assert_eq!(d.sealed.len(), SEALS_AT_START, "seed {seed}");
+            // Sealing all it can leaves a way through.
+            for _ in 0..5 {
+                d.bloom(true);
+            }
+            assert_eq!(d.sealed.len(), 1);
+            assert!(d.reaches(&d.sealed_edges()));
+            // A walker at the hub takes the open way.
+            let open_edge = if d.sealed == [0] { 4 } else { 3 };
+            assert!((0..20).all(|_| d.fork(3, Kind::Walker) == Some(open_edge)));
+        }
+    }
+
+    #[test]
     fn runs_differ_by_their_seed_and_a_flanking_wave_comes_mostly_through_one_gate() {
         let spots = DefenseSpots { reactor: [0.0; 3], radius: 6.0, gates: vec![[0.0, 0.0, -100.0], [100.0, 0.0, 0.0]], lanes: Lanes::default() };
         let waves = |seed: u32| {
@@ -997,13 +1169,17 @@ mod tests {
         assert!(steps(&mut d, 0, FIRST_BREAK - 0.1).iter().all(|t| t.spawn.is_empty()));
         let ticks = steps(&mut d, t0 - 3, 3.0);
         assert!(ticks.iter().any(|t| t.news.contains(&News::Wave { n: 1, count: 6 })));
+        // Wave 1 through the one gate open first (the run's pick).
         let spawned: Vec<Vector> = ticks.iter().flat_map(|t| t.spawn.iter().map(|s| s.2)).collect();
-        assert_eq!(spawned[..2], [Vector::new(0.0, 0.0, -100.0), Vector::new(100.0, 0.0, 0.0)], "the gates in turn");
+        let gate = [Vector::new(0.0, 0.0, -100.0), Vector::new(100.0, 0.0, 0.0)][d.open_gates(1)[0]];
+        assert_eq!(spawned[..2], [gate, gate], "the open gate");
         // They close on it at a walker's walk.
         let (speed, spread) = (species(Kind::Walker).speed, species(Kind::Walker).spread);
         let ticks = steps(&mut d, t0 + 90, 1.0);
         let first = ticks.last().unwrap().moves.iter().find(|m| m.0 == FIRST_OWNER).unwrap().1;
-        assert!(first.z > -100.0 + speed * 3.0 && first.x.abs() <= spread + 1e-3, "{first}");
+        // (Straight at the reactor at the origin, within its place across the lane.)
+        assert!(gate.length() - first.length() > speed * 3.0, "{first}");
+        assert!((first - gate.normalize() * first.dot(gate.normalize())).length() <= spread + 1e-3, "{first}");
     }
 
     #[test]
@@ -1037,12 +1213,15 @@ mod tests {
     #[test]
     fn at_a_fork_walkers_take_each_branch_by_weight() {
         // A gate at the origin forking to two points, 3 to 1, each a dead end away from the reactor.
-        let lanes = Lanes { points: vec![[0.0, 0.0, 0.0], [0.0, 0.0, 10.0], [10.0, 0.0, 0.0]], edges: vec![(0, 1, 3.0), (0, 2, 1.0)], narrow: vec![0] };
+        let lanes = Lanes { points: vec![[0.0, 0.0, 0.0], [0.0, 0.0, 10.0], [10.0, 0.0, 0.0]], edges: vec![(0, 1, 3.0), (0, 2, 1.0)], narrow: vec![0], seals: vec![] };
         let spots = DefenseSpots { reactor: [500.0, 0.0, 500.0], radius: 6.0, gates: vec![[0.0; 3]], lanes };
         let mut d = Defense::new(&spots, 0, |_, _| Vec::new()).unwrap();
         let picks: Vec<usize> = (0..400).filter_map(|_| d.fork(0, Kind::Walker)).collect();
         let first = picks.iter().filter(|&&e| e == 0).count() as f32 / picks.len() as f32;
-        assert!((first - 0.75).abs() < 0.07, "{first}");
+        // (Each fork's weights are the run's own: 3 to 1, each times 0.5-1.5.)
+        let (a, b) = (d.edges[0].2, d.edges[1].2);
+        assert!((a / 3.0 - 1.0).abs() <= 0.5 && (b - 1.0).abs() <= 0.5);
+        assert!((first - a / (a + b)).abs() < 0.07, "{first} against {}", a / (a + b));
         // A brute keeps off the narrow one.
         assert!((0..50).all(|_| d.fork(0, Kind::Brute) == Some(1)));
     }

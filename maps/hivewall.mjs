@@ -250,7 +250,20 @@ link('E3', 'M3', 1);
 link('H4', 'S3', 1); // the Shaft at 48 to the Stair's west landing
 link('S2', 'A24', 1, true); // the Stair's east landing at 24 into the Warren
 chain(['A72', 'K1', 'K2', 'S5'], 1, true); // the Warren at 72 out along the strip to the Stair
-defense({ at: REACTOR, radius: 8 }, GATES.map((g) => [g, WORK, -104]), { points: lanePoints, edges, narrow });
+// Routes the Bloom can seal (a run starts with one sealed, and between waves it seals another or
+// bursts one open, never cutting a gate off from the reactor).
+const edgeOf = (a, b) => edges.findIndex(([x, y]) => x === at[a] && y === at[b]);
+const seals = [
+  [edgeOf('W3', 'H0'), "the Shaft's foot"],
+  [edgeOf('E3', 'A0'), 'the Warren tunnel'],
+  [edgeOf('W3', 'M3'), 'the west street'],
+  [edgeOf('E3', 'M3'), 'the east street'],
+  [edgeOf('H4', 'S3'), 'the Shaft link at 48'],
+  [edgeOf('S2', 'A24'), 'the Warren door at 24'],
+  [edgeOf('A72', 'K1'), 'the strip at 72'],
+];
+if (seals.some(([e]) => e < 0)) throw new Error('a seal on no edge');
+defense({ at: REACTOR, radius: 8 }, GATES.map((g) => [g, WORK, -104]), { points: lanePoints, edges, narrow, seals });
 coopOnly();
 
 // --- Waypoints ------------------------------------------------------------------------------------------

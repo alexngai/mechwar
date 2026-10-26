@@ -378,6 +378,30 @@ impl WasmNetClient {
         std::iter::once(d.theme as u8 as f32).chain(d.next.iter().flat_map(|&(foe, n)| [match foe { Foe::Lane(k) => k as u8 as f32, Foe::Elite => 255.0 }, f32::from(n)])).collect()
     }
 
+    /// Co-op: the gates open this wave (or the next, in a break), by index.
+    pub fn open_gates(&self) -> Vec<u8> {
+        self.0.defense().map_or_else(Vec::new, |d| d.open.clone())
+    }
+
+    /// Co-op: the routes the Bloom has sealed: seven floats each, its lane edge's ends (xyz, xyz)
+    /// and 1 if it's narrow.
+    pub fn seals(&self) -> Vec<f32> {
+        let sealed = self.0.defense().map_or_else(Vec::new, |d| d.sealed.clone());
+        self.lanes_with(|d, _| {
+            sealed.iter().filter_map(|&k| d.seal(usize::from(k))).flat_map(|(a, b, narrow, _)| [a.x, a.y, a.z, b.x, b.y, b.z, if narrow { 1.0 } else { 0.0 }]).collect()
+        })
+    }
+
+    /// Co-op: the name of the map's route `k` the Bloom can seal ("" for none).
+    pub fn seal_name(&self, k: u8) -> String {
+        self.0.map.and_then(|i| crate::Map::load(i).objectives.defense).and_then(|d| d.lanes.seals.get(usize::from(k)).map(|s| s.1.clone())).unwrap_or_default()
+    }
+
+    /// Co-op's supply caches lying out: xyz each.
+    pub fn caches(&self) -> Vec<f32> {
+        self.0.defense().map_or_else(Vec::new, |d| d.caches.iter().flat_map(|c| c.to_array()).collect())
+    }
+
     /// Co-op's salvage lying about: four floats each, xyz and 1 for a boss's.
     pub fn cores(&self) -> Vec<f32> {
         self.0.defense().map_or_else(Vec::new, |d| d.cores.iter().flat_map(|&(at, rare)| [at.x, at.y, at.z, if rare { 1.0 } else { 0.0 }]).collect())
@@ -476,7 +500,9 @@ impl WasmNetClient {
     /// 1 stalled, 2 back up, 3 delivered), b = the team (that took it over, or delivered it; else -1).
     /// Co-op (kind 14): a = what (0 a wave comes: b = which, x = how many; 1 b is cleared; 2 a
     /// walker reached the reactor; 3 player b's build order refused, x = why: `defense::Refusal`'s
-    /// index; 4 a boss came, b = its kind; 5 player b picked up salvage, x = 1 a boss's). Arc pylon lightning (kind 15), two records a jump: a = 0 xyz = from, then a = 1
+    /// index; 4 a boss came, b = its kind; 5 player b picked up salvage, x = 1 a boss's; 6 the
+    /// Bloom sealed route b (x = 1) or burst it open (x = 0), b indexing the map's seals; 7
+    /// player b picked up a supply cache). Arc pylon lightning (kind 15), two records a jump: a = 0 xyz = from, then a = 1
     /// xyz = to. Pulse pylon EMP (kind 16): a = radius, xyz = where. Mortar shell fired (kind 17),
     /// two records: a = 0 xyz = from, then a = 1 xyz = where it lands; b = its flight (s).
     pub fn take_events(&mut self) -> Vec<f32> {
@@ -515,6 +541,8 @@ impl WasmNetClient {
                         News::Refused { id, why } => [14.0, 3.0, f32::from(id), why as u8 as f32, 0.0, 0.0],
                         News::Boss(kind) => [14.0, 4.0, kind as u8 as f32, 0.0, 0.0, 0.0],
                         News::Salvage { id, rare } => [14.0, 5.0, f32::from(id), if rare { 1.0 } else { 0.0 }, 0.0, 0.0],
+                        News::Bloom { seal, sealed } => [14.0, 6.0, f32::from(seal), if sealed { 1.0 } else { 0.0 }, 0.0, 0.0],
+                        News::Cache { id } => [14.0, 7.0, f32::from(id), 0.0, 0.0, 0.0],
                     });
                 }
                 Event::Zap { from, to } => {

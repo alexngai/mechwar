@@ -54,7 +54,7 @@ export const SENTRY_HEIGHT = 5.5;
 export class Objectives {
   /** `cast(ox, oy, oz, dx, dy, dz, max)`: how far a ray goes into the arena, up to `max`. */
   constructor(scene, fx, sound, cast) {
-    Object.assign(this, { scene, fx, sound, cast, silos: [], aa: [], zones: [], labels: [], stations: [], dropZones: [], bases: [], missiles: [], ships: new Map(), sentries: new Map(), drops: [], stands: [], flags: [], walkers: new Map(), gates: [], reactor: null, pylons: new Map(), ghost: null, lanes: null, shells: [], cores: [], fire: {}, seen: null });
+    Object.assign(this, { scene, fx, sound, cast, silos: [], aa: [], zones: [], labels: [], stations: [], dropZones: [], bases: [], missiles: [], ships: new Map(), sentries: new Map(), drops: [], stands: [], flags: [], walkers: new Map(), gates: [], reactor: null, pylons: new Map(), ghost: null, lanes: null, shells: [], cores: [], seals: [], caches: [], fire: {}, seen: null });
     this.dropGeometry = new THREE.OctahedronGeometry(0.6);
     this.dropMaterial = hot(new THREE.MeshBasicMaterial({ color: ENERGY }));
   }
@@ -217,10 +217,11 @@ export class Objectives {
    * holds (cold blue, guttering to red as it goes), and the gates' fungus pulsing, brighter during
    * a wave. Hidden in other modes.
    */
-  drawDefense(defense, now) {
+  drawDefense(defense, now, open = []) {
     const on = defense.length >= 5;
     if (this.reactor) this.reactor.group.visible = on;
-    for (const g of this.gates) g.group.visible = on;
+    // Only the gates open this wave (or the next) glow.
+    this.gates.forEach((g, k) => (g.group.visible = on && (!open.length || open.includes(k))));
     if (!on) return;
     const [, , breakLeft, hull] = defense, health = Math.max(hull, 0) / REACTOR_HULL;
     const core = this.reactor?.group.userData.core;
@@ -391,6 +392,51 @@ export class Objectives {
       group.userData.core.rotation.set(now / 900, now / 600, 0);
       group.userData.core.scale.setScalar(rare ? 1.6 : 1);
       group.userData.glow.color.setHex(rare ? 0xff9a3c : 0xffd27a);
+    });
+  }
+
+  /**
+   * The routes the Bloom has sealed, from `seals` (seven floats each: the lane edge's ends, 1 if
+   * narrow): a glowing fungal membrane across each, a few metres in from its start, pulsing.
+   */
+  drawSeals(seals, now) {
+    while (this.seals.length < seals.length / 7) {
+      const membrane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1, 8, 8), hot(new THREE.MeshBasicMaterial({ color: FUNGUS, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false })));
+      membrane.add(new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.PlaneGeometry(1, 1, 6, 6)), new THREE.LineBasicMaterial({ color: FUNGUS, transparent: true, opacity: 0.8 })));
+      this.scene.add(membrane);
+      this.seals.push(membrane);
+    }
+    this.seals.forEach((m, k) => {
+      m.visible = k < seals.length / 7;
+      if (!m.visible) return;
+      const [ax, ay, az, bx, by, bz, narrow] = seals.slice(7 * k, 7 * k + 7);
+      const dir = new THREE.Vector3(bx - ax, 0, bz - az).normalize(), [w, h] = narrow ? [7, 7] : [12, 10];
+      m.position.set(ax + dir.x * 4, ay + (by - ay) * 0.1 + h / 2, az + dir.z * 4);
+      m.rotation.set(0, Math.atan2(dir.x, dir.z), 0);
+      m.scale.set(w * (1 + 0.03 * Math.sin(now / 300 + k)), h, 1);
+      m.material.opacity = 0.35 + 0.15 * Math.sin(now / 450 + k);
+    });
+  }
+
+  /** Co-op's supply caches, from `caches` (xyz each): a crate with glowing bands and a beam over it. */
+  drawCaches(caches, now) {
+    while (this.caches.length < caches.length / 3) {
+      const group = new THREE.Group();
+      part(group, new THREE.BoxGeometry(1.6, 1.2, 1.6), foeHazard, 0, 0.6, 0);
+      const band = part(group, new THREE.BoxGeometry(1.65, 0.12, 1.65), hot(new THREE.MeshBasicMaterial({ color: 0x8dff9a })), 0, 0.9, 0);
+      const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 24, 6, 1, true), hot(new THREE.MeshBasicMaterial({ color: 0x8dff9a, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false })));
+      beam.position.y = 12;
+      group.add(beam);
+      group.userData = { band };
+      this.scene.add(group);
+      this.caches.push(group);
+    }
+    this.caches.forEach((group, k) => {
+      group.visible = k < caches.length / 3;
+      if (!group.visible) return;
+      group.position.set(...caches.slice(3 * k, 3 * k + 3));
+      group.rotation.y = now / 2000 + k;
+      group.userData.band.scale.setScalar(1 + 0.04 * Math.sin(now / 200));
     });
   }
 

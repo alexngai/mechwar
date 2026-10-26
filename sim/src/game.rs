@@ -2172,7 +2172,14 @@ impl Game {
         let tick = self.tick;
         let made = self.defense.take().or_else(|| {
             let (nav, arena) = (&self.nav, &self.arena);
-            Defense::new(self.spots.defense.as_ref()?, tick, |a, b| nav.route(arena, a, b))
+            let mut d = Defense::new(self.spots.defense.as_ref()?, tick, |a, b| nav.route(arena, a, b))?;
+            // Supply caches lie out at the waypoints furthest from the reactor: the far half (down
+            // the cliff, on a map up one), worth going out for.
+            let mut far: Vec<Vector> = nav.points().to_vec();
+            far.sort_by(|a, b| (*b - d.reactor).length().total_cmp(&(*a - d.reactor).length()));
+            far.truncate(far.len() / 2);
+            d.set_cache_spots(far);
+            Some(d)
         });
         let Some(mut d) = made else { return };
         // Infested mechs that reached the reactor hit it and are gone; downed ones go before they'd
@@ -2222,8 +2229,18 @@ impl Game {
         }
         self.deployables.retain(|w| !w.kind.lane_enemy() || !out.leaked.contains(&w.owner));
         self.events.extend(out.news.iter().map(|&n| Event::Defense(n)));
-        // Salvage to whoever walks over it; bots take their drafts as they come.
+        // Salvage, and supply caches, to whoever walks over them; bots take their drafts as they come.
         let mut news = Vec::new();
+        for i in (0..d.caches.len()).rev() {
+            let at = d.caches[i];
+            if let Some(p) = self.players.iter().find(|p| p.team == 0 && p.mech.health > 0.0 && (p.mech.pos - at).with_y(0.0).length() <= SALVAGE_REACH && (p.mech.pos.y - at.y).abs() < 4.0) {
+                d.caches.remove(i);
+                if let Some(s) = d.scrap.get_mut(usize::from(p.id)) {
+                    *s += defense::CACHE_SCRAP;
+                }
+                news.push(defense::News::Cache { id: p.id });
+            }
+        }
         for i in (0..d.cores.len()).rev() {
             let (at, rare) = d.cores[i];
             if let Some(p) = self.players.iter().find(|p| p.team == 0 && p.mech.health > 0.0 && (p.mech.pos - at).with_y(0.0).length() <= SALVAGE_REACH) {
@@ -3351,8 +3368,9 @@ mod tests {
     #[test]
     fn towers_shoot_walkers_down_for_their_builders_scrap_and_walkers_shoot_back() {
         let (mut game, id) = co_op(false);
-        // A rocket tower by the first gate's lane, the wave on.
-        let gate = Vector::from_array(game.spots.defense.as_ref().unwrap().gates[0]);
+        // A rocket tower by the lane of the gate open first, the wave on.
+        let first = game.defense.as_ref().unwrap().open_gates(1)[0];
+        let gate = Vector::from_array(game.spots.defense.as_ref().unwrap().gates[first]);
         aim_to_build(&mut game, id, gate + Vector::new(0.0, 0.0, 20.0), 6.0);
         game.build(id, defense::Build::Place(1));
         assert_eq!(towers(&game).len(), 1, "{:?}", refused(&game));
@@ -3374,7 +3392,8 @@ mod tests {
     fn arc_pylons_chain_between_walkers_and_pulse_pylons_stop_them() {
         for (k, kind) in [(2, Kind::Arc), (3, Kind::Pulse)] {
             let (mut game, id) = co_op(false);
-            let gate = Vector::from_array(game.spots.defense.as_ref().unwrap().gates[0]);
+            let first = game.defense.as_ref().unwrap().open_gates(1)[0];
+            let gate = Vector::from_array(game.spots.defense.as_ref().unwrap().gates[first]);
             aim_to_build(&mut game, id, gate + Vector::new(0.0, 0.0, 12.0), 6.0);
             game.build(id, defense::Build::Place(k));
             assert_eq!(towers(&game)[0].kind, kind, "{:?}", refused(&game));

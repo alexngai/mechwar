@@ -110,6 +110,9 @@ pub struct Lanes {
     pub edges: Vec<(usize, usize, f32)>,
     #[serde(default)]
     pub narrow: Vec<usize>,
+    /// Edges the Bloom can seal (by index), each with its name for callouts.
+    #[serde(default)]
+    pub seals: Vec<(usize, String)>,
 }
 
 /// Where a map's objective modes play.

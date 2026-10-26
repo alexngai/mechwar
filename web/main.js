@@ -1021,6 +1021,17 @@ function frame(now) {
         // A boss (of kind b) has come.
         callout = { text: `${(FOE_NAMES[b] ?? 'A boss').toUpperCase()} IS COMING`, color: hex(FOE.accent), at: now };
         sound.flagAlarm();
+      } else if (a === 6) {
+        // The Bloom sealed route b (x 1) or burst it open (x 0).
+        const name = net.seal_name(b).toUpperCase();
+        callout = { text: x ? `THE BLOOM HAS SEALED ${name}` : `THE BLOOM BURST ${name} OPEN`, color: hex(FOE.accent), at: now };
+        sound.zone('lost');
+      } else if (a === 7) {
+        // A supply cache picked up (by b).
+        if (b === myId) {
+          callout = { text: 'SUPPLY CACHE · +60 SCRAP', color: hex(FRIEND.accent), at: now };
+          sound.zone('took');
+        }
       } else if (a === 5) {
         // Salvage picked up (by b; x 1 a boss's).
         if (b === myId) {
@@ -1206,7 +1217,7 @@ function frame(now) {
   objectives.drawFlags(ctf, myTeam, FRIEND.accent, FOE.accent, top, now);
   objectives.drawHauler(game.deployables(), convoy, myTeam, FRIEND.accent, FOE.accent, dt, now);
   objectives.drawWalkers(game.deployables(), dt, now, turretGuns, (net ? net.defense()[0] : 0) || 1);
-  objectives.drawDefense(net ? net.defense() : [], now);
+  objectives.drawDefense(net ? net.defense() : [], now, net ? [...net.open_gates()] : []);
   objectives.drawShells(now);
   drawBuild(now, alive, myId);
 
@@ -1522,7 +1533,8 @@ function topPanel(hudState, myId, zones, siege, clock) {
       for (let i = 1; i < next.length; i += 2) foes.push([next[i], next[i + 1]]);
       foes.sort((a, b) => b[1] - a[1]);
       const named = foes.map(([k, n]) => `${n} ${k === 255 ? 'INFESTED MECH' : (FOE_NAMES[k] ?? '').replace(/^The /, '').toUpperCase()}${n > 1 ? 'S' : ''}`);
-      more = `NEXT: ${THEMES[next[0]] ? THEMES[next[0]] + ' · ' : ''}${named.join(' · ')}`;
+      const gates = net.open_gates().length, all = objectives.gates.length;
+      more = `NEXT: ${THEMES[next[0]] ? THEMES[next[0]] + ' · ' : ''}${named.join(' · ')}${all > 1 ? ` · ${gates === all ? 'ALL' : `${gates} OF ${all}`} GATES` : ''}`;
     }
     state = [buildHint, breakLeft >= 0 ? `GET READY · WAVE ${wave} IN ${Math.ceil(breakLeft)}s` : ''].filter(Boolean).join(' · ');
   } else if (mode === CONVOY) {
@@ -1743,6 +1755,8 @@ function drawBuild(now, alive, myId) {
   }
   objectives.drawPylons(list, towerTiers, FRIEND.accent, now);
   objectives.drawCores(net.cores(), now);
+  objectives.drawSeals(net.seals(), now);
+  objectives.drawCaches(net.caches(), now);
   drawDraft();
   const spot = building >= 0 ? net.build_spot() : [];
   objectives.drawBuild(net.lanes(), building, spot, now);
