@@ -598,6 +598,11 @@ let eliminated = null, callout = null, capture = null, blipAt = 0, reactorHitAt 
 let building = -1, lastTower = 0, buildHint = '', zapFrom = null, shellFrom = null;
 const coop = () => !!net && net.defense().length > 0;
 const sendBuild = (order) => ws?.readyState === WebSocket.OPEN && ws.send(net.build(order));
+/** How a co-op run ended: held through its last wave, or lost on the wave it fell. */
+const coopResult = (won) => {
+  const [wave, waves] = net.defense();
+  return won ? `REACTOR HELD · ALL ${waves} WAVES BEATEN` : `REACTOR LOST ON WAVE ${wave} OF ${waves}`;
+};
 /** A co-op wave's theme as the panel calls it (defense.rs `Theme`, in order; mixed says nothing). */
 const THEMES = ['', 'SWARM', 'ARMOR', 'SIEGE', 'SHIELDED', 'FLANKING'];
 /** Why a build order didn't go (defense.rs `Refusal`, in order). */
@@ -1370,7 +1375,7 @@ function frame(now) {
     const html = topPanel(hudState, myId, zones, siege, clock);
     if (html !== scoreHtml) hud.score.innerHTML = scoreHtml = html;
     const next = `${mode_name(nextMode)} on ${MAPS[map_name(nextMap)]?.name ?? ''}`;
-    const result = winner < 0 ? 'DRAW' : winner === team ? 'VICTORY' : dm ? `${nameOf(winner)} WINS` : 'DEFEAT';
+    const result = winner < 0 ? 'DRAW' : hudState[20] === DEFENSE ? coopResult(winner === team) : winner === team ? 'VICTORY' : dm ? `${nameOf(winner)} WINS` : 'DEFEAT';
     hud.banner.textContent = ended ? `${result} · next: ${next} in ${secondsLeft}s` : '';
     // Progression: keep each record the server sends; a match's end brings its XP.
     const got = net.take_progress();
@@ -1540,7 +1545,8 @@ function topPanel(hudState, myId, zones, siege, clock) {
   }
   if (ended) {
     const won = mode === DEATHMATCH ? winner === myId : winner === team;
-    state = winner < 0 ? 'DRAW' : `<span class="${won ? 'us' : 'them'}">${mode === DEATHMATCH ? (won ? 'YOU WIN' : `${esc(nameOf(winner))} WINS`) : won ? 'OUR TEAM WINS' : 'ENEMY TEAM WINS'}</span>`;
+    state = winner < 0 ? 'DRAW' : `<span class="${won ? 'us' : 'them'}">${mode === DEATHMATCH ? (won ? 'YOU WIN' : `${esc(nameOf(winner))} WINS`) : mode === DEFENSE ? coopResult(won) : won ? 'OUR TEAM WINS' : 'ENEMY TEAM WINS'}</span>`;
+    more = '';
   }
   return `${top}<div class="main">${main}</div>${state ? `<div class="state">${state}</div>` : ''}${more ? `<div class="state">${more}</div>` : ''}`;
 }
