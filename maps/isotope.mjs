@@ -9,7 +9,7 @@
 // salt flat's, so its routes and nav hold: the pump house (deck 7) mid-map, a catwalk (7) down each
 // west side, tank farms east, low walls before each spawn. The glow is all props: nothing on the
 // floor trips anyone.
-import { box, cylinder, decor, lamp, once, pipe, point, railing, sentries, sign, turned, write } from './kit.mjs';
+import { box, cylinder, deathmatch, decor, lamp, once, pipe, point, railing, sentries, sign, turned, write } from './kit.mjs';
 
 const GLOW = '#5dff4a'; // spent fuel and sludge
 const BEACON = '#ff3020';
@@ -151,6 +151,7 @@ for (let y = 0; y < 56; y += 2.5) {
 decor.push({ kind: 'steam', at: [-92, 56, 48] });
 
 sentries([[-6, 0, 47], [6, 0, 47]]);
+deathmatch([-55, 0.1, 6], [0, 0.1, 13], [52, 0.1, 40], [-30, 0.1, 18]); // Deathmatch's own spawns, out between the bases
 
 write(
   new URL('./isotope.json', import.meta.url),

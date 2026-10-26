@@ -14,7 +14,7 @@
 // clockwise from north; on it, p runs outward from the center and s runs clockwise along it.
 // Every class goes everywhere: the workings are 10, 6 and 5 m wide and give a Heavy (5.8 m tall)
 // 6.5 m of headroom (6 under the -7 bench).
-import { bases, beam, box, cylinder, decor, flagStand, flags, growth, lamp, once, pad, pipe, point, r3, railing, ramp, sentries, sign, silos, slope, turned, write } from './kit.mjs';
+import { bases, beam, box, cylinder, deathmatch, decor, flagStand, flags, growth, lamp, once, pad, pipe, point, r3, railing, ramp, sentries, sign, silos, slope, turned, write } from './kit.mjs';
 
 const BASE = -29; // bottom of every rock mass
 const AMBER = '#ffae2a';
@@ -351,6 +351,7 @@ silos({ at: [-70, 0, 40], radius: 10, band: 4, pad: [-75, 0, 39.5] }, { at: [0, 
 
 // --- Spawns, twin, write -------------------------------------------------------------------------
 const north = [[-20, 0.1, 84], [-12, 0.1, 92], [12, 0.1, 80], [20, 0.1, 82]];
+deathmatch([90, 0.1, 30], [-76.21, 0.1, 44], [85, 0.1, 85], [-85, 0.1, 85]); // Deathmatch's own, round the rim
 // An overcast day shift: dust lying in the pit and blowing over the rim, the sun a pale disc,
 // the runoff on the floor rust-red, mesas out past the spoil.
 const palette = {

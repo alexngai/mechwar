@@ -17,6 +17,8 @@ const COLORS = {
   // A mine's strata and the gravel on its benches.
   gravel: 0x8b8274, shale: 0x5e5955, ore: 0x9b5a37, clay: 0xb38a5b,
   pale: 0xd2cdc0, // bone-pale wood
+  // A city's two sides: warm plaster, tiled floors and red lacquer; grimy tenement concrete.
+  plaster: 0xb8a07c, terracotta: 0x94644a, lacquer: 0x7c3328, tenement: 0x6f736a, grime: 0x74766e,
 };
 // Ground, rock and wood: no trim, ribs or beams on these.
 const NATURAL = new Set(['ground', 'rock', 'stone', 'moss', 'bark', 'deadwood', 'snow', 'ice', 'sand', 'sandstone', 'gravel', 'shale', 'ore', 'clay', 'pale']);
@@ -29,6 +31,11 @@ const TERRAIN = [COLORS.ground, COLORS.rock, COLORS.ground];
 // Lit windows on `tower` solids, unless the palette names its own; and how many slots are lit.
 const WINDOWS = ['#ffd890', '#9dffc0', '#7fe8ff'];
 const LIT = 0.3;
+// Materials glazed like towers, with lit windows of their own colors, this share of them lit.
+const GLAZED = {
+  plaster: { colors: ['#ffcf8a', '#ffb466', '#ffe2ae'], lit: 0.3 },
+  tenement: { colors: ['#d4ffec', '#a6ecff', '#eafff4', '#ffa2d4'], lit: 0.5 },
+};
 const TILE = 8; // ground texture repeat, meters
 // Baked night lights: color, reach (m) and strength. Lamps light pools; furnaces glow orange.
 const LAMP = { color: 0xffc98a, radius: 16, power: 1.4 };
@@ -176,7 +183,7 @@ function kitbash(s, parts) {
     add(0.2, 0.25, 2 * hz + 0.2, hx, hy - 0.12, 0);
     add(0.2, 0.25, 2 * hz + 0.2, -hx, hy - 0.12, 0);
   }
-  if (tall && Math.max(hx, hz) > 3 && s.mat !== 'tower') {
+  if (tall && Math.max(hx, hz) > 3 && s.mat !== 'tower' && !GLAZED[s.mat]) {
     // Vertical ribs every ~4 m on the long faces.
     const alongX = hx >= hz, long = alongX ? hx : hz, short = alongX ? hz : hx;
     for (let p = -long + 2; p <= long - 2 + 1e-3; p += 4) {
@@ -200,6 +207,23 @@ function kitbash(s, parts) {
   }
 }
 
+/** A box from corner `d.from` to `d.to`, pitched `d.tilt` degrees (raising its -Z end) and turned `d.yaw` about its middle. */
+function turnedBox(d, geometry = (size) => new THREE.BoxGeometry(...size)) {
+  const a = new THREE.Vector3(...d.from), b = new THREE.Vector3(...d.to);
+  const g = geometry(new THREE.Vector3().subVectors(b, a).toArray().map(Math.abs));
+  if (d.tilt) g.rotateX(THREE.MathUtils.degToRad(d.tilt));
+  if (d.yaw) g.rotateY(THREE.MathUtils.degToRad(d.yaw));
+  return g.translate(...a.add(b).multiplyScalar(0.5).toArray());
+}
+
+/** A corrugated sheet `w` x `d`, ribbed every 0.25 m across its width, 0.1 m thick (it fills `size`'s x and z). */
+function corrugated([w, , d]) {
+  const n = Math.max(2, Math.round(w / 0.25)), g = new THREE.BoxGeometry(w, 0.1, d, n, 1, 1), pos = g.attributes.position;
+  for (let i = 0; i < pos.count; i++) if (Math.round((pos.getX(i) + w / 2) / (w / n)) % 2) pos.setY(i, pos.getY(i) + 0.12);
+  g.computeVertexNormals();
+  return g;
+}
+
 /** `lamp` is the lamps' { light, head } colors. */
 function decorParts(d, parts, glow, lamp) {
   const segment = (from, to, thickness, hex) => {
@@ -216,9 +240,9 @@ function decorParts(d, parts, glow, lamp) {
     const posts = Math.max(1, Math.round(a.distanceTo(b) / 1.6));
     for (let i = 0; i <= posts; i++) {
       const p = a.clone().lerp(b, i / posts);
-      segment([p.x, p.y, p.z], [p.x, p.y + 1.1, p.z], 0.09, COLORS.rail);
+      segment([p.x, p.y, p.z], [p.x, p.y + 1.1, p.z], 0.09, d.color ?? COLORS.rail);
     }
-    for (const h of [0.55, 1.1]) segment([a.x, a.y + h, a.z], [b.x, b.y + h, b.z], 0.08, COLORS.rail);
+    for (const h of [0.55, 1.1]) segment([a.x, a.y + h, a.z], [b.x, b.y + h, b.z], 0.08, d.color ?? COLORS.rail);
   } else if (d.kind === 'pipe') {
     const a = new THREE.Vector3(...d.from), b = new THREE.Vector3(...d.to);
     const len = a.distanceTo(b), dir = new THREE.Vector3().subVectors(b, a).normalize();
@@ -227,7 +251,7 @@ function decorParts(d, parts, glow, lamp) {
       const g = new THREE.CylinderGeometry(r, r, l, 10);
       g.applyQuaternion(q);
       g.translate(...at.toArray());
-      parts.push(paint(g, COLORS.pipe));
+      parts.push(paint(g, d.color ?? COLORS.pipe));
     };
     cyl(d.r, len, a.clone().lerp(b, 0.5));
     for (let t = 0; t <= len; t += 6) cyl(d.r * 1.3, 0.25, a.clone().addScaledVector(dir, t));
@@ -241,12 +265,14 @@ function decorParts(d, parts, glow, lamp) {
     // Its light shaft, down to the deck it stands on.
     glow.shafts.push(paint(new THREE.CylinderGeometry(0.3, 2.6, 3.1, 16, 1, true).translate(x, y + 1.55, z), lamp.light, 0.25, true));
   } else if (d.kind === 'slab') {
-    // A flat box of `mat` from corner `from` to `to` that nothing collides with: paint on a floor
-    // (a pool's rim, the racks in it) that mustn't trip anyone.
-    const a = new THREE.Vector3(...d.from), b = new THREE.Vector3(...d.to);
-    const g = new THREE.BoxGeometry(...new THREE.Vector3().subVectors(b, a).toArray().map(Math.abs));
-    g.translate(...a.add(b).multiplyScalar(0.5).toArray());
-    parts.push(paint(g, COLORS[d.mat] ?? COLORS.concrete));
+    // A flat box of `mat` (or `color`) from corner `from` to `to`, turned `yaw` degrees about its
+    // middle, that nothing collides with: paint on a floor (a pool's rim, the racks in it) that
+    // mustn't trip anyone, or clutter on a wall.
+    parts.push(paint(turnedBox(d), d.color ?? COLORS[d.mat] ?? COLORS.concrete));
+  } else if (d.kind === 'roof') {
+    // A corrugated sheet (a shack's or lean-to's roof) over `from`/`to`, pitched and turned as a
+    // slab, of `color` (or `mat`): only for show.
+    parts.push(paint(turnedBox(d, corrugated), d.color ?? COLORS[d.mat] ?? COLORS.rust));
   } else if (d.kind === 'sparks') {
     glow.sparkers.push(new THREE.Vector3(...d.at)); // a broken cable or fitting spitting sparks: only fx
   } else if (d.kind === 'steam') {
@@ -314,12 +340,11 @@ function decorParts(d, parts, glow, lamp) {
     }
     glow.fungi.push(new THREE.Vector3(x, y + 1, z));
   } else if (d.kind === 'sign') {
-    // A neon panel set on a wall (`from`/`to` corners), lighting the street from `at`.
-    const a = new THREE.Vector3(...d.from), b = new THREE.Vector3(...d.to);
-    const g = new THREE.BoxGeometry(...new THREE.Vector3().subVectors(b, a).toArray().map(Math.abs));
-    g.translate(...a.add(b).multiplyScalar(0.5).toArray());
-    glow.push(paint(g, d.color, 1, true));
-    glow.signs.push({ at: new THREE.Vector3(...d.at), color: d.color });
+    // A neon panel set on a wall (`from`/`to` corners, turned `yaw` degrees about its middle),
+    // lighting the street from `at` (as far and as bright as `light`, [radius, power], says; 0 for
+    // none at all).
+    glow.push(paint(turnedBox(d), d.color, 1, true));
+    if (d.light !== 0) glow.signs.push({ at: new THREE.Vector3(...d.at), color: d.color, ...(d.light && { radius: d.light[0], power: d.light[1] }) });
   } else if (d.kind === 'furnace') {
     // A furnace mouth: a glowing slab set into a wall (`from`/`to` corners), lit from `at`.
     const a = new THREE.Vector3(...d.from), b = new THREE.Vector3(...d.to), at = new THREE.Vector3(...d.at);
@@ -516,14 +541,17 @@ function bakeAO(geometry, boxes, cover = 1) {
   const pos = geometry.attributes.position, nor = geometry.attributes.normal, col = geometry.attributes.color;
   geometry.computeBoundingSphere();
   const { center, radius } = geometry.boundingSphere;
-  const near = boxes.filter((b) => b.center.distanceTo(center) < b.radius + radius + 4);
+  const near = new Set(boxes.filter((b) => b.center.distanceTo(center) < b.radius + radius + 4));
   const reach = AO_STEPS[AO_STEPS.length - 1];
+  // Only boxes within twice the reach can shade a sample (one at most `reach` off the vertex).
+  boxes.columns ??= columns(boxes, boxFootprint(2 * reach));
   for (let i = 0; i < pos.count; i++) {
     v.fromBufferAttribute(pos, i);
     n.fromBufferAttribute(nor, i);
     let light = 0.45; // undersides only ever face the ground: dark without sampling
     if (n.y > -0.9) {
-      const close = near.filter((b) => b.center.distanceTo(v) < b.radius + reach);
+      const column = boxes.columns(v);
+      const close = column.filter((b) => near.has(b) && b.center.distanceTo(v) < b.radius + reach && boxDistance(v, b.inv, b.half) < 2 * reach);
       let occlusion = 0;
       for (const step of AO_STEPS) {
         sample.copy(v).addScaledVector(n, step);
@@ -535,12 +563,39 @@ function bakeAO(geometry, boxes, cover = 1) {
       if (cover < 1) {
         off.copy(v).addScaledVector(n, 0.05);
         sky.copy(off).y += COVER_REACH;
-        if (near.some((b) => blocks(off, sky, b.inv, b.half))) light *= cover;
+        if (boxes.columns(off).some((b) => near.has(b) && blocks(off, sky, b.inv, b.half))) light *= cover;
       }
     }
     col.setXYZ(i, col.getX(i) * light, col.getY(i) * light, col.getZ(i) * light);
   }
 }
+
+/**
+ * Finds the things (boxes, lights) whose footprint reaches a point's 8 m column of the map: each is
+ * filed under every column its footprint covers, `footprint(thing)` giving its middle and half-size
+ * across, [x, z, ex, ez].
+ */
+function columns(things, footprint) {
+  const SIZE = 8, filed = new Map(), cell = (v) => Math.floor(v / SIZE);
+  for (const t of things) {
+    const [x0, z0, ex, ez] = footprint(t);
+    for (let x = cell(x0 - ex); x <= cell(x0 + ex); x++) {
+      for (let z = cell(z0 - ez); z <= cell(z0 + ez); z++) {
+        const k = x * 65536 + z;
+        if (!filed.has(k)) filed.set(k, []);
+        filed.get(k).push(t);
+      }
+    }
+  }
+  const none = [];
+  return (p) => filed.get(cell(p.x) * 65536 + cell(p.z)) ?? none;
+}
+
+/** A box's footprint for `columns`, grown `grow` m all round. */
+const boxFootprint = (grow) => (b) => {
+  const e = b.matrix.elements, [hx, hy, hz] = b.half;
+  return [b.center.x, b.center.z, Math.abs(e[0]) * hx + Math.abs(e[4]) * hy + Math.abs(e[8]) * hz + grow, Math.abs(e[2]) * hx + Math.abs(e[6]) * hy + Math.abs(e[10]) * hz + grow];
+};
 
 /** True when the segment from `a` to `b` passes through the box placed by inverse matrix `inv`. */
 function blocks(a, b, inv, [hx, hy, hz]) {
@@ -566,18 +621,21 @@ function blocks(a, b, inv, [hx, hy, hz]) {
 function bakeLights(geometry, lights, boxes) {
   const pos = geometry.attributes.position, nor = geometry.attributes.normal;
   const glow = new Float32Array(pos.count * 3);
-  geometry.computeBoundingSphere();
-  const { center, radius } = geometry.boundingSphere;
-  for (const l of lights.filter((l) => l.at.distanceTo(center) < l.radius + radius)) {
-    const near = boxes.filter((b) => b.center.distanceTo(l.at) < b.radius + l.radius);
-    for (let i = 0; i < pos.count; i++) {
-      n.fromBufferAttribute(nor, i);
-      // From just off the surface, so the vertex's own solid doesn't shade it.
-      v.fromBufferAttribute(pos, i).addScaledVector(n, 0.05);
+  // Each light is filed under every 8 m column of the map within its reach, and knows the boxes
+  // within its reach, the only ones that can shade it.
+  if (!lights.columns) {
+    for (const l of lights) l.near = boxes.filter((b) => b.center.distanceTo(l.at) < b.radius + l.radius && boxDistance(l.at, b.inv, b.half) < l.radius);
+    lights.columns = columns(lights, (l) => [l.at.x, l.at.z, l.radius, l.radius]);
+  }
+  for (let i = 0; i < pos.count; i++) {
+    n.fromBufferAttribute(nor, i);
+    // From just off the surface, so the vertex's own solid doesn't shade it.
+    v.fromBufferAttribute(pos, i).addScaledVector(n, 0.05);
+    for (const l of lights.columns(v)) {
       to.subVectors(l.at, v);
       const d = to.length(), facing = n.dot(to) / d;
       if (d >= l.radius || facing <= 0) continue;
-      if (near.some((b) => blocks(v, l.at, b.inv, b.half))) continue;
+      if (l.near.some((b) => blocks(v, l.at, b.inv, b.half))) continue;
       const k = l.power * (1 - d / l.radius) ** 2 * facing;
       glow[i * 3] += l.rgb.r * k;
       glow[i * 3 + 1] += l.rgb.g * k;
@@ -647,18 +705,18 @@ function shaftMaterial() {
 }
 
 /**
- * Lit window panes on the faces of a `tower` solid, in its local space: rows every 4 m from 8 m up
- * (street level stays dark, no glare at eye height), a slot every 3 m, LIT of them lit (seeded by
- * `seed`, so a tower always looks the same).
+ * Lit window panes on the faces of a `tower` (or GLAZED) solid, in its local space: rows every 4 m
+ * from 8 m up (street level stays dark, no glare at eye height), a slot every 3 m, `lit` of them lit
+ * (seeded by `seed`, so a tower always looks the same).
  */
-function towerWindows(s, seed, colors, out) {
+function towerWindows(s, seed, colors, out, lit = LIT) {
   const [hx, hy, hz] = s.half;
   let k = seed * 9301 + 49297;
   const rand = () => ((k = (k * 16807) % 2147483647) / 2147483647);
   for (const [w, d, face] of [[hx, hz, (a, y) => [a, y, hz + 0.05, 0]], [hx, hz, (a, y) => [a, y, -hz - 0.05, Math.PI]], [hz, hx, (a, y) => [hx + 0.05, y, -a, Math.PI / 2]], [hz, hx, (a, y) => [-hx - 0.05, y, a, -Math.PI / 2]]]) {
     for (let y = -hy + 8; y < hy - 2; y += 4) {
       for (let a = -w + 2; a < w - 1; a += 3) {
-        if (rand() > LIT) continue;
+        if (rand() > lit) continue;
         const [x, wy, z, turn] = face(a, y);
         const pane = new THREE.PlaneGeometry(1.2, 1).rotateY(turn).translate(x, wy, z);
         out.push(paint(pane, colors[Math.floor(rand() * colors.length)], 0.2 + rand() * 0.25, true));
@@ -731,7 +789,7 @@ export function buildArena(scene, map) {
   glow.fungi = [];
   glow.floor = map.terrain && ((x, z) => heightAt(map.terrain, map.size, x, z));
   map.solids.forEach((s, i) => {
-    const g = paint((s.shape === 'cylinder' ? cylinderGeometry : boxGeometry)(s.half), COLORS[s.mat] ?? COLORS.concrete, jitter(i));
+    const g = paint((s.shape === 'cylinder' ? cylinderGeometry : boxGeometry)(s.half), s.color ?? COLORS[s.mat] ?? COLORS.concrete, jitter(i));
     g.applyMatrix4(boxes[i].matrix);
     bakeAO(g, boxes, palette.cover);
     if (s.mat === 'ground') {
@@ -745,9 +803,9 @@ export function buildArena(scene, map) {
     const parts = [];
     kitbash(s, parts);
     for (const p of parts) solid.push(p.applyMatrix4(boxes[i].matrix));
-    if (s.mat === 'tower') {
+    if (s.mat === 'tower' || GLAZED[s.mat]) {
       const panes = [];
-      towerWindows(s, i, palette.windows ?? WINDOWS, panes);
+      towerWindows(s, i, GLAZED[s.mat]?.colors ?? palette.windows ?? WINDOWS, panes, GLAZED[s.mat]?.lit);
       for (const p of panes) glow.push(p.applyMatrix4(boxes[i].matrix));
     }
   });
@@ -767,7 +825,7 @@ export function buildArena(scene, map) {
     ? [
         ...glow.lamps.map((p) => light(p, { ...LAMP, color: lamp.light })),
         ...glow.furnaces.map((p) => light(p, FURNACE)),
-        ...glow.signs.map(({ at, color }) => light(at, { ...SIGN, color })),
+        ...glow.signs.map(({ at, color, radius = SIGN.radius, power = SIGN.power }) => light(at, { radius, power, color })),
         ...glow.fungi.map((p) => light(p, FUNGUS)),
       ]
     : [];
