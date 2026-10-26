@@ -1,0 +1,13 @@
+{
+  "about": "Target bands for the balance loop (the plan's Phase 1), drafted from the round 1 baseline. strength: every weapon, class, item and ability's rating (team-margin plus-minus a match, from sweep.py) within spread of its slot's median, at each aim level listed. range: a primary's rank among the primaries by the damage a second it lands on a strafing Medium in threat_probe, per range band (1 is best).",
+  "strength": {"spread": 0.75, "aims": ["skill05", "skill1"]},
+  "range": {
+    "bands": {"close": [10, 20], "mid": [30, 45], "far": [60, 80]},
+    "roles": {
+      "stitcher": {"close": [1, 3], "far": [6, 8]},
+      "triplet": {"mid": [1, 3]},
+      "pike": {"far": [1, 2]},
+      "squall": {"close": [1, 1]}
+    }
+  }
+}
