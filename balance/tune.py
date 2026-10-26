@@ -31,11 +31,11 @@ SPACE = {
     'post_cross': (0.0, 1.5),
     'trade_reach': (0.0, 90.0),
 }
-MAPS = {'tdm': ['foundry', 'isotope', 'verdigris', 'riftline', 'sump', 'sinkhole', 'canopy', 'crashsite', 'ziggurat', 'span'],
-        'ma': ['foundry', 'verdigris', 'riftline', 'sinkhole', 'canopy', 'crashsite', 'ziggurat', 'span'],
+MAPS = {'tdm': ['foundry', 'isotope', 'verdigris', 'riftline', 'sump', 'sinkhole', 'canopy', 'crashsite', 'ziggurat', 'span', 'walled'],
+        'ma': ['foundry', 'verdigris', 'riftline', 'sinkhole', 'canopy', 'crashsite', 'ziggurat', 'span', 'walled'],
         'siege': ['foundry', 'riftline', 'canopy', 'crashsite', 'span'],
-        'ctf': ['foundry', 'verdigris', 'riftline', 'sinkhole', 'canopy', 'crashsite'],
-        'convoy': ['foundry', 'riftline', 'canopy', 'crashsite', 'span']}
+        'ctf': ['foundry', 'verdigris', 'riftline', 'sinkhole', 'canopy', 'crashsite', 'walled'],
+        'convoy': ['foundry', 'riftline', 'canopy', 'crashsite', 'span', 'walled']}
 
 
 def margins(pool, n, seed, args):
