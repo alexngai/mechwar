@@ -3,8 +3,8 @@
 //! over all of it.
 
 use sim::bot::{Bot, Nav, sees};
-use sim::game::{Game, TEAM_SIZE};
-use sim::map::MAPS;
+use sim::game::{Game, Mode, TEAM_SIZE};
+use sim::map::{MAPS, ROTATION};
 use sim::{Arena, Input, Loadout, Map, MechClass, TICK_HZ, Tuning, Vector, spawn_mech, step_mech};
 
 #[test]
@@ -12,8 +12,11 @@ fn spawns_are_standable_for_every_class() {
     for (index, (name, _)) in MAPS.iter().enumerate() {
         let map = Map::load(index);
         let arena = Arena::new(&map);
-        for (team, spawns) in map.spawns.iter().enumerate() {
-            assert!(spawns.len() >= TEAM_SIZE, "{name}: team {team} has {} spawns", spawns.len());
+        if ROTATION.contains(name) && Mode::Deathmatch.fits(&map) {
+            assert!(!map.dm_spawns.is_empty(), "{name}: plays Deathmatch with no spawns of its own");
+        }
+        for (team, spawns) in map.spawns.iter().chain([&map.dm_spawns]).enumerate() {
+            assert!(team == 2 || spawns.len() >= TEAM_SIZE, "{name}: team {team} has {} spawns", spawns.len());
             for class in MechClass::ALL {
                 let t = Tuning::default().for_class(class);
                 for p in spawns {
@@ -241,6 +244,9 @@ fn rotationally_symmetric(name: &str, map: &Map) {
     let [a, b] = &map.spawns;
     assert!(a.iter().zip(b).all(|(p, q)| p[0] == -q[0] && p[1] == q[1] && p[2] == -q[2]), "{name}: spawns aren't mirrored");
     let turned = |p: [f32; 3], q: [f32; 3]| (p[0] + q[0]).abs() < 0.01 && (p[1] - q[1]).abs() < 0.01 && (p[2] + q[2]).abs() < 0.01;
+    for p in &map.dm_spawns {
+        assert!(map.dm_spawns.iter().any(|q| turned(*p, *q)), "{name}: Deathmatch spawn {p:?} has no 180-degree twin");
+    }
     for p in &map.pads {
         let twin = map.pads.iter().any(|q| turned(p.at, q.at) && turned(p.to, q.to) && p.apex == q.apex);
         assert!(twin, "{name}: pad at {:?} has no 180-degree twin", p.at);

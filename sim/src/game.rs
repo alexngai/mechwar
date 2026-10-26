@@ -176,7 +176,7 @@ struct Player {
     id: u8,
     /// In Deathmatch, the player's own id.
     team: u8,
-    /// Which spawn point the first spawn of each match takes (`Game::spawn_point`).
+    /// Which of the team's spawns the first spawn of each match takes (`Game::start_points`).
     slot: usize,
     class: MechClass,
     loadout: Loadout,
@@ -283,6 +283,8 @@ pub struct Game {
     nav: &'static Nav,
     /// Feet positions per team and slot, from the map.
     spawns: [Vec<Vector>; 2],
+    /// The map's extra Deathmatch spawns.
+    dm_spawns: Vec<Vector>,
     /// Where the map's objective modes play, and this match's objective state (Missile Assault's,
     /// Siege's, Capture the Flag's or Convoy's).
     spots: Objectives,
@@ -317,6 +319,7 @@ impl Game {
             arena: Arena::new(&data),
             nav: Nav::for_map(map),
             spawns: data.spawns.map(|team| team.iter().map(|p| Vector::from_array(*p)).collect()),
+            dm_spawns: data.dm_spawns.iter().map(|p| Vector::from_array(*p)).collect(),
             spots: data.objectives,
             assault: None,
             siege: None,
@@ -896,9 +899,10 @@ impl Game {
         self.deployables.clear();
         self.arena.set_barriers(items(&self.arsenal), &[]);
         self.phase = Phase::Playing { started_at: self.tick };
-        for p in &mut self.players {
+        let starts = self.start_points();
+        for (p, start) in self.players.iter_mut().zip(starts) {
             (p.class, p.loadout) = (p.next_class, p.next_loadout);
-            p.mech = spawn(&self.arsenal, p.class, p.loadout, spawn_point(self.mode, &self.spawns, p.team, p.slot));
+            p.mech = spawn(&self.arsenal, p.class, p.loadout, start);
             if let Some(bot) = &mut p.bot {
                 bot.respawned();
             }
@@ -1024,36 +1028,46 @@ impl Game {
         self.arena = Arena::new(&data);
         self.nav = Nav::for_map(index);
         self.spawns = data.spawns.map(|team| team.iter().map(|p| Vector::from_array(*p)).collect());
+        self.dm_spawns = data.dm_spawns.iter().map(|p| Vector::from_array(*p)).collect();
         self.spots = data.objectives;
         for p in &mut self.players {
             p.history.clear();
         }
     }
 
-    /// Where slot `slot` of `team` starts a match.
+    /// Where slot `slot` of `team` joins a match: its own spawn, or in Deathmatch, a respawn's.
     fn spawn_point(&self, team: u8, slot: usize) -> Vector {
-        spawn_point(self.mode, &self.spawns, team, slot)
+        match self.mode {
+            Mode::Deathmatch => self.respawn_point(team),
+            _ => self.spawns[usize::from(team)][slot],
+        }
+    }
+
+    /// Where each player starts a match: on their slot's spawn, or in Deathmatch, each in turn on
+    /// the spawn farthest from everyone placed before them.
+    fn start_points(&self) -> Vec<Vector> {
+        let mut placed = Vec::new();
+        for p in &self.players {
+            placed.push(match self.mode {
+                Mode::Deathmatch => farthest(self.dm_pool(), &placed),
+                _ => self.spawns[usize::from(p.team)][p.slot],
+            });
+        }
+        placed
     }
 
     /// The spawn (the team's; in Deathmatch, any) farthest from the nearest living enemy.
     fn respawn_point(&self, team: u8) -> Vector {
-        let threat = |spawn: Vector| {
-            self.players
-                .iter()
-                .filter(|p| p.team != team && p.mech.health > 0.0)
-                .map(|p| p.mech.pos.distance(spawn))
-                .fold(f32::MAX, f32::min)
-        };
-        let spawns = match self.mode {
-            Mode::Deathmatch => &self.spawns[..],
-            _ => std::slice::from_ref(&self.spawns[usize::from(team)]),
-        };
-        spawns
-            .iter()
-            .flatten()
-            .copied()
-            .max_by(|a, b| threat(*a).total_cmp(&threat(*b)))
-            .expect("teams have spawns")
+        let foes: Vec<Vector> = self.players.iter().filter(|p| p.team != team && p.mech.health > 0.0).map(|p| p.mech.pos).collect();
+        match self.mode {
+            Mode::Deathmatch => farthest(self.dm_pool(), &foes),
+            _ => farthest(self.spawns[usize::from(team)].iter().copied(), &foes),
+        }
+    }
+
+    /// Deathmatch's spawns: both teams' and the map's own.
+    fn dm_pool(&self) -> impl Iterator<Item = Vector> + '_ {
+        self.spawns.iter().flatten().chain(&self.dm_spawns).copied()
     }
 
     /// Hitscan pellets from the shooter's eye (seeded by input `seq`) against enemies rewound to
@@ -1268,7 +1282,8 @@ impl Game {
         let mechs = self.players.iter().filter(|q| q.mech.health > 0.0).map(|q| (self.arsenal.of(&q.mech), &q.mech));
         // A spawn point counts as a Heavy standing there.
         let heavy = self.arsenal.get(MechClass::C, Loadout::of(MechClass::C));
-        let spawns: Vec<Mech> = self.spawns.iter().flatten().map(|&pos| Mech { pos, ..Mech::default() }).collect();
+        let dm = if self.mode == Mode::Deathmatch { &self.dm_spawns[..] } else { &[] };
+        let spawns: Vec<Mech> = self.spawns.iter().flatten().chain(dm).map(|&pos| Mech { pos, ..Mech::default() }).collect();
         let mechs = mechs.chain(spawns.iter().map(|m| (heavy, m)));
         match deploy::place(&self.arena, self.arsenal.of(&u.mech), &u.mech, kind, u.team, u.id, self.tick, mechs) {
             Some(d) => {
@@ -1876,13 +1891,10 @@ fn items(arsenal: &Arsenal) -> &Tuning {
     arsenal.get(MechClass::B, Loadout::default())
 }
 
-/// Where slot `slot` of `team` starts a match: in Deathmatch, slots take the two teams' spawns in
-/// turn.
-fn spawn_point(mode: Mode, spawns: &[Vec<Vector>; 2], team: u8, slot: usize) -> Vector {
-    match mode {
-        Mode::Deathmatch => spawns[slot % 2][slot / 2],
-        _ => spawns[usize::from(team)][slot],
-    }
+/// Which of `spawns` is farthest from the nearest of `foes` (with none, the last).
+fn farthest(spawns: impl Iterator<Item = Vector>, foes: &[Vector]) -> Vector {
+    let threat = |spawn: Vector| foes.iter().map(|f| f.distance(spawn)).fold(f32::MAX, f32::min);
+    spawns.max_by(|a, b| threat(*a).total_cmp(&threat(*b))).expect("maps have spawns")
 }
 
 /// A fresh mech of `class` carrying `loadout` at `pos`.
@@ -2072,6 +2084,15 @@ mod tests {
             assert!(game.join().is_some());
         }
         assert_eq!((game.join(), game.headcount()), (None, (MAX_PLAYERS, 0)));
+    }
+
+    #[test]
+    fn deathmatch_starts_everyone_apart() {
+        let (mut game, _) = deathmatch();
+        game.start_match();
+        let pos: Vec<Vector> = game.players.iter().map(|p| p.mech.pos).collect();
+        let closest = pos.iter().enumerate().flat_map(|(i, a)| pos[i + 1..].iter().map(|b| a.distance(*b))).fold(f32::MAX, f32::min);
+        assert!(closest > 40.0, "two start {closest} m apart");
     }
 
     /// A Missile Assault on Foundry, with one human in it (and bots, if `bots`).
@@ -3241,6 +3262,7 @@ mod tests {
             name: "cover".into(),
             solids: vec![solid([0.0, -0.5, 0.0], [50.0, 0.5, 50.0]), solid([0.0, 1.5, 0.0], [4.0, 1.5, 0.25]), solid([0.0, 2.0, 16.0], [2.0, 2.0, 2.0])],
             spawns: [vec![], vec![]],
+            dm_spawns: vec![],
             nav: vec![],
             pads: vec![],
             size: [100.0, 100.0],

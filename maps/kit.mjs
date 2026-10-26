@@ -238,6 +238,10 @@ export function siege(station, aa, sky) {
   Object.assign(objectives, { stations: [station], aa, sky });
 }
 
+const dm = [];
+/** Deathmatch's spawns beyond the teams' (it uses both; the team modes never use these): feet positions, twinned like waypoints. */
+export const deathmatch = (...spawns) => dm.push(...spawns);
+
 /**
  * Writes `file` (a URL) with `meta` (name, size, night, palette...), the terrain if any, and each
  * team's `spawns`. Without `south`, first adds the 180-degree twin of everything authored, and the
@@ -253,6 +257,7 @@ export function write(file, meta, north, south) {
     for (const d of [...decor]) decor.push(Object.fromEntries(Object.entries(d).map(([k, val]) => [k, Array.isArray(val) ? flip(val) : val])));
     for (const p of [...nav]) if (!single.has(p)) nav.push(flip(p));
     for (const p of [...pads]) pads.push({ at: flip(p.at), to: flip(p.to), apex: p.apex });
+    for (const p of [...dm]) dm.push(flip(p));
     south = north.map(flip);
   }
   // Where the Convoy route runs beyond the waypoints (over decks, crests and bridges), its points
@@ -272,6 +277,6 @@ export function write(file, meta, north, south) {
   const head = Object.entries(meta).map(([k, v]) => `"${k}": ${JSON.stringify(v).replaceAll(',', ', ')}`).join(',\n  ');
   const ground = terrain ? `,\n  "terrain": {"cell": ${terrain.cell}, ${lines('heights', terrain.heights)}}` : '';
   const goals = Object.keys(objectives).length ? `,\n  "objectives": ${JSON.stringify(objectives)}` : '';
-  writeFileSync(file, `{\n  ${head},\n  ${['solids', 'decor', ...(pads.length ? ['pads'] : [])].map((k) => lines(k)).join(',\n  ')},\n  "spawns": ${JSON.stringify(map.spawns)},\n  ${lines('nav')}${goals}${ground}\n}\n`);
+  writeFileSync(file, `{\n  ${head},\n  ${['solids', 'decor', ...(pads.length ? ['pads'] : [])].map((k) => lines(k)).join(',\n  ')},\n  "spawns": ${JSON.stringify(map.spawns)},${dm.length ? `\n  "dm_spawns": ${JSON.stringify(dm)},` : ''}\n  ${lines('nav')}${goals}${ground}\n}\n`);
   console.log(`${meta.name}: ${solids.length} solids, ${decor.length} decor, ${pads.length} pads, ${nav.length} waypoints${terrain ? `, ${terrain.heights.length}x${terrain.heights[0].length} terrain` : ''}`);
 }

@@ -9,7 +9,7 @@
 //
 // The north half (z > 0: the NE and NW lobes) and the east trench are authored here; `write`
 // (maps/kit.mjs) adds the 180-degree twin. Heavy is 5.8 m: trenches 10 m wide, 6.5 m+ under roofs.
-import { bases, box, cylinder, ground, heightAt, lamp, once, pipe, point, r3, sentries, sign, silos, slope, solids, turned, write } from './kit.mjs';
+import { bases, box, cylinder, deathmatch, ground, heightAt, lamp, once, pipe, point, r3, sentries, sign, silos, slope, solids, turned, write } from './kit.mjs';
 
 const SIZE = [200, 200], CELL = 4;
 const B = 46, TW = 5, VAULT = 14; // the pyramid's half-width at its foot, a trench's, the Vault's
@@ -208,6 +208,7 @@ silos({ at: [33, H1, DRIFT_Z], radius: 7, band: 3 }, { at: [0, 0, 0], radius: 12
 
 // --- Spawns, write ---------------------------------------------------------------------------------
 const north = [[70, 0.1, 72], [78, 0.1, 66], [86, 0.1, 74], [74, 0.1, 78]];
+deathmatch([-90, 0.7, 90], [-78.461, 0.117, 12.67], [-15, 0.175, 75], [30, 1.75, 90]); // Deathmatch's own, round the ring
 // A blizzard: an overcast white-out, the sun a pale smear, fog closing in past 25 m and gone by
 // 170 (the pyramid a grey shape from the yards), blowing snow thick near the ground, and flakes
 // driven hard from the west-north-west. The red beacons are what you steer by.

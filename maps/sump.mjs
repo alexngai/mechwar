@@ -6,7 +6,7 @@
 // The north half (z > 0), the east half of the z = 0 street and the center are authored here;
 // `write` (maps/kit.mjs) adds the 180-degree twin. Metrics as the other maps': 10 m streets, 7.5 m
 // under the deck, ramps near 24 degrees, 3 m hover-up crates. Bots walk, so every way up is a ramp.
-import { box, growth, lamp, once, pad, point, railing, ramp, sentries, sign, write } from './kit.mjs';
+import { box, deathmatch, growth, lamp, once, pad, point, railing, ramp, sentries, sign, write } from './kit.mjs';
 
 const CYAN = '#3de0ff', BLUE = '#5a8cff', AMBER = '#ffb347';
 
@@ -122,6 +122,7 @@ sentries([[-6, 0, 55], [6, 0, 55]]);
 
 // --- Spawns, twin, write -------------------------------------------------------------------------
 const north = [[-20, 0.1, 64], [-12, 0.1, 70], [12, 0.1, 66], [20, 0.1, 62]];
+deathmatch([-70, -7.9, 14], [70, 0.1, 40], [22, 0.1, 8], [-60, 0.1, 70]); // Deathmatch's own, out between the bases
 const palette = {
   sky: { horizon: '#1f3550', zenith: '#070d18', sun: '#cfe4ff', stars: 0.1 },
   fog: [30, 140],
