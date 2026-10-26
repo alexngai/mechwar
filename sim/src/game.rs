@@ -73,6 +73,10 @@ const MORTAR_PILOT: f32 = 30.0;
 const NODE_DOME: f32 = 250.0;
 const NODE_DOME_STEP: f32 = 20.0;
 const NODE_RECHARGE: f32 = 8.0;
+/// A flak blueprint's rounds burst this far round where they hit (m); a pilot picks up salvage
+/// within SALVAGE_REACH.
+const FLAK_BURST: f32 = 3.0;
+const SALVAGE_REACH: f32 = 3.5;
 /// Co-op's bots building (see `bots_build`): how often they plan (s), how near their spot they
 /// build from, how far off a lane's line they look, and the mix of towers they want (by
 /// `defense::TOWERS`).
@@ -965,7 +969,7 @@ impl Game {
             }
         }
         // And the hauler and co-op's walkers block them all, unmoved.
-        for d in self.deployables.iter().filter(|d| d.kind == Kind::Hauler || d.kind.lane_enemy()) {
+        for d in self.deployables.iter().filter(|d| d.kind == Kind::Hauler || (d.kind.lane_enemy() && d.hull > 0.0)) {
             let (th, mut body) = deploy::as_mech(items(&self.arsenal), d);
             for p in &mut self.players {
                 collide::separate(&self.arena, self.arsenal.of(&p.mech), &mut p.mech, &th, &mut body, 1.0);
@@ -1516,8 +1520,9 @@ impl Game {
                 continue;
             }
             let (t, rt) = (items(&self.arsenal), self.arsenal.get(MechClass::B, rocket));
-            // A co-op tower's tier (1 for anything else).
-            let tier = self.defense.as_ref().and_then(|df| df.tower(d.owner)).map_or(1, |tw| tw.tier);
+            // A co-op tower's reach and rate of fire, by its tier and its builder's perks (1s for
+            // anything else).
+            let (reach, rate) = self.defense.as_ref().map_or((1.0, 1.0), |df| (df.reach_of(d.owner), df.rate_of(d.owner)));
             let (range, speed) = match d.kind {
                 Kind::MgTurret => (t.mg_turret_range, f32::INFINITY),
                 Kind::Ship => (SHIP_GUN_RANGE, f32::INFINITY),
@@ -1525,7 +1530,7 @@ impl Game {
                 Kind::Walker => (WALKER_RANGE, f32::INFINITY),
                 _ => (t.rocket_turret_range, rt.alt_speed),
             };
-            let range = range * defense::reach(tier);
+            let range = range * reach;
             let gun = deploy::gun(t, &d);
             let (arena, clouds) = (&self.arena, &self.clouds);
             // Not one across a dome's surface, which would only soak up the fire.
@@ -1567,7 +1572,7 @@ impl Game {
             }
             let d = &mut self.deployables[k];
             if d.kind != Kind::RocketTurret {
-                let (burst, rate, pause) = match d.kind {
+                let (burst, rate_hz, pause) = match d.kind {
                     Kind::Ship => (SHIP_BURST, SHIP_RATE, SHIP_PAUSE),
                     Kind::Sentry => (SENTRY_BURST, SENTRY_RATE, SENTRY_PAUSE),
                     Kind::Walker => (WALKER_BURST, WALKER_RATE, WALKER_PAUSE),
@@ -1577,10 +1582,10 @@ impl Game {
                     d.burst = burst;
                 }
                 d.burst -= 1;
-                d.ready = tick + secs(if d.burst > 0 { 1.0 / rate } else { pause } / defense::rate(tier));
+                d.ready = tick + secs(if d.burst > 0 { 1.0 / rate_hz } else { pause } / rate);
                 self.turret_round(k);
             } else {
-                d.ready = tick + secs(t.rocket_turret_cooldown / defense::rate(tier));
+                d.ready = tick + secs(t.rocket_turret_cooldown / rate);
                 let dir = Rotation::from_rotation_y(d.yaw) * Rotation::from_rotation_x(d.pitch) * Vector::NEG_Z;
                 let p = Projectile {
                     owner: d.owner, seq: tick, n: projectile::TURRET, primary: false, class: MechClass::B, loadout: rocket, charge: 0.0, boosted: false,
@@ -1597,12 +1602,12 @@ impl Game {
     fn turret_round(&mut self, k: usize) {
         let (d, t) = (self.deployables[k], items(&self.arsenal));
         let ray = Ray::new(deploy::gun(t, &d), weapon::in_cone(d.yaw, d.pitch, t.mg_turret_spread_deg.to_radians(), self.tick, u32::from(d.owner)));
-        let tier = self.defense.as_ref().and_then(|df| df.tower(d.owner)).map_or(1, |tw| tw.tier);
+        let reach = self.defense.as_ref().map_or(1.0, |df| df.reach_of(d.owner));
         let range = match d.kind {
             Kind::Ship => SHIP_GUN_RANGE,
             Kind::Sentry => SENTRY_SHIP_RANGE,
             Kind::Walker => WALKER_RANGE,
-            _ => t.mg_turret_range * defense::reach(tier),
+            _ => t.mg_turret_range * reach,
         };
         let wall = self.arena.cast_ray(&ray, range).unwrap_or(range);
         let mut best = deploy::stops(&self.deployables, t, &ray, wall).unwrap_or(wall);
@@ -1634,6 +1639,16 @@ impl Game {
         // Base guns' rounds stop at the hauler but don't wear it.
         if let Some(k) = worn.filter(|&k| d.kind != Kind::Sentry || self.deployables[k].kind != Kind::Hauler) {
             self.wear(k, damage, d.owner);
+            // A flak blueprint's rounds burst on the hive: half again on each other foe nearby.
+            let flak = self.defense.as_ref().is_some_and(|df| df.tower_perk(d.owner, defense::Perk::Flak) > 0.0);
+            if flak && self.deployables[k].kind.lane_enemy() {
+                let at = ray.point_at(best);
+                let t = items(&self.arsenal);
+                let near: Vec<usize> = (0..self.deployables.len()).filter(|&j| j != k && self.deployables[j].kind.lane_enemy() && self.deployables[j].hull > 0.0 && deploy::center(t, &self.deployables[j]).distance(at) <= FLAK_BURST).collect();
+                for j in near {
+                    self.wear(j, 0.5 * damage, d.owner);
+                }
+            }
         }
     }
 
@@ -1648,7 +1663,16 @@ impl Game {
             return;
         }
         let standing = d.hull > 0.0;
-        let amount = defense::armored(d.kind, amount);
+        // Perks: a pilot's own guns hit the hive harder; a sabot blueprint's rockets go through
+        // plating.
+        let (mut hunter, mut sabot) = (0.0, false);
+        if let Some(df) = self.defense.as_ref().filter(|_| d.kind.lane_enemy()) {
+            hunter = df.perk(attacker, defense::Perk::Hunter);
+            sabot = df.tower_perk(attacker, defense::Perk::Sabot) > 0.0 && df.tower(attacker).is_some() && attacker_kind(&self.deployables, attacker) == Some(Kind::RocketTurret);
+        }
+        let d = &mut self.deployables[k];
+        let amount = amount * (1.0 + 0.2 * hunter);
+        let amount = if sabot { amount } else { defense::armored(d.kind, amount) };
         let dealt = amount.min(d.hull.max(0.0));
         d.hull -= amount;
         // (Points and XP for the hull shot off a ship, the hauler or a walker; in co-op, scrap for
@@ -1659,6 +1683,14 @@ impl Game {
             && let Some(df) = self.defense.as_mut()
         {
             df.earn(attacker, dealt);
+        }
+        let d = &mut self.deployables[k];
+        // A boss shot down leaves salvage: a blueprint for whoever picks it up.
+        if standing && d.hull <= 0.0 && d.kind.boss() {
+            let at = d.pos;
+            if let Some(df) = self.defense.as_mut() {
+                df.cores.push((at, true));
+            }
         }
         let d = &mut self.deployables[k];
         if standing && d.hull <= 0.0 {
@@ -1695,7 +1727,8 @@ impl Game {
         if let Some(toi) = deploy::stops(&self.deployables, t, &Ray::new(eye, (end - eye).normalize_or_zero()), end.distance(eye)) {
             (end, hit) = (eye + (end - eye).normalize_or_zero() * toi, None);
         }
-        let (owner, team, heal, burn) = (u.id, u.team, t.alt_beam_heal * DT, t.alt_damage * DT * ability::damage_mult(t, &u.mech));
+        let medic = self.defense.as_ref().map_or(0.0, |df| df.perk(u.id, defense::Perk::Medic));
+        let (owner, team, heal, burn) = (u.id, u.team, t.alt_beam_heal * DT * (1.0 + 0.5 * medic), t.alt_damage * DT * ability::damage_mult(t, &u.mech));
         // In co-op it mends the team's towers, and the reactor, short of whatever else it meets.
         if let Some(df) = self.defense.as_mut().filter(|_| team == 0) {
             let (dir, reach) = ((end - eye).normalize_or_zero(), end.distance(eye));
@@ -1705,9 +1738,9 @@ impl Game {
             let reactor = ((eye + dir * s - core).length() < REACTOR_BODY).then_some(s);
             match (towers, reactor) {
                 (Some((k, toi)), r) if r.is_none_or(|s| toi < s) => {
-                    let tier = df.tower(self.deployables[k].owner).map_or(1, |tw| tw.tier);
+                    let max = df.hull_max(self.deployables[k].owner);
                     let e = &mut self.deployables[k];
-                    e.hull = (e.hull + heal).min(defense::tower_hull(tier));
+                    e.hull = (e.hull + heal).min(max);
                     (end, hit) = (eye + dir * toi, None);
                 }
                 (_, Some(s)) => {
@@ -1753,7 +1786,13 @@ impl Game {
         let tt = self.arsenal.of(&target.mech);
         let braced = ability::on(&target.mech, Ability::Brace);
         let damage = amount * if braced { tt.brace_damage_mult } else { 1.0 };
-        let respawn_at = self.tick + secs(tt.respawn_delay);
+        // Co-op perks: a reinforced frame takes less, a hive hunter deals more; a quick return
+        // relaunches sooner.
+        let perk = |id: Option<u8>, p| self.defense.as_ref().zip(id).map_or(0.0, |(df, id)| df.perk(id, p));
+        let victim = Some(target.id).filter(|_| target.team == 0);
+        let hunter = attacker.map(|a| self.players[a].id).filter(|_| target.team == 1);
+        let damage = damage * (1.0 - 0.15 * perk(victim, defense::Perk::Frame)) * (1.0 + 0.2 * perk(hunter, defense::Perk::Hunter));
+        let respawn_at = self.tick + secs(tt.respawn_delay * (1.0 - 0.3 * perk(victim, defense::Perk::Return)));
         let (tick, from) = (self.tick, attacker.map(|a| (self.players[a].id, self.players[a].mech.pos)));
         let target = &mut self.players[j];
         // A bot feels where the hit came from.
@@ -1767,9 +1806,14 @@ impl Game {
             target.ledger.push((id, took, tick));
         }
         target.tally.taken += took;
-        // In co-op, scrap for the health shot off an infested mech.
-        if let (Some(df), Some((id, _)), 1) = (self.defense.as_mut(), from, target.team) {
-            df.earn(id, ELITE_SCRAP * took);
+        // In co-op, scrap for the health shot off an infested mech, and salvage where one falls.
+        if let (Some(df), 1) = (self.defense.as_mut(), target.team) {
+            if let Some((id, _)) = from {
+                df.earn(id, ELITE_SCRAP * took);
+            }
+            if damage >= target.mech.health {
+                df.cores.push((target.mech.pos, false));
+            }
         }
         target.mech.health -= damage;
         let dead = target.mech.health <= 0.0;
@@ -2160,12 +2204,37 @@ impl Game {
         }
         self.deployables.retain(|w| !w.kind.lane_enemy() || !out.leaked.contains(&w.owner));
         self.events.extend(out.news.iter().map(|&n| Event::Defense(n)));
+        // Salvage to whoever walks over it; bots take their drafts as they come.
+        let mut news = Vec::new();
+        for i in (0..d.cores.len()).rev() {
+            let (at, rare) = d.cores[i];
+            if let Some(p) = self.players.iter().find(|p| p.team == 0 && p.mech.health > 0.0 && (p.mech.pos - at).with_y(0.0).length() <= SALVAGE_REACH) {
+                d.cores.remove(i);
+                d.offer(p.id, rare);
+                news.push(defense::News::Salvage { id: p.id, rare });
+            }
+        }
+        self.events.extend(news.into_iter().map(Event::Defense));
+        for p in self.players.iter().filter(|p| p.bot.is_some()) {
+            while d.offers.iter().any(|o| o.0 == p.id) {
+                let pick = (tick + u32::from(p.id)) % 3;
+                let n = d.offers.iter().find(|o| o.0 == p.id).map_or(1, |o| o.1.len() as u32);
+                d.draft(p.id, (pick % n) as u8);
+            }
+        }
         self.defense = Some(d);
         self.bots_build();
         self.power_pylons();
         self.lane_enemies_strike();
         if out.lost || out.won {
             self.end_match();
+        }
+    }
+
+    /// Player `id` takes perk `choice` (0-2) of their co-op draft on offer.
+    pub fn draft(&mut self, id: u8, choice: u8) {
+        if let Some(d) = self.defense.as_mut() {
+            d.draft(id, choice);
         }
     }
 
@@ -2192,14 +2261,14 @@ impl Game {
                 match (d.spot(&self.arena, &aim, towers), d.free_tower()) {
                     (Err(why), _) => Some(why),
                     (_, None) => Some(defense::Refusal::Full),
-                    _ if d.scrap[usize::from(id)] < defense::price(kind) => Some(defense::Refusal::Scrap),
+                    _ if d.scrap[usize::from(id)] < d.price_for(id, kind) => Some(defense::Refusal::Scrap),
                     (Ok(pos), Some(owner)) => {
-                        let (tick, hull) = (self.tick, defense::tower_hull(1));
+                        let (tick, hull, cost) = (self.tick, defense::tower_hull(1) * (1.0 + 0.25 * d.perk(id, defense::Perk::Plating)), d.price_for(id, kind));
                         let ready = tick + secs(items(&self.arsenal).turret_warmup);
                         self.deployables.push(Deployable { kind, team: 0, owner, pos, yaw: m.yaw, pitch: 0.0, hull, placed: tick, expires: u32::MAX, ready, burst: 0 });
                         let d = self.defense.as_mut().unwrap();
-                        d.scrap[usize::from(id)] -= defense::price(kind);
-                        d.towers.push(defense::Tower { owner, by: id, tier: 1, spent: defense::price(kind) });
+                        d.scrap[usize::from(id)] -= cost;
+                        d.towers.push(defense::Tower { owner, by: id, tier: 1, spent: cost });
                         None
                     }
                 }
@@ -2219,7 +2288,7 @@ impl Game {
                         match order {
                             _ if order == defense::Build::Sell && tower.by != id => Some(defense::Refusal::Tower),
                             defense::Build::Sell => {
-                                d.scrap[usize::from(id)] += tower.refund();
+                                d.scrap[usize::from(id)] += d.refund_of(&tower);
                                 d.towers.retain(|t| t.owner != e.owner);
                                 self.deployables.remove(k);
                                 None
@@ -2228,10 +2297,11 @@ impl Game {
                             _ if d.scrap[usize::from(id)] < cost => Some(defense::Refusal::Scrap),
                             _ => {
                                 d.scrap[usize::from(id)] -= cost;
+                                let before = d.hull_max(e.owner);
                                 let tower = d.towers.iter_mut().find(|t| t.owner == e.owner).unwrap();
                                 (tower.tier, tower.spent) = (tower.tier + 1, tower.spent + cost);
                                 // Its new hull, less what it's lost.
-                                self.deployables[k].hull += defense::tower_hull(tower.tier) - defense::tower_hull(tower.tier - 1);
+                                self.deployables[k].hull += d.hull_max(e.owner) - before;
                                 None
                             }
                         }
@@ -2278,7 +2348,7 @@ impl Game {
         let scrap = d.scrap[usize::from(id)];
         let towers: Vec<Deployable> = self.deployables.iter().filter(|e| d.tower(e.owner).is_some()).copied().collect();
         let count = |kind| towers.iter().filter(|t| t.kind == kind).count() as f32;
-        let kind = (0..defense::TOWERS.len()).filter(|&k| defense::PRICES[k] <= scrap).min_by(|&a, &b| (count(defense::TOWERS[a]) / BOT_MIX[a]).total_cmp(&(count(defense::TOWERS[b]) / BOT_MIX[b])));
+        let kind = (0..defense::TOWERS.len()).filter(|&k| d.price_for(id, defense::TOWERS[k]) <= scrap).min_by(|&a, &b| (count(defense::TOWERS[a]) / BOT_MIX[a]).total_cmp(&(count(defense::TOWERS[b]) / BOT_MIX[b])));
         if let Some(k) = kind {
             // Towers and spots already planned crowd a spot alike.
             let taken: Vec<Vector> = towers.iter().map(|t| t.pos).chain(d.plans.iter().filter(|q| matches!(q.2, defense::Build::Place(_))).map(|q| q.1)).collect();
@@ -2508,7 +2578,10 @@ impl Game {
             if !matches!(p.kind, Kind::Arc | Kind::Pulse) || p.hull <= 0.0 || tick < p.ready {
                 continue;
             }
-            let tier = self.defense.as_ref().and_then(|d| d.tower(p.owner)).map_or(1, |t| t.tier);
+            let Some(df) = self.defense.as_ref() else { return };
+            let (reach, rate) = (df.reach_of(p.owner), df.rate_of(p.owner));
+            let perk = |perk| df.tower_perk(p.owner, perk);
+            let (hops, storm, stasis) = (ARC_HOPS + 2 * perk(defense::Perk::Chain) as usize, perk(defense::Perk::Storm), perk(defense::Perk::Stasis));
             let top = p.pos + Vector::Y * PYLON_TOP;
             let arena = &self.arena;
             let walkers: Vec<(usize, Vector)> = (self.deployables.iter().enumerate())
@@ -2517,28 +2590,28 @@ impl Game {
                 .filter(|&(_, c)| arena.cast_ray(&Ray::new(top, (c - top).normalize_or_zero()), c.distance(top)).is_none())
                 .collect();
             if p.kind == Kind::Arc {
-                let Some(&first) = walkers.iter().filter(|w| w.1.distance(top) <= ARC_RANGE * defense::reach(tier)).min_by(|a, b| a.1.distance(top).total_cmp(&b.1.distance(top))) else { continue };
-                let (mut from, mut at, mut damage, mut struck) = (top, first, ARC_DAMAGE, vec![first.0]);
-                for hop in 0..=ARC_HOPS {
+                let Some(&first) = walkers.iter().filter(|w| w.1.distance(top) <= ARC_RANGE * reach * (1.0 + 0.3 * storm)).min_by(|a, b| a.1.distance(top).total_cmp(&b.1.distance(top))) else { continue };
+                let (mut from, mut at, mut damage, mut struck) = (top, first, ARC_DAMAGE * (1.0 + storm), vec![first.0]);
+                for hop in 0..=hops {
                     self.events.push(Event::Zap { from, to: at.1 });
                     self.wear(at.0, damage, p.owner);
                     let next = walkers.iter().filter(|w| !struck.contains(&w.0) && w.1.distance(at.1) <= ARC_HOP).min_by(|a, b| a.1.distance(at.1).total_cmp(&b.1.distance(at.1)));
                     match next {
-                        Some(&w) if hop < ARC_HOPS => {
+                        Some(&w) if hop < hops => {
                             (from, at, damage) = (at.1, w, damage * ARC_FALLOFF);
                             struck.push(w.0);
                         }
                         _ => break,
                     }
                 }
-                self.deployables[k].ready = tick + secs(ARC_COOLDOWN / defense::rate(tier));
+                self.deployables[k].ready = tick + secs(ARC_COOLDOWN / rate);
             } else {
-                let radius = PULSE_RADIUS * defense::reach(tier);
+                let radius = PULSE_RADIUS * reach;
                 let hit: Vec<usize> = walkers.iter().filter(|w| (w.1 - p.pos).with_y(0.0).length() <= radius).map(|w| w.0).collect();
                 if hit.is_empty() {
                     continue;
                 }
-                let until = tick + secs(PULSE_STUN);
+                let until = tick + secs(PULSE_STUN * (1.0 + stasis));
                 self.events.push(Event::Stun { at: top, radius });
                 let owners: Vec<u8> = hit.iter().map(|&j| self.deployables[j].owner).collect();
                 for &j in &hit {
@@ -2553,7 +2626,7 @@ impl Game {
                 for e in self.deployables.iter_mut().filter(|e| e.kind == Kind::Dome && e.team == 1 && (e.pos - p.pos).with_y(0.0).length() <= radius) {
                     e.hull = 0.0;
                 }
-                self.deployables[k].ready = tick + secs(PULSE_COOLDOWN / defense::rate(tier));
+                self.deployables[k].ready = tick + secs(PULSE_COOLDOWN / rate / (1.0 + 0.3 * stasis));
             }
         }
     }
@@ -2622,6 +2695,11 @@ fn worn(list: &[Deployable], t: &Tuning, team: u8, turret: Option<(usize, f32)>,
         None if hit_mech => None,
         None => deploy::struck(list, t, team, end),
     }
+}
+
+/// The kind of deployable `owner` in `list`, if there is one.
+fn attacker_kind(list: &[Deployable], owner: u8) -> Option<Kind> {
+    list.iter().find(|d| d.owner == owner).map(|d| d.kind)
 }
 
 /// Feet position at fractional tick `at`, interpolated like the client draws it; None if dead then.
@@ -3582,6 +3660,85 @@ mod tests {
             assert!(d.segments().any(|(a, b)| (t.pos - a.lerp(b, 0.5)).length() < 40.0 || (t.pos - a).length() < 25.0));
         }
         assert!(bots.iter().all(|&b| scrap(&game, b) < 250.0));
+    }
+
+    #[test]
+    fn a_beaten_wave_drafts_every_pilot_a_perk_and_bots_take_theirs() {
+        let (mut game, id) = co_op(true);
+        game.dock(id);
+        skip_break(&mut game);
+        for _ in 0..secs(12.0) {
+            game.step();
+            for k in (0..game.deployables.len()).filter(|&k| game.deployables[k].kind.lane_enemy()).collect::<Vec<_>>() {
+                game.wear(k, 1e4, id);
+            }
+        }
+        let d = game.defense.as_ref().unwrap();
+        assert_eq!(d.wave, 2);
+        let offer = d.offers.iter().find(|o| o.0 == id).expect("no draft").1.clone();
+        assert_eq!(offer.len(), 3);
+        assert!(offer.iter().all(|p| !p.rare()));
+        // The bots have taken theirs.
+        for p in game.players.iter().filter(|p| p.bot.is_some()) {
+            assert!(!d.offers.iter().any(|o| o.0 == p.id));
+            assert_eq!(defense::PERKS.iter().map(|&k| d.perk(p.id, k)).sum::<f32>(), 1.0);
+        }
+        game.draft(id, 1);
+        assert_eq!(game.defense.as_ref().unwrap().perk(id, offer[1]), 1.0);
+        assert!(game.defense.as_ref().unwrap().offers.iter().all(|o| o.0 != id));
+    }
+
+    #[test]
+    fn downed_infested_mechs_and_bosses_leave_salvage_for_a_draft() {
+        let (mut game, id) = co_op(false);
+        let elite = game.add_player(1, Some(Bot::new(3)), MechClass::B).unwrap();
+        let (i, j) = (game.players.iter().position(|p| p.id == id).unwrap(), game.players.iter().position(|p| p.id == elite).unwrap());
+        let at = game.players[j].mech.pos;
+        game.players[j].mech.shield = 0.0;
+        game.apply_damage_by(Some(i), j, 1e4, Cause::Unknown);
+        assert_eq!(game.defense.as_ref().unwrap().cores, vec![(at, false)]);
+        // Walk over it: a draft.
+        game.players[i].mech.pos = at;
+        game.step();
+        assert!(game.defense.as_ref().unwrap().cores.is_empty());
+        assert!(game.events.iter().any(|e| matches!(e, Event::Defense(defense::News::Salvage { rare: false, .. }))));
+        assert!(game.defense.as_ref().unwrap().offers.iter().any(|o| o.0 == id));
+        // A boss's: blueprints.
+        let k = lane_enemy(&mut game, Kind::Excavator, at + Vector::new(30.0, 0.0, 0.0));
+        game.wear(k, 1e5, id);
+        let core = game.defense.as_ref().unwrap().cores[0];
+        assert!(core.1);
+        game.defense.as_mut().unwrap().offers.clear();
+        game.players[i].mech.pos = core.0;
+        game.step();
+        assert!(game.defense.as_ref().unwrap().offers.iter().find(|o| o.0 == id).unwrap().1.iter().all(|p| p.rare()));
+    }
+
+    #[test]
+    fn perks_make_their_pilots_towers_and_guns_better() {
+        let (mut game, id) = co_op(false);
+        let perks = &mut game.defense.as_mut().unwrap().perks[usize::from(id)];
+        for p in [defense::Perk::Plating, defense::Perk::Bulk, defense::Perk::Salvage, defense::Perk::Sabot, defense::Perk::Hunter] {
+            perks[p as usize] = 1;
+        }
+        let reactor = game.defense.as_ref().unwrap().reactor;
+        aim_to_build(&mut game, id, reactor, 14.0);
+        game.build(id, defense::Build::Place(1));
+        let tower = towers(&game)[0];
+        assert_eq!(tower.hull, 1.25 * defense::TOWER_HULL, "plating");
+        assert_eq!(scrap(&game, id), 250.0 - 0.85 * defense::PRICES[1], "bulk order");
+        // Sabot rockets go through a brute's plating; a hunter's own hits land harder.
+        let b = lane_enemy(&mut game, Kind::Brute, reactor + Vector::new(30.0, 0.0, 0.0));
+        let hull = game.deployables[b].hull;
+        game.wear(b, 20.0, tower.owner);
+        assert_eq!(hull - game.deployables[b].hull, 20.0);
+        let hull = game.deployables[b].hull;
+        game.wear(b, 20.0, id);
+        assert!((hull - game.deployables[b].hull - (24.0 - 5.0)).abs() < 1e-3);
+        // Salvage rights: all it cost, back.
+        let had = scrap(&game, id);
+        game.build(id, defense::Build::Sell);
+        assert_eq!(scrap(&game, id) - had, 0.85 * defense::PRICES[1]);
     }
 
     #[test]

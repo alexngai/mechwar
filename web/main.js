@@ -4,7 +4,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import init, { WasmNetClient, WasmSim, map_name, mode_name, tick_dt } from '../sim/pkg/sim.js';
+import init, { WasmNetClient, WasmSim, map_name, mode_name, perk_info, tick_dt } from '../sim/pkg/sim.js';
 import tuning from '../tuning.json';
 import classes from '../classes.json';
 import weapons from '../weapons.json';
@@ -388,6 +388,8 @@ addEventListener('keydown', (e) => {
   if (coop() && e.code === 'KeyB') building = building < 0 ? lastTower : -1;
   const tower = ['Digit1', 'Digit2', 'Digit3', 'Digit4'].indexOf(e.code);
   if (building >= 0 && tower >= 0) building = lastTower = tower;
+  // Co-op: with a draft on offer (and not building), 1-3 pick from it.
+  else if (coop() && tower >= 0 && tower < 3 && $('picker').hidden && net.offer().length > tower && ws?.readyState === WebSocket.OPEN) ws.send(net.draft(tower));
   if (coop() && (e.code === 'KeyU' || e.code === 'KeyX')) sendBuild(e.code === 'KeyU' ? 4 : 5);
   if (e.code === 'KeyK' && sim) { sim.reset(); prev = curr = sim.state(); }
   if (e.code === 'KeyI') $('stats').hidden = !$('stats').hidden;
@@ -1011,6 +1013,12 @@ function frame(now) {
         // A boss (of kind b) has come.
         callout = { text: `${(FOE_NAMES[b] ?? 'A boss').toUpperCase()} IS COMING`, color: hex(FOE.accent), at: now };
         sound.flagAlarm();
+      } else if (a === 5) {
+        // Salvage picked up (by b; x 1 a boss's).
+        if (b === myId) {
+          callout = { text: x ? 'BLUEPRINT FOUND · PICK ONE' : 'SALVAGE · PICK AN UPGRADE', color: hex(FRIEND.accent), at: now };
+          sound.zone('took');
+        }
       } else if (a === 3) {
         // Our build order refused (b us, x why).
         if (b === myId) {
@@ -1672,6 +1680,27 @@ function turretMesh(kind, material) {
   group.userData.head = head;
   return group;
 }
+/**
+ * Co-op's draft panel: the perks on offer to pick from (1-3), blueprints marked, and the perks
+ * held so far; hidden with none on offer.
+ */
+let draftShown = '';
+function drawDraft() {
+  const offer = net.offer(), perks = net.perks(), el = $('draft');
+  const info = (i) => perk_info(i).split('\n');
+  const mine = [...perks].map((n, i) => (n ? `${info(i)[0]}${n > 1 ? ' ×' + n : ''}` : '')).filter(Boolean).join(' · ');
+  const html = offer.length
+    ? `<div class="head">PICK ONE · 1-${offer.length}</div><div class="cards">${[...offer]
+        .map((p, k) => {
+          const [name, text] = info(p);
+          return `<div class="card${name.startsWith('Blueprint') ? ' rare' : ''}"><b>${k + 1} ${esc(name.toUpperCase())}</b><span>${esc(text)}</span></div>`;
+        })
+        .join('')}</div>${mine ? `<div class="mine">YOURS: ${esc(mine)}</div>` : ''}`
+    : '';
+  if (html !== draftShown) el.innerHTML = draftShown = html;
+  el.hidden = !html || building >= 0;
+}
+
 /** Co-op towers' tiers, by owner, as of this frame. */
 const towerTiers = new Map();
 
@@ -1684,6 +1713,7 @@ function drawBuild(now, alive, myId) {
   if (!coop()) {
     building = -1;
     buildHint = '';
+    $('draft').hidden = true;
     return;
   }
   if (!alive) building = -1;
@@ -1694,6 +1724,8 @@ function drawBuild(now, alive, myId) {
     info.set(towers[i], towers.subarray(i, i + 5));
   }
   objectives.drawPylons(list, towerTiers, FRIEND.accent, now);
+  objectives.drawCores(net.cores(), now);
+  drawDraft();
   const spot = building >= 0 ? net.build_spot() : [];
   objectives.drawBuild(net.lanes(), building, spot, now);
   const scrap = net.scrap()[myId] ?? 0;

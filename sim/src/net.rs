@@ -25,6 +25,8 @@ pub enum ClientMsg {
     Unlock { class: MechClass, slot: Slot, index: u8 },
     /// A build order in co-op, where the player aims.
     Build(crate::defense::Build),
+    /// A pick (0-2) from the player's co-op draft on offer.
+    Draft(u8),
 }
 
 /// One per client tick. `view_tick` is the fractional server tick the client was rendering

@@ -350,6 +350,35 @@ impl WasmNetClient {
             .collect()
     }
 
+    /// Co-op: the player's draft on offer, its perks (`defense::PERKS` indices; empty for none).
+    pub fn offer(&self) -> Vec<u8> {
+        let (Some(d), Some(me)) = (self.0.defense(), self.0.id) else { return Vec::new() };
+        d.offers.iter().find(|o| o.0 == me).map_or_else(Vec::new, |o| o.1.iter().map(|&p| p as u8).collect())
+    }
+
+    /// Co-op: how many of each perk (`defense::PERKS`' order) the player holds.
+    pub fn perks(&self) -> Vec<u8> {
+        let mut out = vec![0; crate::defense::PERKS.len()];
+        if let (Some(d), Some(me)) = (self.0.defense(), self.0.id) {
+            for &(id, p, n) in &d.perks {
+                if id == me {
+                    out[p as usize] = n;
+                }
+            }
+        }
+        out
+    }
+
+    /// Co-op's salvage lying about: four floats each, xyz and 1 for a boss's.
+    pub fn cores(&self) -> Vec<f32> {
+        self.0.defense().map_or_else(Vec::new, |d| d.cores.iter().flat_map(|&(at, rare)| [at.x, at.y, at.z, if rare { 1.0 } else { 0.0 }]).collect())
+    }
+
+    /// A co-op draft pick to send: perk `choice` (0-2) of the player's draft on offer.
+    pub fn draft(&self, choice: u8) -> Vec<u8> {
+        crate::net::encode(&crate::net::ClientMsg::Draft(choice))
+    }
+
     /// A co-op build order to send: 0-3 put down that tower (`defense::TOWERS`), 4 raise the one
     /// aimed at a tier, 5 sell it.
     pub fn build(&self, order: u8) -> Vec<u8> {
@@ -438,7 +467,7 @@ impl WasmNetClient {
     /// 1 stalled, 2 back up, 3 delivered), b = the team (that took it over, or delivered it; else -1).
     /// Co-op (kind 14): a = what (0 a wave comes: b = which, x = how many; 1 b is cleared; 2 a
     /// walker reached the reactor; 3 player b's build order refused, x = why: `defense::Refusal`'s
-    /// index; 4 a boss came, b = its kind). Arc pylon lightning (kind 15), two records a jump: a = 0 xyz = from, then a = 1
+    /// index; 4 a boss came, b = its kind; 5 player b picked up salvage, x = 1 a boss's). Arc pylon lightning (kind 15), two records a jump: a = 0 xyz = from, then a = 1
     /// xyz = to. Pulse pylon EMP (kind 16): a = radius, xyz = where. Mortar shell fired (kind 17),
     /// two records: a = 0 xyz = from, then a = 1 xyz = where it lands; b = its flight (s).
     pub fn take_events(&mut self) -> Vec<f32> {
@@ -476,6 +505,7 @@ impl WasmNetClient {
                         News::Hit => [14.0, 2.0, 0.0, 0.0, 0.0, 0.0],
                         News::Refused { id, why } => [14.0, 3.0, f32::from(id), why as u8 as f32, 0.0, 0.0],
                         News::Boss(kind) => [14.0, 4.0, kind as u8 as f32, 0.0, 0.0, 0.0],
+                        News::Salvage { id, rare } => [14.0, 5.0, f32::from(id), if rare { 1.0 } else { 0.0 }, 0.0, 0.0],
                     });
                 }
                 Event::Zap { from, to } => {
@@ -566,6 +596,16 @@ fn mode_index(mode: Mode) -> f32 {
 #[wasm_bindgen]
 pub fn mode_name(i: u8) -> String {
     Mode::ALL.get(usize::from(i)).map_or(String::new(), |m| m.name().into())
+}
+
+/// Co-op perk `i` (`defense::PERKS`' order): its name and what it does, a newline between; and
+/// whether it's a blueprint (`perk_rare`). "" past the end.
+#[wasm_bindgen]
+pub fn perk_info(i: u8) -> String {
+    crate::defense::PERKS.get(usize::from(i)).map_or(String::new(), |p| {
+        let (name, text) = p.describe();
+        format!("{name}\n{text}")
+    })
 }
 
 /// Name of compiled-in map `i` (matching a file in maps/), or "" past the end.

@@ -156,6 +156,79 @@ pub enum Refusal {
     Full,
 }
 
+/// A pilot's perks for the run, drafted one in three after each wave beaten and from salvage
+/// (`Defense::offer`): each makes what they build, or their own mech, better, stacking to its
+/// `cap`. Blueprints (`rare`) come only from a boss's salvage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum Perk {
+    Plating,
+    Overclock,
+    Barrels,
+    Chain,
+    Bulk,
+    Scavenger,
+    Salvage,
+    Frame,
+    Hunter,
+    Medic,
+    Return,
+    Flak,
+    Sabot,
+    Storm,
+    Stasis,
+}
+
+pub const PERKS: [Perk; 15] = [
+    Perk::Plating,
+    Perk::Overclock,
+    Perk::Barrels,
+    Perk::Chain,
+    Perk::Bulk,
+    Perk::Scavenger,
+    Perk::Salvage,
+    Perk::Frame,
+    Perk::Hunter,
+    Perk::Medic,
+    Perk::Return,
+    Perk::Flak,
+    Perk::Sabot,
+    Perk::Storm,
+    Perk::Stasis,
+];
+
+impl Perk {
+    /// Its name, and what it does (each stack, for those that stack).
+    pub fn describe(self) -> (&'static str, &'static str) {
+        match self {
+            Perk::Plating => ("Hardened plating", "Your towers have 25% more hull"),
+            Perk::Overclock => ("Overclock", "Your towers fire 20% faster"),
+            Perk::Barrels => ("Long barrels", "Your towers reach 15% further"),
+            Perk::Chain => ("Chain reaction", "Your arc pylons' lightning jumps to 2 more"),
+            Perk::Bulk => ("Bulk order", "What you build costs 15% less"),
+            Perk::Scavenger => ("Scavenger", "25% more scrap from what you shoot down"),
+            Perk::Salvage => ("Salvage rights", "Selling a tower refunds all it cost"),
+            Perk::Frame => ("Reinforced frame", "Your mech takes 15% less damage"),
+            Perk::Hunter => ("Hive hunter", "Your guns do 20% more to the hive"),
+            Perk::Medic => ("Field medic", "Your torch mends 50% faster"),
+            Perk::Return => ("Quick return", "You relaunch 30% sooner"),
+            Perk::Flak => ("Blueprint: flak rounds", "Your MG towers' rounds burst, half again on each foe within 3 m"),
+            Perk::Sabot => ("Blueprint: sabot rockets", "Your rocket towers punch through plating"),
+            Perk::Storm => ("Blueprint: storm coil", "Your arc pylons reach 30% further, their first strike twice as hard"),
+            Perk::Stasis => ("Blueprint: stasis field", "Your pulse pylons stun twice as long and recharge 30% faster"),
+        }
+    }
+
+    pub fn rare(self) -> bool {
+        matches!(self, Perk::Flak | Perk::Sabot | Perk::Storm | Perk::Stasis)
+    }
+
+    /// How many of it one pilot can hold.
+    pub fn cap(self) -> u8 {
+        if self.rare() || self == Perk::Salvage { 1 } else { 2 }
+    }
+}
+
 /// A mortar walker's shell in the air: the tick it lands, where, and whose.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shell {
@@ -203,7 +276,8 @@ pub fn rate(tier: u8) -> f32 {
 
 /// What players see of a run: the wave (the one on, or next), whether it's a break (and the
 /// seconds left of it), the reactor's hull, and the walkers still to come or standing this wave.
-/// Every pilot's scrap (by id), and the towers.
+/// Every pilot's scrap (by id), the towers, every pilot's draft on offer (the first, if more
+/// wait), the perks pilots hold (who, which, how many), and salvage lying about (rare: a boss's).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DefenseNet {
     pub wave: u8,
@@ -213,6 +287,9 @@ pub struct DefenseNet {
     pub left: u16,
     pub scrap: Vec<u16>,
     pub towers: Vec<Tower>,
+    pub offers: Vec<(u8, Vec<Perk>)>,
+    pub perks: Vec<(u8, Perk, u8)>,
+    pub cores: Vec<(Vector, bool)>,
 }
 
 /// What happened in a run.
@@ -226,6 +303,8 @@ pub enum News {
     Hit,
     /// A boss came through a gate.
     Boss(Kind),
+    /// Player `id` picked up salvage (`rare`: a boss's): a draft to pick from.
+    Salvage { id: u8, rare: bool },
     /// Player `id`'s build order didn't go through.
     Refused { id: u8, why: Refusal },
 }
@@ -294,6 +373,11 @@ pub struct Defense {
     pub shells: Vec<Shell>,
     /// Bots' builds in mind: whose, where (to stand, and aim down at), and the order.
     pub plans: Vec<(u8, Vector, Build)>,
+    /// Drafts on offer (whose, the perks to pick from; several may wait for one pilot), the
+    /// perks each pilot holds (by id, how many of each), and salvage lying about.
+    pub offers: Vec<(u8, Vec<Perk>)>,
+    pub perks: [[u8; PERKS.len()]; MAX_PLAYERS],
+    pub cores: Vec<(Vector, bool)>,
 }
 
 impl Defense {
@@ -341,6 +425,9 @@ impl Defense {
             towers: Vec::new(),
             shells: Vec::new(),
             plans: Vec::new(),
+            offers: Vec::new(),
+            perks: [[0; PERKS.len()]; MAX_PLAYERS],
+            cores: Vec::new(),
         })
     }
 
@@ -396,8 +483,72 @@ impl Defense {
 
     /// Scrap for player `id` for shooting `hull` off a walker.
     pub fn earn(&mut self, id: u8, hull: f32) {
+        let more = 1.0 + 0.25 * self.perk(id, Perk::Scavenger);
         if let Some(s) = self.scrap.get_mut(usize::from(id)) {
-            *s += SCRAP_PER_HULL * hull;
+            *s += SCRAP_PER_HULL * hull * more;
+        }
+    }
+
+    /// How many of `perk` player `id` holds.
+    pub fn perk(&self, id: u8, perk: Perk) -> f32 {
+        self.perks.get(usize::from(id)).map_or(0.0, |p| f32::from(p[perk as usize]))
+    }
+
+    /// How many of `perk` the builder of tower `owner` holds (0 for anything not a tower).
+    pub fn tower_perk(&self, owner: u8, perk: Perk) -> f32 {
+        self.tower(owner).map_or(0.0, |t| self.perk(t.by, perk))
+    }
+
+    /// Tower `owner`'s full hull, its reach and its rate of fire (times tier 1's), by its tier and
+    /// its builder's perks (1s for anything not a tower).
+    pub fn hull_max(&self, owner: u8) -> f32 {
+        self.tower(owner).map_or(TOWER_HULL, |t| tower_hull(t.tier) * (1.0 + 0.25 * self.perk(t.by, Perk::Plating)))
+    }
+    pub fn reach_of(&self, owner: u8) -> f32 {
+        self.tower(owner).map_or(1.0, |t| reach(t.tier) * (1.0 + 0.15 * self.perk(t.by, Perk::Barrels)))
+    }
+    pub fn rate_of(&self, owner: u8) -> f32 {
+        self.tower(owner).map_or(1.0, |t| rate(t.tier) * (1.0 + 0.2 * self.perk(t.by, Perk::Overclock)))
+    }
+
+    /// What `kind` costs player `id` to build.
+    pub fn price_for(&self, id: u8, kind: Kind) -> f32 {
+        price(kind) * (1.0 - 0.15 * self.perk(id, Perk::Bulk))
+    }
+
+    /// What selling `tower` refunds its builder.
+    pub fn refund_of(&self, tower: &Tower) -> f32 {
+        if self.perk(tower.by, Perk::Salvage) > 0.0 { tower.spent } else { tower.refund() }
+    }
+
+    /// A draft for player `id`: three perks they can still take (blueprints if `rare`, made up
+    /// with others if they hold most of those already), none twice.
+    pub fn offer(&mut self, id: u8, rare: bool) {
+        let open = |d: &Defense, p: &Perk| d.perk(id, *p) < f32::from(p.cap());
+        let mut pool: Vec<Perk> = PERKS.iter().copied().filter(|p| p.rare() == rare && open(self, p)).collect();
+        let mut picks = Vec::new();
+        while picks.len() < 3 {
+            if pool.is_empty() {
+                pool = PERKS.iter().copied().filter(|p| !p.rare() && open(self, p) && !picks.contains(p)).collect();
+                if pool.is_empty() {
+                    break;
+                }
+            }
+            let k = (self.rand() * pool.len() as f32) as usize % pool.len();
+            picks.push(pool.swap_remove(k));
+        }
+        if !picks.is_empty() {
+            self.offers.push((id, picks));
+        }
+    }
+
+    /// Player `id` takes perk `choice` (0-2) of their draft on offer.
+    pub fn draft(&mut self, id: u8, choice: u8) {
+        let Some(k) = self.offers.iter().position(|o| o.0 == id) else { return };
+        let Some(&perk) = self.offers[k].1.get(usize::from(choice)) else { return };
+        self.offers.remove(k);
+        if let Some(p) = self.perks.get_mut(usize::from(id)) {
+            p[perk as usize] += 1;
         }
     }
 
@@ -418,7 +569,14 @@ impl Defense {
             _ => 0,
         };
         let scrap = self.scrap.iter().map(|s| s.round() as u16).collect();
-        DefenseNet { wave: self.wave, waves: WAVES, break_left, hull: self.hull, left, scrap, towers: self.towers.clone() }
+        let mut offers: Vec<(u8, Vec<Perk>)> = Vec::new();
+        for (id, o) in &self.offers {
+            if !offers.iter().any(|(i, _)| i == id) {
+                offers.push((*id, o.clone()));
+            }
+        }
+        let perks = (0..MAX_PLAYERS as u8).flat_map(|id| PERKS.iter().filter(move |&&p| self.perk(id, p) > 0.0).map(move |&p| (id, p, self.perk(id, p) as u8))).collect();
+        DefenseNet { wave: self.wave, waves: WAVES, break_left, hull: self.hull, left, scrap, towers: self.towers.clone(), offers, perks, cores: self.cores.clone() }
     }
 
     /// Where each mech (its id, its team, whether it's a living bot) should head with lane enemies standing
@@ -525,7 +683,10 @@ impl Defense {
             Stage::Wave { .. } if self.queue.is_empty() && self.walkers.is_empty() && elites == 0 => {
                 out.news.push(News::Cleared(self.wave));
                 for &id in pilots {
-                    self.earn(id, WAVE_BONUS / SCRAP_PER_HULL);
+                    if let Some(s) = self.scrap.get_mut(usize::from(id)) {
+                        *s += WAVE_BONUS;
+                    }
+                    self.offer(id, false);
                 }
                 if self.wave >= WAVES {
                     self.stage = Stage::Won;

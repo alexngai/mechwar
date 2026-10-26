@@ -54,7 +54,7 @@ export const SENTRY_HEIGHT = 5.5;
 export class Objectives {
   /** `cast(ox, oy, oz, dx, dy, dz, max)`: how far a ray goes into the arena, up to `max`. */
   constructor(scene, fx, sound, cast) {
-    Object.assign(this, { scene, fx, sound, cast, silos: [], aa: [], zones: [], labels: [], stations: [], dropZones: [], bases: [], missiles: [], ships: new Map(), sentries: new Map(), drops: [], stands: [], flags: [], walkers: new Map(), gates: [], reactor: null, pylons: new Map(), ghost: null, lanes: null, shells: [], fire: {}, seen: null });
+    Object.assign(this, { scene, fx, sound, cast, silos: [], aa: [], zones: [], labels: [], stations: [], dropZones: [], bases: [], missiles: [], ships: new Map(), sentries: new Map(), drops: [], stands: [], flags: [], walkers: new Map(), gates: [], reactor: null, pylons: new Map(), ghost: null, lanes: null, shells: [], cores: [], fire: {}, seen: null });
     this.dropGeometry = new THREE.OctahedronGeometry(0.6);
     this.dropMaterial = hot(new THREE.MeshBasicMaterial({ color: ENERGY }));
   }
@@ -366,6 +366,32 @@ export class Objectives {
     this.ghost.position.set(spot[0], spot[1], spot[2]);
     this.ghost.userData.material.color.setHex(ok ? 0x6dff9a : 0xff5a4a);
     this.ghost.userData.ring.scale.setScalar(towerReach(k));
+  }
+
+  /**
+   * Co-op salvage from `cores` (four floats each: xyz, 1 for a boss's): a glowing core turning
+   * over the ground with a beam of light up from it, a boss's bigger and hotter.
+   */
+  drawCores(cores, now) {
+    while (this.cores.length < cores.length / 4) {
+      const group = new THREE.Group(), glow = hot(new THREE.MeshBasicMaterial({ color: 0xffd27a }));
+      const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.6), glow);
+      const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 30, 6, 1, true), hot(new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false })));
+      beam.position.y = 15;
+      group.add(core, beam);
+      group.userData = { core, glow };
+      this.scene.add(group);
+      this.cores.push(group);
+    }
+    this.cores.forEach((group, k) => {
+      group.visible = k < cores.length / 4;
+      if (!group.visible) return;
+      const [x, y, z, rare] = cores.slice(4 * k, 4 * k + 4);
+      group.position.set(x, y + 1.4 + 0.25 * Math.sin(now / 400 + k), z);
+      group.userData.core.rotation.set(now / 900, now / 600, 0);
+      group.userData.core.scale.setScalar(rare ? 1.6 : 1);
+      group.userData.glow.color.setHex(rare ? 0xff9a3c : 0xffd27a);
+    });
   }
 
   /** A mortar shell fired `from` (xyz), landing at `to` in `flight` seconds, at `now` (ms). */
