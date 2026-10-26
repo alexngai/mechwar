@@ -725,7 +725,9 @@ const repairPhase = (t, cls = classIdx) => (t > 0 ? Math.min(t / Math.max(classV
 let prev = game.state(), curr = prev, acc = 0, last = performance.now();
 const eye = new THREE.Vector3(), offset = new THREE.Vector3(), aim = new THREE.Vector3();
 const pos = new THREE.Vector3(), vel = new THREE.Vector3(), seen = new THREE.Vector3(), step = new THREE.Vector3();
-const beamFrom = new THREE.Vector3(), beamTo = new THREE.Vector3();
+const beamFrom = new THREE.Vector3(), beamTo = new THREE.Vector3(), beamAim = new THREE.Vector3();
+/** The way `yaw` and `pitch` look, as the sim's `aim_ray` has it. */
+const aimDir = (yaw, pitch) => beamAim.set(0, Math.sin(pitch), -Math.cos(pitch)).applyAxisAngle(THREE.Object3D.DEFAULT_UP, yaw);
 const BEAM_HOLD = 120; // ms a remote's beam stays drawn after the server last said it was on
 // How faint camouflage draws a mech: our own or a teammate's (a ghost), and an enemy's (a veil
 // that dims what's behind it by about 6%, on any map: faint, but there to see).
@@ -923,7 +925,7 @@ function frame(now) {
         repair: repairPhase(e.repairAt === null ? 0 : (now - e.repairAt) / 1000 + 1e-3, cls),
         cloak: e.hidden ? CLOAK_HIDDEN : e.cloaked ? CLOAK_SEEN : 0, hidden: e.hidden, wind, burn,
       });
-      if (now - (e.beamAt ?? -Infinity) < BEAM_HOLD) fx.mend(id + 1, e.mech.launcher.getWorldPosition(beamFrom), e.beamTo, dt);
+      if (now - (e.beamAt ?? -Infinity) < BEAM_HOLD) fx.mend(id + 1, e.mech.launcher.getWorldPosition(beamFrom), e.beamTo, dt, aimDir(ryaw, rpitch));
       if (now < (e.jammedUntil ?? 0) && !e.hidden) fx.jam(toChest(spark.copy(e.pos), cls), dt);
       if (health > 0) debug.hitbox(e.pos, classValue(cls, 'mech_radius'), classValue(cls, 'mech_height') * (repairing ? CROUCH : 1));
     }
@@ -1179,7 +1181,7 @@ function frame(now) {
   // A held beam, from the launcher (the cockpit's, in first person) to where the sim says it stops.
   if (curr[S.BEAM]) {
     const from = firstPerson && cockpit.weapons ? cockpit.launcherTip(camera, beamFrom) : me.launcher.getWorldPosition(beamFrom);
-    fx.mend(0, from, beamTo.set(curr[S.BEAM_END], curr[S.BEAM_END + 1], curr[S.BEAM_END + 2]), dt);
+    fx.mend(0, from, beamTo.set(curr[S.BEAM_END], curr[S.BEAM_END + 1], curr[S.BEAM_END + 2]), dt, aimDir(yaw, pitch));
   }
   // ...and light it from the night lamps and flashes nearby (not our own guns': the cockpit flashes those).
   if (firstPerson) {

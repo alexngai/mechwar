@@ -189,6 +189,12 @@ async fn main() {
     let lag = Duration::from_millis(env::var("LAG_MS").map_or(0, |v| v.parse().expect("LAG_MS must be milliseconds")));
     let static_dir = env::var("STATIC_DIR").unwrap_or_else(|_| "dist".into());
     let seed = SystemTime::now().duration_since(UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64) | 1;
+    // The bots' tactical spots, baked at build (see the Dockerfile): made here instead, a map's
+    // would stall its room the first time bots fight on it.
+    if let Ok(path) = env::var("SPOTS") {
+        let bakes = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("SPOTS {path}: {e}"));
+        eprintln!("bot spots preloaded for {} of {} maps", sim::tactics::Spots::preload(&bakes), MAPS.len());
+    }
 
     let mut quick = Settings { name: "Quick play".into(), public: true, mode: None, map: None, score_limit: 25, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
     if let Ok(key) = env::var("MODE") {

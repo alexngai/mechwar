@@ -527,7 +527,7 @@ mod tests {
         let (t, mut m) = armed(MechClass::B, Loadout::named("talon", "rocket"), [0.0, 0.0, 40.0], 0.0, 0.0);
         let eye = aim_ray(&t, &m).origin;
         let off = |deg: f32| eye + Rotation::from_rotation_y(deg.to_radians()) * Vector::NEG_Z * 20.0;
-        let (near, wide) = (off(4.0), off(-15.0));
+        let (near, wide) = (off(0.6 * t.shot_seek_cone), off(-15.0));
         seek(&arena, &t, &mut m, &[(3, wide), (5, near)]);
         assert_eq!(m.seek, 6, "marked the wrong one");
         // Its shots launch marked; one turns toward the mark, from the muzzle on.
