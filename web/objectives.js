@@ -29,16 +29,18 @@ export const SHIP_HULL = 3000;
 /** The AA gun fires a burst of AA_BURST rounds AA_GAP ms apart every AA_EVERY ms, while firing; it turns at AA_TURN rad/s. */
 const AA_BURST = 4, AA_GAP = 110, AA_EVERY = 1000, AA_TURN = 1.6;
 /** The deployable kinds of a battleship, and of a team mode's base gun. */
-export const SHIP = 4, SENTRY = 5, HAULER = 6, WALKER = 7, ARC = 8, PULSE = 9, CRAWLER = 10, BRUTE = 11, MORTAR = 12, NODE = 13;
-/** Co-op's lane enemies. */
-export const FOES = [WALKER, CRAWLER, BRUTE, MORTAR, NODE];
+export const SHIP = 4, SENTRY = 5, HAULER = 6, WALKER = 7, ARC = 8, PULSE = 9, CRAWLER = 10, BRUTE = 11, MORTAR = 12, NODE = 13, EXCAVATOR = 14, HIVE = 15;
+/** Co-op's lane enemies, and its bosses among them. */
+export const FOES = [WALKER, CRAWLER, BRUTE, MORTAR, NODE, EXCAVATOR, HIVE];
+export const BOSSES = [EXCAVATOR, HIVE];
 /** Match defense.rs: the reactor's hull, and a walker's in wave `n`. */
 export const REACTOR_HULL = 2000;
 export const walkerHull = (n) => 100 + 12 * n;
 /** Match defense.rs `species`: a lane enemy's hull in wave `n`, and (here) how high its middle is. */
-export const foeHull = (kind, n) => ({ [CRAWLER]: 30 + 3 * n, [BRUTE]: 600 + 50 * n, [MORTAR]: 140 + 14 * n, [NODE]: 150 + 12 * n })[kind] ?? walkerHull(n);
-export const foeMiddle = (kind) => ({ [CRAWLER]: 0.6, [BRUTE]: 2.5, [MORTAR]: 1.8, [NODE]: 2.2 })[kind] ?? 2;
-export const FOE_NAMES = { [WALKER]: 'Infested walker', [CRAWLER]: 'Crawler', [BRUTE]: 'Ore brute', [MORTAR]: 'Mortar walker', [NODE]: 'Shield node' };
+// (A boss's, for a full team: it comes with less for fewer pilots, so its bar starts short of full then.)
+export const foeHull = (kind, n) => ({ [CRAWLER]: 30 + 3 * n, [BRUTE]: 600 + 50 * n, [MORTAR]: 140 + 14 * n, [NODE]: 150 + 12 * n, [EXCAVATOR]: 3000, [HIVE]: 5000 })[kind] ?? walkerHull(n);
+export const foeMiddle = (kind) => ({ [CRAWLER]: 0.6, [BRUTE]: 2.5, [MORTAR]: 1.8, [NODE]: 2.2, [EXCAVATOR]: 4, [HIVE]: 6 })[kind] ?? 2;
+export const FOE_NAMES = { [WALKER]: 'Infested walker', [CRAWLER]: 'Crawler', [BRUTE]: 'Ore brute', [MORTAR]: 'Mortar walker', [NODE]: 'Shield node', [EXCAVATOR]: 'The Excavator', [HIVE]: 'The Hive walker' };
 /** Match defense.rs: what pilots build (`TOWERS`, in Build::Place's order), their prices, their reach at tier 1 (m: tuning's turret ranges, game.rs's ARC_RANGE and PULSE_RADIUS) and how it grows a tier. */
 export const TOWER_NAMES = ['MG tower', 'Rocket tower', 'Arc pylon', 'Pulse pylon'];
 export const TOWER_PRICES = [100, 150, 175, 200];
@@ -243,7 +245,7 @@ export class Objectives {
       const [, , owner, x, y, z, yaw, pitch] = list.subarray(i, i + 8);
       let w = this.walkers.get(owner);
       if (!w) {
-        w = { kind, group: ({ [CRAWLER]: crawlerMesh, [BRUTE]: bruteMesh, [MORTAR]: mortarMesh, [NODE]: nodeMesh })[kind]?.() ?? walkerMesh(), heading: 0, gait: 0, aim: yaw, rear: 0 };
+        w = { kind, group: ({ [CRAWLER]: crawlerMesh, [BRUTE]: bruteMesh, [MORTAR]: mortarMesh, [NODE]: nodeMesh, [EXCAVATOR]: excavatorMesh, [HIVE]: hiveMesh })[kind]?.() ?? walkerMesh(), heading: 0, gait: 0, aim: yaw, rear: 0 };
         w.group.position.set(x, y, z);
         this.scene.add(w.group);
         this.walkers.set(owner, w);
@@ -254,7 +256,10 @@ export class Objectives {
       const dx = group.position.x - before.x, dz = group.position.z - before.z, moved = Math.hypot(dx, dz);
       if (moved > 1e-3) w.heading += Math.atan2(Math.sin(Math.atan2(-dx, -dz) - w.heading), Math.cos(Math.atan2(-dx, -dz) - w.heading)) * (1 - Math.exp(-6 * dt));
       group.rotation.y = w.heading;
-      const { legs, stride, phases, pod, muzzle, body, fungus } = group.userData;
+      const { legs, stride, phases, pod, muzzle, body, fungus, drill, sac } = group.userData;
+      // The Excavator's drill turns as it goes; the Hive walker's sac heaves.
+      if (drill) drill.rotation.z += 6 * dt;
+      if (sac) sac.scale.setScalar(sac.userData.r * (1 + 0.12 * Math.sin(now / 180)));
       w.gait += (moved / stride) * Math.PI;
       legs.forEach((leg, k) => {
         const p = w.gait + phases[k], lift = Math.max(0, Math.sin(p)) * stride * 0.35;
@@ -282,7 +287,7 @@ export class Objectives {
       // Gone: shot down (a burst and spores), or walked into the reactor.
       const at = w.group.position.clone().setY(w.group.position.y + 1.5);
       if (!this.reactor || at.distanceTo(this.reactor.at) > 14) {
-        const big = w.kind === BRUTE ? 1.6 : w.kind === CRAWLER ? 1 : w.kind === NODE ? 1.2 : 0.7;
+        const big = BOSSES.includes(w.kind) ? 3 : w.kind === BRUTE ? 1.6 : w.kind === CRAWLER ? 1 : w.kind === NODE ? 1.2 : 0.7;
         this.fx.explosion(at, big);
         this.sound.blast(4 * big, at);
       }
@@ -1180,6 +1185,56 @@ function nodeMesh() {
   const feet = [0, 1, 2].map((k) => [1.6 * Math.sin((k * 2 * Math.PI) / 3), 1.6 * Math.cos((k * 2 * Math.PI) / 3)]);
   const legs = legsOf(group, hips, feet, 1.2, 0.08);
   group.userData = { legs, fungus, stride: 1.0, phases: [0, (2 * Math.PI) / 3, (4 * Math.PI) / 3] };
+  return group;
+}
+
+/**
+ * Co-op's first boss, the Excavator, along -Z: a mining drill rig on two great treads, its body
+ * and cab over them, a huge cone drill on an arm out front (`userData.drill`, turning), fungus
+ * thick over its back.
+ */
+function excavatorMesh() {
+  const group = new THREE.Group();
+  for (const x of [-2.6, 2.6]) {
+    part(group, new THREE.BoxGeometry(1.8, 2.0, 9.0), foeDark, x, 1.0, 0.5);
+    for (let z = -3; z <= 4; z += 1.75) part(group, new THREE.CylinderGeometry(0.8, 0.8, 1.9, 10).rotateZ(Math.PI / 2), foePaint, x, 1.0, z);
+  }
+  part(group, new THREE.BoxGeometry(5.0, 3.0, 7.0), foePaint, 0, 3.4, 1.0);
+  part(group, new THREE.BoxGeometry(2.2, 2.0, 2.4), foeDark, -1.2, 5.9, 2.4); // the cab
+  part(group, ball, foeGlow, -1.2, 6.0, 1.18).scale.set(0.8, 0.3, 0.05); // its window, taken over
+  part(group, new THREE.BoxGeometry(5.1, 0.5, 7.1), foeHazard, 0, 2.1, 1.0);
+  part(group, new THREE.BoxGeometry(1.6, 1.4, 3.2), foeDark, 0, 3.6, -3.4); // the arm
+  const drill = new THREE.Group();
+  drill.position.set(0, 3.6, -5.2);
+  group.add(drill);
+  const cone = part(drill, new THREE.ConeGeometry(2.0, 4.2, 10), foeHazard, 0, 0, -2.0);
+  cone.rotation.x = -Math.PI / 2;
+  for (let k = 0; k < 4; k++) part(drill, new THREE.BoxGeometry(0.25, 3.6, 0.3), foeDark, 0, 0, -1.6).rotation.z = (k * Math.PI) / 4;
+  const fungus = blobs(group, [[1.8, 5.1, 3.6, 0.9], [-1.9, 5.0, -0.5, 0.7], [0.6, 5.2, 0.8, 0.6], [2.4, 4.0, -1.8, 0.5], [-2.5, 3.8, 3.8, 0.55], [1.0, 4.4, 4.6, 0.45]]);
+  group.userData = { legs: [], drill, fungus, stride: 1, phases: [] };
+  return group;
+}
+
+/**
+ * Co-op's last boss, the Hive walker, along -Z: a towering six-legged walker, a long hull slung
+ * between its legs, and on its back the hive's sac (`userData.sac`), great and heaving, crawlers
+ * clinging round it.
+ */
+function hiveMesh() {
+  const group = new THREE.Group();
+  part(group, new THREE.BoxGeometry(5.0, 2.4, 9.0), foePaint, 0, 6.4, 0);
+  part(group, new THREE.BoxGeometry(4.2, 1.0, 8.0), foeDark, 0, 4.9, 0);
+  part(group, new THREE.BoxGeometry(2.4, 1.6, 2.0), foeDark, 0, 6.6, -5.2); // its head
+  for (const x of [-0.6, 0.6]) part(group, ball, foeGlow, x, 6.8, -6.25).scale.setScalar(0.25);
+  const sac = part(group, ball, foeGlow, 0, 9.6, 0.8);
+  sac.userData.r = 3.0;
+  sac.scale.setScalar(3.0);
+  const fungus = blobs(group, [[2.4, 8.0, -2.6, 0.8], [-2.3, 8.1, 3.4, 0.9], [1.6, 7.8, 4.2, 0.6], [-1.8, 7.9, -3.2, 0.55]]);
+  const rows = [-3.2, 0, 3.2];
+  const hips = rows.flatMap((z) => [[-2.4, 6.0, z], [2.4, 6.0, z]]);
+  const feet = rows.flatMap((z) => [[-6.5, z * 1.4], [6.5, z * 1.4]]);
+  const legs = legsOf(group, hips, feet, 4.4, 0.4);
+  group.userData = { legs, sac, fungus, stride: 3.2, phases: [0, Math.PI, Math.PI, 0, 0, Math.PI] };
   return group;
 }
 

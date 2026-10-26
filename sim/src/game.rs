@@ -73,6 +73,22 @@ const MORTAR_PILOT: f32 = 30.0;
 const NODE_DOME: f32 = 250.0;
 const NODE_DOME_STEP: f32 = 20.0;
 const NODE_RECHARGE: f32 = 8.0;
+/// Co-op's bosses (see `bosses_act`).
+const EXCAVATOR_REACH: f32 = 10.0;
+const EXCAVATOR_DRILL: f32 = 60.0;
+const EXCAVATOR_GRIND: f32 = 20.0;
+const EXCAVATOR_FIRST: f32 = 12.0;
+const EXCAVATOR_EVERY: f32 = 20.0;
+const EXCAVATOR_UNDER: f32 = 4.0;
+const UNDERGROUND: f32 = 30.0;
+const QUAKE_RADIUS: f32 = 12.0;
+const QUAKE_DAMAGE: f32 = 120.0;
+const QUAKE_PILOT: f32 = 30.0;
+const QUAKE_STUN: f32 = 3.0;
+const HIVE_EVERY: f32 = 10.0;
+const HIVE_BROOD: usize = 3;
+const HIVE_BURST: usize = 8;
+const HIVE_EMP: f32 = 25.0;
 const ELITE_WRECK: f32 = 2.0;
 /// Co-op's reactor as a torch meets it: a ball REACTOR_BODY round, REACTOR_MIDDLE over its foot.
 const REACTOR_MIDDLE: f32 = 6.0;
@@ -670,7 +686,7 @@ impl Game {
                 let full = match d.kind {
                     Kind::Sentry => SENTRY_SHIELD,
                     Kind::Hauler => convoy::SHIELD,
-                    Kind::Walker | Kind::Crawler | Kind::Brute | Kind::Mortar | Kind::Node => defense::hull(d.kind, defense::WAVES),
+                    Kind::Walker | Kind::Crawler | Kind::Brute | Kind::Mortar | Kind::Node | Kind::Excavator | Kind::Hive => defense::hull(d.kind, defense::WAVES),
                     Kind::Arc | Kind::Pulse => defense::tower_hull(defense::TIERS),
                     _ => sizes.turret_hull,
                 };
@@ -2010,9 +2026,7 @@ impl Game {
         out.news.extend(news);
         out.lost |= d.hull <= 0.0;
         for (owner, kind, at, hull) in out.spawn {
-            let pos = self.ground(at);
-            let ready = tick + secs(WALKER_WARMUP);
-            self.deployables.push(Deployable { kind, team: 1, owner, pos, yaw: 0.0, pitch: 0.0, hull, placed: tick, expires: u32::MAX, ready, burst: 0 });
+            self.put_foe(owner, kind, at, hull);
         }
         for at in out.elites {
             let seed = u64::from(tick) << 8 | 0x5a;
@@ -2028,7 +2042,8 @@ impl Game {
         for (owner, at, _) in out.moves {
             let pos = self.ground(at);
             if let Some(w) = self.deployables.iter_mut().find(|w| w.kind.lane_enemy() && w.owner == owner) {
-                w.pos = pos;
+                // A burrowing Excavator goes under its lane.
+                w.pos = if w.kind == Kind::Excavator && w.burst == 1 { pos - Vector::Y * UNDERGROUND } else { pos };
             }
         }
         self.deployables.retain(|w| !w.kind.lane_enemy() || !out.leaked.contains(&w.owner));
@@ -2119,6 +2134,7 @@ impl Game {
         let near = |a: Vector, b: Vector, r: f32| (a - b).with_y(0.0).length() <= r && (a.y - b.y).abs() < 4.0;
         self.shell_towers(&towers);
         self.shield_foes();
+        self.bosses_act(&towers);
         for k in 0..self.deployables.len() {
             let e = self.deployables[k];
             if e.hull <= 0.0 || tick < e.ready {
@@ -2194,6 +2210,89 @@ impl Game {
                 self.apply_damage_by(None, j, MORTAR_PILOT, Cause::Unknown);
             }
         }
+    }
+
+    /// Co-op's bosses. The Excavator grinds every tower within EXCAVATOR_REACH (EXCAVATOR_DRILL a
+    /// second, EXCAVATOR_GRIND to pilots), and EXCAVATOR_EVERY (first EXCAVATOR_FIRST after it
+    /// comes) burrows: UNDERGROUND under its lane for EXCAVATOR_UNDER (out of reach and sight),
+    /// rushing on, then bursting up: QUAKE_DAMAGE to every tower within QUAKE_RADIUS, stunned
+    /// QUAKE_STUN, and QUAKE_PILOT to pilots. (`burst` 1 while it's under.) The Hive walker breeds
+    /// HIVE_BROOD crawlers every HIVE_EVERY, and as it falls past two thirds and a third of its hull
+    /// HIVE_BURST more and an EMP stunning every tower within HIVE_EMP for QUAKE_STUN (`burst`'s
+    /// bits mark those done).
+    fn bosses_act(&mut self, towers: &[usize]) {
+        let tick = self.tick;
+        let near = |a: Vector, b: Vector, r: f32| (a - b).with_y(0.0).length() <= r;
+        for k in 0..self.deployables.len() {
+            let b = self.deployables[k];
+            if !b.kind.boss() || b.hull <= 0.0 {
+                continue;
+            }
+            let Some(d) = self.defense.as_mut() else { return };
+            let full = d.hull_of(b.kind);
+            // (Where, how far, what to every tower and pilot there, and whether it stuns the towers.)
+            let mut quake = None;
+            let mut brood = 0;
+            if b.kind == Kind::Excavator {
+                let under = b.burst == 1;
+                if !under && tick >= b.placed + secs(EXCAVATOR_FIRST) && tick >= b.ready {
+                    let until = tick + secs(EXCAVATOR_UNDER);
+                    d.rush(b.owner, until);
+                    (self.deployables[k].burst, self.deployables[k].ready) = (1, until);
+                    self.events.push(Event::Stun { at: b.pos, radius: 6.0 });
+                } else if under && tick >= b.ready {
+                    (self.deployables[k].burst, self.deployables[k].ready) = (0, tick + secs(EXCAVATOR_EVERY));
+                    let at = b.pos + Vector::Y * UNDERGROUND;
+                    quake = Some((at, QUAKE_RADIUS, QUAKE_DAMAGE, QUAKE_PILOT, true));
+                } else if !under {
+                    quake = Some((b.pos, EXCAVATOR_REACH, EXCAVATOR_DRILL * DT, EXCAVATOR_GRIND * DT, false));
+                }
+            } else {
+                let fell = [2.0 / 3.0, 1.0 / 3.0].iter().enumerate().find(|&(bit, f)| b.hull < f * full && b.burst & (1 << bit) == 0);
+                if let Some((bit, _)) = fell {
+                    self.deployables[k].burst |= 1 << bit;
+                    brood = HIVE_BURST;
+                    quake = Some((b.pos, HIVE_EMP, 0.0, 0.0, true));
+                } else if tick >= b.ready && tick >= b.placed + secs(HIVE_EVERY) {
+                    self.deployables[k].ready = tick + secs(HIVE_EVERY);
+                    brood = HIVE_BROOD;
+                }
+            }
+            if brood > 0 {
+                let taken: Vec<u8> = self.deployables.iter().map(|e| e.owner).collect();
+                let born = self.defense.as_mut().unwrap().brood(b.owner, Kind::Crawler, brood, &taken);
+                for (owner, kind, at, hull) in born {
+                    self.put_foe(owner, kind, at, hull);
+                }
+            }
+            if let Some((at, reach, tower_damage, pilot_damage, stun)) = quake {
+                let hit: Vec<usize> = towers.iter().copied().filter(|&t| t < self.deployables.len() && near(self.deployables[t].pos, at, reach)).collect();
+                for t in hit {
+                    if stun {
+                        let e = &mut self.deployables[t];
+                        (e.ready, e.burst) = (e.ready.max(tick + secs(QUAKE_STUN)), 0);
+                    }
+                    if tower_damage > 0.0 {
+                        self.wear(t, tower_damage, b.owner);
+                    }
+                }
+                if pilot_damage > 0.0 {
+                    let pilots: Vec<usize> = (0..self.players.len()).filter(|&j| self.players[j].team == 0 && near(self.players[j].mech.pos, at, reach)).collect();
+                    for j in pilots {
+                        self.apply_damage_by(None, j, pilot_damage, Cause::Unknown);
+                    }
+                }
+                if stun {
+                    self.events.push(Event::Stun { at: at + Vector::Y, radius: reach });
+                }
+            }
+        }
+    }
+
+    /// Puts down lane enemy `owner` of `kind` with `hull` on the ground under `at`, for the hive.
+    fn put_foe(&mut self, owner: u8, kind: Kind, at: Vector, hull: f32) {
+        let (pos, tick) = (self.ground(at), self.tick);
+        self.deployables.push(Deployable { kind, team: 1, owner, pos, yaw: 0.0, pitch: 0.0, hull, placed: tick, expires: u32::MAX, ready: tick + secs(WALKER_WARMUP), burst: 0 });
     }
 
     /// Co-op's shield nodes: each throws a dome (the item's, on the hive's side, NODE_DOME hull and
@@ -3136,6 +3235,76 @@ mod tests {
         game.step();
         game.step();
         assert!(dome(&game).is_none());
+    }
+
+    /// Runs wave `n` (its break skipped, pilot `id` docked) till its boss comes, every other lane
+    /// enemy shot down as it comes; the boss's index.
+    fn boss_of_wave(game: &mut Game, id: u8, n: u8) -> usize {
+        game.dock(id);
+        game.defense.as_mut().unwrap().wave = n;
+        skip_break(game);
+        for _ in 0..secs(90.0) {
+            game.step();
+            for k in (0..game.deployables.len()).filter(|&k| game.deployables[k].kind.lane_enemy() && !game.deployables[k].kind.boss()).collect::<Vec<_>>() {
+                game.wear(k, 1e4, id);
+            }
+            if let Some(k) = game.deployables.iter().position(|d| d.kind.boss()) {
+                assert!(game.events.iter().any(|e| matches!(e, Event::Defense(defense::News::Boss(_)))));
+                return k;
+            }
+        }
+        panic!("no boss on wave {n}");
+    }
+
+    #[test]
+    fn the_excavator_grinds_towers_and_burrows_under_them_to_burst_up_further_on() {
+        let (mut game, id) = co_op(false);
+        let k = boss_of_wave(&mut game, id, 5);
+        let boss = game.deployables[k];
+        assert_eq!(boss.kind, Kind::Excavator);
+        assert!((boss.hull - 0.6 * 3000.0).abs() < 1.0, "a lone pilot's share: {}", boss.hull);
+        // A tower by it is ground down.
+        aim_to_build(&mut game, id, boss.pos, 4.0);
+        game.players.iter_mut().find(|p| p.id == id).unwrap().mech.health = 100.0;
+        game.build(id, defense::Build::Place(0));
+        game.dock(id);
+        let t = game.deployables.iter().position(|d| d.kind == Kind::MgTurret).unwrap();
+        let before = game.deployables[t].hull;
+        game.step();
+        assert!(game.deployables[t].hull < before || (game.deployables[t].pos - game.deployables[k].pos).with_y(0.0).length() > EXCAVATOR_REACH);
+        // It goes under, and comes up with a quake.
+        let (mut deepest, mut quake) = (f32::MAX, false);
+        for _ in 0..secs(EXCAVATOR_FIRST + EXCAVATOR_UNDER + 1.0) {
+            game.step();
+            let Some(b) = game.deployables.iter().find(|d| d.kind == Kind::Excavator) else { break };
+            deepest = deepest.min(b.pos.y);
+            quake |= game.events.iter().any(|e| matches!(e, Event::Stun { radius, .. } if *radius == QUAKE_RADIUS));
+        }
+        assert!(deepest < boss.pos.y - 20.0 && quake, "{deepest} {quake}");
+    }
+
+    #[test]
+    fn the_hive_walker_breeds_crawlers_and_bursts_with_more_as_it_falls() {
+        let (mut game, id) = co_op(false);
+        let k = boss_of_wave(&mut game, id, 10);
+        assert_eq!(game.deployables[k].kind, Kind::Hive);
+        let crawlers = |game: &Game| game.deployables.iter().filter(|d| d.kind == Kind::Crawler && d.hull > 0.0).count();
+        // Every so often, a few.
+        let mut bred = 0;
+        for _ in 0..secs(HIVE_EVERY + 1.0) {
+            let had = crawlers(&game);
+            game.step();
+            bred += crawlers(&game).saturating_sub(had);
+        }
+        assert!(bred >= HIVE_BROOD, "{bred}");
+        // Past two thirds of its hull, a burst more and an EMP.
+        let had = crawlers(&game);
+        let k = game.deployables.iter().position(|d| d.kind == Kind::Hive).unwrap();
+        let full = game.defense.as_ref().unwrap().hull_of(Kind::Hive);
+        game.deployables[k].hull = 0.6 * full;
+        game.step();
+        assert!(crawlers(&game) >= had + HIVE_BURST);
+        assert!(game.events.iter().any(|e| matches!(e, Event::Stun { radius, .. } if *radius == HIVE_EMP)));
     }
 
     #[test]

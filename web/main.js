@@ -13,7 +13,7 @@ import classesText from '../classes.json?raw';
 import weaponsText from '../weapons.json?raw';
 import { buildArena, HIGH_ONLY, LOW_ONLY } from './arena.js';
 import { Effects, HOT, halo, hot } from './fx.js';
-import { ARC, FOE_NAMES, FOES, HAULER, Objectives, foeHull, foeMiddle, PULSE, TOWER_NAMES, TOWER_PRICES, REACTOR_HULL, SENTRY, SENTRY_HEIGHT, SENTRY_SHIELD, SHIP, SHIP_HULL } from './objectives.js';
+import { ARC, BOSSES, FOE_NAMES, FOES, HAULER, Objectives, foeHull, foeMiddle, PULSE, TOWER_NAMES, TOWER_PRICES, REACTOR_HULL, SENTRY, SENTRY_HEIGHT, SENTRY_SHIELD, SHIP, SHIP_HULL } from './objectives.js';
 import { Preview, weaponThumbs } from './hangar.js';
 import { GLYPHS, STATS, facts as cardFacts, shown } from './cards.js';
 import { controlsHtml } from './controls.js';
@@ -982,6 +982,10 @@ function frame(now) {
       } else if (a === 1) {
         callout = { text: `WAVE ${b} CLEARED`, color: hex(FRIEND.accent), at: now };
         sound.zone('took');
+      } else if (a === 4) {
+        // A boss (of kind b) has come.
+        callout = { text: `${(FOE_NAMES[b] ?? 'A boss').toUpperCase()} IS COMING`, color: hex(FOE.accent), at: now };
+        sound.flagAlarm();
       } else if (a === 3) {
         // Our build order refused (b us, x why).
         if (b === myId) {
@@ -1457,7 +1461,15 @@ function topPanel(hudState, myId, zones, siege, clock) {
     // The reactor's hull, and the walkers still to come or standing; between waves, the countdown.
     const [wave, waves, breakLeft, hull, left] = net.defense().length ? net.defense() : [1, 10, -1, REACTOR_HULL, 0];
     const scrap = Math.floor(net.scrap()[myId] ?? 0);
-    main = `<span class="us"><small>WAVE</small> ${wave}/${waves}</span><span class="us"><small>REACTOR</small>${bar((1000 * hull) / REACTOR_HULL)}${Math.ceil(hull)}</span><span class="us"><small>SCRAP</small> ${scrap}</span><span class="them">${left} <small>WALKERS</small></span>`;
+    // A boss on the field gets its own bar.
+    const list = game.deployables();
+    let boss = '';
+    for (let i = 0; i < list.length; i += 10) {
+      if (!BOSSES.includes(list[i]) || list[i + 9] <= 0) continue;
+      const kind = list[i], hp = list[i + 9];
+      boss = `<span class="them"><small>${FOE_NAMES[kind].toUpperCase()}</small>${bar((1000 * hp) / foeHull(kind, wave))}${Math.ceil(hp)}</span>`;
+    }
+    main = `<span class="us"><small>WAVE</small> ${wave}/${waves}</span><span class="us"><small>REACTOR</small>${bar((1000 * hull) / REACTOR_HULL)}${Math.ceil(hull)}</span><span class="us"><small>SCRAP</small> ${scrap}</span>${boss}<span class="them">${left} <small>WALKERS</small></span>`;
     state = [buildHint, breakLeft >= 0 ? `GET READY · WAVE ${wave} IN ${Math.ceil(breakLeft)}s` : ''].filter(Boolean).join(' · ');
   } else if (mode === CONVOY) {
     // The hauler on its track from our base (left) to theirs, the middle marked, in the color of

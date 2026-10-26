@@ -438,7 +438,7 @@ impl WasmNetClient {
     /// 1 stalled, 2 back up, 3 delivered), b = the team (that took it over, or delivered it; else -1).
     /// Co-op (kind 14): a = what (0 a wave comes: b = which, x = how many; 1 b is cleared; 2 a
     /// walker reached the reactor; 3 player b's build order refused, x = why: `defense::Refusal`'s
-    /// index). Arc pylon lightning (kind 15), two records a jump: a = 0 xyz = from, then a = 1
+    /// index; 4 a boss came, b = its kind). Arc pylon lightning (kind 15), two records a jump: a = 0 xyz = from, then a = 1
     /// xyz = to. Pulse pylon EMP (kind 16): a = radius, xyz = where. Mortar shell fired (kind 17),
     /// two records: a = 0 xyz = from, then a = 1 xyz = where it lands; b = its flight (s).
     pub fn take_events(&mut self) -> Vec<f32> {
@@ -475,6 +475,7 @@ impl WasmNetClient {
                         News::Cleared(n) => [14.0, 1.0, f32::from(n), 0.0, 0.0, 0.0],
                         News::Hit => [14.0, 2.0, 0.0, 0.0, 0.0, 0.0],
                         News::Refused { id, why } => [14.0, 3.0, f32::from(id), why as u8 as f32, 0.0, 0.0],
+                        News::Boss(kind) => [14.0, 4.0, kind as u8 as f32, 0.0, 0.0, 0.0],
                     });
                 }
                 Event::Zap { from, to } => {
