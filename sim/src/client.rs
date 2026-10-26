@@ -192,7 +192,7 @@ impl NetClient {
         }
         if self.mech.beaming {
             let others = self.obstacles.iter().filter(|(_, _, m)| m.health > 0.0).map(|(id, _, m)| (*id, self.arsenal.of(m), m));
-            self.mech.beam_end = weapon::beam(&self.arena, self.arsenal.of(&self.mech), &self.mech, others).0;
+            (self.mech.beam_end, self.mech.beam_on) = weapon::beam(&self.arena, self.arsenal.of(&self.mech), &self.mech, others);
         }
         self.fly_own();
         self.render_offset *= 0.7;

@@ -349,6 +349,27 @@ addEventListener('mouseup', (e) => {
   if (e.button === 1) auxHeld = false;
 });
 addEventListener('contextmenu', (e) => e.preventDefault());
+// ?capture: the page under remote control, for the guide's screen grabs (tools/capture.js): the
+// camera set anywhere, the view held still, and our mech looking, firing
+// and locking on with no mouse; keys still come in as key events. Only in dev, or a build made with
+// VITE_CAPTURE=1: never in what players get, where it would aim for them.
+const remote = (import.meta.env.DEV || import.meta.env.VITE_CAPTURE) && params.has('capture') ? (globalThis.__capture = {
+  /** null: the game's own camera. { eye, look }: there, in world metres. */
+  view: null,
+  /** While set, the last frame stays on screen. */
+  hold: false,
+  team: -1,
+  look: (y, p) => { yaw = y; pitch = p; },
+  fire: (main, alt = false) => { firing = main; altFiring = alt; },
+  lock: (on) => { auxHeld = on; aux ||= on; },
+  me: () => ({ pos: pos.toArray(), yaw, pitch, health: curr[S.HEALTH], heat: curr[S.HEAT], overheated: !!curr[S.OVERHEATED], fuel: curr[S.FUEL], lock: curr[S.LOCK] - 1, lockT: curr[S.LOCK_T] }),
+  mechs: () => [...remotes].map(([id, e]) => ({ id, team: e.team, cls: e.cls, bot: e.bot, health: e.health, pos: e.pos.toArray(), yaw: e.yaw, boosting: e.boosting, hovering: e.hovering, repairing: e.repairing, ability: e.ability && e.mech.weapons.ability.id, loadout: e.loadout })),
+  objectives: () => objectives,
+  /** How far a ray from `o` along `d` (unit) goes before it hits the arena, up to `max`. */
+  ray: (o, d, max) => game.cast_ray(...o, ...d, max),
+  /** Deployables (10 floats each: kind, team, owner, xyz...), health orbs (5 each: xyz...) and smoke clouds (5 each: xyz, radius, left). */
+  field: () => ({ deployables: [...game.deployables()], orbs: [...orbs], clouds: [...clouds] }),
+}) : null;
 addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
   if (e.code === 'Space') e.preventDefault();
@@ -723,7 +744,9 @@ const repairPhase = (t, cls = classIdx) => (t > 0 ? Math.min(t / Math.max(classV
 let prev = game.state(), curr = prev, acc = 0, last = performance.now();
 const eye = new THREE.Vector3(), offset = new THREE.Vector3(), aim = new THREE.Vector3();
 const pos = new THREE.Vector3(), vel = new THREE.Vector3(), seen = new THREE.Vector3(), step = new THREE.Vector3();
-const beamFrom = new THREE.Vector3(), beamTo = new THREE.Vector3();
+const beamFrom = new THREE.Vector3(), beamTo = new THREE.Vector3(), beamAim = new THREE.Vector3();
+/** The way `yaw` and `pitch` look, as the sim's `aim_ray` has it. */
+const aimDir = (yaw, pitch) => beamAim.set(0, Math.sin(pitch), -Math.cos(pitch)).applyAxisAngle(THREE.Object3D.DEFAULT_UP, yaw);
 const BEAM_HOLD = 120; // ms a remote's beam stays drawn after the server last said it was on
 // How faint camouflage draws a mech: our own or a teammate's (a ghost), and an enemy's (a veil
 // that dims what's behind it by about 6%, on any map: faint, but there to see).
@@ -740,6 +763,7 @@ const toChest = (p, cls) => { p.y += classValue(cls, 'mech_height') * 0.5; retur
 const padStands = new Map(), padAt = new THREE.Vector3();
 
 function frame(now) {
+  if (remote?.hold) return void requestAnimationFrame(frame);
   renderer.info.reset();
   const dt = Math.min((now - last) / 1000, 0.25);
   acc += dt;
@@ -799,6 +823,7 @@ function frame(now) {
   if (net) ensureArena(net.map());
   const hudState = net ? net.hud() : null;
   const [myId, myTeam] = hudState ? [hudState[0], hudState[6]] : [-1, -1];
+  if (remote) remote.team = myTeam;
   // In Deathmatch everyone's their own team: paint us blue and the rest red, as by side.
   const dm = hudState?.[20] === DEATHMATCH, assault = hudState?.[20] === MISSILE_ASSAULT, sieging = hudState?.[20] === SIEGE;
   const zones = net ? net.zones() : new Float32Array(0), siege = net ? net.siege() : new Float32Array(0);
@@ -866,7 +891,7 @@ function frame(now) {
     if (hudState?.[16] >= 0) pickerOpen = true;
   }
   chase += ((curr[S.REPAIR_T] > 0 || curr[S.STAND] > 0 ? 1 : 0) - chase) * (1 - Math.exp(-5 * dt));
-  firstPerson = chase < 0.02 && killcam === null;
+  firstPerson = chase < 0.02 && killcam === null && !remote?.view;
   me.root.visible = !firstPerson;
   // Camouflage shows us as a ghost: our mech in the chase view, our guns from the cockpit.
   const myCloak = curr[S.ABILITY_T] > 0 && armament(loadout).ability.id === 'cloak' ? CLOAK_SEEN : 0;
@@ -922,7 +947,7 @@ function frame(now) {
         repair: repairPhase(e.repairAt === null ? 0 : (now - e.repairAt) / 1000 + 1e-3, cls),
         cloak: e.hidden ? CLOAK_HIDDEN : e.cloaked ? CLOAK_SEEN : 0, hidden: e.hidden, wind, burn,
       });
-      if (now - (e.beamAt ?? -Infinity) < BEAM_HOLD) fx.mend(id + 1, e.mech.launcher.getWorldPosition(beamFrom), e.beamTo, dt);
+      if (now - (e.beamAt ?? -Infinity) < BEAM_HOLD) fx.mend(id + 1, e.mech.launcher.getWorldPosition(beamFrom), e.beamTo, dt, aimDir(ryaw, rpitch));
       if (now < (e.jammedUntil ?? 0) && !e.hidden) fx.jam(toChest(spark.copy(e.pos), cls), dt);
       if (health > 0) debug.hitbox(e.pos, classValue(cls, 'mech_radius'), classValue(cls, 'mech_height') * (repairing ? CROUCH : 1));
     }
@@ -1200,6 +1225,10 @@ function frame(now) {
     const room = game.cast_ray(eye.x, eye.y, eye.z, offset.x, offset.y, offset.z, want + 0.5) - 0.5;
     camera.position.addScaledVector(offset, (Math.max(room, 0.5) / want) * chase);
   }
+  if (remote?.view) {
+    camera.position.set(...remote.view.eye);
+    camera.lookAt(...remote.view.look);
+  }
   shake *= Math.exp(-6 * dt);
   // A small FOV kick while boosting sells the speed.
   boostKick += ((curr[S.BOOSTING] ? 1 : 0) - boostKick) * (1 - Math.exp(-6 * dt));
@@ -1220,7 +1249,7 @@ function frame(now) {
   // A held beam, from the launcher (the cockpit's, in first person) to where the sim says it stops.
   if (curr[S.BEAM]) {
     const from = firstPerson && cockpit.weapons ? cockpit.launcherTip(camera, beamFrom) : me.launcher.getWorldPosition(beamFrom);
-    fx.mend(0, from, beamTo.set(curr[S.BEAM_END], curr[S.BEAM_END + 1], curr[S.BEAM_END + 2]), dt);
+    fx.mend(0, from, beamTo.set(curr[S.BEAM_END], curr[S.BEAM_END + 1], curr[S.BEAM_END + 2]), dt, aimDir(yaw, pitch));
   }
   // ...and light it from the night lamps and flashes nearby (not our own guns': the cockpit flashes those).
   if (firstPerson) {
