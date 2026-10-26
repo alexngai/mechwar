@@ -257,6 +257,9 @@ enum Phase {
 }
 
 pub struct Game {
+    /// Damage curves of one kit on another (class, primary, secondary each), for bots weighing
+    /// fights: made as matchups come up, and kept.
+    matchups: std::collections::HashMap<[u8; 6], crate::threat::Curve>,
     /// Tuning per class and loadout.
     arsenal: Arsenal,
     pub tick: u32,
@@ -264,6 +267,8 @@ pub struct Game {
     pub bots: bool,
     /// Bots' skill, 0 (raw) to 1 (sharp): each bot's own spreads around it.
     pub bot_skill: f32,
+    /// Plays on with bots alone and no human connected, for balance runs (`add_bot` seats them).
+    pub headless: bool,
     pub mode: Mode,
     /// Team kills that win the match; in Deathmatch, as many solo kills' worth of points.
     pub score_limit: u16,
@@ -307,9 +312,16 @@ pub struct Game {
 
 impl Game {
     pub fn new(tuning: Tuning, map: usize) -> Self {
+        Self::with_arsenal(Arsenal::new(&tuning), map)
+    }
+
+    /// `new` with weapons and classes other than the compiled-in ones: a balance run's tweaks
+    /// (`Arsenal::tweaked`).
+    pub fn with_arsenal(arsenal: Arsenal, map: usize) -> Self {
         let data = Map::load(map);
         assert!(data.spawns.iter().all(|s| s.len() >= TEAM_SIZE), "map needs {TEAM_SIZE} spawns per team");
         Self {
+            matchups: std::collections::HashMap::new(),
             map,
             mode: Mode::default(),
             rotation: Vec::new(),
@@ -325,10 +337,11 @@ impl Game {
             siege: None,
             ctf: None,
             convoy: None,
-            arsenal: Arsenal::new(&tuning),
+            arsenal,
             tick: 0,
             bots: true,
             bot_skill: 0.5,
+            headless: false,
             score_limit: 25,
             match_seconds: 600.0,
             players: Vec::new(),
@@ -437,6 +450,20 @@ impl Game {
         Some(id)
     }
 
+    /// Seats `bot` on `team` (in Deathmatch, its own) as `class`: a balance run's line-up.
+    pub fn add_bot(&mut self, team: u8, bot: Bot, class: MechClass) -> Option<u8> {
+        self.add_player(team, Some(bot), class)
+    }
+
+    /// Puts player `id` at `pos` facing `toward`, with `hull` of its health and no spawn shield: a
+    /// drill's set-up.
+    pub fn place(&mut self, id: u8, pos: Vector, toward: Vector, hull: f32) {
+        let Some(p) = self.players.iter_mut().find(|p| p.id == id) else { return };
+        let max = self.arsenal.of(&p.mech).health_max;
+        let d = toward - pos;
+        (p.mech.pos, p.mech.yaw, p.mech.pitch, p.mech.health, p.mech.shield) = (pos, libm::atan2f(-d.x, -d.z), 0.0, hull * max, 0.0);
+    }
+
     pub fn leave(&mut self, id: u8) {
         self.players.retain(|p| p.id != id);
         self.roster_version += 1;
@@ -513,7 +540,7 @@ impl Game {
                 let class = MechClass::ALL[(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33) as usize % 3];
                 self.add_player(team, Some(Bot::with_skill(seed, self.bot_skill)), class);
             }
-        } else {
+        } else if !self.headless {
             if !self.players.is_empty() {
                 self.players.clear();
                 self.roster_version += 1;
@@ -552,7 +579,8 @@ impl Game {
         // radio in of those they see; it fights the one it picks from those in view, favoring one
         // a teammate is already on. With nothing to go on it groups on its team's lead (a human
         // if there's one alive), and a repair torch follows the nearest teammate and gets the
-        // most hurt one it can see within twice its beam's reach.
+        // most hurt one it can see within twice its beam's reach, to mend all but a scratch off
+        // (stopping at 80% left the torch idle between fights, its mates going in short).
         let alive = |p: &Player| p.mech.health > 0.0;
         let lead_of = |team: u8| {
             let mates = || self.players.iter().filter(move |p| p.team == team && alive(p));
@@ -568,7 +596,11 @@ impl Game {
         // Objectives to take or hold, in Missile Assault, Siege, Capture the Flag and Convoy.
         let hauler = self.deployables.iter().find(|d| d.kind == Kind::Hauler).map(|d| d.pos);
         let orders = match (&self.assault, &self.siege, &self.ctf, self.convoy.as_ref().zip(hauler)) {
-            (Some(a), ..) => Some(a.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.mech.health > 0.0)).collect::<Vec<_>>())),
+            (Some(a), ..) => {
+                // Each team's bots go after as many silos at once as its first bot's policy says.
+                let spread = [0, 1].map(|team| self.players.iter().filter(|p| p.team == team).find_map(|p| p.bot.as_ref()).map_or(usize::MAX, |b| b.policy.assault_spread.round().max(1.0) as usize));
+                Some(a.orders_spread(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.mech.health > 0.0)).collect::<Vec<_>>(), spread))
+            }
             (_, Some(s), ..) => {
                 let ships = [0, 1].map(|t| self.deployables.iter().any(|d| d.kind == Kind::Ship && d.team == t));
                 Some(s.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.eu)).collect::<Vec<_>>(), ships))
@@ -577,6 +609,22 @@ impl Game {
             (.., Some((c, at))) => Some(c.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.mech.health > 0.0)).collect::<Vec<_>>(), at)),
             _ => None,
         };
+        let mut matchups = std::mem::take(&mut self.matchups);
+        // Which enemies have a clear line to which players (eye to middle, within their weapons'
+        // reach): for bots weighing how an enemy's fire is split.
+        let up = |q: &Player| q.mech.health > 0.0 && q.respawn_at.is_none();
+        let mut lines: Vec<(u8, u8)> = Vec::new();
+        for q in self.players.iter().filter(|q| up(q)) {
+            let tq = self.arsenal.of(&q.mech);
+            let eye = q.mech.pos + Vector::Y * tq.eye_height;
+            for m in self.players.iter().filter(|m| m.team != q.team && up(m)) {
+                let mid = m.mech.pos + Vector::Y * (self.arsenal.of(&m.mech).mech_height * 0.5);
+                let d = mid - eye;
+                if d.length() <= tq.weapon_range && self.arena.cast_ray(&Ray::new(eye, d / d.length()), d.length()).is_none() {
+                    lines.push((q.id, m.id));
+                }
+            }
+        }
         for i in 0..self.players.len() {
             let me = &self.players[i];
             if me.bot.is_none() {
@@ -606,9 +654,28 @@ impl Game {
                 };
                 (deploy::target_id(d), Mech { pos: at, health: d.hull, ..Mech::default() }, d.hull / full)
             }));
+            // The kits of the enemies about (players, not turrets): each one's damage on it, and
+            // its on them, by range.
+            let kit = |m: &Mech| [m.class.index() as u8, m.loadout.primary, m.loadout.secondary];
+            let mut curve = |a: &Mech, b: &Mech| {
+                let key = [kit(a), kit(b)].concat().try_into().expect("six");
+                *matchups.entry(key).or_insert_with(|| crate::threat::Curve::of(self.arsenal.of(a), self.arsenal.of(b)))
+            };
+            let foes: Vec<bot::FoeKit> = enemies
+                .iter()
+                .filter_map(|&(id, _, _)| self.players.iter().find(|q| q.id == id))
+                .map(|q| {
+                    let theirs = self.arsenal.of(&q.mech);
+                    let watching = lines.iter().filter(|&&(from, to)| from == q.id && to != me.id).count() as u8;
+                    bot::FoeKit { id: q.id, on_me: curve(&q.mech, &me.mech), mine: curve(&me.mech, &q.mech), hull: theirs.health_max, eye: theirs.eye_height, mid: theirs.mech_height * 0.5, watching }
+                })
+                .collect();
+            let mates: Vec<(Vector, Option<u8>)> = self.players.iter().filter(|q| q.team == me.team && q.id != me.id && up(q)).map(|q| (q.mech.pos, q.bot.as_ref().and_then(Bot::focus))).collect();
             let (team, id) = (usize::from(me.team), me.id);
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
+            bot.foes = foes;
+            bot.mates = mates;
             bot.engaged.clone_from(&engaged[team]);
             bot.smoke.clone_from(&self.clouds);
             bot.domes.clone_from(&self.deployables);
@@ -625,13 +692,14 @@ impl Game {
             let t = self.arsenal.of(&me.mech);
             let hurt = |q: &&Player| q.mech.health / self.arsenal.of(&q.mech).health_max;
             let mates = || self.players.iter().filter(|q| q.team == me.team && q.id != me.id && alive(q));
+            let mid = |q: &Player| self.arsenal.of(&q.mech).mech_height * 0.5;
             let heal = (t.alt_beam > 0.0)
                 .then(|| {
                     mates()
-                        .filter(|q| hurt(q) < 0.8)
-                        .filter(|q| q.mech.pos.distance(me.mech.pos) < 2.0 * t.alt_beam && bot::sees(&self.arena, t, &me.mech, &q.mech))
+                        .filter(|q| hurt(q) < 0.97)
+                        .filter(|q| q.mech.pos.distance(me.mech.pos) < 2.0 * t.alt_beam && bot::sees_at(&self.arena, t, &me.mech, q.mech.pos + Vector::Y * mid(q)))
                         .min_by(|a, b| hurt(a).total_cmp(&hurt(b)))
-                        .map(|q| q.mech)
+                        .map(|q| (q.mech, mid(q)))
                 })
                 .flatten();
             // A torch follows the nearest teammate without one (so two torches don't hold on each
@@ -643,8 +711,16 @@ impl Game {
                 .and_then(|l| torch(me).then(|| mates().filter(|q| !torch(q)).min_by(|a, b| dist(a).total_cmp(&dist(b)))).flatten().or_else(|| mates().find(|q| q.id == l)))
                 .map(|q| q.mech.pos);
             let team = usize::from(me.team);
+            // Whether an enemy stands in the blast of its limpet, if it has one down.
+            let reach = items(&self.arsenal).limpet_radius;
+            let limpet_hits = me.mech.limpet
+                && self.projectiles.iter().filter(|f| f.p.owner == me.id && projectile::item(&f.p) == Some(Item::Limpet)).any(|f| {
+                    self.players.iter().any(|q| q.team != me.team && q.mech.health > 0.0 && (q.mech.pos + Vector::Y * (self.arsenal.of(&q.mech).mech_height * 0.5)).distance(f.p.pos) < reach)
+                });
+            let mates_near = self.players.iter().filter(|q| q.team == me.team && q.id != me.id && alive(q) && q.mech.pos.distance(me.mech.pos) < bot::MATES_NEAR).count() as u8;
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
+            bot.mates_near = mates_near;
             for &(from, enemy, at) in &radio[team] {
                 if from != p.id {
                     bot.told(enemy, at, self.tick);
@@ -652,27 +728,39 @@ impl Game {
             }
             bot.lead = lead;
             bot.order = orders.as_ref().and_then(|o| o[i]);
+            // The zone that order is in, if it's one to hold.
+            let zones = self.assault.iter().flat_map(|a| a.silos.iter()).chain(self.siege.iter().flat_map(|s| std::iter::once(&s.aa).chain(s.stations.iter().map(|(z, _)| z))));
+            bot.order_zone = bot.order.and_then(|o| zones.clone().find(|z| z.holds(o))).map(|z| crate::tactics::Hold { at: z.at, radius: z.radius, band: z.band });
+            bot.limpet_hits = limpet_hits;
             bot.orbs.clear();
             bot.orbs.extend(self.orbs.iter().filter(|o| o.dropped.is_none_or(|(_, side)| usize::from(side) == team)).map(|o| o.pos));
             let (focus, enemies) = &seen[i];
             let target = focus.and_then(|id| enemies.iter().find(|e| e.0 == id)).map(|e| e.1);
-            let mut input = bot.think_with(&self.arena, self.nav, t, &p.mech, target.as_ref(), heal.as_ref(), self.tick);
+            let mut input = bot.think_with(&self.arena, self.nav, t, &p.mech, target.as_ref(), heal.as_ref().map(|(m, mid)| (m, *mid)), self.tick);
+            if p.mech.health > 0.0 {
+                p.tally.doing[bot.doing() as usize] += 1;
+            }
             #[cfg(test)]
             {
                 bot.last = input;
             }
-            // Burst a shell that has flown past the target with the target inside its blast.
-            if let Some(tm) = &target {
-                let tt = self.arsenal.of(tm);
-                let chest = tm.pos + Vector::Y * (tt.mech_height * 0.5);
-                input.alt_fire |= self.projectiles.iter().any(|f| {
-                    let ts = self.arsenal.get(f.p.class, f.p.loadout);
-                    f.p.owner == p.id && projectile::armed(&f.p) && f.p.vel.dot(chest - f.p.pos) < 0.0 && projectile::splash(&self.arena, ts, false, f.p.pos, tt, tm) > 0.0
-                });
-            }
+            // Burst a shell that has flown past the target with the target inside its blast, and a
+            // splitting one as soon as any enemy it knows of (in view or not) is inside it: left to
+            // reach them, it would burst on contact, whole, without its bomblets. Pressed now, it
+            // still splits if it hits them in this tick's flight.
+            input.alt_fire |= self.projectiles.iter().filter(|f| f.p.owner == p.id && projectile::armed(&f.p)).any(|f| {
+                let ts = self.arsenal.get(f.p.class, f.p.loadout);
+                let inside = |tm: &Mech| projectile::splash(&self.arena, ts, false, f.p.pos, self.arsenal.of(tm), tm) > 0.0;
+                if ts.alt_split >= 1.0 {
+                    enemies.iter().any(|e| bot.knows(e.0) && inside(&e.1))
+                } else {
+                    target.as_ref().is_some_and(|tm| f.p.vel.dot(tm.pos + Vector::Y * (self.arsenal.of(tm).mech_height * 0.5) - f.p.pos) < 0.0 && inside(tm))
+                }
+            });
             bot.seq += 1;
             p.inputs.push_back(InputMsg { seq: bot.seq, input, view_tick: self.tick as f32 });
         }
+        self.matchups = matchups;
 
         // Inputs are applied exactly as the client predicted them, never guessed or repeated,
         // so reconciliation corrections stay at zero over a reliable transport.
@@ -689,7 +777,14 @@ impl Game {
                 p.ack_seq = msg.seq;
                 let t = self.arsenal.of(&p.mech);
                 let was = p.mech.ability_time;
+                let (ready, beamed) = (p.mech.ability_cooldown <= 0.0, p.mech.beaming);
                 step_mech(&self.arena, t, &mut p.mech, &msg.input);
+                // A beam's use is its start; an ability's starts its cooldown (a Power shot can be
+                // used and spent in a tick).
+                let used = [p.mech.shot, p.mech.launched || p.mech.beaming && !beamed, p.mech.threw, p.mech.pulsed, ready && p.mech.ability_cooldown > 0.0];
+                for (n, used) in p.tally.uses.iter_mut().zip(used) {
+                    *n += u32::from(used);
+                }
                 if p.mech.launched && t.alt_melee > 0.0 {
                     // At foes where its client saw them, its newest snapshot's, as it predicted the lunge.
                     let (mut m, team) = (p.mech, p.team);
@@ -1488,7 +1583,7 @@ impl Game {
             (end, hit) = (eye + (end - eye).normalize_or_zero() * toi, None);
         }
         let (owner, team, heal, burn) = (u.id, u.team, t.alt_beam_heal * DT, t.alt_damage * DT * ability::damage_mult(t, &u.mech));
-        self.players[user].mech.beam_end = end;
+        (self.players[user].mech.beam_end, self.players[user].mech.beam_on) = (end, hit);
         self.events.push(Event::Beam { owner, end, hit });
         if let Some(k) = worn(&self.deployables, t, team, None, hit.is_some(), end) {
             self.wear(k, burn, owner);
@@ -1533,13 +1628,23 @@ impl Game {
         }
         target.mech.end_repair(tt);
         // Assist shares count the health a hit took, not its overkill.
+        let took = damage.min(target.mech.health);
         if let Some((id, _)) = from {
-            target.ledger.push((id, damage.min(target.mech.health), tick));
+            target.ledger.push((id, took, tick));
         }
+        target.tally.taken += took;
         target.mech.health -= damage;
-        if target.mech.health > 0.0 {
+        let dead = target.mech.health <= 0.0;
+        if let Some(a) = attacker.filter(|&a| a != j) {
+            self.players[a].tally.dealt += took;
+            if let Cause::Weapon { slot, .. } = cause {
+                self.players[a].tally.dealt_by[slot as usize] += took;
+            }
+        }
+        if !dead {
             return;
         }
+        let target = &mut self.players[j];
         target.mech.health = 0.0;
         target.deaths += 1;
         target.tally.stats.deaths += 1;
@@ -2154,6 +2259,30 @@ mod tests {
         panic!("bots took {} silos in a minute", owned(&game));
     }
 
+    #[test]
+    fn headless_bots_play_on_and_tally_the_damage() {
+        let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
+        (game.headless, game.match_seconds) = (true, 40.0);
+        for seat in 0..MAX_PLAYERS as u64 {
+            game.add_bot((seat % 2) as u8, Bot::new(seat), MechClass::ALL[seat as usize % 3]).unwrap();
+        }
+        while !game.match_state().ended {
+            game.step();
+        }
+        let tallies: Vec<&Tally> = game.players.iter().map(|p| &p.tally).collect();
+        let (dealt, taken): (f32, f32) = (tallies.iter().map(|t| t.dealt).sum(), tallies.iter().map(|t| t.taken).sum());
+        assert_eq!(game.players.len(), MAX_PLAYERS, "no one cleared out for want of a human");
+        assert!(dealt > 0.0, "no one hit anyone");
+        // Every hull point dealt was taken by someone; base guns' and turrets' with no owner here
+        // are only taken.
+        assert!(dealt <= taken + 1e-3, "dealt {dealt} > taken {taken}");
+        // Every hull point dealt is put down to a slot; guns fired; and bots logged what they did.
+        let by_slot: f32 = tallies.iter().flat_map(|t| t.dealt_by).sum();
+        assert!((by_slot - dealt).abs() < 1e-2 * dealt, "by slot {by_slot}, dealt {dealt}");
+        assert!(tallies.iter().all(|t| t.uses[0] > 0 && t.doing.iter().sum::<u32>() > 0), "a bot that never fired or did nothing");
+        assert!(tallies.iter().any(|t| t.uses[4] > 0), "no ability used");
+    }
+
     /// A Siege on Foundry, with one human in it (and bots, if `bots`).
     fn siege(bots: bool) -> (Game, u8) {
         let mut game = Game::new(Tuning::default(), Map::index("foundry").unwrap());
@@ -2577,7 +2706,9 @@ mod tests {
         assert!((mech(&game, enemy).health - (t.health_max - t.alt_damage * DT)).abs() < 1e-4, "enemy health {}", mech(&game, enemy).health);
         assert!(mech(&game, user).heat > 0.0, "beaming ran cold");
 
-        // Put the teammate there, hurt: it mends, capped at full.
+        // Let go, and put the teammate in the way, hurt: it mends, capped at full.
+        send(&mut game, user, Input { alt_fire: false, ..beam });
+        game.step();
         let p = game.players.iter_mut().find(|p| p.id == mate).unwrap();
         (p.mech.pos, p.mech.health) = (Vector::new(-15.0, 0.1, 24.0), t.health_max - 1.0);
         for _ in 0..secs(1.0) {
@@ -3093,6 +3224,30 @@ mod tests {
     }
 
     #[test]
+    fn repair_torches_mend_teammates_near_full() {
+        let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
+        game.bots = false;
+        // Two bots with no one to fight: one carrying a torch, and a teammate 15 m off a few hits
+        // down. The torch mends it near full, not just to where it isn't badly hurt.
+        let human = game.join().unwrap();
+        game.dock(human);
+        let torch = (0..game.arsenal.counts().1 as u8).find(|&s| game.arsenal.get(MechClass::B, Loadout { secondary: s, ..Loadout::of(MechClass::B) }).alt_beam > 0.0).unwrap();
+        let (medic, mate) = (game.add_player(0, Some(Bot::new(1)), MechClass::B).unwrap(), game.add_player(0, Some(Bot::new(2)), MechClass::B).unwrap());
+        game.pick(medic, MechClass::B, Loadout { secondary: torch, ..Loadout::of(MechClass::B) });
+        game.pick(mate, MechClass::B, Loadout::of(MechClass::B));
+        let max = game.arsenal.of(&mech(&game, mate)).health_max;
+        for (id, pos) in [(medic, Vector::new(0.0, 0.1, 40.0)), (mate, Vector::new(8.0, 0.1, 27.0))] {
+            game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = pos;
+        }
+        game.players.iter_mut().find(|p| p.id == mate).unwrap().mech.health = 0.85 * max;
+        for _ in 0..secs(6.0) {
+            game.step();
+        }
+        let hull = mech(&game, mate).health / max;
+        assert!(hull > 0.95, "mended to {:.0}%", 100.0 * hull);
+    }
+
+    #[test]
     fn bots_go_after_enemy_turrets() {
         let t = Tuning::default();
         let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
@@ -3335,5 +3490,422 @@ mod tests {
         game.step();
         let hits = game.events.iter().find_map(|e| if let Event::Blast { owner, hits, .. } = *e { Some((owner, hits)) } else { None });
         assert_eq!(hits, Some((bot, 1 << human)));
+    }
+
+    /// A bot of `skill` carrying `primary`, its secondary, items and ability held back, `range` from a human
+    /// strafing across its line in the open (turning every 1.2 s) for `seconds`: the game after,
+    /// the bot's id, its rounds fired, and its seeking mark (0 for none) every tick from 1 s on.
+    fn duel_strafer(primary: &str, skill: f32, range: f32, seconds: f32) -> (Game, u8, u32, Vec<u8>) {
+        let t = Tuning::default();
+        let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+        game.bots = false;
+        let human = game.join().unwrap();
+        let mut brain = Bot::new(3);
+        brain.skill = skill;
+        let bot = game.add_player(1, Some(brain), MechClass::B).unwrap();
+        let (from, spot) = (Vector::new(-36.0, 0.1, -42.0), Vector::new(-36.0, 0.1, -42.0 + range));
+        for (id, pos) in [(human, from), (bot, spot)] {
+            let p = game.players.iter_mut().find(|p| p.id == id).unwrap();
+            p.mech.pos = pos;
+            if id == bot {
+                p.mech.loadout = Loadout::named(primary, "rocket");
+            }
+        }
+        unshield(&mut game);
+        let (mut rounds, mut marks) = (0, Vec::new());
+        for k in 0..secs(seconds) {
+            let side = if (k / secs(1.2)) % 2 == 0 { -1.0 } else { 1.0 };
+            send(&mut game, human, Input { move_x: side, yaw: std::f32::consts::PI, ..Input::default() });
+            game.step();
+            for p in &mut game.players {
+                if p.id == bot {
+                    // Held to its spot, its gun alone.
+                    (p.mech.pos, p.mech.vel, p.mech.alt_wait, p.mech.grenades, p.mech.emps, p.mech.ability_cooldown) = (spot, Vector::ZERO, 99.0, 0, 0, 99.0);
+                    rounds += u32::from(p.mech.shot);
+                    if k >= secs(1.0) {
+                        marks.push(p.mech.seek);
+                    }
+                } else {
+                    p.mech.health = t.health_max; // so it never dies
+                }
+            }
+        }
+        (game, bot, rounds, marks)
+    }
+
+    #[test]
+    fn bots_track_a_strafing_target() {
+        // Up close a strafer crosses the sights fast: a bot that aimed where it saw it a reaction
+        // ago (0.25 s, 3 m behind) landed a quarter of its SMG rounds.
+        let (game, bot, rounds, _) = duel_strafer("stitcher", 0.5, 12.0, 12.0);
+        let t = game.arsenal.of(&mech(&game, bot)).clone();
+        let landed = game.tally(bot).unwrap().0.dealt_by[0] / (rounds as f32 * t.shot_damage);
+        assert!(rounds > 50 && landed > 0.4, "landed {landed:.2} of {rounds} rounds");
+    }
+
+    #[test]
+    fn bots_fight_from_cover_and_cool_in_it() {
+        // A rifle bot north-west of the 6 m block at (-5, -30), in sight of a human 20 m south of the
+        // block. The bot takes the block as its post: out from behind it to fire, back in to cool.
+        let t = Tuning::default();
+        let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+        game.bots = false;
+        let human = game.join().unwrap();
+        let bot = game.add_player(1, Some(Bot::new(4)), MechClass::B).unwrap();
+        for (id, pos) in [(human, Vector::new(-5.0, 0.1, -48.0)), (bot, Vector::new(-12.0, 0.1, -22.0))] {
+            let p = game.players.iter_mut().find(|p| p.id == id).unwrap();
+            p.mech.pos = pos;
+            if id == bot {
+                p.mech.loadout = Loadout::named("pike", "rocket");
+            }
+        }
+        unshield(&mut game);
+        let (mut covered, mut cooling, mut hidden, mut ticks) = (0, 0, 0, 0);
+        for _ in 0..secs(20.0) {
+            game.step();
+            for p in &mut game.players {
+                if p.id == bot {
+                    // Its gun alone.
+                    (p.mech.alt_wait, p.mech.grenades, p.mech.emps, p.mech.ability_cooldown) = (99.0, 0, 0, 99.0);
+                } else {
+                    p.mech.health = t.health_max;
+                }
+            }
+            let (b, h) = (mech(&game, bot), mech(&game, human));
+            let state = game.players.iter().find(|p| p.id == bot).unwrap().bot.as_ref().unwrap().post_state();
+            ticks += 1;
+            covered += u32::from(state.is_some_and(|(cover, _)| cover));
+            if let Some((true, true)) = state {
+                cooling += 1;
+                hidden += u32::from(!crate::tactics::exposed(&game.arena, &t, b.pos, h.pos + Vector::Y * t.eye_height));
+            }
+        }
+        let dealt = game.tally(bot).unwrap().0.dealt;
+        assert!(covered * 2 > ticks, "a post with cover only {covered} of {ticks} ticks");
+        assert!(cooling > 30 && hidden * 10 > cooling * 6, "hidden {hidden} of {cooling} ticks cooling");
+        assert!(dealt > 100.0, "dealt only {dealt:.0}");
+    }
+
+    #[test]
+    fn bots_back_up_a_teammates_fight() {
+        // A human 10 m south of the 6 m block at (-5, -30), fought by a bot off to its side; a
+        // second bot stands behind the block, out of its sight, within its trade reach (22 m).
+        // Told of the fight, it goes to a spot it can fire on the human from.
+        let t = Tuning::default();
+        let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+        game.bots = false;
+        let human = game.join().unwrap();
+        let fighter = game.add_player(1, Some(Bot::new(4)), MechClass::B).unwrap();
+        let backup = game.add_player(1, Some(Bot::new(5)), MechClass::B).unwrap();
+        for (id, pos) in [(human, Vector::new(-5.0, 0.1, -42.0)), (fighter, Vector::new(15.0, 0.1, -40.0)), (backup, Vector::new(-5.0, 0.1, -20.0))] {
+            game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = pos;
+        }
+        unshield(&mut game);
+        let in_sight = |g: &Game| bot::sees(&g.arena, &t, &mech(g, backup), &mech(g, human));
+        assert!(!in_sight(&game), "in sight to start with");
+        let (mut traded, mut sighted) = (false, false);
+        for _ in 0..secs(8.0) {
+            game.step();
+            game.players.iter_mut().find(|p| p.id == human).unwrap().mech.health = t.health_max;
+            traded |= game.players.iter().find(|p| p.id == backup).unwrap().bot.as_ref().unwrap().doing() == bot::Doing::Trade;
+            sighted |= in_sight(&game);
+        }
+        assert!(traded && sighted, "traded {traded}, got the human in sight {sighted}");
+    }
+
+    #[test]
+    fn bots_lead_long_lobs_no_further_than_a_strafer_goes() {
+        // An Auto-GL's lob 35 m out flies about 0.8 s, and the bot leads its reaction time on top:
+        // longer than a strafer keeps going one way. Led the whole way, its grenades all landed
+        // past where the target turned back (none hit).
+        let (game, bot, rounds, _) = duel_strafer("hail", 0.5, 35.0, 15.0);
+        let dealt = game.tally(bot).unwrap().0.dealt_by[0];
+        assert!(rounds > 15 && dealt > 20.0, "dealt {dealt:.0} from {rounds} grenades");
+    }
+
+    #[test]
+    fn homing_bots_keep_the_target_marked() {
+        // A homing rocket homes on what's in the crosshair as it flies: a bot leading the target
+        // took it out of the 3° seek cone. (A sharp bot's: a raw one's aim wanders that far.)
+        let (_, _, rounds, marks) = duel_strafer("talon", 1.0, 45.0, 12.0);
+        let marked = marks.iter().filter(|&&m| m != 0).count() as f32 / marks.len() as f32;
+        assert!(rounds > 8 && marked > 0.7, "marked {marked:.2} of the time, {rounds} rockets");
+    }
+
+    #[test]
+    fn bots_use_salve_pall_and_limpet() {
+        let t = Tuning::default();
+        // A bot 20 m south of a human standing in the open, carrying `offensive` and `support`, at
+        // `hull` of its health; the game after up to `seconds`, or as soon as `done` holds.
+        let play = |offensive: &str, support: &str, hull: f32, seconds: f32, done: &dyn Fn(&Game, u8) -> bool| {
+            let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+            game.bots = false;
+            let human = game.join().unwrap();
+            let bot = game.add_player(1, Some(Bot::new(5)), MechClass::B).unwrap();
+            let loadout = Loadout::named("pike", "rocket").with(Slot::Offensive, arsenal::index(Slot::Offensive, offensive)).with(Slot::Support, arsenal::index(Slot::Support, support));
+            for (id, pos) in [(human, Vector::new(0.0, 0.1, -5.0)), (bot, Vector::new(0.0, 0.1, 15.0))] {
+                let m = &mut game.players.iter_mut().find(|p| p.id == id).unwrap().mech;
+                (m.pos, m.loadout) = (pos, loadout);
+                item::fill(&t, m);
+            }
+            unshield(&mut game);
+            game.players.iter_mut().find(|p| p.id == bot).unwrap().mech.health = hull * t.health_max;
+            for _ in 0..secs(seconds) {
+                game.step();
+                game.players.iter_mut().find(|p| p.id == human).unwrap().mech.health = t.health_max; // so it never dies
+                if done(&game, bot) {
+                    return true;
+                }
+            }
+            false
+        };
+        // Hurt, with no orb about: it drops its Salve.
+        assert!(play("grenade", "orb", 0.45, 5.0, &|g, bot| g.orbs.iter().any(|o| o.dropped.is_some_and(|(by, _)| by == bot))), "no Salve dropped");
+        // Falling back in the human's sight: it smokes the way.
+        assert!(play("smoke", "emp", 0.3, 6.0, &|g, _| !g.clouds.is_empty()), "no Pall thrown");
+        // A limpet stuck by the human, then set off: it hurts.
+        assert!(play("limpet", "emp", 1.0, 12.0, &|g, bot| g.tally(bot).unwrap().0.dealt_by[Slot::Offensive as usize] > 0.0), "no limpet damage");
+    }
+
+    #[test]
+    fn bots_split_cluster_canisters_at_their_target() {
+        let t = Tuning::default();
+        let bomblet = |n: u8| (projectile::BOMBLET..projectile::TURRET).contains(&n);
+        let (mut canisters, mut splits, mut bomblets, mut bomblet_hits) = (0, 0, 0, 0);
+        for seed in 1..=6 {
+            let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+            game.bots = false;
+            let human = game.join().unwrap();
+            let bot = game.add_player(1, Some(Bot::new(seed)), MechClass::B).unwrap();
+            // A bot with the cluster launcher 30 m south of a human standing in the open.
+            for (id, pos) in [(human, Vector::new(0.0, 0.1, -5.0)), (bot, Vector::new(0.0, 0.1, 25.0))] {
+                let m = &mut game.players.iter_mut().find(|p| p.id == id).unwrap().mech;
+                m.pos = pos;
+                m.loadout = Loadout::named("pike", "splitter");
+            }
+            unshield(&mut game);
+            for _ in 0..secs(30.0) {
+                game.step();
+                for e in &game.events {
+                    match *e {
+                        Event::Blast { owner, primary: false, n, .. } if owner == bot && n < projectile::BOMBLET => canisters += 1,
+                        Event::Launch(p) if p.owner == bot && bomblet(p.n) => {
+                            splits += u32::from(p.n == projectile::BOMBLET);
+                            bomblets += 1;
+                        }
+                        Event::Blast { owner, primary: false, n, hits, .. } if owner == bot && bomblet(n) && hits & 1 << human != 0 => bomblet_hits += 1,
+                        _ => {}
+                    }
+                }
+                game.players.iter_mut().find(|p| p.id == human).unwrap().mech.health = t.health_max; // so it never dies
+            }
+        }
+        assert!(splits * 3 >= canisters * 2, "only {splits} of {canisters} canisters split");
+        assert!(bomblet_hits * 2 >= bomblets, "only {bomblet_hits} of {bomblets} bomblets hit");
+    }
+
+    #[test]
+    fn bots_lob_shells_onto_shorter_mechs() {
+        // A Heavy bot with Scatter 25 m from a Light standing in the open: the Light's head is below
+        // the Heavy's eye. Lobbed level with that eye, the pellets flew over it.
+        let t = Tuning::default();
+        let (mut pellets, mut caught) = (0, 0);
+        for seed in 1..=4 {
+            let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+            game.bots = false;
+            let human = game.join().unwrap();
+            let bot = game.add_player(1, Some(Bot::new(seed)), MechClass::C).unwrap();
+            for (id, class, pos) in [(human, MechClass::A, Vector::new(0.0, 0.1, -5.0)), (bot, MechClass::C, Vector::new(0.0, 0.1, 20.0))] {
+                let p = game.players.iter_mut().find(|p| p.id == id).unwrap();
+                p.class = class;
+                // Its guns only: no grenades or EMPs.
+                p.mech = Mech { grenades: 0, emps: 0, ..spawn(&game.arsenal, class, Loadout { ability: 2, ..Loadout::named("pike", "darts") }, pos) };
+            }
+            unshield(&mut game);
+            for _ in 0..secs(15.0) {
+                game.step();
+                for e in &game.events {
+                    if let Event::Blast { owner, primary: false, hits, .. } = *e
+                        && owner == bot
+                    {
+                        pellets += 1;
+                        caught += u32::from(hits & 1 << human != 0);
+                    }
+                }
+                let p = game.players.iter_mut().find(|p| p.id == human).unwrap();
+                p.mech.health = game.arsenal.of(&p.mech).health_max; // so it never dies
+            }
+        }
+        // Lobbed level with the eye, 13 of 149 caught it.
+        assert!(pellets >= 100 && caught * 3 >= pellets, "only {caught} of {pellets} pellets caught the Light");
+    }
+
+    #[test]
+    fn bots_fire_shells_out_to_their_fuse() {
+        // A bot held 45 m from a human standing in the open, with Scatter (pellets bursting 60 m
+        // out) and the Cluster launcher (canisters splitting 70 m out): its shells that burst, and
+        // how many caught the human.
+        let t = Tuning::default();
+        for secondary in ["darts", "splitter"] {
+            let (mut bursts, mut caught) = (0, 0);
+            for seed in 1..=3 {
+                let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+                game.bots = false;
+                let human = game.join().unwrap();
+                let bot = game.add_player(1, Some(Bot::new(seed)), MechClass::B).unwrap();
+                let at = Vector::new(0.0, 0.1, 40.0);
+                for (id, pos) in [(human, Vector::new(0.0, 0.1, -5.0)), (bot, at)] {
+                    let m = &mut game.players.iter_mut().find(|p| p.id == id).unwrap().mech;
+                    // Its guns only: no grenades or EMPs.
+                    (m.pos, m.loadout, m.grenades, m.emps) = (pos, Loadout { ability: 1, ..Loadout::named("pike", secondary) }, 0, 0);
+                }
+                unshield(&mut game);
+                for _ in 0..secs(12.0) {
+                    game.step();
+                    for e in &game.events {
+                        if let Event::Blast { owner, primary: false, n, hits, .. } = *e
+                            && owner == bot
+                            && n < projectile::BOMBLET
+                        {
+                            bursts += 1;
+                            caught += u32::from(hits & 1 << human != 0);
+                        }
+                    }
+                    game.players.iter_mut().find(|p| p.id == human).unwrap().mech.health = t.health_max; // so it never dies
+                    let m = &mut game.players.iter_mut().find(|p| p.id == bot).unwrap().mech;
+                    (m.pos, m.vel) = (at, Vector::ZERO);
+                }
+            }
+            // Held to the grenade launcher's 40 m, neither fired at all.
+            assert!(bursts >= 4 && caught * 3 >= bursts, "{secondary}: {caught} of {bursts} caught the human");
+        }
+    }
+
+    #[test]
+    fn furnace_bots_throw_fireballs_once_warm() {
+        // A bot with the Furnace and a rifle held 30 m from a human standing in the open, who drops
+        // out of its sight (camouflaged) every other 3 s, as fights come and go in a match: its gun
+        // cools between sightings. Its fireballs, and how many caught the human.
+        let t = Tuning::default();
+        let (mut fireballs, mut caught) = (0, 0);
+        for seed in 1..=4 {
+            let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+            game.bots = false;
+            let human = game.join().unwrap();
+            let bot = game.add_player(1, Some(Bot::new(seed)), MechClass::B).unwrap();
+            let at = Vector::new(0.0, 0.1, 25.0);
+            for (id, pos) in [(human, Vector::new(0.0, 0.1, -5.0)), (bot, at)] {
+                let m = &mut game.players.iter_mut().find(|p| p.id == id).unwrap().mech;
+                // Its guns only: no grenades or EMPs, and no vent; the human camouflages.
+                (m.pos, m.loadout, m.grenades, m.emps) = (pos, Loadout { ability: arsenal::index(Slot::Ability, if id == bot { "power" } else { "cloak" }), ..Loadout::named("pike", "furnace") }, 0, 0);
+            }
+            unshield(&mut game);
+            for k in 0..secs(24.0) {
+                game.players.iter_mut().find(|p| p.id == human).unwrap().mech.ability_time = if k / secs(3.0) % 2 == 0 { 0.0 } else { 1.0 };
+                game.step();
+                for e in &game.events {
+                    if let Event::Blast { owner, primary: false, hits, .. } = *e
+                        && owner == bot
+                    {
+                        fireballs += 1;
+                        caught += u32::from(hits & 1 << human != 0);
+                    }
+                }
+                game.players.iter_mut().find(|p| p.id == human).unwrap().mech.health = t.health_max; // so it never dies
+                let m = &mut game.players.iter_mut().find(|p| p.id == bot).unwrap().mech;
+                (m.pos, m.vel) = (at, Vector::ZERO);
+            }
+        }
+        // At 60% heat it threw none.
+        assert!(fireballs >= 8 && caught * 4 >= fireballs * 3, "{caught} of {fireballs} fireballs caught the human");
+    }
+
+    #[test]
+    fn bots_close_in_and_land_the_pile_driver() {
+        // A bot with an SMG and the pile driver 15 m from a human in the open, standing, then
+        // strafing side to side: how many strikes it lets go, and how many land.
+        let t = Tuning::default();
+        let (mut released, mut landed) = (0, 0);
+        for (seed, strafe) in (1..=4).flat_map(|seed| [(seed, false), (seed, true)]) {
+            let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+            game.bots = false;
+            let human = game.join().unwrap();
+            let bot = game.add_player(1, Some(Bot::new(seed)), MechClass::B).unwrap();
+            for (id, pos) in [(human, Vector::new(0.0, 0.1, -5.0)), (bot, Vector::new(0.0, 0.1, 10.0))] {
+                let m = &mut game.players.iter_mut().find(|p| p.id == id).unwrap().mech;
+                // Its guns only: no grenades or EMPs.
+                (m.pos, m.loadout, m.grenades, m.emps) = (pos, Loadout { ability: 1, ..Loadout::named("stitcher", "piston") }, 0, 0);
+            }
+            unshield(&mut game);
+            for k in 0..secs(20.0) {
+                let side = if !strafe { 0.0 } else if k / secs(1.2) % 2 == 0 { 1.0 } else { -1.0 };
+                send(&mut game, human, Input { move_x: side, ..Input::default() });
+                game.step();
+                released += u32::from(mech(&game, bot).launched);
+                landed += game.events.iter().filter(|e| matches!(**e, Event::Strike { owner, hit, .. } if owner == bot && hit == human)).count() as u32;
+                let p = game.players.iter_mut().find(|p| p.id == human).unwrap();
+                // So it never dies, nor slams into anything for a second Strike.
+                (p.mech.health, p.knock) = (t.health_max, None);
+            }
+        }
+        // 160 s in all: a strike landed every 5 s or so, and nearly every one let go lands.
+        assert!(landed >= 30, "only {landed} strikes landed (of {released})");
+        assert!(landed * 10 >= released * 9, "only {landed} of {released} strikes landed");
+    }
+
+    #[test]
+    fn bots_aim_at_the_middle_of_each_size_of_mech() {
+        // A bot with the Rifle 40 m from a human standing in the open, each class against each:
+        // its shots that hit, (hits, shots) by its class and the target's.
+        let t = Tuning::default();
+        let loadout = Loadout::named("pike", "rocket");
+        let mut tally = [[(0u32, 0u32); 3]; 3];
+        for (class, target) in MechClass::ALL.into_iter().flat_map(|a| MechClass::ALL.map(|b| (a, b))) {
+            let (hits, shots) = &mut tally[class.index()][target.index()];
+            for seed in 1..=4 {
+                let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+                game.bots = false;
+                let human = game.join().unwrap();
+                let bot = game.add_player(1, Some(Bot::new(seed)), class).unwrap();
+                let at = Vector::new(-36.0, 0.1, -2.0);
+                for (id, pos, c) in [(human, Vector::new(-36.0, 0.1, -42.0), target), (bot, at, class)] {
+                    let p = game.players.iter_mut().find(|p| p.id == id).unwrap();
+                    let l = Loadout { ability: if c == MechClass::C { 2 } else { 1 }, ..loadout };
+                    (p.class, p.loadout, p.next_loadout) = (c, l, l);
+                    p.mech = Mech { class: c, ..spawn(&game.arsenal, c, l, pos) };
+                }
+                unshield(&mut game);
+                for _ in 0..secs(10.0) {
+                    send(&mut game, human, Input::default());
+                    game.step();
+                    for e in &game.events {
+                        if let Event::Shot { shooter, hit, .. } = *e
+                            && shooter == bot
+                        {
+                            (*hits, *shots) = (*hits + u32::from(hit == Some(human)), *shots + 1);
+                        }
+                    }
+                    for p in &mut game.players {
+                        // The bot holds its spot, with its gun alone; the human never dies.
+                        if p.id == bot {
+                            (p.mech.pos, p.mech.vel, p.mech.alt_wait, p.mech.grenades, p.mech.emps, p.mech.ability_cooldown) = (at, Vector::ZERO, 99.0, 0, 0, 99.0);
+                        } else {
+                            p.mech.health = 1.0e3;
+                        }
+                    }
+                }
+            }
+        }
+        // Its own size costs it nothing: on each target it hits about as often as one the
+        // target's size does. Aimed at its own middle's height, a Light hit a Heavy 150 of 204
+        // shots (a Heavy, 214 of 240).
+        let rate = |c: MechClass, t: MechClass| {
+            let (hits, shots) = tally[c.index()][t.index()];
+            assert!(shots >= 100, "{c:?} fired {shots} shots at {t:?}");
+            hits as f32 / shots as f32
+        };
+        for (class, target) in MechClass::ALL.into_iter().flat_map(|a| MechClass::ALL.map(|b| (a, b))) {
+            assert!(rate(class, target) >= 0.9 * rate(target, target), "{class:?} on {target:?}: {:?}", tally);
+        }
     }
 }

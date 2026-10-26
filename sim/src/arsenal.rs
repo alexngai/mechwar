@@ -163,6 +163,26 @@ impl Arsenal {
         Self { primaries: primaries.len(), secondaries: secondaries.len(), items, tunings }
     }
 
+    /// `new` with balance-run tweaks laid over the compiled-in files: per class key, values in
+    /// classes.json's `overrides` form; per weapon id, values in weapons.json's `stats` form.
+    /// Panics naming a class or weapon that isn't there, or a value it may not set.
+    pub fn tweaked(base: &Tuning, classes: &Value, weapons: &Value) -> Self {
+        let mut c = classes_json().clone();
+        for (key, values) in classes.as_object().into_iter().flatten() {
+            let overrides = c.get_mut(key).and_then(|class| class["overrides"].as_object_mut()).unwrap_or_else(|| panic!("no class `{key}`"));
+            overrides.extend(values.as_object().cloned().unwrap_or_default());
+        }
+        let mut w = weapons_json().clone();
+        for (id, values) in weapons.as_object().into_iter().flatten() {
+            let mine = |x: &Value| x["id"] == id.as_str();
+            let list = ["primaries", "secondaries"].into_iter().find(|l| w[*l].as_array().is_some_and(|ws| ws.iter().any(mine))).unwrap_or_else(|| panic!("no primary or secondary `{id}`"));
+            let weapon = w[list].as_array_mut().and_then(|ws| ws.iter_mut().find(|x| mine(x))).expect("found above");
+            let stats = weapon.as_object_mut().expect("weapons are objects").entry("stats").or_insert_with(|| Value::Object(Default::default()));
+            stats.as_object_mut().expect("stats are objects").extend(values.as_object().cloned().unwrap_or_default());
+        }
+        Self::with(base, &c, &w)
+    }
+
     pub fn get(&self, class: MechClass, loadout: Loadout) -> &Tuning {
         let Loadout { primary, secondary, .. } = self.clamp(loadout);
         &self.tunings[(class.index() * self.primaries + usize::from(primary)) * self.secondaries + usize::from(secondary)]
@@ -277,6 +297,19 @@ mod tests {
         assert!(usize::from(wild.primary) < arsenal.primaries && usize::from(wild.secondary) < arsenal.secondaries);
         assert!(usize::from(wild.offensive) < arsenal.items[0] && usize::from(wild.support) < arsenal.items[1] && usize::from(wild.ability) < arsenal.items[2]);
         let _ = arsenal.get(MechClass::C, Loadout { primary: 200, secondary: 200, offensive: 200, support: 200, ability: 200 });
+    }
+
+    #[test]
+    fn tweaks_reach_only_what_they_name() {
+        let base = Tuning::default();
+        let stock = Arsenal::new(&base);
+        let tweaked = Arsenal::tweaked(&base, &serde_json::json!({"B": {"health_max": 120}}), &serde_json::json!({"rocket": {"alt_radius": 6}}));
+        let (rocket, mortar) = (Loadout::named("pike", "rocket"), Loadout::named("pike", "mortar"));
+        assert_eq!(tweaked.get(MechClass::A, rocket).alt_radius, 6.0);
+        assert_eq!(tweaked.get(MechClass::B, rocket).health_max, 120.0);
+        assert_eq!(tweaked.get(MechClass::A, rocket).health_max, stock.get(MechClass::A, rocket).health_max);
+        let values = |a: &Arsenal| serde_json::to_value(a.get(MechClass::C, mortar)).unwrap();
+        assert_eq!(values(&tweaked), values(&stock), "a Heavy with no rocket is untouched");
     }
 
     #[test]

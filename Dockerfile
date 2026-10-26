@@ -13,10 +13,13 @@ COPY maps maps
 COPY sim sim
 COPY server server
 # Bake the bots' nav fresh, whatever maps/nav.json was committed with: walking it at startup
-# instead stalls the server for minutes on Fly's shared CPU (see sim/src/bot.rs).
-RUN cargo test -p sim --release --lib bake_nav -- --ignored
+# instead stalls the server for minutes on Fly's shared CPU (see sim/src/bot.rs). Their tactical
+# spots too, which the server loads at startup (SPOTS) rather than make mid-match.
+RUN cargo test -p sim --release --lib bake_nav -- --ignored \
+ && cargo test -p sim --release --lib bake_spots -- --ignored
+# The release profile's opt-level "s" sizes the wasm; the server builds at 3, ~1.7x faster a tick.
 RUN wasm-pack build sim --target web --release --no-pack -- --features wasm \
- && cargo build -p server --release
+ && CARGO_PROFILE_RELEASE_OPT_LEVEL=3 cargo build -p server --release
 
 FROM node:22-bookworm-slim AS web
 WORKDIR /src
@@ -33,8 +36,9 @@ FROM debian:bookworm-slim
 RUN useradd --system --no-create-home game
 WORKDIR /app
 COPY --from=rust /src/target/release/server ./server
+COPY --from=rust /src/maps/spots.json ./spots.json
 COPY --from=web /src/dist ./dist
-ENV PORT=8080 STATIC_DIR=/app/dist
+ENV PORT=8080 STATIC_DIR=/app/dist SPOTS=/app/spots.json
 EXPOSE 8080
 USER game
 CMD ["/app/server"]

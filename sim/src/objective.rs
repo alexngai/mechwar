@@ -165,10 +165,22 @@ impl Assault {
     /// than a fair share, counting living humans already in them; with every silo secure, one
     /// guards each and the rest roam (None). Humans get None.
     pub fn orders(&self, mechs: &[(u8, Vector, bool, bool)]) -> Vec<Option<Vector>> {
+        self.orders_spread(mechs, [usize::MAX; 2])
+    }
+
+    /// `orders`, each team going after no more than `spread[team]` of the silos it doesn't hold
+    /// securely at once: those nearest its living bots (on average).
+    pub fn orders_spread(&self, mechs: &[(u8, Vector, bool, bool)], spread: [usize; 2]) -> Vec<Option<Vector>> {
         let mut out = vec![None; mechs.len()];
         for team in 0..2 {
             let mine = |i: &usize| mechs[*i].0 == team;
-            let wanted: Vec<usize> = (0..self.silos.len()).filter(|&z| !self.silos[z].state.secure(team)).collect();
+            let mut wanted: Vec<usize> = (0..self.silos.len()).filter(|&z| !self.silos[z].state.secure(team)).collect();
+            let bots: Vec<Vector> = (0..mechs.len()).filter(mine).filter(|&i| mechs[i].2 && mechs[i].3).map(|i| mechs[i].1).collect();
+            if wanted.len() > spread[usize::from(team)] && !bots.is_empty() {
+                let middle = bots.iter().copied().sum::<Vector>() / bots.len() as f32;
+                wanted.sort_by(|&a, &b| self.silos[a].at.distance(middle).total_cmp(&self.silos[b].at.distance(middle)));
+                wanted.truncate(spread[usize::from(team)].max(1));
+            }
             let (targets, share) = if wanted.is_empty() {
                 ((0..self.silos.len()).collect(), 1)
             } else {

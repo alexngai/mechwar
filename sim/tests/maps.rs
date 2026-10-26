@@ -536,25 +536,41 @@ fn skybridge_drops_to_the_courtyard() {
 
 #[test]
 fn bots_spread_over_foundry() {
-    let mut game = Game::new(Tuning::default(), Map::index("foundry").unwrap());
-    let me = game.join().unwrap();
     // Bot samples in the channel, on the ground, decks and gantries; in the west and east lanes.
+    // Three six-minute matches at once, pooled: any one match swings too much as bots group up
+    // (in one, twelve minutes went by without a bot in the east lane).
+    let matches: Vec<([usize; 4], [usize; 2], usize)> = std::thread::scope(|s| {
+        let runs: Vec<_> = (0..3u32)
+            .map(|seed| {
+                s.spawn(move || {
+                    let mut game = Game::new(Tuning::default(), Map::index("foundry").unwrap());
+                    game.tick = seed * 7919;
+                    let me = game.join().unwrap();
+                    let (mut levels, mut lanes, mut n) = ([0; 4], [0; 2], 0);
+                    for _ in 0..(360.0 * TICK_HZ) as u32 {
+                        game.step();
+                        // Relaunch from the hangar once destroyed, as a pilot would.
+                        game.pick(me, MechClass::B, Loadout::of(MechClass::B));
+                        for p in game.snapshot(me).players.iter().filter(|p| p.bot && p.view.health > 0.0) {
+                            let pos = p.view.pos;
+                            if let Some(level) = [-5.0, 0.0, 7.0, 14.0].iter().position(|y| (pos.y - y).abs() < 1.0) {
+                                levels[level] += 1;
+                            }
+                            if pos.x.abs() > 60.0 {
+                                lanes[usize::from(pos.x > 0.0)] += 1;
+                            }
+                            n += 1;
+                        }
+                    }
+                    (levels, lanes, n)
+                })
+            })
+            .collect();
+        runs.into_iter().map(|r| r.join().unwrap()).collect()
+    });
     let (mut levels, mut lanes, mut n) = ([0; 4], [0; 2], 0);
-    // Six minutes: shorter runs swing too much as bots group up early on.
-    for _ in 0..(360.0 * TICK_HZ) as u32 {
-        game.step();
-        // Relaunch from the hangar once destroyed, as a pilot would.
-        game.pick(me, MechClass::B, Loadout::of(MechClass::B));
-        for p in game.snapshot(me).players.iter().filter(|p| p.bot && p.view.health > 0.0) {
-            let pos = p.view.pos;
-            if let Some(level) = [-5.0, 0.0, 7.0, 14.0].iter().position(|y| (pos.y - y).abs() < 1.0) {
-                levels[level] += 1;
-            }
-            if pos.x.abs() > 60.0 {
-                lanes[usize::from(pos.x > 0.0)] += 1;
-            }
-            n += 1;
-        }
+    for (l, w, k) in matches {
+        (levels, lanes, n) = (std::array::from_fn(|i| levels[i] + l[i]), [lanes[0] + w[0], lanes[1] + w[1]], n + k);
     }
     let share = |count: usize| count as f32 / n as f32;
     let (levels, lanes) = (levels.map(share), lanes.map(share));
