@@ -369,6 +369,15 @@ impl WasmNetClient {
         out
     }
 
+    /// Co-op, in a break: the wave to come: its theme (`defense::Theme`'s index), then two floats
+    /// a foe: what (a lane enemy's deployable kind, 255 an infested mech) and how many. Empty
+    /// otherwise.
+    pub fn next_wave(&self) -> Vec<f32> {
+        use crate::defense::Foe;
+        let Some(d) = self.0.defense().filter(|d| !d.next.is_empty()) else { return Vec::new() };
+        std::iter::once(d.theme as u8 as f32).chain(d.next.iter().flat_map(|&(foe, n)| [match foe { Foe::Lane(k) => k as u8 as f32, Foe::Elite => 255.0 }, f32::from(n)])).collect()
+    }
+
     /// Co-op's salvage lying about: four floats each, xyz and 1 for a boss's.
     pub fn cores(&self) -> Vec<f32> {
         self.0.defense().map_or_else(Vec::new, |d| d.cores.iter().flat_map(|&(at, rare)| [at.x, at.y, at.z, if rare { 1.0 } else { 0.0 }]).collect())

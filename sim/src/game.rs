@@ -73,6 +73,9 @@ const MORTAR_PILOT: f32 = 30.0;
 const NODE_DOME: f32 = 250.0;
 const NODE_DOME_STEP: f32 = 20.0;
 const NODE_RECHARGE: f32 = 8.0;
+/// Co-op's MG and rocket towers do these times what the item turrets do, to the hive.
+const TOWER_MG_POWER: f32 = 3.0;
+const TOWER_ROCKET_POWER: f32 = 2.0;
 /// A flak blueprint's rounds burst this far round where they hit (m); a pilot picks up salvage
 /// within SALVAGE_REACH.
 const FLAK_BURST: f32 = 3.0;
@@ -1553,7 +1556,7 @@ impl Game {
                 .chain(
                     (deployables.iter())
                         .filter(|e| e.team != d.team && e.hull > 0.0 && e.kind.shootable() && d.kind.lane_enemy() != e.kind.lane_enemy())
-                        .map(|e| (deploy::center(t, e), Vector::ZERO)),
+                        .map(|e| (deploy::center(t, e), self.defense.as_ref().map_or(Vector::ZERO, |df| df.velocity(e.owner)))),
                 )
                 .filter(|&(chest, _)| sighted(chest, range))
                 .min_by(|a, b| a.0.distance(gun).total_cmp(&b.0.distance(gun)))
@@ -1665,13 +1668,20 @@ impl Game {
         let standing = d.hull > 0.0;
         // Perks: a pilot's own guns hit the hive harder; a sabot blueprint's rockets go through
         // plating.
-        let (mut hunter, mut sabot) = (0.0, false);
+        // And a co-op tower's guns hit the hive far harder than the item turrets they're built on.
+        let (mut hunter, mut sabot, mut power) = (0.0, false, 1.0);
         if let Some(df) = self.defense.as_ref().filter(|_| d.kind.lane_enemy()) {
             hunter = df.perk(attacker, defense::Perk::Hunter);
-            sabot = df.tower_perk(attacker, defense::Perk::Sabot) > 0.0 && df.tower(attacker).is_some() && attacker_kind(&self.deployables, attacker) == Some(Kind::RocketTurret);
+            let tower = df.tower(attacker).and_then(|_| attacker_kind(&self.deployables, attacker));
+            sabot = tower == Some(Kind::RocketTurret) && df.tower_perk(attacker, defense::Perk::Sabot) > 0.0;
+            power = match tower {
+                Some(Kind::MgTurret) => TOWER_MG_POWER,
+                Some(Kind::RocketTurret) => TOWER_ROCKET_POWER,
+                _ => 1.0,
+            };
         }
         let d = &mut self.deployables[k];
-        let amount = amount * (1.0 + 0.2 * hunter);
+        let amount = amount * (1.0 + 0.2 * hunter) * power;
         let amount = if sabot { amount } else { defense::armored(d.kind, amount) };
         let dealt = amount.min(d.hull.max(0.0));
         d.hull -= amount;
@@ -3208,8 +3218,7 @@ mod tests {
     fn shooting_down_a_wave_clears_it_and_the_reactor_falling_loses_the_run() {
         let (mut game, id) = co_op(false);
         skip_break(&mut game);
-        let total = Defense::count(1, 1);
-        for _ in 0..secs(1.2 * f32::from(total) + 1.0) {
+        for _ in 0..secs(12.0) {
             game.step();
             // Each walker shot down as it comes.
             let standing: Vec<usize> = (0..game.deployables.len()).filter(|&k| game.deployables[k].kind.lane_enemy()).collect();
@@ -3731,7 +3740,7 @@ mod tests {
         let b = lane_enemy(&mut game, Kind::Brute, reactor + Vector::new(30.0, 0.0, 0.0));
         let hull = game.deployables[b].hull;
         game.wear(b, 20.0, tower.owner);
-        assert_eq!(hull - game.deployables[b].hull, 20.0);
+        assert_eq!(hull - game.deployables[b].hull, 20.0 * TOWER_ROCKET_POWER);
         let hull = game.deployables[b].hull;
         game.wear(b, 20.0, id);
         assert!((hull - game.deployables[b].hull - (24.0 - 5.0)).abs() < 1e-3);
@@ -3746,7 +3755,7 @@ mod tests {
         let (mut game, id) = co_op(false);
         let start = scrap(&game, id);
         skip_break(&mut game);
-        for _ in 0..secs(1.2 * f32::from(Defense::count(1, 1)) + 1.0) {
+        for _ in 0..secs(12.0) {
             game.step();
             let standing: Vec<usize> = (0..game.deployables.len()).filter(|&k| game.deployables[k].kind.lane_enemy()).collect();
             for k in standing {

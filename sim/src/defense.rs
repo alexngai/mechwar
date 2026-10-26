@@ -24,22 +24,61 @@ pub const LEAK: f32 = 100.0;
 pub const WAVES: u8 = 10;
 const FIRST_BREAK: f32 = 60.0;
 const BREAK: f32 = 30.0;
-/// Each wave's foes for a full team (walkers, crawlers, brutes, infested mechs, mortar walkers,
-/// shield nodes), each new kind coming in on a wave of its own; SOLO_SHARE of them for one pilot and evenly between (at least
-/// one of a kind the wave has). They come through the gates in turn, SPAWN_GAP apart, a pack of
-/// crawlers CRAWLER_GAP apart.
-const WAVE_TABLE: [[u16; 6]; WAVES as usize] = [
-    [6, 0, 0, 0, 0, 0],
-    [8, 0, 0, 0, 0, 0],
-    [6, 8, 0, 0, 0, 0],
-    [8, 6, 1, 0, 0, 0],
-    [8, 8, 1, 0, 2, 0],
-    [8, 8, 1, 1, 1, 0],
-    [8, 10, 1, 1, 1, 2],
-    [10, 16, 2, 2, 2, 2],
-    [12, 20, 3, 2, 2, 3],
-    [14, 24, 3, 3, 3, 3],
+/// The wave director: each wave's threat budget for a full team (SOLO_SHARE of it for one pilot
+/// and evenly between), spent on `CARDS`, a theme leaning it one way from wave 3 (`Theme`). Foes
+/// come through the gates SPAWN_GAP apart, a pack of crawlers CRAWLER_GAP apart.
+const BUDGETS: [f32; WAVES as usize] = [6.0, 10.0, 14.0, 21.0, 30.0, 36.0, 46.0, 64.0, 80.0, 100.0];
+
+/// What the director buys: a foe (crawlers by the pack), what it costs of the budget, the wave
+/// it first comes on (where one's bought first, before the rest), how likely it is (by weight)
+/// against the others, and at most how many a wave.
+struct Card {
+    foe: Foe,
+    pack: u16,
+    cost: f32,
+    from: u8,
+    weight: f32,
+    most: u16,
+}
+
+const CARDS: [Card; 6] = [
+    Card { foe: Foe::Lane(Kind::Walker), pack: 1, cost: 1.0, from: 1, weight: 3.0, most: 40 },
+    Card { foe: Foe::Lane(Kind::Crawler), pack: 4, cost: 2.0, from: 3, weight: 2.0, most: 32 },
+    Card { foe: Foe::Lane(Kind::Brute), pack: 1, cost: 4.0, from: 4, weight: 1.0, most: 4 },
+    Card { foe: Foe::Lane(Kind::Mortar), pack: 1, cost: 3.0, from: 5, weight: 1.0, most: 4 },
+    Card { foe: Foe::Elite, pack: 1, cost: 5.0, from: 6, weight: 0.6, most: 3 },
+    Card { foe: Foe::Lane(Kind::Node), pack: 1, cost: 3.0, from: 7, weight: 0.7, most: 3 },
 ];
+/// A themed wave's foe is THEME_LEAN times as likely; a flanking wave sends FLANK of its foes
+/// through one gate.
+const THEME_LEAN: f32 = 3.0;
+const FLANK: f32 = 0.8;
+
+/// A wave's theme: the foe it leans on, or its gate (Flank).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Theme {
+    #[default]
+    Mixed,
+    Swarm,
+    Armor,
+    Siege,
+    Shielded,
+    Flank,
+}
+
+impl Theme {
+    /// The foe it leans on, and the wave it can first come on.
+    fn leans(self) -> (Option<Foe>, u8) {
+        match self {
+            Theme::Mixed => (None, 1),
+            Theme::Swarm => (Some(Foe::Lane(Kind::Crawler)), 3),
+            Theme::Armor => (Some(Foe::Lane(Kind::Brute)), 4),
+            Theme::Siege => (Some(Foe::Lane(Kind::Mortar)), 5),
+            Theme::Shielded => (Some(Foe::Lane(Kind::Node)), 7),
+            Theme::Flank => (None, 3),
+        }
+    }
+}
 const SOLO_SHARE: f32 = 0.6;
 /// The bosses, and the waves they come on.
 const BOSS_WAVES: [(u8, Kind); 2] = [(5, Kind::Excavator), (10, Kind::Hive)];
@@ -53,7 +92,7 @@ pub const ELITE_LEAK: f32 = 200.0;
 const ARMOR_FLOOR: f32 = 0.25;
 
 /// Who comes in a wave: a lane enemy, or an infested mech (a bot on team 1, `Game`'s to make).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Foe {
     Lane(Kind),
     Elite,
@@ -114,7 +153,7 @@ const REFUND: f32 = 0.7;
 /// Each pilot's scrap to start, for each hull point they (or their towers) shoot off a walker, and
 /// for each wave beaten.
 const START_SCRAP: f32 = 250.0;
-const SCRAP_PER_HULL: f32 = 0.5;
+const SCRAP_PER_HULL: f32 = 0.35;
 const WAVE_BONUS: f32 = 100.0;
 /// Where a tower goes: on ground within REACH of the eye, no steeper than FLAT (its normal's
 /// rise), with ROOM over it; not within LANE_CLEAR of a lane's line, GAP of another tower, or
@@ -290,6 +329,9 @@ pub struct DefenseNet {
     pub offers: Vec<(u8, Vec<Perk>)>,
     pub perks: Vec<(u8, Perk, u8)>,
     pub cores: Vec<(Vector, bool)>,
+    /// In a break, the wave to come: its theme, and how many of each foe.
+    pub theme: Theme,
+    pub next: Vec<(Foe, u16)>,
 }
 
 /// What happened in a run.
@@ -355,15 +397,20 @@ pub struct Defense {
     pub reactor: Vector,
     pub radius: f32,
     pub hull: f32,
-    /// The wave on (or next), its foes still to come (the next last), its lane enemies standing,
-    /// and its infested mechs alive (`Game`'s count).
+    /// The wave on (or next), its theme, its foes still to come (the next last; each with the gate
+    /// it comes through, by index; drawn up at the break's start), its lane enemies standing, and
+    /// its infested mechs alive (`Game`'s count).
     pub wave: u8,
     pub stage: Stage,
-    queue: Vec<Foe>,
+    theme: Theme,
+    drawn: u8,
+    queue: Vec<(Foe, usize)>,
     walkers: Vec<Walker>,
     elites: usize,
     /// The share of a full team's foes this wave (for bosses' hull).
     share: f32,
+    /// The tick last stepped.
+    now: u32,
     /// Picks walkers' branches and places, run to run the same (xorshift).
     rng: u32,
     /// Each player's scrap, by id; the towers standing.
@@ -381,7 +428,7 @@ pub struct Defense {
 }
 
 impl Defense {
-    /// The run on a map with `spots`, from tick `tick`; `route` is the bots' walk between two
+    /// The run on a map with `spots`, from tick `tick` (which seeds it); `route` is the bots' walk between two
     /// spots (for a map without lanes of its own: each gate's lane is then its route to the
     /// reactor). None without gates.
     pub fn new(spots: &DefenseSpots, tick: u32, route: impl Fn(Vector, Vector) -> Vec<Vector>) -> Option<Defense> {
@@ -416,11 +463,14 @@ impl Defense {
             hull: REACTOR_HULL,
             wave: 1,
             stage: Stage::Break { until: tick + (FIRST_BREAK * TICK_HZ) as u32 },
+            theme: Theme::Mixed,
+            drawn: 0,
             queue: Vec::new(),
             walkers: Vec::new(),
             elites: 0,
             share: 1.0,
-            rng: 0x9e37_79b9,
+            now: tick,
+            rng: (0x9e37_79b9 ^ tick.wrapping_mul(0x85eb_ca6b)) | 1,
             scrap: [START_SCRAP; MAX_PLAYERS],
             towers: Vec::new(),
             shells: Vec::new(),
@@ -576,7 +626,16 @@ impl Defense {
             }
         }
         let perks = (0..MAX_PLAYERS as u8).flat_map(|id| PERKS.iter().filter(move |&&p| self.perk(id, p) > 0.0).map(move |&p| (id, p, self.perk(id, p) as u8))).collect();
-        DefenseNet { wave: self.wave, waves: WAVES, break_left, hull: self.hull, left, scrap, towers: self.towers.clone(), offers, perks, cores: self.cores.clone() }
+        let mut next: Vec<(Foe, u16)> = Vec::new();
+        if matches!(self.stage, Stage::Break { .. }) {
+            for (foe, _) in &self.queue {
+                match next.iter_mut().find(|(f, _)| f == foe) {
+                    Some((_, n)) => *n += 1,
+                    None => next.push((*foe, 1)),
+                }
+            }
+        }
+        DefenseNet { wave: self.wave, waves: WAVES, break_left, hull: self.hull, left, scrap, towers: self.towers.clone(), offers, perks, cores: self.cores.clone(), theme: self.theme, next }
     }
 
     /// Where each mech (its id, its team, whether it's a living bot) should head with lane enemies standing
@@ -599,31 +658,64 @@ impl Defense {
             .collect()
     }
 
-    /// Wave `n`'s walkers with `pilots` on the team.
-    pub fn count(n: u8, pilots: usize) -> u16 {
-        Defense::foes(n, pilots).len() as u16
-    }
-
-    /// Wave `n`'s foes with `pilots` on the team, in the order they come: a shield node, a couple
-    /// of walkers, a pack of crawlers, a brute, an infested mech, a mortar walker, and again, till
-    /// all have come; on BOSS_WAVES, the boss among them, a third of the way through.
-    pub fn foes(n: u8, pilots: usize) -> Vec<Foe> {
-        let share = Defense::share(pilots);
-        let row = WAVE_TABLE[usize::from(n.clamp(1, WAVES) - 1)];
-        let mut left = row.map(|c| if c == 0 { 0 } else { ((f32::from(c) * share).round() as u16).max(1) });
-        let kinds = [Foe::Lane(Kind::Walker), Foe::Lane(Kind::Crawler), Foe::Lane(Kind::Brute), Foe::Elite, Foe::Lane(Kind::Mortar), Foe::Lane(Kind::Node)];
-        let mut out = Vec::new();
-        while left.iter().any(|&c| c > 0) {
-            for (k, take) in [(5, 1), (0, 2), (1, 4), (2, 1), (3, 1), (4, 1)] {
-                let n = left[k].min(take);
-                out.extend(std::iter::repeat_n(kinds[k], usize::from(n)));
-                left[k] -= n;
+    /// Draws up wave `n` for `pilots` on the team: its theme (from wave 3; one whose foe has come
+    /// by then), and its foes in the order they come, each with its gate (by index). On the wave
+    /// a foe first comes on, one comes first; then the budget is spent a card at a time, by
+    /// weight (the theme's foe THEME_LEAN times as likely), till none it can afford is left; a
+    /// boss wave's boss comes a third of the way through. They come a shield node, a couple of
+    /// walkers, a pack of crawlers, a brute, an infested mech, a mortar walker, and again.
+    pub fn compose(&mut self, n: u8, pilots: usize) -> (Theme, Vec<(Foe, usize)>) {
+        let n = n.clamp(1, WAVES);
+        let themes: Vec<Theme> = [Theme::Mixed, Theme::Swarm, Theme::Armor, Theme::Siege, Theme::Shielded, Theme::Flank].into_iter().filter(|t| n >= 3 && t.leans().1 <= n).collect();
+        let theme = if themes.is_empty() { Theme::Mixed } else { themes[(self.rand() * themes.len() as f32) as usize % themes.len()] };
+        let mut budget = BUDGETS[usize::from(n) - 1] * Defense::share(pilots);
+        let mut counts = [0u16; CARDS.len()];
+        let buy = |k: usize, counts: &mut [u16; CARDS.len()], budget: &mut f32| {
+            counts[k] += CARDS[k].pack;
+            *budget -= CARDS[k].cost;
+        };
+        for k in (0..CARDS.len()).filter(|&k| CARDS[k].from == n) {
+            buy(k, &mut counts, &mut budget);
+        }
+        loop {
+            let open: Vec<(usize, f32)> = (0..CARDS.len())
+                .filter(|&k| CARDS[k].from <= n && CARDS[k].cost <= budget + 1e-3 && counts[k] + CARDS[k].pack <= CARDS[k].most)
+                .map(|k| (k, CARDS[k].weight * if theme.leans().0 == Some(CARDS[k].foe) { THEME_LEAN } else { 1.0 }))
+                .collect();
+            if open.is_empty() {
+                break;
+            }
+            let mut pick = self.rand() * open.iter().map(|o| o.1).sum::<f32>();
+            let k = open.iter().find(|o| {
+                pick -= o.1;
+                pick <= 0.0
+            });
+            buy(k.unwrap_or(open.last().unwrap()).0, &mut counts, &mut budget);
+        }
+        // In order: a shield node, two walkers, a pack, a brute, an infested mech, a mortar.
+        let order = [(5, 1), (0, 2), (1, 4), (2, 1), (4, 1), (3, 1)];
+        let mut foes = Vec::new();
+        while counts.iter().any(|&c| c > 0) {
+            for (k, take) in order {
+                let m = counts[k].min(take);
+                foes.extend(std::iter::repeat_n(CARDS[k].foe, usize::from(m)));
+                counts[k] -= m;
             }
         }
         if let Some(&(_, boss)) = BOSS_WAVES.iter().find(|(w, _)| *w == n) {
-            out.insert(out.len() / 3, Foe::Lane(boss));
+            foes.insert(foes.len() / 3, Foe::Lane(boss));
         }
-        out
+        let gates = self.gates.len().max(1);
+        let main = (self.rand() * gates as f32) as usize % gates;
+        let out = foes
+            .into_iter()
+            .enumerate()
+            .map(|(k, foe)| {
+                let gate = if theme == Theme::Flank { if self.rand() < FLANK { main } else { (self.rand() * gates as f32) as usize % gates } } else { k % gates };
+                (foe, gate)
+            })
+            .collect();
+        (theme, out)
     }
 
     /// The share of a full team's foes `pilots` meet.
@@ -639,20 +731,25 @@ impl Defense {
     /// stunned, and reaching the reactor.
     pub fn step(&mut self, tick: u32, pilots: &[u8], standing: &[u8], elites: usize) -> Tick {
         let mut out = Tick::default();
+        self.now = tick;
         self.walkers.retain(|w| standing.contains(&w.owner));
         self.towers.retain(|t| standing.contains(&t.owner));
         self.elites = elites;
+        // A break begun: the next wave drawn up, to see coming.
+        if matches!(self.stage, Stage::Break { .. }) && self.drawn != self.wave {
+            let (theme, mut queue) = self.compose(self.wave, pilots.len());
+            queue.reverse();
+            (self.theme, self.queue, self.drawn, self.share) = (theme, queue, self.wave, Defense::share(pilots.len()));
+        }
         match self.stage {
             Stage::Break { until } if tick >= until => {
-                self.queue = Defense::foes(self.wave, pilots.len());
-                self.share = Defense::share(pilots.len());
-                self.queue.reverse();
                 self.stage = Stage::Wave { next_at: tick };
                 out.news.push(News::Wave { n: self.wave, count: self.queue.len() as u16 });
             }
             Stage::Wave { next_at } if tick >= next_at && !self.queue.is_empty() => {
-                let gate = self.gates[self.queue.len() % self.gates.len()];
-                let came = match *self.queue.last().unwrap() {
+                let (foe, gate) = *self.queue.last().unwrap();
+                let gate = self.gates[gate % self.gates.len()];
+                let came = match foe {
                     Foe::Elite => {
                         out.elites.push(self.points[gate]);
                         true
@@ -675,8 +772,8 @@ impl Defense {
                     }
                 };
                 if came {
-                    let foe = self.queue.pop();
-                    let pack = foe == Some(Foe::Lane(Kind::Crawler)) && self.queue.last() == foe.as_ref();
+                    let foe = self.queue.pop().map(|q| q.0);
+                    let pack = foe == Some(Foe::Lane(Kind::Crawler)) && self.queue.last().map(|q| q.0) == foe;
                     self.stage = Stage::Wave { next_at: tick + (if pack { CRAWLER_GAP } else { SPAWN_GAP } * TICK_HZ) as u32 };
                 }
             }
@@ -750,6 +847,16 @@ impl Defense {
         hull(kind, self.wave) * if kind.boss() { self.share } else { 1.0 }
     }
 
+    /// Lane enemy `owner`'s velocity as of the last tick (zero stunned, or for anything else): for
+    /// towers to lead it.
+    pub fn velocity(&self, owner: u8) -> Vector {
+        let Some(w) = self.walkers.iter().find(|w| w.owner == owner) else { return Vector::ZERO };
+        if self.now < w.stunned {
+            return Vector::ZERO;
+        }
+        self.place(w).1 * species(w.kind).speed * if self.now < w.rush { RUSH } else { 1.0 }
+    }
+
     /// Lane enemy `owner` walks RUSH times its pace till tick `until`.
     pub fn rush(&mut self, owner: u8, until: u32) {
         for w in self.walkers.iter_mut().filter(|w| w.owner == owner) {
@@ -821,22 +928,49 @@ mod tests {
         out
     }
 
+    /// What `foes` cost the director (a boss nothing).
+    fn spent(foes: &[(Foe, usize)]) -> f32 {
+        foes.iter().filter_map(|(f, _)| CARDS.iter().find(|c| c.foe == *f)).map(|c| c.cost / f32::from(c.pack)).sum()
+    }
+
     #[test]
-    fn waves_grow_and_scale_with_the_team() {
-        assert_eq!((Defense::count(1, 4), Defense::count(10, 4)), (6, 51));
-        assert!(Defense::count(5, 1) < Defense::count(5, 4));
-        assert!(hull(Kind::Walker, 10) > hull(Kind::Walker, 1));
-        // Each kind first on a wave of its own, then mixed in: walkers in pairs, crawlers in packs.
-        let first = |foe| (1..=WAVES).find(|&n| Defense::foes(n, 4).contains(&foe)).unwrap();
-        assert_eq!([Kind::Walker, Kind::Crawler, Kind::Brute].map(|k| first(Foe::Lane(k))), [1, 3, 4]);
-        assert_eq!(first(Foe::Elite), 6);
-        assert_eq!([Kind::Mortar, Kind::Node].map(|k| first(Foe::Lane(k))), [5, 7]);
-        // A boss apiece on waves 5 and 10.
-        let bosses = |n| Defense::foes(n, 4).iter().filter(|f| matches!(f, Foe::Lane(k) if k.boss())).count();
-        assert_eq!((1..=WAVES).map(bosses).collect::<Vec<_>>(), [0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
-        assert_eq!(Defense::foes(3, 4)[..6], [Foe::Lane(Kind::Walker), Foe::Lane(Kind::Walker), Foe::Lane(Kind::Crawler), Foe::Lane(Kind::Crawler), Foe::Lane(Kind::Crawler), Foe::Lane(Kind::Crawler)]);
-        // A lone pilot still meets at least one of each kind a wave has.
-        assert!(Defense::foes(6, 1).contains(&Foe::Elite));
+    fn the_director_spends_each_waves_budget_bringing_each_foe_in_on_its_wave() {
+        let mut d = run();
+        for n in 1..=WAVES {
+            let (theme, foes) = d.compose(n, 4);
+            assert!(spent(&foes) <= BUDGETS[usize::from(n) - 1] + 1e-3, "wave {n} over budget");
+            assert!(spent(&foes) >= BUDGETS[usize::from(n) - 1] - 1.0, "wave {n} left budget unspent");
+            for c in &CARDS {
+                let has = foes.iter().any(|(f, _)| *f == c.foe);
+                assert!(n >= c.from || !has, "{:?} before wave {}", c.foe, c.from);
+                assert!(n != c.from || has, "{:?} not on its wave {n}", c.foe);
+            }
+            let bosses = foes.iter().filter(|(f, _)| matches!(f, Foe::Lane(k) if k.boss())).count();
+            assert_eq!(bosses, usize::from(n == 5 || n == 10));
+            assert!(n >= 3 || theme == Theme::Mixed);
+            assert!(foes.iter().all(|(_, g)| *g < 2));
+        }
+        // A lone pilot's waves are smaller; crawlers come in packs of four.
+        let (_, solo) = run().compose(8, 1);
+        let (_, full) = run().compose(8, 4);
+        assert!(spent(&solo) < spent(&full));
+        let (_, foes) = run().compose(3, 4);
+        let at = foes.iter().position(|(f, _)| *f == Foe::Lane(Kind::Crawler)).unwrap();
+        assert!(foes[at..at + 4].iter().all(|(f, _)| *f == Foe::Lane(Kind::Crawler)));
+    }
+
+    #[test]
+    fn runs_differ_by_their_seed_and_a_flanking_wave_comes_mostly_through_one_gate() {
+        let spots = DefenseSpots { reactor: [0.0; 3], radius: 6.0, gates: vec![[0.0, 0.0, -100.0], [100.0, 0.0, 0.0]], lanes: Lanes::default() };
+        let waves = |seed: u32| {
+            let mut d = Defense::new(&spots, seed, |_, _| Vec::new()).unwrap();
+            (1..=WAVES).map(|n| d.compose(n, 4)).collect::<Vec<_>>()
+        };
+        assert_eq!(waves(7), waves(7));
+        assert_ne!(waves(7), waves(8));
+        let flank = (0..40).flat_map(waves).find(|(t, _)| *t == Theme::Flank).expect("no flanking wave in 40 runs").1;
+        let main = (0..2).max_by_key(|g| flank.iter().filter(|(_, x)| x == g).count()).unwrap();
+        assert!(flank.iter().filter(|(_, g)| *g == main).count() as f32 >= 0.65 * flank.len() as f32);
     }
 
     #[test]

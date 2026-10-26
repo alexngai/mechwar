@@ -598,6 +598,8 @@ let eliminated = null, callout = null, capture = null, blipAt = 0, reactorHitAt 
 let building = -1, lastTower = 0, buildHint = '', zapFrom = null, shellFrom = null;
 const coop = () => !!net && net.defense().length > 0;
 const sendBuild = (order) => ws?.readyState === WebSocket.OPEN && ws.send(net.build(order));
+/** A co-op wave's theme as the panel calls it (defense.rs `Theme`, in order; mixed says nothing). */
+const THEMES = ['', 'SWARM', 'ARMOR', 'SIEGE', 'SHIELDED', 'FLANKING'];
 /** Why a build order didn't go (defense.rs `Refusal`, in order). */
 const REFUSALS = ['NOTHING IN REACH', 'NO ROOM HERE', 'TOO CLOSE TO A LANE', 'TOO CLOSE TO A TOWER', 'TOO CLOSE TO THE REACTOR', 'NOT ENOUGH SCRAP', 'AIM AT A TOWER (YOUR OWN TO SELL)', 'AS HIGH AS IT GOES'];
 /** Siege energy we carried as of the last frame; CARRY_MAX matches siege::CARRY_MAX. */
@@ -1472,7 +1474,7 @@ function topPanel(hudState, myId, zones, siege, clock) {
   const [ours, theirs] = team === 0 ? [blue, red] : [red, blue];
   const color = (owner) => (owner < 0 ? 'dim' : owner === team ? 'us' : 'them');
   const bar = (hull) => `<span class="bar"><i style="width:${Math.max(0, Math.min(100, hull / 10))}%"></i></span>`;
-  let main = '', state = '';
+  let main = '', state = '', more = '';
   if (mode === DEATHMATCH) {
     // Our place (ties share one), and the best of the rest: the leader, or whoever's next.
     const rows = boardRows(), mine = rows.find((r) => r.id === myId), other = standings(rows.filter((r) => r.id !== myId))[0];
@@ -1507,6 +1509,15 @@ function topPanel(hudState, myId, zones, siege, clock) {
       boss = `<span class="them"><small>${FOE_NAMES[kind].toUpperCase()}</small>${bar((1000 * hp) / foeHull(kind, wave))}${Math.ceil(hp)}</span>`;
     }
     main = `<span class="us"><small>WAVE</small> ${wave}/${waves}</span><span class="us"><small>REACTOR</small>${bar((1000 * hull) / REACTOR_HULL)}${Math.ceil(hull)}</span><span class="us"><small>SCRAP</small> ${scrap}</span>${boss}<span class="them">${left} <small>WALKERS</small></span>`;
+    // In a break, what's coming: the wave's theme and its foes, most first.
+    const next = net.next_wave();
+    if (next.length) {
+      const foes = [];
+      for (let i = 1; i < next.length; i += 2) foes.push([next[i], next[i + 1]]);
+      foes.sort((a, b) => b[1] - a[1]);
+      const named = foes.map(([k, n]) => `${n} ${k === 255 ? 'INFESTED MECH' : (FOE_NAMES[k] ?? '').replace(/^The /, '').toUpperCase()}${n > 1 ? 'S' : ''}`);
+      more = `NEXT: ${THEMES[next[0]] ? THEMES[next[0]] + ' · ' : ''}${named.join(' · ')}`;
+    }
     state = [buildHint, breakLeft >= 0 ? `GET READY · WAVE ${wave} IN ${Math.ceil(breakLeft)}s` : ''].filter(Boolean).join(' · ');
   } else if (mode === CONVOY) {
     // The hauler on its track from our base (left) to theirs, the middle marked, in the color of
@@ -1531,7 +1542,7 @@ function topPanel(hudState, myId, zones, siege, clock) {
     const won = mode === DEATHMATCH ? winner === myId : winner === team;
     state = winner < 0 ? 'DRAW' : `<span class="${won ? 'us' : 'them'}">${mode === DEATHMATCH ? (won ? 'YOU WIN' : `${esc(nameOf(winner))} WINS`) : won ? 'OUR TEAM WINS' : 'ENEMY TEAM WINS'}</span>`;
   }
-  return `${top}<div class="main">${main}</div>${state ? `<div class="state">${state}</div>` : ''}`;
+  return `${top}<div class="main">${main}</div>${state ? `<div class="state">${state}</div>` : ''}${more ? `<div class="state">${more}</div>` : ''}`;
 }
 
 /** The scoreboard's rows from the server: id, team, class, bot, kills, deaths, points. */
