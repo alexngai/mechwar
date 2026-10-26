@@ -292,6 +292,8 @@ pub struct Defense {
     pub towers: Vec<Tower>,
     /// Mortar shells in the air.
     pub shells: Vec<Shell>,
+    /// Bots' builds in mind: whose, where (to stand, and aim down at), and the order.
+    pub plans: Vec<(u8, Vector, Build)>,
 }
 
 impl Defense {
@@ -338,6 +340,7 @@ impl Defense {
             scrap: [START_SCRAP; MAX_PLAYERS],
             towers: Vec::new(),
             shells: Vec::new(),
+            plans: Vec::new(),
         })
     }
 
@@ -362,7 +365,7 @@ impl Defense {
     }
 
     /// Whether `p` is within LANE_CLEAR of a lane's line (across, near its height).
-    fn in_lane(&self, p: Vector) -> bool {
+    pub fn in_lane(&self, p: Vector) -> bool {
         self.edges.iter().any(|&(a, b, _)| {
             let (a, b) = (self.points[a], self.points[b]);
             let ab = (b - a).with_y(0.0);
@@ -418,17 +421,24 @@ impl Defense {
         DefenseNet { wave: self.wave, waves: WAVES, break_left, hull: self.hull, left, scrap, towers: self.towers.clone() }
     }
 
-    /// Where each mech (its team, whether it's a living bot) should head with lane enemies standing
+    /// Where each mech (its id, its team, whether it's a living bot) should head with lane enemies standing
     /// at `walkers`: every pilots' bot to the one nearest the reactor; with none, round the
     /// reactor, each to its own spot on a ring just out of the reactor's reach.
-    pub fn orders(&self, mechs: &[(u8, bool)], walkers: &[Vector]) -> Vec<Option<Vector>> {
+    pub fn orders(&self, mechs: &[(u8, u8, bool)], walkers: &[Vector]) -> Vec<Option<Vector>> {
         let front = walkers.iter().copied().min_by(|a, b| a.distance(self.reactor).total_cmp(&b.distance(self.reactor)));
         let ring = |k: usize| {
             let a = k as f32 * std::f32::consts::TAU / mechs.len().max(1) as f32;
             self.reactor + Vector::new(a.cos(), 0.0, a.sin()) * (self.radius + 8.0)
         };
-        // Infested mechs make for the reactor, fighting whoever they meet.
-        (0..mechs.len()).map(|k| mechs[k].1.then(|| if mechs[k].0 == 1 { self.reactor } else { front.unwrap_or_else(|| ring(k)) })).collect()
+        // Infested mechs make for the reactor, fighting whoever they meet; a bot with a build in
+        // mind heads for its spot.
+        let plan = |id| self.plans.iter().find(|q| q.0 == id).map(|q| q.1);
+        (0..mechs.len())
+            .map(|k| {
+                let (id, team, bot) = mechs[k];
+                bot.then(|| if team == 1 { self.reactor } else { plan(id).or(front).unwrap_or_else(|| ring(k)) })
+            })
+            .collect()
     }
 
     /// Wave `n`'s walkers with `pilots` on the team.

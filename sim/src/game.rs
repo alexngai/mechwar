@@ -73,6 +73,13 @@ const MORTAR_PILOT: f32 = 30.0;
 const NODE_DOME: f32 = 250.0;
 const NODE_DOME_STEP: f32 = 20.0;
 const NODE_RECHARGE: f32 = 8.0;
+/// Co-op's bots building (see `bots_build`): how often they plan (s), how near their spot they
+/// build from, how far off a lane's line they look, and the mix of towers they want (by
+/// `defense::TOWERS`).
+const BOT_PLAN: f32 = 1.0;
+const BOT_BUILD_REACH: f32 = 12.0;
+const BOT_SPOTS: [f32; 3] = [7.0, 10.0, 13.0];
+const BOT_MIX: [f32; 4] = [1.0, 1.0, 0.8, 0.5];
 /// Co-op's bosses (see `bosses_act`).
 const EXCAVATOR_REACH: f32 = 10.0;
 const EXCAVATOR_DRILL: f32 = 60.0;
@@ -658,7 +665,7 @@ impl Game {
             (.., Some((c, at))) => Some(c.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.mech.health > 0.0)).collect::<Vec<_>>(), at)),
             _ => self.defense.as_ref().map(|d| {
                 let walkers: Vec<Vector> = self.deployables.iter().filter(|w| w.kind.lane_enemy()).map(|w| w.pos).collect();
-                d.orders(&self.players.iter().map(|p| (p.team, p.bot.is_some() && p.mech.health > 0.0)).collect::<Vec<_>>(), &walkers)
+                d.orders(&self.players.iter().map(|p| (p.id, p.team, p.bot.is_some() && p.mech.health > 0.0)).collect::<Vec<_>>(), &walkers)
             }),
         };
         for i in 0..self.players.len() {
@@ -2049,6 +2056,7 @@ impl Game {
         self.deployables.retain(|w| !w.kind.lane_enemy() || !out.leaked.contains(&w.owner));
         self.events.extend(out.news.iter().map(|&n| Event::Defense(n)));
         self.defense = Some(d);
+        self.bots_build();
         self.power_pylons();
         self.lane_enemies_strike();
         if out.lost || out.won {
@@ -2061,10 +2069,18 @@ impl Game {
     /// A refusal is news, for them.
     pub fn build(&mut self, id: u8, order: defense::Build) {
         let Some(i) = self.players.iter().position(|p| p.id == id && p.team == 0 && p.mech.health > 0.0) else { return };
-        let Some(d) = self.defense.as_ref() else { return };
-        let (t, m) = (self.arsenal.of(&self.players[i].mech), self.players[i].mech);
-        let aim = aim_ray(t, &m);
-        let refused = match order {
+        let aim = aim_ray(self.arsenal.of(&self.players[i].mech), &self.players[i].mech);
+        if let Some(why) = self.build_along(id, order, &aim) {
+            self.events.push(Event::Defense(defense::News::Refused { id, why }));
+        }
+    }
+
+    /// `build`'s work for player `id` along `aim` (a bot's: down at its spot); why not, if not.
+    fn build_along(&mut self, id: u8, order: defense::Build, aim: &Ray) -> Option<defense::Refusal> {
+        let Some(i) = self.players.iter().position(|p| p.id == id) else { return Some(defense::Refusal::Reach) };
+        let Some(d) = self.defense.as_ref() else { return Some(defense::Refusal::Reach) };
+        let (m, aim) = (self.players[i].mech, *aim);
+        match order {
             defense::Build::Place(k) => {
                 let kind = *defense::TOWERS.get(usize::from(k)).unwrap_or(&Kind::MgTurret);
                 let towers = self.deployables.iter().filter(|e| d.tower(e.owner).is_some()).map(|e| e.pos);
@@ -2117,10 +2133,68 @@ impl Game {
                     }
                 }
             }
-        };
-        if let Some(why) = refused {
-            self.events.push(Event::Defense(defense::News::Refused { id, why }));
         }
+    }
+
+    /// Co-op's bots build too. In a break, every BOT_PLAN each bot of the pilots' without a plan
+    /// makes one (`plan_build`); it heads there (its order), and once within BOT_BUILD_REACH,
+    /// builds, down at the spot. A wave on, plans are dropped: it's time to fight.
+    fn bots_build(&mut self) {
+        let Some(d) = self.defense.as_ref() else { return };
+        if !matches!(d.stage, defense::Stage::Break { .. }) {
+            self.defense.as_mut().unwrap().plans.clear();
+            return;
+        }
+        if self.tick % secs(BOT_PLAN) == 0 {
+            let bots: Vec<u8> = self.players.iter().filter(|p| p.team == 0 && p.bot.is_some() && p.mech.health > 0.0 && !d.plans.iter().any(|q| q.0 == p.id)).map(|p| p.id).collect();
+            for id in bots {
+                if let Some(plan) = self.plan_build(id) {
+                    self.defense.as_mut().unwrap().plans.push((id, plan.0, plan.1));
+                }
+            }
+        }
+        let plans = self.defense.as_ref().unwrap().plans.clone();
+        for (id, at, order) in plans {
+            let Some(p) = self.players.iter().find(|p| p.id == id && p.mech.health > 0.0) else { continue };
+            if (p.mech.pos - at).with_y(0.0).length() > BOT_BUILD_REACH {
+                continue;
+            }
+            self.build_along(id, order, &Ray::new(at + Vector::Y * 6.0, Vector::NEG_Y));
+            self.defense.as_mut().unwrap().plans.retain(|q| q.0 != id);
+        }
+    }
+
+    /// What bot `id` would build with its scrap: the tower it can afford the team has fewest of
+    /// (for BOT_MIX), on the free spot BOT_SPOTS off a lane's line covered by fewest towers (nearer
+    /// the reactor first); else the team's lowest tower raised a tier, if it can afford that.
+    /// Where it'd stand, and the order.
+    fn plan_build(&self, id: u8) -> Option<(Vector, defense::Build)> {
+        let d = self.defense.as_ref()?;
+        let scrap = d.scrap[usize::from(id)];
+        let towers: Vec<Deployable> = self.deployables.iter().filter(|e| d.tower(e.owner).is_some()).copied().collect();
+        let count = |kind| towers.iter().filter(|t| t.kind == kind).count() as f32;
+        let kind = (0..defense::TOWERS.len()).filter(|&k| defense::PRICES[k] <= scrap).min_by(|&a, &b| (count(defense::TOWERS[a]) / BOT_MIX[a]).total_cmp(&(count(defense::TOWERS[b]) / BOT_MIX[b])));
+        if let Some(k) = kind {
+            // Towers and spots already planned crowd a spot alike.
+            let taken: Vec<Vector> = towers.iter().map(|t| t.pos).chain(d.plans.iter().filter(|q| matches!(q.2, defense::Build::Place(_))).map(|q| q.1)).collect();
+            let mut best: Option<(f32, Vector)> = None;
+            for (a, b) in d.segments() {
+                let across = (b - a).with_y(0.0).normalize_or_zero().cross(Vector::Y);
+                for (f, off) in [0.25f32, 0.75].into_iter().flat_map(|f| BOT_SPOTS.into_iter().flat_map(move |o| [(f, o), (f, -o)])) {
+                    let at = self.ground(a.lerp(b, f) + across * off);
+                    let Ok(at) = d.spot(&self.arena, &Ray::new(at + Vector::Y * 6.0, Vector::NEG_Y), taken.iter().copied()) else { continue };
+                    let score = 100.0 * taken.iter().filter(|t| t.distance(at) < 20.0).count() as f32 + 0.2 * at.distance(d.reactor);
+                    if best.is_none_or(|(s, _)| score < s) {
+                        best = Some((score, at));
+                    }
+                }
+            }
+            if let Some((_, at)) = best {
+                return Some((at, defense::Build::Place(k as u8)));
+            }
+        }
+        let low = towers.iter().filter_map(|t| d.tower(t.owner).map(|r| (t, r))).filter(|(t, r)| r.tier < defense::TIERS && r.upgrade(t.kind) <= scrap).min_by_key(|(_, r)| r.tier)?;
+        Some((low.0.pos, defense::Build::Upgrade))
     }
 
     /// Co-op's unarmed lane enemies close in: a crawler with a tower or pilot within CRAWLER_TRIGGER
@@ -3360,6 +3434,25 @@ mod tests {
         game.step();
         assert!(game.players.iter().all(|p| p.id != elite));
         assert_eq!(game.defense.as_ref().unwrap().hull, defense::REACTOR_HULL - defense::ELITE_LEAK);
+    }
+
+    #[test]
+    fn bots_build_towers_by_the_lanes_in_the_break() {
+        let (mut game, id) = co_op(true);
+        game.dock(id);
+        for _ in 0..secs(55.0) {
+            game.step();
+        }
+        let d = game.defense.as_ref().unwrap();
+        let bots: Vec<u8> = game.players.iter().filter(|p| p.bot.is_some()).map(|p| p.id).collect();
+        let built: Vec<u8> = d.towers.iter().map(|t| t.by).collect();
+        assert!(bots.iter().all(|b| built.contains(b)), "bots {bots:?} built {built:?}");
+        // Out of the lanes, by them.
+        for t in towers(&game) {
+            assert!(!d.in_lane(t.pos));
+            assert!(d.segments().any(|(a, b)| (t.pos - a.lerp(b, 0.5)).length() < 40.0 || (t.pos - a).length() < 25.0));
+        }
+        assert!(bots.iter().all(|&b| scrap(&game, b) < 250.0));
     }
 
     #[test]
