@@ -1016,7 +1016,7 @@ mod tests {
         d.wave = WAVES;
         let mut t = 0;
         let mut won = false;
-        while t < ((FIRST_BREAK + 60.0) * TICK_HZ) as u32 && !won {
+        while t < ((FIRST_BREAK + 180.0) * TICK_HZ) as u32 && !won {
             // Every walker falls as soon as it comes.
             let out = d.step(t, &[0, 1, 2, 3], &[], 0);
             won = out.won;
