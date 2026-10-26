@@ -37,6 +37,8 @@ const AMBIENCE = {
   storm: { gain: 1.2, beds: [['rain', 0.07, 1800], ['wind', 0.05, 450, 1]], accents: [['croak', [3, 8], 0.035], ['creak', [8, 18], 0.05]] },
   desert: { gain: 1.2, beds: [['wind', 0.1, 900, 0.8], ['wind', 0.06, 3200, 1.2]], accents: [['whistle', [15, 35], 0.025]] },
   blizzard: { gain: 1.9, beds: [['howl', 0.12, 600], ['wind', 0.07, 2400, 0.7]], accents: [['creak', [12, 24], 0.035]] },
+  // Hivewall: wind up the canyon, the flooded mines below, the Bloom's machines droning on.
+  hive: { gain: 1.3, beds: [['wind', 0.045, 380, 2], ['water', 0.03], ['hum', 0.03, [55, 82.6, 110.3]]], accents: [['drip', [0.6, 2], 0.045], ['moan', [14, 30], 0.035], ['clank', [6, 14], 0.04], ['creak', [10, 22], 0.035], ['rumble', [18, 36], 0.06], ['siren', [60, 110], 0.018]] },
 };
 
 export class Sound {

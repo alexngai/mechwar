@@ -28,6 +28,7 @@ import canopy from '../maps/canopy.json';
 import crashsite from '../maps/crashsite.json';
 import ziggurat from '../maps/ziggurat.json';
 import span from '../maps/span.json';
+import hivewall from '../maps/hivewall.json';
 import { CROUCH, LISTS, Mech, TEAMS, armament, ownLoadout, showRound, stoke, windUp } from './mech.js';
 import { Debug } from './debug.js';
 import { Cockpit } from './cockpit.js';
@@ -62,7 +63,7 @@ const sameOrigin = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${locatio
 const server = params.get('server') ?? (import.meta.env.PROD && !params.has('offline') ? sameOrigin : null);
 const net = server ? new WasmNetClient() : null;
 // Maps by name; the sim's compiled-in list gives the index. Offline, ?map=<name> picks one.
-const MAPS = { isotope, blockout, foundry, verdigris, riftline, sump, sinkhole, canopy, crashsite, ziggurat, span };
+const MAPS = { isotope, blockout, foundry, verdigris, riftline, sump, sinkhole, canopy, crashsite, ziggurat, span, hivewall };
 const mapIndex = (name) => {
   for (let i = 0; map_name(i); i++) if (map_name(i) === name) return i;
   return 0;
