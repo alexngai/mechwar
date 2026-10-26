@@ -82,6 +82,8 @@ impl Theme {
 const SOLO_SHARE: f32 = 0.6;
 /// The bosses, and the waves they come on.
 const BOSS_WAVES: [(u8, Kind); 2] = [(5, Kind::Excavator), (10, Kind::Hive)];
+/// Lane enemies this wide (radius) or more keep off narrow lanes (`Lanes::narrow`).
+pub const BIG: f32 = 2.5;
 /// A lane enemy rushing (`rush`: a boss burrowing) walks this many times its pace.
 const RUSH: f32 = 5.0;
 const SPAWN_GAP: f32 = 1.2;
@@ -393,6 +395,7 @@ pub struct Defense {
     /// starts at.
     points: Vec<Vector>,
     edges: Vec<(usize, usize, f32)>,
+    narrow: Vec<usize>,
     gates: Vec<usize>,
     pub reactor: Vector,
     pub radius: f32,
@@ -436,6 +439,7 @@ impl Defense {
         let gates: Vec<Vector> = spots.gates.iter().map(|g| Vector::from_array(*g)).collect();
         (!gates.is_empty()).then_some(())?;
         let (mut points, mut edges, mut starts) = (Vec::new(), Vec::new(), Vec::new());
+        let narrow = spots.lanes.narrow.clone();
         if spots.lanes.points.is_empty() {
             for gate in gates {
                 let walk: Vec<Vector> = std::iter::once(gate).chain(route(gate, reactor)).chain(std::iter::once(reactor)).collect();
@@ -457,6 +461,7 @@ impl Defense {
         Some(Defense {
             points,
             edges,
+            narrow,
             gates: starts,
             reactor,
             radius: spots.radius,
@@ -757,7 +762,7 @@ impl Defense {
                     Foe::Lane(kind) => {
                         let owner = (FIRST_OWNER..=LAST_OWNER).find(|o| !standing.contains(o) && !self.walkers.iter().any(|w| w.owner == *o));
                         let offset = species(kind).spread * (2.0 * self.rand() - 1.0);
-                        match (owner, self.fork(gate)) {
+                        match (owner, self.fork(gate, kind)) {
                             (Some(owner), Some(edge)) => {
                                 self.walkers.push(Walker { owner, kind, edge, along: 0.0, offset, stunned: 0, rush: 0 });
                                 out.spawn.push((owner, kind, self.points[gate], self.hull_of(kind)));
@@ -808,7 +813,7 @@ impl Defense {
                 if w.along < len {
                     break;
                 }
-                match self.fork(b) {
+                match self.fork(b, w.kind) {
                     Some(next) => (w.edge, w.along) = (next, w.along - len),
                     None => {
                         w.along = len;
@@ -884,9 +889,13 @@ impl Defense {
         self.hull = (self.hull - amount).max(0.0);
     }
 
-    /// The edge out of point `p` a walker takes, by weight (None at a lane's end).
-    fn fork(&mut self, p: usize) -> Option<usize> {
-        let out: Vec<usize> = (0..self.edges.len()).filter(|&e| self.edges[e].0 == p).collect();
+    /// The edge out of point `p` a walker of `kind` takes, by weight (None at a lane's end): a big
+    /// one (a brute or boss) not a narrow one, where there's another.
+    fn fork(&mut self, p: usize, kind: Kind) -> Option<usize> {
+        let mut out: Vec<usize> = (0..self.edges.len()).filter(|&e| self.edges[e].0 == p).collect();
+        if kind.lane_body().0 >= BIG && out.iter().any(|e| !self.narrow.contains(e)) {
+            out.retain(|e| !self.narrow.contains(e));
+        }
         let total: f32 = out.iter().map(|&e| self.edges[e].2.max(0.0)).sum();
         let mut pick = self.rand() * total;
         for &e in &out {
@@ -1028,11 +1037,13 @@ mod tests {
     #[test]
     fn at_a_fork_walkers_take_each_branch_by_weight() {
         // A gate at the origin forking to two points, 3 to 1, each a dead end away from the reactor.
-        let lanes = Lanes { points: vec![[0.0, 0.0, 0.0], [0.0, 0.0, 10.0], [10.0, 0.0, 0.0]], edges: vec![(0, 1, 3.0), (0, 2, 1.0)] };
+        let lanes = Lanes { points: vec![[0.0, 0.0, 0.0], [0.0, 0.0, 10.0], [10.0, 0.0, 0.0]], edges: vec![(0, 1, 3.0), (0, 2, 1.0)], narrow: vec![0] };
         let spots = DefenseSpots { reactor: [500.0, 0.0, 500.0], radius: 6.0, gates: vec![[0.0; 3]], lanes };
         let mut d = Defense::new(&spots, 0, |_, _| Vec::new()).unwrap();
-        let picks: Vec<usize> = (0..400).filter_map(|_| d.fork(0)).collect();
+        let picks: Vec<usize> = (0..400).filter_map(|_| d.fork(0, Kind::Walker)).collect();
         let first = picks.iter().filter(|&&e| e == 0).count() as f32 / picks.len() as f32;
         assert!((first - 0.75).abs() < 0.07, "{first}");
+        // A brute keeps off the narrow one.
+        assert!((0..50).all(|_| d.fork(0, Kind::Brute) == Some(1)));
     }
 }

@@ -99,11 +99,15 @@ pub struct DefenseSpots {
     pub lanes: Lanes,
 }
 
-/// Co-op Defense's lanes: points on walkable ground, and edges between them (from, to, weight).
+/// Co-op Defense's lanes: points on walkable ground, and edges between them (from, to, weight);
+/// `narrow`, the edges (by index) too tight for big foes (brutes and bosses), who take another
+/// branch where there is one.
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct Lanes {
     pub points: Vec<[f32; 3]>,
     pub edges: Vec<(usize, usize, f32)>,
+    #[serde(default)]
+    pub narrow: Vec<usize>,
 }
 
 /// Where a map's objective modes play.
@@ -135,6 +139,9 @@ pub struct Objectives {
     /// Co-op Defense: the reactor, gates and lanes.
     #[serde(default)]
     pub defense: Option<DefenseSpots>,
+    /// A map made for co-op alone: the versus modes leave it out.
+    #[serde(default)]
+    pub coop: bool,
 }
 
 #[derive(Deserialize, Clone, Debug)]

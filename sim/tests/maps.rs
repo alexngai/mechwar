@@ -143,6 +143,73 @@ fn flag_stands_shelter_their_flags() {
 /// 3.5 and 6 m up nor overhead under 7 m, its side 2 m off each base gun's foot and well off the pads.
 /// It runs from team 0's base to team 1's, and starts between its ends, as far to walk to either base
 /// (within 10%), since the start is the middle of a tug of war.
+/// Co-op maps' lanes (where authored): every gate's lane reaches the reactor along edges, every
+/// edge's line on walkable ground (ground within 4 m under it, no step of more than 0.8 m a metre,
+/// for lane enemies to walk smoothly), with room for what walks it: 3 m either side and 6.5 m
+/// overhead on a narrow edge, BIG_ROOM either side and 9 m overhead on any other (a boss is 9 m
+/// across). And a co-op-only map's reactor is reachable on foot from the pilots' spawns.
+#[test]
+fn defense_lanes_fit_their_foes() {
+    use rapier3d::prelude::Ray;
+    const BIG_ROOM: f32 = 5.0;
+    let flat = |v: Vector| Vector::new(v.x, 0.0, v.z);
+    for (index, (name, _)) in MAPS.iter().enumerate() {
+        let map = Map::load(index);
+        let Some(spots) = &map.objectives.defense else { continue };
+        let lanes = &spots.lanes;
+        if lanes.points.is_empty() {
+            continue;
+        }
+        let points: Vec<Vector> = lanes.points.iter().map(|p| Vector::from_array(*p)).collect();
+        let reactor = Vector::from_array(spots.reactor);
+        // From each gate's nearest point, along edges, to the reactor.
+        for gate in &spots.gates {
+            let g = Vector::from_array(*gate);
+            let start = (0..points.len()).min_by(|&a, &b| points[a].distance(g).total_cmp(&points[b].distance(g))).unwrap();
+            assert!(points[start].distance(g) < 8.0, "{name}: the gate at {g} is {:.1} m from its lane", points[start].distance(g));
+            let mut seen = vec![false; points.len()];
+            let mut todo = vec![start];
+            let mut reached = false;
+            while let Some(p) = todo.pop() {
+                if std::mem::replace(&mut seen[p], true) {
+                    continue;
+                }
+                reached |= flat(points[p] - reactor).length() <= spots.radius;
+                todo.extend(lanes.edges.iter().filter(|e| e.0 == p).map(|e| e.1));
+            }
+            assert!(reached, "{name}: the lane from the gate at {g} never reaches the reactor");
+        }
+        let arena = Arena::new(&map);
+        for (k, &(a, b, _)) in lanes.edges.iter().enumerate() {
+            let (a, b) = (points[a], points[b]);
+            let narrow = lanes.narrow.contains(&k);
+            let (room, head) = if narrow { (3.0, 6.5) } else { (BIG_ROOM, 9.0) };
+            let dir = flat(b - a).normalize_or_zero();
+            let side = Vector::new(-dir.z, 0.0, dir.x);
+            let n = flat(b - a).length().ceil().max(1.0) as usize;
+            let mut last: Option<f32> = None;
+            for i in 0..=n {
+                let p = a + (b - a) * (i as f32 / n as f32);
+                let ground = arena.cast_ray(&Ray::new(p + Vector::Y * 4.0, Vector::NEG_Y), 8.0).map(|d| p.y + 4.0 - d);
+                let g = ground.unwrap_or_else(|| panic!("{name}: no ground within 4 m under lane edge {k} at {p}"));
+                if let Some(h) = last {
+                    assert!((g - h).abs() <= 0.8, "{name}: a {:.2} m step under lane edge {k} at {p}", (g - h).abs());
+                }
+                last = Some(g);
+                let feet = Vector::new(p.x, g, p.z);
+                for up in [1.0, 3.5] {
+                    for s in [side, -side] {
+                        let hit = arena.cast_ray(&Ray::new(feet + Vector::Y * up, s), room);
+                        assert!(hit.is_none(), "{name}: something {:.1} m beside lane edge {k}{} at {feet}, {up} m up", hit.unwrap_or(0.0), if narrow { " (narrow)" } else { "" });
+                    }
+                }
+                let roof = arena.cast_ray(&Ray::new(feet + Vector::Y * 0.05, Vector::Y), head);
+                assert!(roof.is_none(), "{name}: a roof {:.1} m over lane edge {k} at {feet}", roof.unwrap_or(0.0));
+            }
+        }
+    }
+}
+
 #[test]
 fn convoy_routes_fit_the_hauler() {
     use rapier3d::prelude::Ray;

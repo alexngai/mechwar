@@ -218,6 +218,9 @@ impl Mode {
 
     /// Whether `map` plays this mode.
     pub fn fits(self, map: &Map) -> bool {
+        if map.objectives.coop && self.versus() {
+            return false;
+        }
         match self {
             Mode::TeamDeathmatch => true,
             Mode::Deathmatch => map.size[0].max(map.size[1]) <= DM_MAX_SIZE,
