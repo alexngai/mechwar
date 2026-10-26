@@ -65,6 +65,9 @@ const BRUTE_COOLDOWN: f32 = 4.0;
 const ELITE_SCRAP: f32 = 1.5;
 /// Co-op's mortar walker (see `shell_towers`) and shield node (`shield_foes`).
 const MORTAR_RANGE: f32 = 60.0;
+/// A mortar shells towers no further than this above or below it: on a map in storeys, not a
+/// cliff's worth of terraces over its lane (where nothing can reach it to stop it).
+const MORTAR_RISE: f32 = 24.0;
 const MORTAR_COOLDOWN: f32 = 5.0;
 const MORTAR_FLIGHT: f32 = 2.5;
 const MORTAR_BLAST: f32 = 4.0;
@@ -103,6 +106,8 @@ const HIVE_EVERY: f32 = 10.0;
 const HIVE_BROOD: usize = 3;
 const HIVE_BURST: usize = 8;
 const HIVE_EMP: f32 = 25.0;
+/// A boss's grind and quake reach no further than this above or below it.
+const BOSS_BAND: f32 = 8.0;
 const ELITE_WRECK: f32 = 2.0;
 /// Co-op's reactor as a torch meets it: a ball REACTOR_BODY round, REACTOR_MIDDLE over its foot.
 const REACTOR_MIDDLE: f32 = 6.0;
@@ -2436,10 +2441,11 @@ impl Game {
         }
     }
 
-    /// Co-op's mortar walkers: one with a tower within MORTAR_RANGE digs in (stops on its lane, its
-    /// pitch 1 for all to see) and every MORTAR_COOLDOWN lobs a shell at the nearest, landing
-    /// MORTAR_FLIGHT later where the tower stood (everyone sees where: dodge it, or not): then
-    /// MORTAR_DAMAGE to every tower and MORTAR_PILOT to every pilot within MORTAR_BLAST.
+    /// Co-op's mortar walkers: one with a tower within MORTAR_RANGE across (and MORTAR_RISE up or
+    /// down) digs in (stops on its lane, its pitch 1 for all to see) and every MORTAR_COOLDOWN lobs
+    /// a shell at the nearest, landing MORTAR_FLIGHT later where the tower stood (everyone sees
+    /// where: dodge it, or not): then MORTAR_DAMAGE to every tower and MORTAR_PILOT to every pilot
+    /// within MORTAR_BLAST.
     fn shell_towers(&mut self, towers: &[usize]) {
         let tick = self.tick;
         for k in 0..self.deployables.len() {
@@ -2447,7 +2453,7 @@ impl Game {
             if m.kind != Kind::Mortar || m.hull <= 0.0 {
                 continue;
             }
-            let target = towers.iter().map(|&t| self.deployables[t].pos).filter(|t| (*t - m.pos).with_y(0.0).length() <= MORTAR_RANGE).min_by(|a, b| a.distance(m.pos).total_cmp(&b.distance(m.pos)));
+            let target = towers.iter().map(|&t| self.deployables[t].pos).filter(|t| (*t - m.pos).with_y(0.0).length() <= MORTAR_RANGE && (t.y - m.pos.y).abs() <= MORTAR_RISE).min_by(|a, b| a.distance(m.pos).total_cmp(&b.distance(m.pos)));
             self.deployables[k].pitch = if target.is_some() { 1.0 } else { 0.0 };
             let (Some(at), Some(d)) = (target, self.defense.as_mut()) else { continue };
             d.stun(&[m.owner], tick + 2);
@@ -2484,7 +2490,8 @@ impl Game {
     /// bits mark those done).
     fn bosses_act(&mut self, towers: &[usize]) {
         let tick = self.tick;
-        let near = |a: Vector, b: Vector, r: f32| (a - b).with_y(0.0).length() <= r;
+        // Within reach across, and BOSS_BAND up or down: on a map in storeys, not the floors above.
+        let near = |a: Vector, b: Vector, r: f32| (a - b).with_y(0.0).length() <= r && (a.y - b.y).abs() < BOSS_BAND;
         for k in 0..self.deployables.len() {
             let b = self.deployables[k];
             if !b.kind.boss() || b.hull <= 0.0 {
@@ -3488,8 +3495,11 @@ mod tests {
             game.step();
         }
         assert_eq!(towers(&game)[0].hull, defense::TOWER_HULL - MORTAR_DAMAGE);
-        // Out of its reach, it walks on.
+        // Out of its reach, it walks on: too far across, or too far under (a cliff's foot).
         game.deployables[k].pos = tower.pos + Vector::new(80.0, 0.0, 0.0);
+        game.step();
+        assert_eq!(game.deployables[k].pitch, 0.0);
+        game.deployables[k].pos = tower.pos + Vector::new(30.0, -MORTAR_RISE - 1.0, 0.0);
         game.step();
         assert_eq!(game.deployables[k].pitch, 0.0);
     }
@@ -3565,6 +3575,11 @@ mod tests {
         let before = game.deployables[t].hull;
         game.step();
         assert!(game.deployables[t].hull < before || (game.deployables[t].pos - game.deployables[k].pos).with_y(0.0).length() > EXCAVATOR_REACH);
+        // Not one a storey over it.
+        game.deployables[t].pos = game.deployables[k].pos + Vector::Y * (BOSS_BAND + 1.0);
+        let before = game.deployables[t].hull;
+        game.step();
+        assert_eq!(game.deployables[t].hull, before);
         // It goes under, and comes up with a quake.
         let (mut deepest, mut quake) = (f32::MAX, false);
         for _ in 0..secs(EXCAVATOR_FIRST + EXCAVATOR_UNDER + 1.0) {
