@@ -146,7 +146,7 @@ fn flag_stands_shelter_their_flags() {
 #[test]
 fn convoy_routes_fit_the_hauler() {
     use rapier3d::prelude::Ray;
-    const CONVOY: [&str; 5] = ["span", "crashsite", "foundry", "riftline", "canopy"];
+    const CONVOY: [&str; 6] = ["span", "crashsite", "foundry", "riftline", "canopy", "walled"];
     let flat = |v: Vector| Vector::new(v.x, 0.0, v.z);
     for (index, (name, _)) in MAPS.iter().enumerate() {
         let map = Map::load(index);
