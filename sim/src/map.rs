@@ -6,7 +6,7 @@ use rapier3d::prelude::{ColliderBuilder, Rotation, Vector};
 use serde::Deserialize;
 
 /// Compiled-in maps. The index is what goes over the wire.
-pub const MAPS: [(&str, &str); 11] = [
+pub const MAPS: [(&str, &str); 12] = [
     ("isotope", include_str!("../../maps/isotope.json")),
     ("blockout", include_str!("../../maps/blockout.json")),
     ("foundry", include_str!("../../maps/foundry.json")),
@@ -18,11 +18,13 @@ pub const MAPS: [(&str, &str); 11] = [
     ("crashsite", include_str!("../../maps/crashsite.json")),
     ("ziggurat", include_str!("../../maps/ziggurat.json")),
     ("span", include_str!("../../maps/span.json")),
+    ("hivewall", include_str!("../../maps/hivewall.json")),
 ];
 /// Foundry.
 pub const DEFAULT: usize = 2;
-/// Maps the server rotates through between matches (blockout is a test map).
-pub const ROTATION: [&str; 10] = ["foundry", "isotope", "verdigris", "riftline", "sump", "sinkhole", "canopy", "crashsite", "ziggurat", "span"];
+/// Maps the server rotates through between matches (blockout is a test map; the modes a map plays
+/// pick from these, so a co-op map only comes round in co-op).
+pub const ROTATION: [&str; 11] = ["foundry", "isotope", "verdigris", "riftline", "sump", "sinkhole", "canopy", "crashsite", "ziggurat", "span", "hivewall"];
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct Solid {

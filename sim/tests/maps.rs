@@ -76,6 +76,10 @@ fn base_guns_stand_over_their_spawns() {
     for name in sim::map::ROTATION {
         let index = MAPS.iter().position(|(n, _)| *n == name).unwrap();
         let map = Map::load(index);
+        // A co-op map has none: it plays nothing else.
+        if map.objectives.coop {
+            continue;
+        }
         let arena = Arena::new(&map);
         for (team, guns) in map.objectives.sentries.iter().enumerate() {
             assert_eq!(guns.len(), 2, "{name}: team {team} has {} base guns", guns.len());
@@ -284,8 +288,8 @@ fn open_to_the_sky(name: &str, what: &str, arena: &Arena, spot: &sim::map::ZoneS
     assert!(arena.cast_ray(&rapier3d::prelude::Ray::new(pad + Vector::Y * 0.5, Vector::Y), 80.0).is_none(), "{name}: {what} at {pad} is roofed");
 }
 
-/// Asymmetric by design: blockout (a test map), canopy and crashsite.
-const ASYMMETRIC: [&str; 3] = ["blockout", "canopy", "crashsite"];
+/// Asymmetric by design: blockout (a test map), canopy, crashsite and hivewall (co-op's).
+const ASYMMETRIC: [&str; 4] = ["blockout", "canopy", "crashsite", "hivewall"];
 
 #[test]
 fn maps_are_rotationally_symmetric() {

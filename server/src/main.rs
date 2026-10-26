@@ -722,8 +722,12 @@ mod tests {
     #[test]
     fn rooms_deal_the_modes_and_maps_their_settings_allow() {
         let settings = |mode, map: Option<&str>| Settings { name: String::new(), public: true, mode, map: map.map(|m| Map::index(m).unwrap()), score_limit: 25, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
+        // Every map but the co-op one, which comes round only in co-op rooms.
         let every = deck(&settings(None, None));
-        assert_eq!(every.iter().filter(|(m, _)| *m == Mode::TeamDeathmatch).count(), ROTATION.len());
+        assert_eq!(every.iter().filter(|(m, _)| *m == Mode::TeamDeathmatch).count(), ROTATION.len() - 1);
+        assert!(every.iter().all(|&(_, map)| MAPS[map].0 != "hivewall"));
+        let coop: Vec<&str> = deck(&settings(Some(Mode::Defense), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
+        assert_eq!(coop, ["foundry", "hivewall"]);
         // Deathmatch only on the smaller maps.
         let dm: Vec<&str> = deck(&settings(Some(Mode::Deathmatch), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
         assert_eq!(dm, ["isotope", "verdigris", "sump", "sinkhole", "ziggurat"]);
