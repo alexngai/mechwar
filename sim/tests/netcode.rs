@@ -33,6 +33,11 @@ fn unshielded() -> Tuning {
     Tuning { spawn_shield: 0.0, ..Tuning::default() }
 }
 
+/// The Medium's own primary (the Rifle) on `base`: weapons.json's numbers over it.
+fn rifle(base: &Tuning) -> Tuning {
+    sim::Arsenal::new(base).get(MechClass::B, Loadout::of(MechClass::B)).clone()
+}
+
 /// Base tuning with the primary narrowed to one exact ray at full damage, for tests that count
 /// hits. Server side only: the clients still predict with the compiled-in tuning.
 fn laser() -> Tuning {
@@ -225,7 +230,7 @@ fn lag_compensated_hits_kill_and_respawn() {
     let (hits, shots, killed, h) = duel(false, 300, 0..300, zigzag);
     assert!(killed, "B never died: {hits}/{shots} hits");
     assert_eq!(hits, shots, "with lag compensation every shot at the drawn target should hit");
-    assert_eq!(hits, (t.health_max / t.shot_damage).ceil() as u32);
+    assert_eq!(hits, (t.health_max / rifle(&t).shot_damage).ceil() as u32);
     assert_eq!(h.clients[0].1.kills, 1);
     assert_eq!(h.clients[1].1.deaths, 1);
     // Killed around tick 70, B waits in the hangar (ready once respawn_delay is up) until it
@@ -874,10 +879,11 @@ fn falloff_scales_hit_damage() {
         dealt.push((t.health_max - game.snapshot(victim).me.health, hit_at.distance(eye)));
     }
     let [(near, _), (mid, dist), (far, _)] = dealt[..] else { unreachable!() };
-    assert_eq!(near, t.shot_damage);
-    let want = t.shot_damage * (1.0 - (1.0 - t.falloff_floor) * (dist - 40.0) / 80.0);
+    let hit = rifle(&t).shot_damage;
+    assert!((near - hit).abs() < 1e-4, "near hit did {near}, want {hit}");
+    let want = hit * (1.0 - (1.0 - t.falloff_floor) * (dist - 40.0) / 80.0);
     assert!((mid - want).abs() < 1e-3 && mid < near, "mid-range hit did {mid}, want {want}");
-    assert!((far - t.shot_damage * t.falloff_floor).abs() < 1e-4, "far hit did {far}");
+    assert!((far - hit * t.falloff_floor).abs() < 1e-4, "far hit did {far}");
 }
 
 #[test]
