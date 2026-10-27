@@ -32,12 +32,12 @@ const SIM = {
 // hulls and plating are `defense::species`', the gates' and flanking's are `GATES_ONE`, `GATES_TWO` and `FLANK`).
 const COOP = {
   REACTOR_HULL: 2000, LEAK: 100, WAVES: 10, FIRST_BREAK: 60, BREAK: 30, START_SCRAP: 250, SCRAP_PER_HULL: 0.35, WAVE_BONUS: 100, CACHES: 2, CACHE_SCRAP: 60,
-  PRICES: [100, 150, 175, 200], TIERS: 3, UPGRADE: 0.75, REFUND: 0.7, REACH: 30, LANE_CLEAR: 5,
-  TOWER_MG_POWER: 3, TOWER_ROCKET_POWER: 2, ARC_RANGE: 20, ARC_DAMAGE: 40, ARC_HOPS: 3, ARC_FALLOFF: 0.7, ARC_COOLDOWN: 1.5, PULSE_RADIUS: 14, PULSE_STUN: 2.5, PULSE_DAMAGE: 15, PULSE_COOLDOWN: 7,
+  PRICES: [100, 150, 175, 200], TIERS: 3, UPGRADE: 1, REFUND: 0.7, REACH: 30, LANE_CLEAR: 5,
+  TOWER_MG_POWER: 2.2, TOWER_ROCKET_POWER: 1.6, ARC_RANGE: 20, ARC_DAMAGE: 40, ARC_HOPS: 3, ARC_FALLOFF: 0.7, ARC_COOLDOWN: 1.5, PULSE_RADIUS: 14, PULSE_STUN: 2.5, PULSE_DAMAGE: 15, PULSE_COOLDOWN: 7,
   WALKER_RANGE: 30, CRAWLER_PACK: 4, CRAWLER_BLAST: 5, CRAWLER_DAMAGE: 60, BRUTE_ARMOR: 5, BRUTE_REACH: 8, BRUTE_SMASH: 150,
   MORTAR_RANGE: 60, MORTAR_FLIGHT: 2.5, MORTAR_BLAST: 4, MORTAR_DAMAGE: 80, NODE_DOME: 250, NODE_RECHARGE: 8,
-  EXCAVATOR_HULL: 3000, EXCAVATOR_ARMOR: 8, EXCAVATOR_REACH: 10, EXCAVATOR_EVERY: 20, EXCAVATOR_UNDER: 4, QUAKE_RADIUS: 12, QUAKE_DAMAGE: 120, QUAKE_STUN: 3,
-  HIVE_HULL: 5000, HIVE_ARMOR: 4, HIVE_EVERY: 10, HIVE_BROOD: 3, HIVE_BURST: 8, HIVE_EMP: 25,
+  EXCAVATOR_HULL: 2600, EXCAVATOR_ARMOR: 6, EXCAVATOR_LEAK: 600, EXCAVATOR_REACH: 10, EXCAVATOR_EVERY: 20, EXCAVATOR_UNDER: 4, QUAKE_RADIUS: 12, QUAKE_DAMAGE: 120, QUAKE_STUN: 3,
+  HIVE_HULL: 4500, HIVE_ARMOR: 4, HIVE_LEAK: 1000, HIVE_EVERY: 10, HIVE_BROOD: 3, HIVE_BURST: 8, HIVE_EMP: 25,
   GATES_ONE: 2, GATES_TWO: 5, FLANK: 0.8,
 };
 
@@ -277,7 +277,7 @@ async function modes() {
       <h4>BUILDING</h4>
       <ul class="rules">
         <li>B opens the build menu, 1–4 pick a tower and the left button puts it down where you aim; a ghost shows green where it fits, or red with the reason. It needs flat ground with headroom, within ${C.REACH} m of you, ${C.LANE_CLEAR} m off any lane, and clear of other towers and the reactor.</li>
-        <li>U raises the tower you aim at a tier, anyone's, up to tier ${C.TIERS}: more hull, reach and fire rate, for ${pct(C.UPGRADE)} of its price at tier 1 and ${pct(2 * C.UPGRADE)} at tier 2. X sells your own for ${pct(C.REFUND)} of all that went into it. The ${link('mender')} mends towers and the reactor.</li>
+        <li>U raises the tower you aim at a tier, anyone's, up to tier ${C.TIERS}: more hull, reach and fire rate, for ${pct(C.UPGRADE)} of its price at tier 1 and ${pct(2 * C.UPGRADE)} at tier 2. X sells your own for ${pct(C.REFUND)} of what you put into it. The ${link('mender')} mends towers and the reactor.</li>
       </ul>
       ${table(['TOWER', 'PRICE', 'WHAT IT DOES'], [
         ['MG tower', C.PRICES[0], `Fast fire at single targets, ${C.TOWER_MG_POWER} times the ${link('mg_turret')}'s damage to the hive`],
@@ -301,8 +301,8 @@ async function modes() {
       ])}
       <h4>BOSSES</h4>
       <ul class="rules">
-        <li><b>The Excavator</b> (wave 5), ${C.EXCAVATOR_HULL.toLocaleString('en')} hull for a full team, plated ${C.EXCAVATOR_ARMOR}: grinds every tower within ${C.EXCAVATOR_REACH} m, and every ${C.EXCAVATOR_EVERY} s burrows for ${C.EXCAVATOR_UNDER} s, out of reach, then bursts up in a quake (${C.QUAKE_DAMAGE} to every tower within ${C.QUAKE_RADIUS} m, and a ${C.QUAKE_STUN} s stun). Heavy hits, and towers spread out.</li>
-        <li><b>The Hive walker</b> (wave 10), ${C.HIVE_HULL.toLocaleString('en')} hull, plated ${C.HIVE_ARMOR}: breeds ${C.HIVE_BROOD} crawlers every ${C.HIVE_EVERY} s, and at two thirds and one third of its hull bursts out ${C.HIVE_BURST} more and an EMP that stops every tower within ${C.HIVE_EMP} m for ${C.QUAKE_STUN} s. If it reaches the reactor, the run is lost.</li>
+        <li><b>The Excavator</b> (wave 5), ${C.EXCAVATOR_HULL.toLocaleString('en')} hull for a full team, plated ${C.EXCAVATOR_ARMOR}: grinds every tower within ${C.EXCAVATOR_REACH} m, and every ${C.EXCAVATOR_EVERY} s burrows for ${C.EXCAVATOR_UNDER} s, out of reach, then bursts up in a quake (${C.QUAKE_DAMAGE} to every tower within ${C.QUAKE_RADIUS} m, and a ${C.QUAKE_STUN} s stun); reaching the reactor, it takes ${C.EXCAVATOR_LEAK} off it. Heavy hits, and towers spread out.</li>
+        <li><b>The Hive walker</b> (wave 10), ${C.HIVE_HULL.toLocaleString('en')} hull, plated ${C.HIVE_ARMOR}: breeds ${C.HIVE_BROOD} crawlers every ${C.HIVE_EVERY} s, and at two thirds and one third of its hull bursts out ${C.HIVE_BURST} more and an EMP that stops every tower within ${C.HIVE_EMP} m for ${C.QUAKE_STUN} s. Reaching the reactor, it takes ${C.HIVE_LEAK.toLocaleString('en')} off it.</li>
       </ul>
       <h4>VARIATIONS</h4>
       <ul class="rules">

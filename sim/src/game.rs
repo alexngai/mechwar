@@ -77,8 +77,8 @@ const NODE_DOME: f32 = 250.0;
 const NODE_DOME_STEP: f32 = 20.0;
 const NODE_RECHARGE: f32 = 8.0;
 /// Co-op's MG and rocket towers do these times what the item turrets do, to the hive.
-const TOWER_MG_POWER: f32 = 3.0;
-const TOWER_ROCKET_POWER: f32 = 2.0;
+const TOWER_MG_POWER: f32 = 2.2;
+const TOWER_ROCKET_POWER: f32 = 1.6;
 /// A flak blueprint's rounds burst this far round where they hit (m); a pilot picks up salvage
 /// within SALVAGE_REACH.
 const FLAK_BURST: f32 = 3.0;
@@ -3376,7 +3376,7 @@ mod tests {
         let d = game.defense.as_ref().unwrap();
         let t = *d.tower(tower.owner).unwrap();
         assert_eq!(t.tier, 3);
-        assert!((scrap(&game, other) - (1000.0 - 3.0 * 0.75 * defense::PRICES[1])).abs() < 1e-3, "{before}");
+        assert!((scrap(&game, other) - (1000.0 - 3.0 * defense::UPGRADE * defense::PRICES[1])).abs() < 1e-3, "{before}");
         assert_eq!(towers(&game)[0].hull, defense::tower_hull(3));
         game.events.clear();
         game.build(other, defense::Build::Upgrade);
@@ -3612,7 +3612,7 @@ mod tests {
         let k = boss_of_wave(&mut game, id, 5);
         let boss = game.deployables[k];
         assert_eq!(boss.kind, Kind::Excavator);
-        assert!((boss.hull - 0.6 * 3000.0).abs() < 1.0, "a lone pilot's share: {}", boss.hull);
+        assert!((boss.hull - 0.6 * defense::hull(Kind::Excavator, 5)).abs() < 1.0, "a lone pilot's share: {}", boss.hull);
         // A tower by it is ground down.
         aim_to_build(&mut game, id, boss.pos, 4.0);
         game.players.iter_mut().find(|p| p.id == id).unwrap().mech.health = 100.0;
@@ -3698,8 +3698,15 @@ mod tests {
         let before = scrap(&game, id);
         game.apply_damage_by(Some(i), j, 1e4, Cause::Unknown);
         assert!(scrap(&game, id) > before);
-        for _ in 0..secs(10.0) {
+        // (The rest of the wave shot down as it comes.)
+        for _ in 0..secs(60.0) {
             game.step();
+            for k in (0..game.deployables.len()).filter(|&k| game.deployables[k].kind.lane_enemy()).collect::<Vec<_>>() {
+                game.wear(k, 1e4, id);
+            }
+            if game.defense.as_ref().unwrap().wave == 7 {
+                break;
+            }
         }
         assert!(game.players.iter().all(|p| p.team == 0), "still here");
         assert_eq!(game.defense.as_ref().unwrap().wave, 7);
@@ -3812,7 +3819,7 @@ mod tests {
         // Salvage rights: all it cost, back.
         let had = scrap(&game, id);
         game.build(id, defense::Build::Sell);
-        assert_eq!(scrap(&game, id) - had, 0.85 * defense::PRICES[1]);
+        assert!((scrap(&game, id) - had - 0.85 * defense::PRICES[1]).abs() < 1e-3);
     }
 
     #[test]
@@ -3830,8 +3837,8 @@ mod tests {
         assert_eq!(scrap(&game, id), start + 100.0);
     }
 
-    /// Co-op's balance, bot-only: 32 runs on a co-op map (`COOP_MAP`, else Hivewall), four bot
-    /// skills by eight seeds, in parallel, one docked human and three bots fighting full-size waves
+    /// Co-op's balance, bot-only: runs on a co-op map (`COOP_MAP`, else Hivewall), four bot
+    /// skills by `COOP_SEEDS` seeds (else 8), in parallel, one docked human and three bots fighting full-size waves
     /// (bots count as pilots). A line a run: won, the wave reached, the reactor's hull, minutes,
     /// towers standing and at most, the reactor's losses by wave, and what reached it (kind@wave).
     /// `cargo test --release -p sim --lib coop_balance_sweep -- --ignored --nocapture`
@@ -3839,7 +3846,8 @@ mod tests {
     #[ignore]
     fn coop_balance_sweep() {
         let map = std::env::var("COOP_MAP").unwrap_or_else(|_| "hivewall".into());
-        let runs: Vec<(u32, f32)> = [0.3f32, 0.5, 0.7, 0.9].into_iter().flat_map(|skill| (1..=8u32).map(move |seed| (seed, skill))).collect();
+        let seeds: u32 = std::env::var("COOP_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(8);
+        let runs: Vec<(u32, f32)> = [0.3f32, 0.5, 0.7, 0.9].into_iter().flat_map(|skill| (1..=seeds).map(move |seed| (seed, skill))).collect();
         let out: Vec<String> = std::thread::scope(|scope| {
             let handles: Vec<_> = runs
                 .iter()

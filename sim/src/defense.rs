@@ -27,7 +27,7 @@ const BREAK: f32 = 30.0;
 /// The wave director: each wave's threat budget for a full team (SOLO_SHARE of it for one pilot
 /// and evenly between), spent on `CARDS`, a theme leaning it one way from wave 3 (`Theme`). Foes
 /// come through the gates SPAWN_GAP apart, a pack of crawlers CRAWLER_GAP apart.
-const BUDGETS: [f32; WAVES as usize] = [6.0, 10.0, 14.0, 21.0, 30.0, 36.0, 46.0, 64.0, 80.0, 100.0];
+const BUDGETS: [f32; WAVES as usize] = [6.0, 10.0, 14.0, 21.0, 30.0, 48.0, 60.0, 72.0, 82.0, 80.0];
 
 /// What the director buys: a foe (crawlers by the pack), what it costs of the budget, the wave
 /// it first comes on (where one's bought first, before the rest), how likely it is (by weight)
@@ -126,14 +126,14 @@ pub struct Species {
 
 pub fn species(kind: Kind) -> Species {
     match kind {
-        Kind::Crawler => Species { hull: 30.0, hull_step: 3.0, speed: 8.5, spread: 3.5, leak: 25.0, armor: 0.0 },
-        Kind::Brute => Species { hull: 600.0, hull_step: 50.0, speed: 2.8, spread: 0.5, leak: 300.0, armor: 5.0 },
-        Kind::Mortar => Species { hull: 140.0, hull_step: 14.0, speed: 3.5, spread: 1.5, leak: LEAK, armor: 0.0 },
-        Kind::Node => Species { hull: 150.0, hull_step: 12.0, speed: 4.0, spread: 1.0, leak: 50.0, armor: 0.0 },
+        Kind::Crawler => Species { hull: 30.0, hull_step: 5.0, speed: 8.5, spread: 3.5, leak: 25.0, armor: 0.0 },
+        Kind::Brute => Species { hull: 600.0, hull_step: 80.0, speed: 2.8, spread: 0.5, leak: 300.0, armor: 5.0 },
+        Kind::Mortar => Species { hull: 140.0, hull_step: 22.0, speed: 3.5, spread: 1.5, leak: LEAK, armor: 0.0 },
+        Kind::Node => Species { hull: 150.0, hull_step: 18.0, speed: 4.0, spread: 1.0, leak: 50.0, armor: 0.0 },
         // Bosses: their hull for a full team (a lone pilot meets SOLO_SHARE of it).
-        Kind::Excavator => Species { hull: 3000.0, hull_step: 0.0, speed: 2.0, spread: 0.0, leak: 600.0, armor: 6.0 },
-        Kind::Hive => Species { hull: 5000.0, hull_step: 0.0, speed: 2.2, spread: 0.0, leak: REACTOR_HULL, armor: 4.0 },
-        _ => Species { hull: 100.0, hull_step: 12.0, speed: 4.5, spread: 2.0, leak: LEAK, armor: 0.0 },
+        Kind::Excavator => Species { hull: 2600.0, hull_step: 0.0, speed: 2.0, spread: 0.0, leak: 600.0, armor: 6.0 },
+        Kind::Hive => Species { hull: 4500.0, hull_step: 0.0, speed: 2.2, spread: 0.0, leak: 1000.0, armor: 4.0 },
+        _ => Species { hull: 100.0, hull_step: 20.0, speed: 4.5, spread: 2.0, leak: LEAK, armor: 0.0 },
     }
 }
 
@@ -162,7 +162,7 @@ pub const PRICES: [f32; 4] = [100.0, 150.0, 175.0, 200.0];
 /// each tier it has), and what selling it refunds (REFUND of all that went into it).
 pub const TOWER_HULL: f32 = 300.0;
 pub const TIERS: u8 = 3;
-const UPGRADE: f32 = 0.75;
+pub const UPGRADE: f32 = 1.0;
 const REFUND: f32 = 0.7;
 /// Each pilot's scrap to start, for each hull point they (or their towers) shoot off a walker, and
 /// for each wave beaten.
