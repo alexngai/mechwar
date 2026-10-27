@@ -1870,8 +1870,7 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
       left: T('alt_lock_time') + T('alt_lock_hold') - curr[S.LOCK_T], // s the lock holds once made
     } : null,
     seek: curr[S.SEEK] > 0 ? curr[S.SEEK] - 1 : null,
-    // A lock-on launcher with no lock: its cone as a fraction of the half-height, and when a press last found nothing in it.
-    seeker: T('alt_lock_time') > 0 && !curr[S.LOCK] ? { r: Math.tan(THREE.MathUtils.degToRad(T('alt_lock_cone'))) / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)), missAt } : null,
+    seeking: now - missAt < 800 && !curr[S.LOCK], // a lock-on press just found nothing
     windup: T('alt_charge_time') > 0 && curr[S.ALT_CHARGE] > 0 ? curr[S.ALT_CHARGE] : T('charge_time') > 0 ? curr[S.CHARGE] : T('spin_up') > 0 ? curr[S.SPIN] : 0,
     // The cone the next shot lands in (base spread plus bloom) as a fraction of the half-height,
     // and a slow primary's refire, 0 to 1 (null for fast guns and spinning ones).

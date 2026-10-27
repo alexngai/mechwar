@@ -280,22 +280,6 @@ export class Hud {
       g.font = font(13, 'bold');
       g.fillText(`LOCKED ${Math.max(f.lock.left, 0).toFixed(1)} s`, cx, bottom + 56 * u);
     }
-    // A lock-on launcher with no lock: the cone a press searches, dashed round the aim point; a
-    // press that found nothing in it lights it a second and says so.
-    if (f.seeker) {
-      const { x, y } = f.aim ?? { x: cx, y: cy }, missed = f.now - f.seeker.missAt < 1000;
-      g.lineWidth = 1.5 * u;
-      g.strokeStyle = missed ? AMBER : DIM;
-      g.setLineDash([6 * u, 12 * u]);
-      arc(g, x, y, f.seeker.r * cy, 0, TAU);
-      g.setLineDash([]);
-      if (missed) {
-        g.textAlign = 'center';
-        g.fillStyle = AMBER;
-        g.font = font(13, 'bold');
-        g.fillText('NO TARGET', cx, bottom + 56 * u);
-      }
-    }
 
     // --- Reticle at the aim point, with hit markers -----------------------------------------
     if (f.aim) {
@@ -316,6 +300,14 @@ export class Hud {
         g.lineWidth = 2.5 * u;
         g.strokeStyle = f.windup >= 1 ? '#ffffff' : AMBER;
         arc(g, x, y, Math.max(19 * u, r + 14 * u), -Math.PI / 2, -Math.PI / 2 + TAU * f.windup);
+      }
+      // A lock-on press that found nothing: two arcs spin round it a moment, outside a windup's ring.
+      if (f.seeking) {
+        const a = f.now / 120, rs = Math.max(25 * u, r + 20 * u);
+        g.lineWidth = 2 * u;
+        g.strokeStyle = AMBER;
+        arc(g, x, y, rs, a, a + 1);
+        arc(g, x, y, rs, a + Math.PI, a + Math.PI + 1);
       }
       g.fillStyle = AMBER;
       g.beginPath();
