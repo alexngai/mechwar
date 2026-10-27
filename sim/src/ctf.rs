@@ -19,6 +19,23 @@ pub const CAPTURES_TO_WIN: u16 = 3;
 /// A dropped flag is picked up by feet this close (across, and up or down).
 const PICKUP_RADIUS: f32 = 3.0;
 
+/// How many of a team's bots go to each job (a dropped flag, either side's, takes one):
+/// raiding the enemy's stand, escorting its own carrier, chasing the enemy's and guarding its
+/// own stand. Bots left over fight where they like.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Squads {
+    pub raid: usize,
+    pub escort: usize,
+    pub chase: usize,
+    pub guard: usize,
+}
+
+impl Default for Squads {
+    fn default() -> Self {
+        Squads { raid: 2, escort: 1, chase: 2, guard: 1 }
+    }
+}
+
 /// Where a flag is.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Flag {
@@ -166,11 +183,16 @@ impl Ctf {
     /// to escort our carrier), and one to hold our stand while our flag's on it. The rest roam
     /// (None), as do humans.
     pub fn orders(&self, mechs: &[(u8, u8, Vector, bool)]) -> Vec<Option<Vector>> {
+        self.orders_by(mechs, [Squads::default(); 2])
+    }
+
+    /// `orders`, with each team's own `squads`.
+    pub fn orders_by(&self, mechs: &[(u8, u8, Vector, bool)], squads: [Squads; 2]) -> Vec<Option<Vector>> {
         let mut out = vec![None; mechs.len()];
         let rally = |zone: &Zone| zone.rally.first().copied().unwrap_or(zone.at);
         let feet = |id: u8| mechs.iter().find(|m| m.0 == id).map(|m| m.2);
         for team in 0..2u8 {
-            let (ours, theirs) = (self.flags[usize::from(team)], self.flags[usize::from(1 - team)]);
+            let (ours, theirs, sq) = (self.flags[usize::from(team)], self.flags[usize::from(1 - team)], squads[usize::from(team)]);
             let mut free: Vec<usize> = Vec::new();
             for i in (0..mechs.len()).filter(|&i| mechs[i].1 == team && mechs[i].3) {
                 if self.carried_by(mechs[i].0).is_some() {
@@ -182,16 +204,16 @@ impl Ctf {
             let mut jobs: Vec<(Vector, usize)> = Vec::new();
             match ours {
                 Flag::Dropped { at } => jobs.push((at, 1)),
-                Flag::Carried { by } if mechs.iter().any(|m| m.0 == by && m.1 != team) => jobs.extend(feet(by).map(|at| (at, 2))),
+                Flag::Carried { by } if mechs.iter().any(|m| m.0 == by && m.1 != team) => jobs.extend(feet(by).map(|at| (at, sq.chase))),
                 _ => {}
             }
             match theirs {
                 Flag::Dropped { at } => jobs.push((at, 1)),
-                Flag::Home => jobs.push((rally(&self.stands[usize::from(1 - team)]), 2)),
-                Flag::Carried { by } => jobs.extend(feet(by).filter(|_| mechs.iter().any(|m| m.0 == by && m.1 == team)).map(|at| (at, 1))),
+                Flag::Home => jobs.push((rally(&self.stands[usize::from(1 - team)]), sq.raid)),
+                Flag::Carried { by } => jobs.extend(feet(by).filter(|_| mechs.iter().any(|m| m.0 == by && m.1 == team)).map(|at| (at, sq.escort))),
             }
             if ours == Flag::Home {
-                jobs.push((rally(&self.stands[usize::from(team)]), 1));
+                jobs.push((rally(&self.stands[usize::from(team)]), sq.guard));
             }
             for (at, n) in jobs {
                 for _ in 0..n {

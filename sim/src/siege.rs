@@ -12,6 +12,21 @@ use crate::map::Objectives;
 use crate::objective::Zone;
 use crate::{DT, TICK_HZ, Vector};
 
+/// A team's bots' jobs: home to bank once carrying this share of CARRY_MAX, and how many go to
+/// the anti-air gun (while the other side doesn't hold it securely), with the enemy ship up or not.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Crew {
+    pub bank: f32,
+    pub aa: usize,
+    pub aa_ship: usize,
+}
+
+impl Default for Crew {
+    fn default() -> Self {
+        Crew { bank: 0.8, aa: 1, aa_ship: 2 }
+    }
+}
+
 /// A station holds up to STATION_CAP, refilling at STATION_REFILL a second, and gives at most
 /// STATION_RATE a second, shared between everyone drawing on it (standing in its zone). One
 /// station feeds both teams, so it's as rich as two used to be.
@@ -195,15 +210,20 @@ impl Siege {
     /// the rest, while their own ship's down, to the drop or the station with the most EU (by
     /// distance); else they roam (None). Humans get None.
     pub fn orders(&self, mechs: &[(u8, Vector, bool, f32)], ships: [bool; 2]) -> Vec<Option<Vector>> {
+        self.orders_by(mechs, ships, [Crew::default(); 2])
+    }
+
+    /// `orders`, with each team's own `crews`.
+    pub fn orders_by(&self, mechs: &[(u8, Vector, bool, f32)], ships: [bool; 2], crews: [Crew; 2]) -> Vec<Option<Vector>> {
         let mut out = vec![None; mechs.len()];
         for team in 0..2u8 {
             let bots: Vec<usize> = (0..mechs.len()).filter(|&i| mechs[i].0 == team && mechs[i].2).collect();
-            let bank = self.banks[usize::from(team)];
-            let mut gunners = if self.aa.state.secure(team) { 0 } else if ships[usize::from(1 - team)] { 2 } else { 1 };
+            let (bank, crew) = (self.banks[usize::from(team)], crews[usize::from(team)]);
+            let mut gunners = if self.aa.state.secure(team) { 0 } else if ships[usize::from(1 - team)] { crew.aa_ship } else { crew.aa };
             let aa = self.aa.rally.first().copied().unwrap_or(self.aa.at);
             for i in bots {
                 let (_, feet, _, eu) = mechs[i];
-                if eu >= 0.8 * CARRY_MAX || (eu > 0.0 && bank + eu >= LAUNCH_EU && !ships[usize::from(team)]) {
+                if eu >= crew.bank * CARRY_MAX || (eu > 0.0 && bank + eu >= LAUNCH_EU && !ships[usize::from(team)]) {
                     out[i] = Some(self.bases[usize::from(team)]);
                 } else if gunners > 0 {
                     gunners -= 1;

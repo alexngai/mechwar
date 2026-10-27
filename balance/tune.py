@@ -5,6 +5,7 @@ today's bot (sides swapped, the same seeds for every candidate), and refits the 
 best. The mean at the end is the tuned policy; check it on fresh seeds with --check.
 
   python3 balance/tune.py [--gens 15] [--pop 12] [--matches 120] [--mode tdm,ma,ctf] --out balance/out/tune
+  python3 balance/tune.py --mode ctf --space ctf_raid,ctf_escort,ctf_chase,ctf_guard,carry_retreat --skip walled
   python3 balance/tune.py --check '{"post_take": 1.4}' [--matches 600] [--skill 1.0] [--mode ma]
 
 With several modes, a candidate plays --matches in each, and its fitness is the mean over modes of
@@ -35,6 +36,22 @@ SPACE = {
     'post_cross': (0.0, 1.5),
     'trade_reach': (0.0, 90.0),
 }
+# Each mode's own weights, tuned with --space: Capture the Flag's squads and when a carrier falls
+# back; Missile Assault's spread; Siege's crew; Convoy's escort.
+MODE_SPACE = {
+    'ctf_raid': (0.0, 4.0),
+    'ctf_escort': (0.0, 3.0),
+    'ctf_chase': (0.0, 4.0),
+    'ctf_guard': (0.0, 3.0),
+    'carry_retreat': (0.0, 1.0),
+    'assault_spread': (1.0, 5.0),
+    'siege_bank': (0.2, 1.0),
+    'siege_aa': (0.0, 3.0),
+    'siege_aa_ship': (0.0, 4.0),
+    'convoy_cover': (0.0, 20.0),
+    'convoy_spare': (1.0, 4.0),
+    'convoy_scout': (10.0, 60.0),
+}
 MAPS = {'tdm': ['foundry', 'isotope', 'verdigris', 'riftline', 'sump', 'sinkhole', 'canopy', 'crashsite', 'ziggurat', 'span', 'walled'],
         'ma': ['foundry', 'verdigris', 'riftline', 'sinkhole', 'canopy', 'crashsite', 'ziggurat', 'span', 'walled'],
         'siege': ['foundry', 'riftline', 'canopy', 'crashsite', 'span'],
@@ -45,7 +62,7 @@ MAPS = {'tdm': ['foundry', 'isotope', 'verdigris', 'riftline', 'sump', 'sinkhole
 def margins(pool, n, seed, args, mode=None):
     """Each policy in `pool` (name: overrides) against today's bot over `n` matches, sides
     swapped, on the same seeds: its margin a match (kills; base hull in Missile Assault and Siege;
-    captures in Capture the Flag; percent of the way pushed in Convoy)."""
+    captures and a tenth a flag taken in Capture the Flag; percent of the way pushed in Convoy)."""
     mode = mode or args.mode
     seconds = args.seconds if mode == 'tdm' else max(args.seconds, 300.0)
     matches, owner = [], []
@@ -67,7 +84,7 @@ def margins(pool, n, seed, args, mode=None):
         i = int(r['match'])
         if r['genome'] != 'base' and i not in seen:
             seen.add(i)
-            out[owner[i]].append(int(r['score']) - int(r['opp_score']))
+            out[owner[i]].append(ev.margin(r))
     return out
 
 
@@ -88,6 +105,7 @@ def main():
     ap.add_argument('--seconds', type=float, default=120)
     ap.add_argument('--seed', type=int, default=31)
     ap.add_argument('--skip', default='', help='maps to leave out, comma-separated (Walled City costs about 15 times a match)')
+    ap.add_argument('--space', help='the weights to tune, comma-separated (default: the posts\' and team play\'s, SPACE)')
     ap.add_argument('--check', type=json.loads, help='a policy to play against today\'s bot on fresh seeds, instead of tuning')
     ap.add_argument('--out', type=Path, default=ev.ROOT / 'balance' / 'out' / 'tune')
     args = ap.parse_args()
@@ -101,8 +119,9 @@ def main():
             m, se = summary(margins({'check': args.check}, args.matches, 900_000_000 + args.seed * 10_000, args, mode)['check'])
             print(f'{mode} skill {"ideal" if args.ideal else args.skill}, {args.matches} matches: margin {m:+.2f} ± {se:.2f} a match')
         return
-    names = list(SPACE)
-    lo, hi = (np.array([SPACE[k][i] for k in names]) for i in (0, 1))
+    space = SPACE | MODE_SPACE
+    names = args.space.split(',') if args.space else list(SPACE)
+    lo, hi = (np.array([space[k][i] for k in names]) for i in (0, 1))
     default = np.array([ev.DEFAULT[k] for k in names], dtype=float)
     mean, sd = default.copy(), 0.25 * (hi - lo)
     rng = np.random.default_rng(args.seed)
@@ -120,9 +139,9 @@ def main():
             for by in per:
                 spread = summary([x for v in by.values() for x in v])[1] * math.sqrt(sum(len(v) for v in by.values())) or 1.0
                 fits.append([x / spread for x in by[k]])
-            mean = sum(summary(f)[0] for f in fits) / len(fits)
+            fit = sum(summary(f)[0] for f in fits) / len(fits)
             se = math.sqrt(sum(summary(f)[1] ** 2 for f in fits)) / len(fits)
-            scores[k] = (mean, se)
+            scores[k] = (fit, se)
         order = sorted(range(args.pop), key=lambda k: -scores[f'c{k}'][0])
         elite = draws[order[: args.elite]]
         mean = 0.3 * mean + 0.7 * elite.mean(axis=0)

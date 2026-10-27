@@ -1333,3 +1333,78 @@ fn objective_probe() {
         }
     }
 }
+
+/// CTF probe: bot-only Capture the Flag on every map that plays it. Each carry (a flag in a
+/// raider's hands, off its stand or off the ground, until it falls or scores): the share that
+/// score, how much of the way home it got, how long it lasted, what the carrier was about, how
+/// many of its side were within ESCORT m of it and how many enemies saw it.
+/// PROBE_MAP=<name> PROBE_SECS=<s> PROBE_SEEDS=<n> cargo test -p sim --release --lib ctf_probe -- --ignored --nocapture
+#[test]
+#[ignore = "probe"]
+fn ctf_probe() {
+    const ESCORT: f32 = 20.0;
+    let only = std::env::var("PROBE_MAP").ok();
+    let run: f32 = std::env::var("PROBE_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(300.0);
+    let seeds: u64 = std::env::var("PROBE_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(4);
+    for (index, (name, _)) in crate::map::MAPS.iter().enumerate() {
+        if only.as_deref().is_some_and(|m| m != *name) || !Mode::CaptureTheFlag.fits(&Map::load(index)) {
+            continue;
+        }
+        let (mut carries, mut scored, mut takes) = (0u32, 0u32, 0u32);
+        let (mut progress, mut ticks, mut escorts, mut seen_by) = (0.0f32, 0u64, 0u64, 0u64);
+        let mut doing: BTreeMap<&str, u64> = BTreeMap::new();
+        for seed in 0..seeds {
+            let mut game = Game::new(Tuning::default(), index);
+            game.mode = Mode::CaptureTheFlag;
+            (game.score_limit, game.match_seconds, game.tick) = (u16::MAX, 1e7, seed as u32 * 7919);
+            let human = game.join().unwrap();
+            game.dock(human);
+            // Per flag, its carry so far: how far from home it started and is now.
+            let mut carry: [Option<(f32, f32)>; 2] = [None; 2];
+            for _ in 0..secs(run) {
+                let caps = game.ctf.as_ref().map_or([0; 2], |c| c.captures);
+                game.step();
+                takes += game.events.iter().filter(|e| matches!(e, Event::Flag { what: Happened::Taken, .. })).count() as u32;
+                let Some(c) = game.ctf.as_ref() else { continue };
+                for f in 0..2 {
+                    let carrier = match c.flags[f] {
+                        ctf::Flag::Carried { by } => game.players.iter().find(|p| p.id == by),
+                        _ => None,
+                    };
+                    let Some(p) = carrier else {
+                        if let Some((from, now)) = carry[f].take() {
+                            carries += 1;
+                            scored += u32::from(c.captures[1 - f] > caps[1 - f]);
+                            progress += if c.captures[1 - f] > caps[1 - f] { 1.0 } else { (1.0 - now / from.max(1.0)).max(0.0) };
+                        }
+                        continue;
+                    };
+                    let d = flat(c.stands[usize::from(p.team)].at - p.mech.pos).length();
+                    carry[f].get_or_insert((d, d)).1 = d;
+                    ticks += 1;
+                    escorts += game.players.iter().filter(|q| q.team == p.team && q.id != p.id && q.mech.health > 0.0 && flat(q.mech.pos - p.mech.pos).length() <= ESCORT).count() as u64;
+                    seen_by += game.players.iter().filter(|q| q.team != p.team && q.mech.health > 0.0 && bot::sees(&game.arena, game.arsenal.of(&q.mech), &q.mech, &p.mech)).count() as u64;
+                    let kind = p.bot.as_ref().map_or("human", |b| match b.doing() {
+                        bot::Doing::Fight => "fight",
+                        bot::Doing::FallBack => "fall back",
+                        bot::Doing::Mend => "mend",
+                        bot::Doing::Move => "move",
+                        bot::Doing::Trade => "trade",
+                    });
+                    *doing.entry(kind).or_insert(0) += 1;
+                }
+            }
+        }
+        let per = |n: u64| n as f32 / ticks.max(1) as f32;
+        let by: Vec<String> = doing.iter().map(|(k, &n)| format!("{k} {:.0}%", 100.0 * per(n))).collect();
+        println!(
+            "== ctf {name}: {takes} takes, {carries} carries, {:.0}% scored, {:.0}% of the way home on average, {:.1} s a carry; carrier {}; {:.1} of its side within {ESCORT:.0} m, seen by {:.1}",
+            100.0 * scored as f32 / carries.max(1) as f32,
+            100.0 * progress / carries.max(1) as f32,
+            ticks as f32 * DT / carries.max(1) as f32,
+            by.join(", "),
+            per(escorts),
+            per(seen_by),
+        );
+    }
+}

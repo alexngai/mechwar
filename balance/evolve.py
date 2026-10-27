@@ -157,14 +157,25 @@ def play(pool, appear, seed, rng, args):
     seats += ['base'] * (len(seats) // 3)
     rng.shuffle(seats)
     seats += ['base'] * (-len(seats) % 8)
-    matches = [{'map': rng.choice(MAPS), 'seed': seed + i, 'teams': [seats[8 * i:8 * i + 4], seats[8 * i + 4:8 * i + 8]]} for i in range(len(seats) // 8)]
-    job = {'seconds': args.seconds, 'skill': args.skill, 'ideal': args.ideal, 'genomes': {'base': {}, **pool}, 'matches': matches, **args.tweaks}
+    maps = getattr(args, 'maps', MAPS)
+    matches = [{'map': rng.choice(maps), 'seed': seed + i, 'teams': [seats[8 * i:8 * i + 4], seats[8 * i + 4:8 * i + 8]]} for i in range(len(seats) // 8)]
+    job = {'mode': getattr(args, 'mode', 'tdm'), 'seconds': args.seconds, 'skill': args.skill, 'ideal': args.ideal, 'genomes': {'base': {}, **pool}, 'matches': matches, **args.tweaks}
     path = args.out / 'job.json'
     path.write_text(json.dumps(job))
     run = subprocess.run([ARENA, path], capture_output=True, text=True)
     if run.returncode:
         raise SystemExit(run.stderr)
     return list(csv.DictReader(io.StringIO(run.stdout)))
+
+
+# A flag taken off the enemy's stand, in captures: about what one came to in bot-only Capture the
+# Flag (8% of takes scored), so the rare captures aren't all a match says.
+TAKE_WORTH = 0.1
+
+
+def margin(r):
+    """A CSV row's team margin: score, plus TAKE_WORTH a flag taken (Capture the Flag; none elsewhere)."""
+    return float(r['score']) - float(r['opp_score']) + TAKE_WORTH * (float(r.get('takes') or 0) - float(r.get('opp_takes') or 0))
 
 
 def rate(rows, ids, ridge=1.0):
@@ -183,7 +194,7 @@ def rate(rows, ids, ridge=1.0):
             if r['genome'] in col:
                 X[m, col[r['genome']]] += side
             if r['team'] == '0':
-                y[m] = float(r['score']) - float(r['opp_score'])
+                y[m] = margin(r)
     penalty = ridge * np.eye(len(ids) + 1)
     penalty[-1, -1] = 0.0
     a = np.linalg.inv(X.T @ X + penalty)
