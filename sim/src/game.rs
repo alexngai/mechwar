@@ -233,7 +233,8 @@ impl Mode {
             Mode::Siege => Siege::new(&map.objectives, &[]).is_some(),
             Mode::CaptureTheFlag => Ctf::new(&map.objectives, &[]).is_some(),
             Mode::Convoy => Convoy::new(&map.objectives).is_some(),
-            Mode::Defense => map.objectives.defense.as_ref().is_some_and(|d| !d.gates.is_empty()),
+            // Co-op plays the maps made for it (Foundry's stand-in data is for tests).
+            Mode::Defense => map.objectives.coop && map.objectives.defense.as_ref().is_some_and(|d| !d.gates.is_empty()),
         }
     }
 }
@@ -3217,7 +3218,8 @@ mod tests {
         }
         assert_eq!((game.team_count(0), game.team_count(1)), (TEAM_SIZE, 0), "bots fill only the pilots' team");
         assert!(game.deployables.iter().all(|d| d.kind != Kind::Sentry));
-        assert!(Mode::Defense.fits(&Map::load(Map::index("foundry").unwrap())) && !Mode::Defense.versus());
+        assert!(Mode::Defense.fits(&Map::load(Map::index("hivewall").unwrap())) && !Mode::Defense.versus());
+        assert!(!Mode::Defense.fits(&Map::load(Map::index("foundry").unwrap())), "Foundry's stand-in co-op data is for tests");
     }
 
     #[test]

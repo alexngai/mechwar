@@ -97,7 +97,7 @@ pub const CACHE_SCRAP: f32 = 60.0;
 /// Lane enemies this wide (radius) or more keep off narrow lanes (`Lanes::narrow`).
 pub const BIG: f32 = 2.5;
 /// A lane enemy rushing (`rush`: a boss burrowing) walks this many times its pace.
-const RUSH: f32 = 5.0;
+const RUSH: f32 = 3.5;
 const SPAWN_GAP: f32 = 1.2;
 const CRAWLER_GAP: f32 = 0.35;
 /// An infested mech that reaches the reactor takes this off it (and is gone).
@@ -131,7 +131,7 @@ pub fn species(kind: Kind) -> Species {
         Kind::Mortar => Species { hull: 140.0, hull_step: 14.0, speed: 3.5, spread: 1.5, leak: LEAK, armor: 0.0 },
         Kind::Node => Species { hull: 150.0, hull_step: 12.0, speed: 4.0, spread: 1.0, leak: 50.0, armor: 0.0 },
         // Bosses: their hull for a full team (a lone pilot meets SOLO_SHARE of it).
-        Kind::Excavator => Species { hull: 3000.0, hull_step: 0.0, speed: 2.0, spread: 0.0, leak: 1000.0, armor: 8.0 },
+        Kind::Excavator => Species { hull: 3000.0, hull_step: 0.0, speed: 2.0, spread: 0.0, leak: 600.0, armor: 6.0 },
         Kind::Hive => Species { hull: 5000.0, hull_step: 0.0, speed: 2.2, spread: 0.0, leak: REACTOR_HULL, armor: 4.0 },
         _ => Species { hull: 100.0, hull_step: 12.0, speed: 4.5, spread: 2.0, leak: LEAK, armor: 0.0 },
     }

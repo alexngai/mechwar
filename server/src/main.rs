@@ -727,7 +727,7 @@ mod tests {
         assert_eq!(every.iter().filter(|(m, _)| *m == Mode::TeamDeathmatch).count(), ROTATION.len() - 1);
         assert!(every.iter().all(|&(_, map)| MAPS[map].0 != "hivewall"));
         let coop: Vec<&str> = deck(&settings(Some(Mode::Defense), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
-        assert_eq!(coop, ["foundry", "hivewall"]);
+        assert_eq!(coop, ["hivewall"]);
         // Deathmatch only on the smaller maps.
         let dm: Vec<&str> = deck(&settings(Some(Mode::Deathmatch), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
         assert_eq!(dm, ["isotope", "verdigris", "sump", "sinkhole", "ziggurat"]);
