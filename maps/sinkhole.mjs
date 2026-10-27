@@ -14,7 +14,7 @@
 // clockwise from north; on it, p runs outward from the center and s runs clockwise along it.
 // Every class goes everywhere: the workings are 10, 6 and 5 m wide and give a Heavy (5.8 m tall)
 // 6.5 m of headroom (6 under the -7 bench).
-import { bases, beam, box, cylinder, deathmatch, decor, flagStand, flags, growth, lamp, once, pad, pipe, point, r3, railing, ramp, sentries, sign, silos, slope, turned, write } from './kit.mjs';
+import { bases, beam, box, cylinder, deathmatch, decor, flags, growth, lamp, once, pad, pipe, point, r3, railing, ramp, sentries, sign, silos, slope, turned, write } from './kit.mjs';
 
 const BASE = -29; // bottom of every rock mass
 const AMBER = '#ffae2a';
@@ -205,7 +205,7 @@ sets(10, 30, 4, 61, 6, (x) => (x < 14 ? -14 : drift(x)), 6.5);
 // base's front wall, a crown with two sheaves, the hoist ropes down the shaft.
 railing([-8, 0, 64], [8, 0, 64]);
 for (const x of [-8, 8]) railing([x, 0, 64], [x, 0, 71.8]);
-pad([1.5, -14, 68], [-16, 0, 68], 6);
+pad([3, -14, 68], [-16, 0, 68], 6);
 for (const x of [-8.5, 8.5]) {
   box([x - 0.5, 0, 63], [x + 0.5, 20, 64], 'hazard');
   box([x - 0.5, 9, 72], [x + 0.5, 20, 73], 'hazard');
@@ -215,8 +215,8 @@ for (const z of [63.5, 72.5]) box([-9, 20, z - 0.5], [9, 21, z + 0.5], 'hazard')
 beam([-8.5, 0.5, 63.5], [8.5, 19.5, 63.5], 0.6, 0.6, 'hazard'); // braces: south face, east face
 beam([8.5, 0.5, 64], [8.5, 19.5, 72], 0.6, 0.6, 'hazard');
 for (const z of [66, 70]) {
-  cylinder([-0.4, 22.6, z], [0.4, 22.6, z], 2, 'metal');
-  pipe([0, 20.6, z], [0, -9, z], 0.07);
+  cylinder([2.6, 22.6, z], [3.4, 22.6, z], 2, 'metal'); // over the cage pad
+  pipe([3, 20.6, z], [3, -9, z], 0.07);
 }
 sign([-0.3, 21, 67.7], [0.3, 21.3, 68.3], [0, 22, 68], AMBER);
 
@@ -343,9 +343,11 @@ point([-15, 0, 68], [15, 0, 68], [-15, 0, 80], [15, 0, 78], [0, 0, 94], [-60, 0,
 bases([-16, 0, 88]);
 // Base guns: either side of the yard's front.
 sentries([[-17, 0, 73.5], [18, 0, 73.5]]);
-// Capture the Flag: the stand outside the yard's west wall, its back to the base guns, its doorways
-// to the rim and the west gate.
-flags(flagStand([-47, 0, 90], 0));
+// Capture the Flag: on the floor of the shaft in front of the base, its west half (the cage pad is
+// in the east), sheltered from the base guns by the rock; in through the station, the haul decline
+// or a drop from the collar, out the same ways or up on the cage.
+flags({ at: [-4.5, -14, 68], radius: 5, band: 3 });
+point([-4.5, -14, 68]);
 // B's launch pad is between two of the bridges, open to the sky.
 silos({ at: [-70, 0, 40], radius: 10, band: 4, pad: [-75, 0, 39.5] }, { at: [0, -28, 0], radius: 14, band: 4, pad: [-4.5, -28, 7.5] });
 
