@@ -93,6 +93,10 @@ impl Harness {
             let (_, id, bytes) = self.down.pop_front().unwrap();
             self.clients.iter_mut().find(|c| c.0 == id).unwrap().1.receive(&bytes, now);
         }
+        // As the page's read of each tick's state does.
+        for (_, c) in &mut self.clients {
+            c.settle();
+        }
         self.tick += 1;
     }
 }
@@ -133,6 +137,39 @@ fn prediction_matches_server() {
     assert!(max_correction < 1e-5, "prediction drifted from the server by {max_correction} m");
     for (k, moved) in travelled.iter().enumerate() {
         assert!(*moved > 30.0, "client {k} only travelled {moved} m, so the test proved nothing");
+    }
+}
+
+#[test]
+fn a_held_backlog_reconciles_once_and_exactly() {
+    // A walks on while its snapshots are held for two seconds (a stalled link), then they land at once.
+    let mut h = Harness::with_classes([MechClass::A, MechClass::C]);
+    let walk = |tick: u32| Input { move_z: 1.0, yaw: tick as f32 * 0.01, ..Input::default() };
+    for tick in 0..30 {
+        h.step([walk(tick), Input::default()]);
+    }
+    for tick in 30..30 + 2 * TICK_HZ as u32 {
+        h.step([walk(tick), Input::default()]);
+        h.down.iter_mut().for_each(|m| m.0 = u32::MAX);
+    }
+    let (id, now) = (h.clients[0].0, h.now());
+    let backlog: Vec<Vec<u8>> = h.down.drain(..).filter(|m| m.1 == id).map(|m| m.2).collect();
+    let Some(ServerMsg::Snapshot(newest)) = net::decode(backlog.last().unwrap()) else { panic!("not a snapshot") };
+    let c = &mut h.clients[0].1;
+    let predicted = c.mech.pos;
+    assert!(backlog.len() >= 2 * TICK_HZ as usize && (newest.me.pos - predicted).length() > 0.5, "nothing was held back");
+
+    // Taking them in replays nothing: the mech is the newest one's, as the server had it then.
+    for bytes in &backlog {
+        c.receive(bytes, now);
+    }
+    assert_eq!(c.mech.pos, newest.me.pos);
+    // Settling replays the inputs since onto it, once, landing exactly where A predicted.
+    c.settle();
+    assert!(c.correction < 1e-5 && (c.mech.pos - predicted).length() < 1e-5, "settled {} m off the prediction", c.correction);
+    for tick in 90..120 {
+        h.step([walk(tick), Input::default()]);
+        assert!(h.clients[0].1.correction < 1e-5, "drifted {} m after the backlog", h.clients[0].1.correction);
     }
 }
 
