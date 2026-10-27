@@ -195,7 +195,7 @@ camera.rotation.order = 'YXZ';
 // concrete stays under about 0.7 by day. The threshold is on the brightest channel, so red accents
 // bloom like blue ones, and the widest blurs stay faint so a furnace mouth doesn't wash the view.
 const composer = new EffectComposer(renderer);
-const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.7, 0, 1.1);
+const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.35, 0, 1.1);
 bloom.materialHighPassFilter.fragmentShader = bloom.materialHighPassFilter.fragmentShader.replace('luminance( texel.xyz )', 'max( texel.r, max( texel.g, texel.b ) )');
 [1, 1, 0.6, 0.2, 0].forEach((k, i) => bloom.bloomTintColors[i].setScalar(k));
 composer.addPass(new RenderPass(scene, camera));
