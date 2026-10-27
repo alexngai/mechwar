@@ -1,27 +1,30 @@
-// Walled City (grey-box): a 384 x 256 m city stacked 100 m deep on both sides of a gorge, the
-// gorge crossed by the city itself again and again at every height. The west half is the wealthy
-// one and the east the tenements (that's for the dressing; the grey-box gives both the same
-// routes). Writes walled.json next to this file; rerun `node maps/walled.mjs` after editing.
+// Walled City (grey-box): a 384 x 256 m city stacked 100 m deep on both sides of a chasm 64 m wide,
+// crossed in its middle by the Bridge, whose top is a plaza at the spawns' level. The west half is
+// the wealthy one and the east the tenements (that's for the dressing; the grey-box gives both the
+// same routes). Writes walled.json next to this file; rerun `node maps/walled.mjs` after editing.
 //
 // The city is planned as a grid of 16 m cells on nine levels 12 m apart (floors at 0-96), each cell
 // solid building, floor (walkable, 11 m of headroom under the floor above) or void (shafts, wells,
-// the gorge), and built in lots, each turned to its own street line (see `warp`). Levels are carved into alleys and halls; light wells and courtyards open them to the sky;
-// switchback ramp slots climb the full height; pad shafts throw you up two floors; anything open
-// drops you down (no fall damage). The gorge (the two middle columns) is crossed by: the Wall at
-// the centre (the city spanning it at every level round a central well), straight bridge blocks
-// at several heights, a pair of diagonal blocks crossing in an X at one level with another block
-// passing over them, the monorail's two bridges, and the canal along its floor. A last pass turns
-// any floor you couldn't get back out of into building.
+// the chasm), and built in lots, each turned to its own street line (see `warp`). Each level is
+// carved into a few streets and a hall, joined into one network with no alley that stops (see
+// `streamline`); light wells and courtyards open them to the sky; switchback ramp slots climb the
+// full height; pad shafts throw you up two floors; anything open drops you down (no fall damage).
+// The chasm (the four middle columns) is crossed at five heights: along its floor by the canal; at
+// the centre by the Bridge, a mass of building with a hall through it at level 2 and a plaza on top
+// at level 4; near its ends by the monorail's enclosed bridges at level 5 and, at level 7, two open
+// high bridges. Balconies on its faces look out over it at every level. A last pass turns any floor
+// you couldn't get back out of into building.
 //
-// Only the west half (columns 0-11) is authored; `write` (maps/kit.mjs) adds its 180-degree twin.
-// Game modes: Missile Assault (A in the west courtyard, B on the canal at the foot of the Wall's well, C the twin of A);
-// Capture the Flag (each team's flag stand in its spawn hall's back corner); Convoy (along the
-// monorail ring's south side at level 5, over the gorge on its bridge, base to base, jogging as it does).
+// Only the west half (columns 0-11) is authored; its 180-degree twin is added at the end.
+// Game modes: Missile Assault (A in the west courtyard, B in the middle of the plaza, C the twin of
+// A); Capture the Flag (each team's flag stand where its spawn hall's ways out meet, a street on
+// from it to the plaza); Convoy (along the monorail ring's south side at level 5, over the chasm on
+// its bridge, base to base, jogging as it does).
 import { bases, box, convoy, cylinder, decor, flags, flagStand, nav, objectives, pad, pads, point, r3, ramp, sentries, silos, solids, turned, write } from './kit.mjs';
 
 const CELL = 16, STORY = 12, LEVELS = 9; // floors at 0, 12, ... 96
 const NI = 24, NJ = 16, W = NI * CELL, D = NJ * CELL; // 384 x 256 m
-const HALF = 12, GORGE = 11, FACE = 10; // columns authored; the gorge's west column; the face over it
+const HALF = 12, GORGE = 10, FACE = 9; // columns authored; the chasm's west edge (it runs to the twin's); the face over it
 const SOLID = 0, FLOOR = 1, VOID = 2;
 const X = (i) => -W / 2 + i * CELL, Z = (j) => -D / 2 + j * CELL; // a cell's min corner
 const cx = (i) => X(i) + CELL / 2, cz = (j) => Z(j) + CELL / 2;
@@ -46,29 +49,32 @@ const rng = (seed) => (lo = 0, hi = 1) => lo + (hi - lo) * (((seed = (seed * 168
 const rand = rng(20261025);
 const pick = (lo, hi) => Math.floor(rand(lo, hi + 1));
 
-// --- The hill: rock under the city, rising away from the gorge -----------------------------------
+// --- The hill: rock under the city, rising away from the chasm -----------------------------------
 const ground = (i) => Math.max(0, Math.ceil((9 - i) / 3)); // lowest open level in column i (west half)
 const open = (i, j, L, s = FLOOR) => {
   const ii = i >= HALF ? twin(i, j)[0] : i;
-  if (ii !== GORGE && L < ground(ii)) return;
+  if (ii < GORGE && L < ground(ii)) return;
   set(i, j, L, s);
 };
 
-// --- The gorge, the canal on its floor, the docks along it ----------------------------------------
+// --- The chasm, the canal on its floor, the docks along it ----------------------------------------
 for (let j = 0; j < NJ; j++) {
-  set(GORGE, j, 0, FLOOR);
-  for (let L = 1; L < LEVELS; L++) set(GORGE, j, L, VOID);
+  for (let i = GORGE; i < HALF; i++) {
+    set(i, j, 0, FLOOR);
+    for (let L = 1; L < LEVELS; L++) set(i, j, L, VOID);
+  }
   set(FACE, j, 0, FLOOR);
 }
 
-// --- Each level: short balconies over the gorge, alleys winding in from them, a hall ---------------
-// Alleys are random walks that turn often, so no lane runs straight for long. The roofs are carved
-// the same way, out of a roofscape of towers.
+// --- Each level: short balconies over the chasm, alleys in from them, a hall ----------------------
+// Alleys are random walks that turn now and then (the lots bend them more), so a street reads as
+// one street; `streamline` below joins and closes them off. The roofs are carved the same way, out
+// of a roofscape of towers.
 const STEP = [[1, 0], [0, 1], [-1, 0], [0, -1]];
 function wander(i, j, L, steps, dir = pick(0, 3)) {
   for (let s = 0; s < steps; s++) {
     open(i, j, L);
-    if (rand() < 0.45) dir = (dir + (rand() < 0.5 ? 1 : 3)) % 4;
+    if (rand() < 0.15) dir = (dir + (rand() < 0.5 ? 1 : 3)) % 4;
     let [a, b] = [i + STEP[dir][0], j + STEP[dir][1]];
     if (a < 0 || a > FACE || b < 0 || b >= NJ) {
       dir = (dir + 2) % 4;
@@ -79,15 +85,16 @@ function wander(i, j, L, steps, dir = pick(0, 3)) {
 }
 for (let L = 1; L < LEVELS; L++) {
   for (let j = 0; j < NJ; j++) if ((j + 3 * L) % 6 < 2) open(FACE, j, L);
-  for (let k = 0; k < 2; k++) wander(FACE, pick(0, NJ - 1), L, pick(5, 9), 2); // in from the gorge
-  for (let k = 0; k < 2; k++) wander(pick(1, 8), pick(1, 14), L, pick(5, 9));
+  wander(FACE, pick(0, NJ - 1), L, pick(5, 9), 2); // in from the chasm
+  wander(pick(1, 8), pick(1, 14), L, pick(5, 9));
   const i0 = pick(1, 7), j0 = pick(0, 13);
   for (let i = i0; i < i0 + 2; i++) for (let j = j0; j < j0 + 2; j++) open(i, j, L);
 }
 
 // --- Spawn halls (level 4, roofed, deep in each half), their ways out ------------------------------
 // Its base (where missiles land, the convoy's end) is on the monorail ring over it; its flag stand
-// is out where its ways out meet, 60 m on toward the gorge, so defenders have to run to it.
+// is out where its ways out meet, 60 m on toward the chasm, so defenders have to run to it, and a
+// street runs on from the stand's east doorway to the plaza.
 const SPAWN = 4, FLAG = [6, 7], RAIL = 5;
 for (let i = 0; i <= 3; i++) {
   for (let j = 5; j <= 9; j++) {
@@ -95,10 +102,13 @@ for (let i = 0; i <= 3; i++) {
     set(i, j, SPAWN + 1, SOLID);
   }
 }
-for (const row of [6, 9]) wander(4, row, SPAWN, 10, 0); // ways out, winding toward the gorge
-open(FLAG[0], FLAG[1], SPAWN);
+for (const row of [6, 9]) wander(4, row, SPAWN, 10, 0); // ways out, winding toward the chasm
+const STAND = [FLAG, [FLAG[0], FLAG[1] - 1], [FLAG[0] + 1, FLAG[1]]]; // the flag stand's cell and the ones its doorways (south, east) open on
+for (const [i, j] of STAND) open(i, j, SPAWN);
+for (let i = FLAG[0] + 1; i <= FACE; i++) open(i, FLAG[1], SPAWN);
 
 // --- Light wells and courtyards: open to the sky from their floor, galleries round them ----------
+// on every other level from the floor up (the courtyards' pads land on the first of them).
 const WELLS = [
   { i: 3, j: 3, w: 2, d: 2, floor: 3 }, // Missile Assault's A
   { i: 6, j: 11, w: 2, d: 2, floor: 5 },
@@ -106,57 +116,55 @@ const WELLS = [
 ];
 for (const { i, j, w, d, floor } of WELLS) {
   for (let L = floor; L < LEVELS; L++) {
-    for (let a = i - 1; a <= i + w; a++) for (let b = j - 1; b <= j + d; b++) open(a, b, L); // galleries
+    if ((L - floor) % 2 === 0) for (let a = i - 1; a <= i + w; a++) for (let b = j - 1; b <= j + d; b++) open(a, b, L); // galleries
     for (let a = i; a < i + w; a++) for (let b = j; b < j + d; b++) set(a, b, L, L === floor ? FLOOR : VOID);
   }
 }
 
-// --- The Wall: the city spanning the gorge at every level round a central well ---------------------
-// Rows 6-9 of the gorge's columns; the well (rows 7-8 of both columns, with the twin) is 32 m square
-// and open from the canal to the sky, every level looking down it, with Missile Assault's B on the
-// canal at its foot; galleries cross either side of it, solid every third level, walled on their
-// gorge sides on most (so no view runs the gorge's length).
-for (let L = 1; L < LEVELS; L++) {
-  for (const j of [7, 8]) set(GORGE, j, L, VOID);
-  for (const j of [6, 9]) set(GORGE, j, L, L % 3 === 0 ? SOLID : FLOOR);
-  for (let j = 6; j <= 9; j++) open(FACE, j, L);
+// --- The Bridge: the main way across the middle, a plaza on a mass of building ---------------------
+// Rows 6-9 of the chasm, 64 m square: building from level 1 to 3 (the canal runs under it), the
+// plaza on top at the spawns' level, open to the sky, with Missile Assault's B in its middle. Each
+// face opens onto it through a gate 32 m wide, building either side (its shoulders), so no street
+// runs on straight from a spawn over the plaza to the other. Under the plaza, a hall 32 m wide runs
+// through the building at level 2, face to face: the way across out of the plaza's sight.
+const PLAZA = SPAWN, SPAN = [6, 9], HALL = 2; // the plaza's level and rows, the hall's level
+const shoulder = (i, j, L) => L === PLAZA && i === FACE && (j === SPAN[0] || j === SPAN[1]);
+for (let j = SPAN[0]; j <= SPAN[1]; j++) {
+  for (let i = GORGE; i < HALF; i++) {
+    for (let L = 1; L < PLAZA; L++) set(i, j, L, L === HALL && j > SPAN[0] && j < SPAN[1] ? FLOOR : SOLID);
+    set(i, j, PLAZA, FLOOR);
+  }
+  set(FACE, j, PLAZA, shoulder(FACE, j, PLAZA) ? SOLID : FLOOR);
+  if (j > SPAN[0] && j < SPAN[1]) open(FACE, j, HALL);
 }
 
-// --- Straight bridge blocks across the gorge: each at row j and its twin row (15 - j) --------------
-// `shut` ones are walled along the gorge, enclosed; the rest open-sided.
-const BRIDGES = [
-  { j: 12, levels: [6, 7], shut: true }, // a two-storey hall over the X
-  { j: 14, levels: [1, 2] }, // low and open, near the canal
-  { j: 10, levels: [8] }, // a roof bridge
-  { j: 14, levels: [5], shut: true }, // the monorail's (the ring's north and south legs)
-  { j: 11, levels: [4], shut: true }, // a block between the X and the hall
-];
-for (const { j, levels } of BRIDGES) {
-  for (const L of levels) {
-    for (const row of [j, NJ - 1 - j]) {
-      set(GORGE, row, L, FLOOR);
-      open(FACE, row, L);
-    }
-  }
+// --- High bridges: open spans at level 7 near the chasm's ends (rows 3 and 12), face to face ------
+const HIGH = 7, HIGH_ROWS = [3, NJ - 1 - 3];
+for (const row of HIGH_ROWS) {
+  for (let i = GORGE; i < HALF; i++) set(i, row, HIGH, FLOOR);
+  open(FACE, row, HIGH);
 }
 
 // --- The monorail: a ring at level 5 round the city, through its buildings ------------------------
 // It jogs out to the city's edge and back on every side, so no stretch of it runs straight for more
-// than six cells (with the twin's, across the gorge too).
+// than six cells, and crosses the chasm at its ends on enclosed bridges (with the twin's, at rows 1
+// and 14).
+const RAIL_BRIDGE = 14;
+for (const row of [RAIL_BRIDGE, NJ - 1 - RAIL_BRIDGE]) for (let i = GORGE; i < HALF; i++) set(i, row, RAIL, FLOOR);
 const RING = [];
 const run = (i0, j0, i1, j1) => {
   for (let i = Math.min(i0, i1); i <= Math.max(i0, i1); i++) for (let j = Math.min(j0, j1); j <= Math.max(j0, j1); j++) RING.push([i, j]);
 };
-run(10, 1, 8, 1), run(8, 0, 4, 0), run(4, 1, 1, 1); // south
+run(9, 1, 8, 1), run(8, 0, 4, 0), run(4, 1, 1, 1); // south
 run(1, 1, 1, 5), run(0, 5, 0, 10), run(1, 10, 1, 14); // west, past the base
-run(1, 14, 6, 14), run(6, 15, 10, 15), run(10, 14, 10, 14); // north
+run(1, 14, 6, 14), run(6, 15, 9, 15), run(9, 14, 9, 14); // north
 for (const [i, j] of RING) open(i, j, RAIL);
 
 // --- Switchback ramp slots: 4 cells long, the middle two open the full height ---------------------
 // Flights 32 m long climb a level each (21 degrees), in two 8 m lanes taking turns, landing on the
 // end cells: the south end at even steps, the north at odd.
 const SLOTS = [
-  { i: 9, j: 1, from: 0 },
+  { i: 8, j: 1, from: 1 },
   { i: 3, j: 10, from: 2 }, // right outside the spawn hall
   { i: 8, j: 11, from: 1 }, // (the hill's floor here)
 ];
@@ -188,40 +196,97 @@ for (const { i, j, L, to } of SHAFTS) {
   open(i + to[0], j + to[1], L + 2);
 }
 
-// The canal's blocks, [x0, z0, x1, z1, turn] (9 m tall, turned `turn` degrees off their lot), and the
-// gorge's bays ({ j, L, out, turn }: out from the west face at row j, level L, askew); all clear of
-// the crossings, the Wall, the X and the convoy's ring.
+// The canal's boats, [x0, z0, x1, z1, turn] (9 m tall, turned `turn` degrees), moored clear of the
+// Bridge, the dock stairs and the pads (the twin adds as many).
 const CANAL = [
-  [X(GORGE), Z(5), X(GORGE) + 11, Z(6), 12],
-  [X(GORGE) + 9, Z(12), X(GORGE + 1), Z(13), -4], // (clear of the dock stairs beside it)
-  [X(FACE), Z(1) + 4, X(FACE) + 12, Z(2) + 4, 15], // on the docks
-  [X(FACE) + 2, Z(9) + 8, X(FACE) + 14, Z(10) + 8, -10],
-  [X(GORGE) + 8, Z(7) - 4, X(GORGE + 1), Z(8) - 4, 6], // at the foot of the Wall's well (cover round B)
-  [X(GORGE) + 2, Z(14) + 8, X(GORGE) + 14, Z(15) + 4, -14],
+  [X(GORGE) + 12, Z(3) + 4, X(GORGE) + 24, Z(4) + 2, 10],
+  [X(GORGE) + 10, Z(11) + 2, X(GORGE) + 22, Z(12) - 2, -8],
+  [X(GORGE) + 4, Z(14) + 6, X(GORGE) + 16, Z(15) + 4, -12],
 ];
-const BAYS = [
-  { j: 0, L: 1, out: 12, turn: 10 }, { j: 11, L: 1, out: 8, turn: -12 },
-  { j: 4, L: 2, out: 10, turn: -8 }, { j: 12, L: 2, out: 12, turn: 12 },
-  { j: 2, L: 4, out: 12, turn: -10 }, { j: 13, L: 4, out: 10, turn: 8 },
-  { j: 4, L: 5, out: 12, turn: 6 }, { j: 11, L: 5, out: 12, turn: -6 }, // over the level-4 bridges, across the courtyards' line
-  { j: 2, L: 7, out: 10, turn: 12 }, { j: 13, L: 7, out: 12, turn: -10 },
-];
-// Footbridges slung across the gorge at odd angles, { L, a, b }: from the west face's floor at z = a
-// to the east face's at z = b, level L, between the crossings at that level (the twin adds another).
-const FOOTBRIDGES = [{ L: 6, a: 38, b: 58 }, { L: 8, a: 104, b: 72 }];
 // Ways up out of the canal (the twin adds the east face's): dock stairs, ramps along the west face
-// from the canal at row `foot` up onto the low bridge at row `bridge` (level 1), climbing rows
-// `from` to `to`; and pads on the canal's floor at row `j` throwing you onto the face's floor at level `L`.
-const DOCK_STAIRS = [{ foot: 11, from: Z(12), to: Z(14), bridge: 14 }, { foot: 4, from: Z(4), to: Z(2), bridge: 1 }];
+// from the canal at row `foot` up onto a landing at row `top` (level 1), climbing rows `from` to
+// `to`; and pads on the canal's floor at row `j` throwing you onto the face's floor at level `L`.
+const DOCK_STAIRS = [{ foot: 11, from: Z(12), to: Z(14), top: 14 }, { foot: 4, from: Z(4), to: Z(2), top: 1 }];
+for (const { top } of DOCK_STAIRS) set(GORGE, top, 1, FLOOR), open(FACE, top, 1);
 const CANAL_PADS = [{ j: 10, L: 2 }];
 for (const { j, L } of CANAL_PADS) open(FACE, j, L);
-const rowAt = (z) => Math.floor((z + D / 2) / CELL);
-for (const { L, a, b } of FOOTBRIDGES) open(FACE, rowAt(a), L), open(NI - 1 - FACE, rowAt(b), L);
 
-// --- The diagonal X: two blocks crossing the gorge at level 3, meeting mid-gorge ------------------
-// (Geometry below; here, the floors they land on.) Its twin crosses south of the Wall.
-const X_LEVEL = 3, X_ROWS = [10, 14];
-for (const j of X_ROWS) for (const row of [j, NJ - 1 - j]) open(FACE, row, X_LEVEL);
+const key = (i, j, L) => (L * NI + i) * NJ + j;
+// Cells something lands on, climbs from or runs through: `streamline` leaves them be, and nothing's
+// put up on them.
+const special = new Set();
+const mark = (i, j, L) => special.add(key(i, j, L));
+for (const { i, j, L, to } of SHAFTS) for (const [a, b, c] of [[i, j, L], [i - to[0], j - to[1], L], [i + to[0], j + to[1], L + 2], [i, j, L + 1], [i, j, L + 2]]) mark(a, b, c);
+for (const { i, j } of SLOTS) for (let L = 0; L < LEVELS; L++) for (const [a, b] of [[i, j], [i, j + 1], [i, j + 2], [i, j + 3], [i - 1, j], [i - 1, j + 3]]) mark(a, b, L);
+for (let i = 0; i <= 4; i++) for (let j = 4; j <= 10; j++) mark(i, j, SPAWN);
+for (const [i, j] of STAND) mark(i, j, SPAWN); // the flag stand's walls are its own
+for (const [i, j] of RING) mark(i, j, RAIL); // the ring: the convoy's way
+for (const { i, j, w, d, floor } of WELLS) for (let a = i; a < i + w; a++) for (let b = j; b < j + d; b++) mark(a, b, floor); // (silo A's on one)
+for (const { top } of DOCK_STAIRS) mark(FACE, top, 1);
+for (const { j, L } of CANAL_PADS) mark(FACE, j, L);
+
+// --- Streamline: each level one network of streets, and no alley that stops ----------------------
+// The walks leave pockets reached only from another level, and spurs. Each level's pockets are
+// joined to the rest by the shortest cut through building, turning as little as it can; a spur is
+// carried straight on into the next floor if that's near, else filled back to where it branched.
+const carvable = (i, j, L) => i >= 0 && i <= FACE && j >= 0 && j < NJ && L >= ground(i) && grid[L][i][j] === SOLID && !shoulder(i, j, L);
+/** The west half's floor at level L in pockets (cells joined side to side). */
+function pockets(L) {
+  const seen = new Set(), out = [];
+  for (let i = 0; i < HALF; i++) for (let j = 0; j < NJ; j++) {
+    if (grid[L][i][j] !== FLOOR || seen.has(key(i, j, L))) continue;
+    const cells = [[i, j]];
+    seen.add(key(i, j, L));
+    for (let n = 0; n < cells.length; n++) for (const [di, dj] of STEP) {
+      const [a, b] = [cells[n][0] + di, cells[n][1] + dj];
+      if (a >= 0 && a < HALF && b >= 0 && b < NJ && grid[L][a][b] === FLOOR && !seen.has(key(a, b, L))) seen.add(key(a, b, L)), cells.push([a, b]);
+    }
+    out.push(cells);
+  }
+  return out;
+}
+/** The cells of the cheapest cut through building from pocket `p` to other floor at level L (a turn costs half a cell), or null past `most` cells. */
+function cut(p, L, most = 5) {
+  const mine = new Set(p.map(([i, j]) => key(i, j, L))), best = new Map();
+  const queue = p.flatMap(([i, j]) => [0, 1, 2, 3].map((d) => ({ c: 0, i, j, d, path: [] })));
+  while (queue.length) {
+    queue.sort((x, y) => x.c - y.c);
+    const { c, i, j, d, path } = queue.shift();
+    for (const e of path.length ? [d, (d + 1) % 4, (d + 3) % 4] : [d]) {
+      const [a, b] = [i + STEP[e][0], j + STEP[e][1]];
+      if (path.length && a < HALF && grid[L][a]?.[b] === FLOOR && !mine.has(key(a, b, L))) return path;
+      const cost = c + 1 + (e === d ? 0 : 0.5), k = key(a, b, L) * 4 + e;
+      if (!carvable(a, b, L) || path.length >= most || best.get(k) <= cost) continue;
+      best.set(k, cost);
+      queue.push({ c: cost, i: a, j: b, d: e, path: [...path, [a, b]] });
+    }
+  }
+  return null;
+}
+function streamline() {
+  for (let L = 1; L < LEVELS; L++) {
+    for (let ps = pockets(L), tried = new Set(); ps.length > 1; ps = pockets(L)) {
+      const p = ps.sort((a, b) => a.length - b.length).find((q) => !tried.has(key(...q[0], L)));
+      if (!p) break;
+      tried.add(key(...p[0], L));
+      for (const [a, b] of cut(p, L) ?? []) open(a, b, L);
+    }
+    for (let changed = true; changed;) {
+      changed = false;
+      for (let i = 0; i <= FACE; i++) for (let j = 0; j < NJ; j++) {
+        if (grid[L][i][j] !== FLOOR || special.has(key(i, j, L))) continue;
+        const ways = STEP.filter(([di, dj]) => get(i + di, j + dj, L) === FLOOR);
+        if (ways.length > 1 || STEP.some(([di, dj]) => get(i + di, j + dj, L) === VOID)) continue; // (a drop's a way on)
+        const [di, dj] = ways.length ? ways[0].map((v) => -v) : [0, 0], run = [];
+        let [a, b] = [i + di, j + dj];
+        while (ways.length && run.length < 3 && carvable(a, b, L)) run.push([a, b]), (a += di), (b += dj);
+        if (ways.length && run.length && get(a, b, L) === FLOOR) for (const [u, v] of run) open(u, v, L);
+        else grid[L][i][j] = SOLID;
+        changed = true;
+      }
+    }
+  }
+}
 
 // --- Settle: a void resting on building is floor; then keep only floors you can get back from ------
 function standable(i, j, L) {
@@ -230,7 +295,6 @@ function standable(i, j, L) {
 function settle() {
   for (let L = 1; L < LEVELS; L++) for (let i = 0; i < HALF; i++) for (let j = 0; j < NJ; j++) if (grid[L][i][j] === VOID && grid[L - 1][i][j] === SOLID) grid[L][i][j] = FLOOR;
 }
-const key = (i, j, L) => (L * NI + i) * NJ + j;
 function links() {
   const out = new Map(), add = (a, b) => {
     const k = key(...a);
@@ -267,18 +331,10 @@ function links() {
       }
     }
   }
-  for (const { foot, bridge } of DOCK_STAIRS) {
-    for (const [u, v] of [[[GORGE, foot, 0], [GORGE, bridge, 1]], [[...twin(GORGE, foot), 0], [...twin(GORGE, bridge), 1]]]) add(u, v), add(v, u);
+  for (const { foot, top } of DOCK_STAIRS) {
+    for (const [u, v] of [[[GORGE, foot, 0], [GORGE, top, 1]], [[...twin(GORGE, foot), 0], [...twin(GORGE, top), 1]]]) add(u, v), add(v, u);
   }
   for (const { j, L } of CANAL_PADS) add([GORGE, j, 0], [FACE, j, L]), add([...twin(GORGE, j), 0], [...twin(FACE, j), L]);
-  for (const { L, a, b } of FOOTBRIDGES) {
-    const [p, q] = [[FACE, rowAt(a)], [NI - 1 - FACE, rowAt(b)]];
-    for (const [u, v] of [[p, q], [twin(...p), twin(...q)]]) add([...u, L], [...v, L]), add([...v, L], [...u, L]);
-  }
-  // The X: its four ends all meet in the middle (and its twin's).
-  for (const ends of [[[FACE, X_ROWS[0]], [NI - 1 - FACE, X_ROWS[1]], [FACE, X_ROWS[1]], [NI - 1 - FACE, X_ROWS[0]]]]) {
-    for (const e of [ends, ends.map(([a, b]) => twin(a, b))]) for (const p of e) for (const q of e) if (p !== q) add([...p, X_LEVEL], [...q, X_LEVEL]);
-  }
   return out;
 }
 function reachable(from, out, reverse) {
@@ -300,7 +356,8 @@ function reachable(from, out, reverse) {
   return seen;
 }
 const HOME = [2, 7, SPAWN];
-for (let pass = 0; pass < 4; pass++) {
+for (let pass = 0; pass < 6; pass++) {
+  streamline();
   settle();
   const out = links(), there = reachable(HOME, out, false), back = reachable(HOME, out, true);
   let cut = 0;
@@ -315,7 +372,7 @@ for (let pass = 0; pass < 4; pass++) {
 // The grid above is the plan; what's built on it turns. Each lot (a run of whole cells) is turned a
 // few degrees about its middle and nudged, and blends into its neighbours across 24 m, so buildings
 // fan out round the seams and the streets between lots run as wedges. The turn fades out toward the
-// city's outer wall (its outermost cells stand square to it) and the gorge's middle (where the twin's
+// city's outer wall (its outermost cells stand square to it) and the chasm (where the twin's
 // city meets this one). Columns of lots over cells [i0, i1), each split into rows [j0, j1, degrees,
 // dx, dz].
 const LOTS = [
@@ -327,8 +384,8 @@ const BLEND = 12; // half the width a lot blends into the next across
 const ease = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 /** A lot's share at `v` along one axis, the lot spanning [a, b] of the whole [lo, hi]. */
 const share = (v, a, b, lo, hi) => (a > lo ? ease((v - a + BLEND) / (2 * BLEND)) : 1) * (b < hi ? 1 - ease((v - b + BLEND) / (2 * BLEND)) : 1);
-/** How much of the lots' turn the plan's point (x, z) in the west half takes: none by the outer wall or the gorge's middle. */
-const fadeAt = (x, z) => ease((Math.min(x + W / 2, z + D / 2, D / 2 - z) - CELL) / (2 * CELL)) * ease(-x / 24);
+/** How much of the lots' turn the plan's point (x, z) in the west half takes: none by the outer wall or over the chasm. */
+const fadeAt = (x, z) => ease((Math.min(x + W / 2, z + D / 2, D / 2 - z) - CELL) / (2 * CELL)) * ease((X(GORGE) - x) / 24);
 /** Where the plan's point (x, z) in the west half stands, built. */
 function warp(x, z) {
   const fade = fadeAt(x, z);
@@ -418,23 +475,38 @@ function wall(x0, z0, x1, z1, y0, y1, mat, t = 1) {
 }
 
 if (grid[SPAWN][FLAG[0]][FLAG[1]] !== FLOOR) throw new Error('the flag stand\'s cell was cut off');
-// Each building's own walls: the west's painted plaster, the east's faded tile and stained concrete.
-const WEST_WALLS = ['#c4a27a', '#d2bc96', '#b98a6c', '#c9b48a', '#a99a7a', '#c79a7e', '#b7a789', '#d8c4a4'];
-const EAST_WALLS = ['#6f736a', '#6a7378', '#7f8a7e', '#857d6e', '#8a8a84', '#5f6862', '#7a6f6a', '#6e8088'];
+// Each building's own walls, by band of levels (0-2, 3-5, 6 up), so you can tell how deep you are:
+// grey and damp down by the canal, drier higher up, and bright where the sky reaches. The west's
+// painted plaster, the east's faded tile and stained concrete; floors darken with them.
+const band = (L) => Math.min(2, Math.floor(L / 3));
+const WALLS = {
+  west: [
+    ['#6b6052', '#615a50', '#71675a', '#5a5249', '#675d55'],
+    ['#9c8770', '#988a76', '#a58a72', '#8f8572', '#ab9478'],
+    ['#d0ad82', '#ddc59e', '#c7967a', '#d6c192', '#bfae8a', '#d4a888', '#c6b493', '#e6d1ad'],
+  ],
+  east: [
+    ['#454b48', '#40474b', '#4b4d47', '#3b4240', '#4a4644'],
+    ['#606660', '#5b6468', '#687066', '#6b655a', '#646460'],
+    ['#8b9086', '#86929a', '#97a294', '#a09584', '#a4a49d', '#7f8b84', '#958a84', '#8a9da5'],
+  ],
+};
+const FLOORS = { west: ['#5c4a3f', '#7d5a46', '#a2704f'], east: ['#4a4c46', '#62645c', '#808279'] };
 /** A stable random in [0, 1) for whatever stands at (a, b, c). */
 const hue = (a, b, c = 0) => {
   const h = Math.sin(a * 127.1 + b * 311.7 + c * 74.7) * 43758.5453;
   return h - Math.floor(h);
 };
 const wallOf = (list, a, b, c) => list[Math.floor(hue(a, b, c) * list.length)];
+const westWall = (i, j, L) => wallOf(WALLS.west[band(L)], i, j, L);
 // The height of each tower's roof (where building reaches the top), for what's put up on them.
 const tops = Array.from({ length: HALF }, () => Array(NJ).fill(undefined));
 for (const { j, L } of CANAL_PADS) if (grid[L][FACE][j] !== FLOOR) throw new Error(`the canal pad at row ${j} has nowhere to land`);
 
 // --- Geometry: building masses, floor slabs where nothing's under them --------------------------
-// Building, the gorge's columns too (where the Wall and the bridges stand). Inside a lot's rigid
-// middle (or the unturned ring by the outer wall), solid cells merge into blocks as big as they'll go;
-// across a seam each cell's stack is its own mass, inside its cell (so a crack between buildings), a
+// Building, the chasm's columns too (where the Bridge and the monorail's stand). Inside a lot's rigid
+// middle (or the unturned ring by the outer wall), solid cells merge into blocks as big as they'll go
+// within a band of levels (each band its own colours); across a seam each cell's stack is its own mass, inside its cell (so a crack between buildings), a
 // metre short of any floor on it. A floor slab under every walkable cell that isn't on a block, out
 // over the cracks to the floor or building beside it but not past its edge over a drop (a shaft, a
 // well, a ramp slot). The roofs' towers rise a level higher, or more: each built as far as its owner could.
@@ -445,12 +517,12 @@ for (const { j, L } of CANAL_PADS) if (grid[L][FACE][j] !== FLOOR) throw new Err
     if (grid[L][i][j] !== SOLID || done.has(key(i, j, L))) continue;
     if (f === null) {
       let L1 = L;
-      while (L1 + 1 < LEVELS && grid[L1 + 1][i][j] === SOLID) L1++;
+      while (L1 + 1 < LEVELS && grid[L1 + 1][i][j] === SOLID && band(L1 + 1) === band(L)) L1++;
       for (let c = L; c <= L1; c++) done.add(key(i, j, c));
-      quad(X(i), Z(j), X(i + 1), Z(j + 1), Y(L), Y(L1 + 1) - (grid[L1 + 1]?.[i][j] === FLOOR ? 1 : 0), 'plaster', { grow: 0.05, color: wallOf(WEST_WALLS, i, j, L) });
+      quad(X(i), Z(j), X(i + 1), Z(j + 1), Y(L), Y(L1 + 1) - (grid[L1 + 1]?.[i][j] === FLOOR ? 1 : 0), 'plaster', { grow: 0.05, color: westWall(i, j, L) });
       continue;
     }
-    const free = (a, b, c) => a < HALF && b < NJ && c < LEVELS && frames[a][b] === f && grid[c][a][b] === SOLID && !done.has(key(a, b, c));
+    const free = (a, b, c) => a < HALF && b < NJ && c < LEVELS && band(c) === band(L) && frames[a][b] === f && grid[c][a][b] === SOLID && !done.has(key(a, b, c));
     let i1 = i, j1 = j, L1 = L;
     while (free(i1 + 1, j, L)) i1++;
     const rowOk = (b) => { for (let a = i; a <= i1; a++) if (!free(a, b, L)) return false; return true; };
@@ -458,20 +530,20 @@ for (const { j, L } of CANAL_PADS) if (grid[L][FACE][j] !== FLOOR) throw new Err
     const layerOk = (c) => { for (let a = i; a <= i1; a++) for (let b = j; b <= j1; b++) if (!free(a, b, c)) return false; return true; };
     while (layerOk(L1 + 1)) L1++;
     for (let c = L; c <= L1; c++) for (let a = i; a <= i1; a++) for (let b = j; b <= j1; b++) done.add(key(a, b, c));
-    quad(X(i), Z(j), X(i1 + 1), Z(j1 + 1), Y(L), Y(L1 + 1), 'plaster', { grow: 0.05, color: wallOf(WEST_WALLS, i, j, L) });
+    quad(X(i), Z(j), X(i1 + 1), Z(j1 + 1), Y(L), Y(L1 + 1), 'plaster', { grow: 0.05, color: westWall(i, j, L) });
   }
   const storeys = rng(31);
   for (let i = 0; i < HALF; i++) for (let j = 0; j < NJ; j++) {
     // A storey or three more, now and then a tower well over the rest.
     const up = 4 * Math.floor(storeys(0, 4)) + (storeys() < 0.1 ? 8 + 4 * Math.floor(storeys(0, 3)) : 0);
-    if (i !== GORGE && grid[LEVELS - 1][i][j] === SOLID) {
+    if (i < GORGE && grid[LEVELS - 1][i][j] === SOLID) {
       tops[i][j] = Y(LEVELS) + up;
-      if (up) quad(X(i), Z(j), X(i + 1), Z(j + 1), Y(LEVELS), Y(LEVELS) + up, 'plaster', { grow: 0.05, color: wallOf(WEST_WALLS, i, j, 99) });
+      if (up) quad(X(i), Z(j), X(i + 1), Z(j + 1), Y(LEVELS), Y(LEVELS) + up, 'plaster', { grow: 0.05, color: westWall(i, j, LEVELS) });
     }
     for (let L = 0; L < LEVELS; L++) {
       if (grid[L][i][j] !== FLOOR || (L && grid[L - 1][i][j] === SOLID && frames[i][j] !== null)) continue;
       const out = [[-1, 0], [1, 0], [0, -1], [0, 1]].map(([di, dj]) => get(i + di, j + dj, L) !== VOID);
-      quad(X(i), Z(j), X(i + 1), Z(j + 1), Y(L) - 1, Y(L), 'terracotta', { out, grow: frames[i][j] === null ? 0.3 : 0 });
+      quad(X(i), Z(j), X(i + 1), Z(j + 1), Y(L) - 1, Y(L), 'terracotta', { out, grow: frames[i][j] === null ? 0.3 : 0, color: FLOORS.west[band(L)] });
     }
   }
   let rigid = 0;
@@ -483,86 +555,16 @@ box([-W / 2, -2, -D / 2], [0, -1, D / 2], 'ground'); // (where the haze lies)
 box([W / 2, -2, -D / 2], [W / 2 + 1, Y(LEVELS) + 12, D / 2], 'stone');
 box([-W / 2, -2, D / 2], [W / 2, Y(LEVELS) + 12, D / 2 + 1], 'stone');
 
-// Walls along the gorge on the enclosed crossings (on their gorge-facing sides) and the Wall's galleries.
-const shut = (j, L, south = true, north = true) => {
-  for (const [go, z] of [[south, Z(j)], [north, Z(j + 1)]]) if (go) wall(X(GORGE), z, X(GORGE + 1), z, Y(L), Y(L + 1) - 1, 'lacquer');
-};
-for (const { j, levels, shut: s } of BRIDGES) if (s) for (const L of levels) for (const row of [j, NJ - 1 - j]) if (grid[L][GORGE][row] === FLOOR) shut(row, L);
-for (let L = 1; L < LEVELS - 1; L++) {
-  if (L === 6) continue; // an open deck at level 6
-  if (grid[L][GORGE][6] === FLOOR) shut(6, L, true, false);
-  if (grid[L][GORGE][9] === FLOOR) shut(9, L, false, true);
-}
+// The monorail's bridges are walled along the chasm, enclosed.
+for (const row of [RAIL_BRIDGE, NJ - 1 - RAIL_BRIDGE]) for (const z of [Z(row), Z(row + 1)]) wall(X(GORGE), z, X(HALF), z, Y(RAIL), Y(RAIL + 1) - 1, 'lacquer');
 
-// Partitions: between neighbouring floor cells, mostly a wall with an 8 m doorway at one end of it,
-// either end (a waypoint in each), so open floor reads as rooms off rooms, the way through them
-// zigzags, and views stop at the next wall. None round anything a pad, a ramp, the X or a footbridge
-// lands on, nor in the spawn halls or the gorge.
-const special = new Set();
-const mark = (i, j, L) => special.add(key(i, j, L));
-for (const { i, j, L, to } of SHAFTS) for (const [a, b, c] of [[i, j, L], [i - to[0], j - to[1], L], [i + to[0], j + to[1], L + 2], [i, j, L + 1], [i, j, L + 2]]) mark(a, b, c);
-for (const { i, j } of SLOTS) for (let L = 0; L < LEVELS; L++) for (const [a, b] of [[i, j], [i, j + 1], [i, j + 2], [i, j + 3], [i - 1, j], [i - 1, j + 3]]) mark(a, b, L);
-for (let i = 0; i <= 4; i++) for (let j = 4; j <= 10; j++) mark(i, j, SPAWN);
-mark(FLAG[0], FLAG[1], SPAWN); // the flag stand's walls are its own
-for (const [i, j] of RING) mark(i, j, RAIL); // the ring: the convoy's way
-for (const j of X_ROWS) for (const row of [j, NJ - 1 - j]) mark(FACE, row, X_LEVEL);
-for (const { i, j, w, d, floor } of WELLS) for (let a = i; a < i + w; a++) for (let b = j; b < j + d; b++) mark(a, b, floor); // (silo A's on one)
-for (const { L, a, b } of FOOTBRIDGES) for (const z of [a, b, -a, -b]) mark(FACE, rowAt(z), L);
-for (const { j, L } of CANAL_PADS) mark(FACE, j, L);
-// Which corners of a cell have a doorway, by key: "sx,sz" (signs toward the corner from its middle).
-const doors = new Map();
-const door = (i, j, L, sx, sz) => {
-  if (!doors.has(key(i, j, L))) doors.set(key(i, j, L), new Set());
-  doors.get(key(i, j, L)).add(`${sx},${sz}`);
-};
-for (let L = 1; L < LEVELS; L++) {
-  for (let i = 0; i < FACE; i++) {
-    for (let j = 0; j < NJ; j++) {
-      if (grid[L][i][j] !== FLOOR || special.has(key(i, j, L))) continue;
-      for (const [di, dj] of [[1, 0], [0, 1]]) {
-        const [a, b] = [i + di, j + dj];
-        if (a > FACE || b >= NJ || grid[L][a][b] !== FLOOR || special.has(key(a, b, L)) || rand() > 0.8) continue;
-        const c = rand() < 0.5 ? 4 : 12, s = c > 8 ? 1 : -1; // the doorway's middle along the edge
-        // Out on a roof (nothing over either side), a parapet in the building's colour, not a screen.
-        const roof = [[i, j], [a, b]].every(([u, v]) => L + 1 >= LEVELS || grid[L + 1][u][v] === VOID);
-        const [top, mat, color] = roof ? [Y(L) + 5, 'plaster', wallOf(WEST_WALLS, i, j, L)] : [Y(L + 1) - 1, 'lacquer'];
-        const screen = (...line) => {
-          wall(...line, mat);
-          if (color) solids[solids.length - 1].color = color;
-        };
-        if (di) {
-          screen(X(a), c > 8 ? Z(j) : Z(j) + 8, X(a), c > 8 ? Z(j) + 8 : Z(j + 1), Y(L), top);
-          point(at(X(a), Y(L), Z(j) + c));
-          door(i, j, L, 1, s), door(a, j, L, -1, s);
-        } else {
-          screen(c > 8 ? X(i) : X(i) + 8, Z(b), c > 8 ? X(i) + 8 : X(i + 1), Z(b), Y(L), top);
-          point(at(X(i) + c, Y(L), Z(b)));
-          door(i, j, L, s, 1), door(i, b, L, s, -1);
-        }
-      }
-    }
-  }
-}
 // The canal: blocks set along it, staggered across it and askew, so no lane runs its length (the twin adds as many).
 for (const [x0, z0, x1, z1, turn] of CANAL) quad(x0, z0, x1, z1, 0, 9, 'hull', { out: null, turn });
-// Bays: rooms jutting off the gorge's face a storey tall, askew, their roofs out over it (the next
-// floor's balconies, where it has them), staggered up the face so no view runs the gorge's length.
-for (const { j, L, out, turn } of BAYS) quad(X(GORGE) - 4, Z(j) + 2, X(GORGE) + out, Z(j + 1) - 2, Y(L), Y(L + 1), 'plaster', { out: null, turn, color: wallOf(WEST_WALLS, GORGE, j, L) });
 // The spawn halls' piers, at their inner corners (but round the flag stand): cover, and no view across.
 for (const i of [1, 2, 3, 4]) for (const j of [6, 7, 8, 9]) {
   if (i <= 2 && j <= 7) continue; // (the hall's back corner stays open)
   const [x, , z] = at(X(i), 0, Z(j));
   turned([x, Y(SPAWN) + STORY / 2, z], [2, STORY / 2, 2], r3(yawAt(X(i), Z(j))), 'lacquer');
-}
-// Footbridges: 6 m walks across the gorge, from face to face, where both ends stand.
-for (const { L, a, b } of FOOTBRIDGES) {
-  if (get(FACE, rowAt(a), L) !== FLOOR || get(NI - 1 - FACE, rowAt(b), L) !== FLOOR) {
-    console.warn(`footbridge at level ${L} has lost an end`);
-    continue;
-  }
-  const [p, q] = [built(X(GORGE) - 4, a), built(X(NI - GORGE) + 4, b)], len = Math.hypot(q[0] - p[0], q[1] - p[1]);
-  turned([r3((p[0] + q[0]) / 2), Y(L) - 0.5, r3((p[1] + q[1]) / 2)], [3, 0.5, r3(len / 2)], r3(deg(Math.atan2(q[0] - p[0], q[1] - p[1]))), 'metal');
-  for (const f of [0.3, 0.5, 0.7]) point([r3(p[0] + (q[0] - p[0]) * f), Y(L), r3(p[1] + (q[1] - p[1]) * f)]);
 }
 
 // --- The ramp slots' flights ----------------------------------------------------------------------
@@ -580,7 +582,7 @@ for (const { i, j, from } of SLOTS) {
 }
 
 // --- Ways up out of the canal ----------------------------------------------------------------------
-// The dock stairs: a flight up the face from the canal to the low bridge, filled under its top half
+// The dock stairs: a flight up the face from the canal to its landing, filled under its top half
 // (nothing to wedge under), with waypoints at its foot, on it and off its top; the canal pads.
 for (const { from, to } of DOCK_STAIRS) {
   const lane = X(GORGE) + 4, dir = Math.sign(to - from), [a, b] = [at(lane, 0, from), at(lane, Y(1), to)];
@@ -589,25 +591,17 @@ for (const { from, to } of DOCK_STAIRS) {
 }
 for (const { j, L } of CANAL_PADS) pad(at(X(GORGE) + 14, 0, cz(j)), at(cx(FACE), Y(L), cz(j)), Y(L) + 4); // (from mid-canal, so it's high by the face's edge)
 
-// --- The diagonal X: two blocks from face to face, floor and a roof over each, crossing mid-gorge --
-{
-  const [za, zb] = [cz(X_ROWS[0]), cz(X_ROWS[1])], xw = X(GORGE), xe = X(NI - GORGE);
-  for (const [z0, z1] of [[za, zb], [zb, za]]) {
-    const [a, b] = [built(xw, z0), built(xe, z1)], o = [r3((a[0] + b[0]) / 2), r3((a[1] + b[1]) / 2)];
-    const len = Math.hypot(b[0] - a[0], b[1] - a[1]) + 4, yaw = r3(deg(Math.atan2(b[0] - a[0], b[1] - a[1])));
-    turned([o[0], Y(X_LEVEL) - 0.5, o[1]], [7, 0.5, r3(len / 2)], yaw, 'concrete');
-    turned([o[0], Y(X_LEVEL + 1) - 1.5, o[1]], [7, 0.5, r3(len / 2 - 6)], yaw, 'metal'); // its roof, shade only
-    for (const f of [0.25, 0.5, 0.75]) point([r3(a[0] + (b[0] - a[0]) * f), Y(X_LEVEL), r3(a[1] + (b[1] - a[1]) * f)]);
-  }
-}
+// --- The plaza: stalls in its corners and low walls either side of B, clear of its waypoints ------
+for (const z of [-16, 16]) turned([-16, Y(PLAZA) + 2.5, z], [3, 2.5, 3], z > 0 ? 8 : -8, 'pale');
+turned([-12, Y(PLAZA) + 1.5, 0], [0.6, 1.5, 4], 0, 'lacquer');
 
 // --- Pads in their shafts: launched off-centre, away from the landing, so the arc clears the walls --
 // and topping out low enough that a Heavy's head clears the floor over the landing.
 for (const { i, j, L, to } of SHAFTS) pad(at(cx(i) - to[0] * 4, Y(L), cz(j) - to[1] * 4), at(cx(i + to[0]), Y(L + 2), cz(j + to[1])), Y(L + 2) + 4);
 
 // --- Growth: what the city's added since, at any angle --------------------------------------------
-// Shacks and water tanks on the open roofs, each in a corner of its cell clear of the doorways and
-// of the ways through the middle, turned however it was set down.
+// Shacks and water tanks on the open roofs, each in a corner of its cell, clear of the way through
+// its middle, turned however it was set down.
 {
   const grow = rng(77);
   for (let i = 0; i < FACE + 1; i++) for (let j = 0; j < NJ; j++) for (let L = 6; L < LEVELS; L++) {
@@ -615,9 +609,7 @@ for (const { i, j, L, to } of SHAFTS) pad(at(cx(i) - to[0] * 4, Y(L), cz(j) - to
     let sky = true;
     for (let M = L + 1; M < LEVELS; M++) if (grid[M][i][j] !== VOID) sky = false;
     if (!sky || grow() > 0.45) continue;
-    const free = [[1, 1], [1, -1], [-1, 1], [-1, -1]].filter(([sx, sz]) => !doors.get(key(i, j, L))?.has(`${sx},${sz}`));
-    if (!free.length) continue;
-    const [sx, sz] = free[Math.floor(grow() * free.length)], [x, , z] = at(cx(i) + sx * 5, 0, cz(j) + sz * 5);
+    const [sx, sz] = [[1, 1], [1, -1], [-1, 1], [-1, -1]][Math.floor(grow() * 4)], [x, , z] = at(cx(i) + sx * 5, 0, cz(j) + sz * 5);
     if (grow() < 0.3) cylinder([x, Y(L), z], [x, r3(Y(L) + grow(4, 6)), z], r3(grow(1.6, 2)), 'tank');
     else {
       const h = r3(grow(3.5, 6));
@@ -640,7 +632,7 @@ for (let L = 0; L < LEVELS; L++) for (let i = 0; i < HALF; i++) for (let j = 0; 
 // --- Objectives ----------------------------------------------------------------------------------
 bases(at(cx(0), Y(RAIL), 0));
 sentries([at(cx(3) + 4, Y(SPAWN), cz(6)), at(cx(3) + 4, Y(SPAWN), cz(9))]);
-// The flag stand's doorways face south and east, toward the gorge, away from its guns in the hall.
+// The flag stand's doorways face south and east, toward the plaza, away from its guns in the hall.
 flags(flagStand(at(cx(FLAG[0]), Y(SPAWN), cz(FLAG[1])), r3(yawAt(cx(FLAG[0]), cz(FLAG[1])))));
 // The convoy: from the middle of the ring's south bridge to each base, round the ring's jogs (the
 // east's are the twins of the west's north side), 320 m either way in plan; a point every cell or
@@ -656,18 +648,18 @@ const route = (...plan) => {
 const via = (...cells) => cells.map(([i, j]) => [cx(i), cz(j)]);
 convoy(
   route([0, cz(1)], ...via([8, 1], [8, 0], [4, 0], [4, 1], [1, 1], [1, 5], [0, 5]), [cx(0), 0]),
-  route([0, cz(1)], ...via([13, 1], [13, 0], [17, 0], [17, 1], [22, 1], [22, 5], [23, 5]), [cx(23), 0]),
+  route([0, cz(1)], ...via([14, 1], [14, 0], [17, 0], [17, 1], [22, 1], [22, 5], [23, 5]), [cx(23), 0]),
 );
 const [A] = WELLS;
-silos({ at: at(X(A.i + 1), Y(A.floor), Z(A.j + 1)), radius: 12, band: 4 }, { at: [0, 0, 0], radius: 14, band: 4 });
+silos({ at: at(X(A.i + 1), Y(A.floor), Z(A.j + 1)), radius: 12, band: 4 }, { at: [0, Y(PLAZA), 0], radius: 14, band: 4 });
 
-// --- Dressing: the two sides of the gorge ----------------------------------------------------------
+// --- Dressing: the two sides of the chasm ----------------------------------------------------------
 // The same building on both sides; only what it's made of and what hangs in it differ. The west, old
 // money: warm plaster with lamplit windows, tiled floors, red lacquer screens and pillars, paper
-// lanterns under the ceilings, gilt rails along the gorge, banners down its face, gardens and lamps
+// lanterns under the ceilings, gilt rails along the chasm, banners down its face, gardens and lamps
 // on the roofs. The east, the tenements: grimy concrete with fluorescent windows, rust, tubes in
 // nearly every room, pipes and boxes on the walls, cables and washing strung across, neon down the
-// gorge's face. Each side's props are placed on the west's plan and set down on their own side.
+// chasm's face. Each side's props are placed on the west's plan and set down on their own side.
 const flip = ([x, y, z]) => [r3(-x) || 0, y, r3(-z) || 0];
 const EAST = { plaster: 'tenement', terracotta: 'grime', lacquer: 'rust', pale: 'rust', tank: 'rust' };
 const LANTERNS = ['#ff9a3a', '#ff6a32', '#ffc060'], TUBES = ['#dffff0', '#dffff0', '#c4f2ff', '#f0ffe0'];
@@ -762,7 +754,7 @@ for (const east of [false, true]) {
       if (east && r() < 0.4) line('pipe', [x + ox, Y(L), z + oz], [x + ox, Y(L) + r(4, 9), z + oz], { r: 0.08 }); // an aerial
     }
   }
-  // The gorge's face: a balcony's edge gets a rail; a wall gets a banner (west) or neon and boxes (east).
+  // The chasm's face: a balcony's edge gets a rail; a wall gets a banner (west) or neon and boxes (east).
   for (let L = 1; L < LEVELS; L++) for (let j = 0; j < NJ; j++) {
     if (grid[L][GORGE][j] !== VOID) continue;
     const face = grid[L][FACE][j];
@@ -849,17 +841,26 @@ for (const east of [false, true]) {
       }
     }
   });
-  // The Wall's sign down the gorge, on its half of the Wall: a gilt board (west), a neon one (east).
-  light([X(GORGE) + 8, Y(7) + 5, Z(6) - 0.4], [6, 3, 0.15], east ? '#ff3fa0' : '#ffb347', [X(GORGE) + 8, Y(7) + 4, Z(6) - 4], [22, 2.4]);
+  // The Bridge's sign down the chasm, on its half of the Bridge: a gilt board (west), a neon one (east).
+  light([X(GORGE) + 16, Y(2) + 6, Z(SPAN[0]) - 0.4], [6, 3, 0.15], east ? '#ff3fa0' : '#ffb347', [X(GORGE) + 16, Y(2) + 5, Z(SPAN[0]) - 4], [22, 2.4]);
+  // The plaza: rails along its edges over the chasm, lamps by its stalls.
+  for (const z of [Z(SPAN[0]) + 0.4, Z(SPAN[1] + 1) - 0.4]) line('railing', [X(GORGE) + 0.4, Y(PLAZA), z], [0, Y(PLAZA), z], east ? { color: '#6d7376' } : {});
+  for (const z of [-21, 21]) decor.push({ kind: 'lamp', at: here(-21, Y(PLAZA), z) });
+  // The hall under it: lanterns (west) or tubes (east) down its middle.
+  for (const x of [X(GORGE) + 8, X(GORGE) + 24]) {
+    light([x, Y(HALL + 1) - (east ? 0.4 : 2.6), 0], east ? [1.3, 0.06, 0.1] : [0.55, 0.75, 0.55], east ? TUBES[0] : LANTERNS[0], [x, Y(HALL) + 6, 0], [16, 3]);
+  }
+  // The high bridges: rails along both edges.
+  for (const row of HIGH_ROWS) for (const z of [Z(row) + 0.4, Z(row + 1) - 0.4]) line('railing', [X(GORGE) + 0.4, Y(HIGH), z], [0, Y(HIGH), z], east ? { color: '#6d7376' } : {});
   // The docks: lamps along the west's, neon over the east's, steam off the water.
   for (let j = 0; j < NJ; j += 2) {
     const z = cz(j) + r(-4, 4);
     if (!east) decor.push({ kind: 'lamp', at: here(X(FACE) + 13, 0, z) });
     else light([X(FACE) + 1, 7, z], [0.15, 1.2, 2.5], pick(NEON), [X(FACE) + 4, 5, z], [14, 1.8]);
-    if (east && r() < 0.5) decor.push({ kind: 'steam', at: here(X(GORGE) + r(2, 14), 0.8, cz(j) + r(-6, 6)) });
+    if (east && r() < 0.5) decor.push({ kind: 'steam', at: here(X(GORGE) + r(2, 30), 0.8, cz(j) + r(-6, 6)) });
   }
 }
-// Across the gorge: cables slung from face to face, and the monorail's track round the ring.
+// Across the chasm: cables slung from face to face, and the monorail's track round the ring.
 {
   const r = rng(616);
   for (let k = 0; k < 14; k++) {
@@ -892,8 +893,9 @@ for (const plane of grid) for (const col of plane) for (const c of col) floors +
 console.log(`cells: ${floors} floor, ${voids} void (west half)`);
 // The east half: the west's twin, built of the tenements' materials (the props are each side's own).
 for (const s of [...solids]) {
-  const box = flip(s.box);
-  solids.push({ ...s, box, mat: EAST[s.mat] ?? s.mat, ...(s.color && { color: wallOf(EAST_WALLS, box[0], box[2], box[1]) }), ...((s.yaw !== undefined || s.tilt) && { yaw: r3((s.yaw ?? 0) + 180) }) });
+  const box = flip(s.box), b = band(Math.round((s.box[1] - s.half[1]) / STORY)); // (a slab's underside is a metre under its level)
+  const color = s.color && (s.mat === 'terracotta' ? FLOORS.east[b] : wallOf(WALLS.east[b], box[0], box[2], box[1]));
+  solids.push({ ...s, box, mat: EAST[s.mat] ?? s.mat, ...(color && { color }), ...((s.yaw !== undefined || s.tilt) && { yaw: r3((s.yaw ?? 0) + 180) }) });
 }
 for (const p of [...nav]) nav.push(flip(p));
 for (const p of [...pads]) pads.push({ at: flip(p.at), to: flip(p.to), apex: p.apex });

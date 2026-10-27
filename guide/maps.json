@@ -621,7 +621,7 @@
     ]
   },
   "walled": {
-    "blurb": "A walled city stacked 100 m deep on both sides of a gorge at dusk, crossed by the city itself at every height. Old money lives in warm plaster and lantern light on the west side; the east is tenements, neon and fluorescent tubes.",
+    "blurb": "A walled city stacked 100 m deep on both sides of a chasm at dusk, crossed at five heights, chiefly by a bridge in the middle whose top is a plaza. Old money lives in warm plaster and lantern light on the west side; the east is tenements, neon and fluorescent tubes. Both grow darker and damper the lower you go.",
     "hero": {
       "eye": [
         -20,
@@ -636,54 +636,54 @@
     },
     "spots": [
       {
-        "id": "the-well",
-        "name": "The Wall and its Well",
-        "text": "The city spans the gorge at its middle around a well 32 m square, open from the canal to the sky, with galleries looking down it from every level. In Missile Assault silo B is on the canal at its foot, between two blocks moored for cover.",
+        "id": "the-plaza",
+        "name": "The Bridge and its Plaza",
+        "text": "The main crossing, in the middle: a plaza 64 m square on a bridge of solid city, level with the spawns, open to the sky and overlooked by balconies on both faces. A street runs to it from each flag stand. Stalls and low walls give cover, and in Missile Assault silo B is in its middle. A hall runs through the bridge under it at level 2.",
         "eye": [
-          -12,
-          5,
-          -2
+          -44,
+          55,
+          -12
         ],
         "look": [
-          2,
-          80,
-          8
+          20,
+          46,
+          6
         ]
       },
       {
-        "id": "the-x",
-        "name": "The X",
-        "text": "Two enclosed blocks cross the gorge diagonally at level 3 and meet in the middle, with the Wall ahead split warm and cold down the gorge. Bridge blocks cross at other heights, and footbridges at odd angles at levels 6 and 8.",
+        "id": "the-chasm",
+        "name": "The Chasm",
+        "text": "64 m wide and 100 m deep, with balconies on both faces at every level. It's crossed at five heights: the canal on its floor, the hall through the Bridge at level 2, the plaza at level 4, the monorail's enclosed bridges at its ends at level 5, and two open high bridges at level 7.",
         "eye": [
           0,
-          41,
-          72
+          105,
+          -126
         ],
         "look": [
           0,
-          36,
-          -20
+          35,
+          0
         ]
       },
       {
         "id": "the-canal",
         "name": "The Canal",
-        "text": "Black water on the gorge floor, under every crossing, with boats moored as cover. Dock stairs climb both faces to the low bridges at level 1, and a pad mid-canal on each side throws you up onto the galleries by the Wall at level 2.",
+        "text": "Black water on the chasm floor, running under the Bridge, with boats moored as cover. Dock stairs climb both faces to landings at level 1, and a pad mid-canal on each side throws you up onto the face at level 2.",
         "eye": [
-          4,
-          8,
-          44
+          1,
+          7,
+          -95
         ],
         "look": [
-          -12,
-          6,
-          100
+          -2,
+          13,
+          0
         ]
       },
       {
         "id": "the-monorail",
         "name": "The Monorail",
-        "text": "A ring at level 5 round the whole city, jogging out to its outer wall and back so no stretch runs long, and crossing the gorge in enclosed bridges at both ends. Each base is on it, and in Convoy the hauler runs along its south side.",
+        "text": "A ring at level 5 round the whole city, jogging out to its outer wall and back so no stretch runs long, and crossing the chasm in enclosed bridges at both ends. Each base is on it, and in Convoy the hauler runs along its south side.",
         "eye": [
           -120,
           65,
@@ -698,7 +698,7 @@
       {
         "id": "spawn-halls",
         "name": "The Spawn Halls",
-        "text": "Each team spawns at level 4 in a hall of pillars, red lacquer in the west and rusted in the east, under the monorail, with its base guns covering it. In Capture the Flag its flag stand is 60 m on toward the gorge, where the hall's ways out meet.",
+        "text": "Each team spawns at level 4 in a hall of pillars, red lacquer in the west and rusted in the east, under the monorail, with its base guns covering it. In Capture the Flag its flag stand is 60 m on toward the chasm, where the hall's ways out meet, and a street runs on from it to the plaza.",
         "eye": [
           -150,
           52,
@@ -715,13 +715,13 @@
         "name": "The Roofs",
         "text": "Walkable roofs at level 8 between towers rising to 128 m, cluttered with sheds, tanks, poles and cables: lantern strings in the west, washing and neon billboards in the east. Low parapets give cover from one roof to the next.",
         "eye": [
-          -60,
+          -104,
           104,
-          40
+          36
         ],
         "look": [
-          -100,
-          100,
+          -40,
+          94,
           70
         ]
       }
