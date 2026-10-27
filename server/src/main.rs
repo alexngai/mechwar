@@ -77,6 +77,12 @@ const TRICKLE: u32 = 10;
 /// How fast a player's least lag creeps up, in ticks an input (about half a tick a second), so a
 /// route that got slower soon stops counting as behind.
 const BASE_DRIFT: f32 = 1.0 / 60.0;
+/// Each connection is pinged this often, and one that sends nothing (not even the browser's
+/// automatic pong) for SILENT has gone and leaves its room: a pilot who left without the socket
+/// closing (Fly's proxy can keep it open, or the network just dropped) would otherwise hold their
+/// slot for good, bots never taking it.
+const PING_EVERY: Duration = Duration::from_secs(5);
+const SILENT: Duration = Duration::from_secs(20);
 
 /// Outgoing bytes, stamped when queued so `LAG_MS` delays every message by the same amount.
 type Outbox = mpsc::UnboundedSender<(Instant, Vec<u8>)>;
@@ -638,9 +644,17 @@ async fn connection(socket: WebSocket, cmds: mpsc::UnboundedSender<Cmd>, lag: Du
 
     let (out, mut outbox) = mpsc::unbounded_channel::<(Instant, Vec<u8>)>();
     let writer = tokio::spawn(async move {
-        while let Some((queued, bytes)) = outbox.recv().await {
-            time::sleep_until(queued + lag).await;
-            if sink.send(Message::Binary(bytes.into())).await.is_err() {
+        let mut ping = time::interval_at(Instant::now() + PING_EVERY, PING_EVERY);
+        loop {
+            let msg = tokio::select! {
+                next = outbox.recv() => {
+                    let Some((queued, bytes)) = next else { break };
+                    time::sleep_until(queued + lag).await;
+                    Message::Binary(bytes.into())
+                }
+                _ = ping.tick() => Message::Ping(Default::default()),
+            };
+            if sink.send(msg).await.is_err() {
                 break;
             }
         }
@@ -669,7 +683,7 @@ async fn connection(socket: WebSocket, cmds: mpsc::UnboundedSender<Cmd>, lag: Du
         }
     });
 
-    while let Some(Ok(msg)) = source.next().await {
+    while let Ok(Some(Ok(msg))) = time::timeout(SILENT, source.next()).await {
         if let Message::Binary(bytes) = msg
             && let Some(msg) = net::decode::<ClientMsg>(&bytes)
         {
@@ -889,6 +903,35 @@ mod tests {
         send(ClientMsg::Pick(heavy, wanted));
         assert_eq!(loadout_after(&mut inbox).await, Loadout { support: orb, ..own }, "carried an item it couldn't afford");
         room.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_connection_gone_silent_leaves_its_room() {
+        use tokio::io::AsyncWriteExt;
+        let (cmds, mut room) = mpsc::unbounded_channel();
+        let router = Router::new().route(
+            "/ws",
+            get(move |ws: WebSocketUpgrade| {
+                let cmds = cmds.clone();
+                async move { ws.on_upgrade(move |socket| connection(socket, cmds, Duration::ZERO)) }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(axum::serve(listener, router).into_future());
+        // A client by hand that never reads (so never answers a ping) and never closes.
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        client.write_all(b"GET /ws HTTP/1.1\r\nHost: test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n").await.unwrap();
+        let Some(Cmd::Join(_outbox, reply)) = room.recv().await else { panic!("never joined") };
+        reply.send(Some(3)).unwrap();
+        // Sending something (an empty frame) every 10 s keeps it in; then it goes quiet.
+        for _ in 0..4 {
+            time::sleep(Duration::from_secs(10)).await;
+            client.write_all(&[0x82, 0x80, 0, 0, 0, 0]).await.unwrap();
+        }
+        let quiet = Instant::now();
+        let left = time::timeout(2 * SILENT, room.recv()).await;
+        assert!(matches!(left, Ok(Some(Cmd::Leave(3)))) && quiet.elapsed() >= SILENT, "left after {:?} quiet", quiet.elapsed());
     }
 
     #[tokio::test(start_paused = true)]
