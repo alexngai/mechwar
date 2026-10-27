@@ -647,6 +647,25 @@ impl Default for Policy {
     }
 }
 
+impl Policy {
+    /// The play styles a live bot is rolled with (`Bot::with_skill`): today's tuned policy, and
+    /// three leanings off it. A team of one of each holds its own against four of today's (Team
+    /// Deathmatch +0.08 ± 0.16 kills a match at skill 0.5, +0.31 ± 0.17 at skill 1; Missile
+    /// Assault, Capture the Flag and Convoy even).
+    pub fn personalities() -> [Policy; 4] {
+        let base = Policy::default();
+        [
+            base.clone(),
+            // Anchor: perches more, and keeps to its post.
+            Policy { post_take: 1.3, post_leash: 2.5, role_cuts: [0.3, 0.75, 0.9], ..base.clone() },
+            // Brawler: hunts, closes in, dodges, and backs teammates up from farther.
+            Policy { post_take: 0.7, band_near: 0.45, band_far: 1.15, role_cuts: [0.8, 0.85, 0.95], trade_reach: 35.0, dodge_chance: 0.5, post_leash: 5.0, ..base.clone() },
+            // Flanker: goes round the sides.
+            Policy { role_cuts: [0.2, 0.3, 0.8], post_leash: 5.0, trade_reach: 15.0, ..base },
+        ]
+    }
+}
+
 pub struct Bot {
     pub seq: u32,
     rng: u64,
@@ -888,10 +907,13 @@ impl Bot {
         Input { yaw: new_yaw, pitch: new_pitch, grenade: on, ..Input::default() }
     }
 
-    /// A bot of a skill spread around `around` (each one rolls its own).
+    /// A bot of a skill spread around `around` (each one rolls its own), and a personality
+    /// (`Policy::personalities`).
     pub fn with_skill(seed: u64, around: f32) -> Self {
         let mut bot = Self::new(seed);
         bot.skill = (around + (bot.rand() - 0.5) * SKILL_SPREAD).clamp(0.0, 1.0);
+        let styles = Policy::personalities();
+        bot.policy = styles[(bot.rand() * styles.len() as f32) as usize % styles.len()].clone();
         bot
     }
 
@@ -2082,6 +2104,13 @@ mod tests {
         assert_eq!(pick(1.0, false), Some(2), "not the nearest");
         assert_eq!(pick(0.4, false), Some(1), "not the badly wounded one");
         assert_eq!(pick(1.0, true), Some(1), "not the one that just hit it");
+    }
+
+    #[test]
+    fn live_bots_come_in_every_personality() {
+        let styles = Policy::personalities();
+        let rolled: Vec<usize> = (0..64).map(|seed| styles.iter().position(|p| *p == Bot::with_skill(seed, 0.5).policy).expect("not a personality")).collect();
+        assert!((0..styles.len()).all(|k| rolled.contains(&k)), "{rolled:?}");
     }
 
     #[test]
