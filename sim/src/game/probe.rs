@@ -1219,3 +1219,117 @@ fn shield_probe() {
         }
     }
 }
+
+/// Objective probe: bot-only Convoy and Missile Assault (or PROBE_MODE's) on every map that plays
+/// it. Of bot time alive with an order: the share standing still and not firing, by what it was
+/// about (holding at its order with no enemy in view, fighting one in view, keeping its post on
+/// one gone from view, falling back, mending or repairing, or walking but blocked); and the share
+/// on the objective (in a silo its side doesn't hold securely, or in reach of the hauler).
+/// PROBE_SHOW=1 logs each still stretch of 3 s or more.
+/// PROBE_MAP=<name> PROBE_MODE=<key> PROBE_SECS=<s> PROBE_SEEDS=<n> cargo test -p sim --release --lib objective_probe -- --ignored --nocapture
+#[test]
+#[ignore = "probe"]
+fn objective_probe() {
+    let only = std::env::var("PROBE_MAP").ok();
+    let run: f32 = std::env::var("PROBE_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(180.0);
+    let seeds: u64 = std::env::var("PROBE_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(3);
+    let show = std::env::var("PROBE_SHOW").is_ok();
+    let modes: Vec<Mode> = std::env::var("PROBE_MODE").ok().and_then(|m| Mode::from_key(&m)).map_or(vec![Mode::Convoy, Mode::MissileAssault], |m| vec![m]);
+    for mode in modes {
+        for (index, (name, _)) in crate::map::MAPS.iter().enumerate() {
+            if only.as_deref().is_some_and(|m| m != *name) || !mode.fits(&Map::load(index)) {
+                continue;
+            }
+            let (mut ordered, mut on_obj, mut still_on_obj) = (0u64, 0u64, 0u64);
+            let mut still: BTreeMap<&str, u64> = BTreeMap::new();
+            for seed in 0..seeds {
+                let mut game = Game::new(Tuning::default(), index);
+                game.mode = mode;
+                (game.score_limit, game.match_seconds, game.tick) = (u16::MAX, 1e7, seed as u32 * 7919);
+                let human = game.join().unwrap();
+                game.dock(human);
+                // Each bot's still stretch: since when, and what it was about at its start.
+                let mut stretch: BTreeMap<u8, (u32, &str, String)> = BTreeMap::new();
+                for _ in 0..secs(run) {
+                    let before: BTreeMap<u8, Vector> = game.players.iter().map(|p| (p.id, p.mech.pos)).collect();
+                    game.step();
+                    let hauler = game.deployables.iter().find(|d| d.kind == Kind::Hauler).map(|d| d.pos);
+                    for p in &game.players {
+                        let Some(bot) = &p.bot else { continue };
+                        let (alive, order) = (p.mech.health > 0.0 && p.respawn_at.is_none(), bot.order);
+                        let moved = before.get(&p.id).is_none_or(|&b| flat(p.mech.pos - b).length() > 0.5 * DT);
+                        let (i, t) = (&bot.last, game.arsenal.of(&p.mech));
+                        let Some(order) = order.filter(|_| alive) else {
+                            stretch.remove(&p.id);
+                            continue;
+                        };
+                        ordered += 1;
+                        let on = match (&game.assault, hauler) {
+                            (Some(a), _) => a.silos.iter().any(|z| z.holds(p.mech.pos) && !z.state.secure(p.team)),
+                            (_, Some(h)) => flat(p.mech.pos - h).length() <= convoy::ESCORT_RANGE && (p.mech.pos.y - h.y).abs() <= 6.0,
+                            _ => false,
+                        };
+                        on_obj += u64::from(on);
+                        if moved || i.fire || i.alt_fire {
+                            if let Some((from, kind, note)) = stretch.remove(&p.id)
+                                && show
+                                && game.tick - from >= secs(3.0)
+                            {
+                                println!("[{} {name} s{seed}] bot {} still {:.1}s {kind}{note}", mode.key(), p.id, (game.tick - from) as f32 * DT);
+                            }
+                            continue;
+                        }
+                        still_on_obj += u64::from(on);
+                        let seen = |q: &&Player| q.team != p.team && q.mech.health > 0.0 && bot::sees(&game.arena, t, &p.mech, &q.mech);
+                        let target = bot.focus().and_then(|f| game.players.iter().find(|q| q.id == f));
+                        let kind = match bot.doing() {
+                            bot::Doing::FallBack => "fallback",
+                            bot::Doing::Mend => "mend",
+                            _ if i.repair || p.mech.repair_time > 0.0 => "repair",
+                            _ if (i.move_x.abs() + i.move_z.abs()) > 0.3 => "blocked",
+                            _ if bot.focus().is_some() && target.is_none_or(|q| bot::sees(&game.arena, t, &p.mech, &q.mech)) => "fight",
+                            _ if bot.focus().is_some() => "post",
+                            _ if flat(order - p.mech.pos).length() < 3.0 && game.players.iter().any(|q| seen(&q)) => "hold, enemy in sight",
+                            _ if flat(order - p.mech.pos).length() < 3.0 && on => "hold, on it",
+                            _ if flat(order - p.mech.pos).length() < 3.0 => "hold, off it",
+                            _ => "other",
+                        };
+                        *still.entry(kind).or_insert(0) += 1;
+                        stretch.entry(p.id).or_insert_with(|| {
+                            let state = match (&game.assault, hauler) {
+                                (Some(a), _) => a.silos.iter().enumerate().filter(|(_, z)| z.holds(p.mech.pos)).map(|(k, z)| format!("silo {k} {:?} in it {:?}", z.state, [0, 1].map(|t| game.players.iter().filter(|q| q.team == t && q.mech.health > 0.0 && z.holds(q.mech.pos)).count()))).collect::<String>(),
+                                (_, Some(h)) => format!("hauler {:.0}m off, {:?}", flat(h - p.mech.pos).length(), game.convoy.as_ref().map(|c| (c.pusher, c.escorts, c.contested, c.stalled))),
+                                _ => String::new(),
+                            };
+                            let note = format!(
+                                "\n    pos={:.1} order={:.1} on={on} {state} team={} heat={:.0}% input move=({:.2},{:.2}) yaw={:.2} fire={}\n    {}",
+                                p.mech.pos,
+                                order,
+                                p.team,
+                                100.0 * p.mech.heat / t.heat_max,
+                                i.move_x,
+                                i.move_z,
+                                i.yaw,
+                                i.fire,
+                                bot.describe(game.nav, &p.mech)
+                            );
+                            (game.tick, kind, note)
+                        });
+                    }
+                }
+            }
+            let pct = |n: u64| 100.0 * n as f32 / ordered.max(1) as f32;
+            let total: u64 = still.values().sum();
+            let by: Vec<String> = still.iter().map(|(k, &n)| format!("{k} {:.1}%", pct(n))).collect();
+            println!(
+                "== {} {name}: {:.0} bot-s ordered; still {:.1}% ({}); on the objective {:.1}%, still there {:.1}%",
+                mode.key(),
+                ordered as f32 * DT,
+                pct(total),
+                by.join(", "),
+                pct(on_obj),
+                pct(still_on_obj)
+            );
+        }
+    }
+}

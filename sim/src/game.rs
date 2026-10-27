@@ -2262,6 +2262,31 @@ mod tests {
     }
 
     #[test]
+    fn bots_contesting_a_silo_out_of_sight_go_after_each_other() {
+        // Foundry's middle silo has a block in its middle. A bot of each side held a rally spot on
+        // either side of it, each knowing the other was there, and both stood: contested for good.
+        let (mut game, human) = assault(false);
+        game.dock(human);
+        let a = game.add_player(0, Some(Bot::with_skill(1, 0.9)), MechClass::B).unwrap();
+        let b = game.add_player(1, Some(Bot::with_skill(2, 0.9)), MechClass::B).unwrap();
+        unshield(&mut game);
+        let (pa, pb, tick) = (Vector::new(0.0, 0.1, 13.0), Vector::new(0.0, 0.1, -13.0), game.tick);
+        for (id, pos, other, at) in [(a, pa, b, pb), (b, pb, a, pa)] {
+            let p = game.players.iter_mut().find(|p| p.id == id).unwrap();
+            p.mech.pos = pos;
+            p.bot.as_mut().unwrap().told(other, at, tick);
+        }
+        let (ma, mb) = (mech(&game, a), mech(&game, b));
+        assert!(!bot::sees(&game.arena, game.arsenal.of(&ma), &ma, &mb), "in sight across the silo");
+        let fought = (0..secs(10.0)).any(|_| {
+            game.step();
+            game.players.iter().any(|p| p.tally.dealt > 0.0)
+        });
+        let zone = &game.assault.as_ref().unwrap().silos[1];
+        assert!(fought, "no shot in 10 s, silo {:?}, at {} and {}", zone.state, mech(&game, a).pos, mech(&game, b).pos);
+    }
+
+    #[test]
     fn headless_bots_play_on_and_tally_the_damage() {
         let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
         (game.headless, game.match_seconds) = (true, 40.0);

@@ -1049,7 +1049,8 @@ impl Bot {
         }
     }
 
-    /// Where to go with no enemy in view, and what that is: its order; else the freshest last
+    /// Where to go with no enemy in view, and what that is: its order (in the zone it holds, an
+    /// enemy known there first); else the freshest last
     /// known position of an urgent contact (seen, felt, or heard close); else its lead, when far
     /// from it; else the freshest of any contact; else its lead; else a random waypoint it can
     /// reach, patrolled to.
@@ -1071,7 +1072,11 @@ impl Bot {
         // The first of these it wants is where it goes.
         let wants = |a: Action| self.brain.wants(a, &at);
         let trading = (Action::Trade, trade.map(|(pos, _)| pos), Goal::Trade(trade.map_or(0, |(_, id)| id)));
-        let choice = [(Action::GoToOrder, self.order, Goal::Order), trading, (Action::ChaseUrgent, urgent, Goal::Contact), (Action::Regroup, self.lead, Goal::Lead), (Action::ChaseContact, fresh, Goal::Contact), (Action::Follow, self.lead, Goal::Lead)]
+        // In the zone it's to hold with an enemy known to be in it too (contesting it out of
+        // sight, round its middle say): after them, in the zone.
+        let zone = self.order_zone.filter(|z| z.holds(me.pos, 0.0));
+        let contest = zone.and_then(|z| self.contacts.iter().filter(|c| z.holds(c.pos, 0.0)).max_by_key(|c| c.at)).map(|c| c.pos);
+        let choice = [(Action::GoToOrder, contest, Goal::Contact), (Action::GoToOrder, self.order, Goal::Order), trading, (Action::ChaseUrgent, urgent, Goal::Contact), (Action::Regroup, self.lead, Goal::Lead), (Action::ChaseContact, fresh, Goal::Contact), (Action::Follow, self.lead, Goal::Lead)]
             .into_iter()
             .find_map(|(a, spot, goal)| spot.filter(|_| wants(a)).map(|spot| (spot, goal)));
         if let Some(choice) = choice {
@@ -1213,14 +1218,23 @@ impl Bot {
                 return input;
             }
             let spot = Mech { pos, ..Mech::default() };
-            // At its order, or with its lead and nothing else to go on, it holds there, looking about.
+            // At its order, or with its lead and nothing else to go on, it holds there: facing the
+            // nearest enemy it knows of (heard, felt or told of) within WATCH and in a clear line
+            // as last known, or looking about (not staring at a wall one's behind).
             let hold = match goal {
                 Goal::Order if (pos.y - me.pos.y).abs() < 2.0 => ARRIVE,
                 Goal::Lead => self.policy.follow,
                 _ => 0.0,
             };
             if flat(pos - me.pos).length() < hold {
-                return Input { yaw: me.yaw + 0.5 * DT, pitch: me.pitch * 0.9, ..idle };
+                let near = self
+                    .contacts
+                    .iter()
+                    .filter(|c| flat(c.pos - me.pos).length() < WATCH && sees_at(arena, t, me, self.chest(t, Some(c.id), c.pos)))
+                    .map(|c| flat(c.pos - me.pos))
+                    .min_by(|a, b| a.length().total_cmp(&b.length()));
+                let yaw = near.map_or(me.yaw + 0.5 * DT, |d| me.yaw + wrap(atan2f(-d.x, -d.z) - me.yaw).clamp(-max_turn, max_turn));
+                return Input { yaw, pitch: me.pitch * 0.9, ..idle };
             }
             let watch = matches!(goal, Goal::Contact | Goal::Trade(_)) && pos.distance(me.pos) < WATCH;
             return self.walk(arena, nav, t, me, &spot, watch, tick);
@@ -2141,6 +2155,26 @@ mod tests {
             focus == Some(2)
         });
         assert!(turned, "never turned on its attacker");
+    }
+
+    #[test]
+    fn bots_at_their_order_face_the_enemies_they_know_of() {
+        // Holding its order (a spot by Convoy's hauler, say) with no enemy in view, it used to look
+        // slowly about, so one that hit it from 20 m behind stayed out of view for seconds.
+        let (arena, nav, t) = blockout();
+        let mut me = spawn_mech(&t, Vector::new(0.0, 0.1, 20.0));
+        let mut bot = Bot { order: Some(me.pos), ..Bot::new(1) };
+        let behind = spawn_mech(&t, Vector::new(0.0, 0.1, 40.0));
+        assert_eq!(bot.perceive(&arena, &t, &me, &[(2, behind, 1.0)], 0), None, "saw behind itself");
+        bot.hurt_by(2, behind.pos, 0);
+        let turned = (1..secs(1.5)).any(|tick| {
+            let focus = bot.perceive(&arena, &t, &me, &[(2, behind, 1.0)], tick);
+            let input = bot.think(&arena, nav, &t, &me, None, tick);
+            step_mech(&arena, &t, &mut me, &input);
+            focus == Some(2)
+        });
+        assert!(turned, "still looking about at its order, yaw {}", me.yaw);
+        assert!(flat(me.pos - Vector::new(0.0, 0.1, 20.0)).length() < ARRIVE, "left its order for {}", me.pos);
     }
 
     #[test]
