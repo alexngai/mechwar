@@ -1,9 +1,9 @@
-//! Melee secondaries (`alt_melee` > 0, the reach in m): the pile driver, a rocket punch. Held, its
-//! booster spools up over `alt_charge_time`; let go, it strikes instead of launching anything,
-//! hitting harder the more it wound (`alt_charge_damage` times at full), and the booster carries
-//! the mech up to `alt_lunge` as far: onto an enemy ahead in that range, else along its aim, so
-//! it's a dash too. A hit throws the victim along the striker's facing, up off its feet: an
-//! impulse (`alt_impulse`) over the victim's mass, so a Light flies more than twice as far as a
+//! Melee secondaries (`alt_melee` > 0, the reach in m): the rocket punch, a booster-driven ram.
+//! Held, its booster spools up over `alt_charge_time`; let go, it strikes instead of launching
+//! anything, hitting harder the more it wound (`alt_charge_damage` times at full), and the booster
+//! carries the mech up to `alt_lunge` as far: onto an enemy ahead in that range, else along its
+//! aim, so it's a charge too. A hit throws the victim along the striker's facing, up off its feet:
+//! an impulse (`alt_impulse`) over the victim's mass, so a Light flies more than twice as far as a
 //! Heavy, and the striker doesn't recoil. It rides that throw as it would a jump pad's arc, until
 //! it lands, hovers or dodges out, and slamming into a wall on the way hurts it.
 //!

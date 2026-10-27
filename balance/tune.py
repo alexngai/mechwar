@@ -4,8 +4,12 @@ candidates from a Gaussian over the weights, plays each with a team of four agai
 today's bot (sides swapped, the same seeds for every candidate), and refits the Gaussian to the
 best. The mean at the end is the tuned policy; check it on fresh seeds with --check.
 
-  python3 balance/tune.py [--gens 15] [--pop 12] [--matches 120] --out balance/out/tune
+  python3 balance/tune.py [--gens 15] [--pop 12] [--matches 120] [--mode tdm,ma,ctf] --out balance/out/tune
   python3 balance/tune.py --check '{"post_take": 1.4}' [--matches 600] [--skill 1.0] [--mode ma]
+
+With several modes, a candidate plays --matches in each, and its fitness is the mean over modes of
+its margin over that mode's spread of margins (so kills, base hull, captures and push add up).
+Team Deathmatch matches last --seconds; the objective modes' five minutes.
 """
 import argparse
 import csv
@@ -31,24 +35,26 @@ SPACE = {
     'post_cross': (0.0, 1.5),
     'trade_reach': (0.0, 90.0),
 }
-MAPS = {'tdm': ['foundry', 'isotope', 'verdigris', 'riftline', 'sump', 'sinkhole', 'canopy', 'crashsite', 'ziggurat', 'span'],
-        'ma': ['foundry', 'verdigris', 'riftline', 'sinkhole', 'canopy', 'crashsite', 'ziggurat', 'span'],
+MAPS = {'tdm': ['foundry', 'isotope', 'verdigris', 'riftline', 'sump', 'sinkhole', 'canopy', 'crashsite', 'ziggurat', 'span', 'walled'],
+        'ma': ['foundry', 'verdigris', 'riftline', 'sinkhole', 'canopy', 'crashsite', 'ziggurat', 'span', 'walled'],
         'siege': ['foundry', 'riftline', 'canopy', 'crashsite', 'span'],
-        'ctf': ['foundry', 'verdigris', 'riftline', 'sinkhole', 'canopy', 'crashsite'],
-        'convoy': ['foundry', 'riftline', 'canopy', 'crashsite', 'span']}
+        'ctf': ['foundry', 'verdigris', 'riftline', 'sinkhole', 'canopy', 'crashsite', 'walled'],
+        'convoy': ['foundry', 'riftline', 'canopy', 'crashsite', 'span', 'walled']}
 
 
-def margins(pool, n, seed, args):
+def margins(pool, n, seed, args, mode=None):
     """Each policy in `pool` (name: overrides) against today's bot over `n` matches, sides
     swapped, on the same seeds: its margin a match (kills; base hull in Missile Assault and Siege;
     captures in Capture the Flag; percent of the way pushed in Convoy)."""
+    mode = mode or args.mode
+    seconds = args.seconds if mode == 'tdm' else max(args.seconds, 300.0)
     matches, owner = [], []
     for name in pool:
         for k in range(n):
             teams = [[name] * 4, ['base'] * 4] if k % 2 == 0 else [['base'] * 4, [name] * 4]
-            matches.append({'map': MAPS[args.mode][(k // 2) % len(MAPS[args.mode])], 'seed': seed + k, 'teams': teams})
+            matches.append({'map': MAPS[mode][(k // 2) % len(MAPS[mode])], 'seed': seed + k, 'teams': teams})
             owner.append(name)
-    job = {'mode': args.mode, 'seconds': args.seconds, 'skill': args.skill, 'ideal': args.ideal,
+    job = {'mode': mode, 'seconds': seconds, 'skill': args.skill, 'ideal': args.ideal,
            'genomes': {'base': {}, **{name: {'policy': p} for name, p in pool.items()}}, 'matches': matches}
     path = args.out / 'job.json'
     path.write_text(json.dumps(job))
@@ -78,16 +84,22 @@ def main():
     ap.add_argument('--matches', type=int, default=120, help='per candidate (a generation); per check')
     ap.add_argument('--skill', type=float, default=0.5)
     ap.add_argument('--ideal', action='store_true')
-    ap.add_argument('--mode', default='tdm', choices=list(MAPS))
+    ap.add_argument('--mode', default='tdm', help='a mode, or several, comma-separated: ' + ', '.join(MAPS))
     ap.add_argument('--seconds', type=float, default=120)
     ap.add_argument('--seed', type=int, default=31)
+    ap.add_argument('--skip', default='', help='maps to leave out, comma-separated (Walled City costs about 15 times a match)')
     ap.add_argument('--check', type=json.loads, help='a policy to play against today\'s bot on fresh seeds, instead of tuning')
     ap.add_argument('--out', type=Path, default=ev.ROOT / 'balance' / 'out' / 'tune')
     args = ap.parse_args()
+    modes = args.mode.split(',')
+    assert all(m in MAPS for m in modes), f'modes: {", ".join(MAPS)}'
+    for mode in MAPS:
+        MAPS[mode] = [m for m in MAPS[mode] if m not in args.skip.split(',')]
     args.out.mkdir(parents=True, exist_ok=True)
     if args.check is not None:
-        m, se = summary(margins({'check': args.check}, args.matches, 900_000_000 + args.seed * 10_000, args)['check'])
-        print(f'{args.mode} skill {"ideal" if args.ideal else args.skill}, {args.matches} matches: margin {m:+.2f} ± {se:.2f} a match')
+        for mode in modes:
+            m, se = summary(margins({'check': args.check}, args.matches, 900_000_000 + args.seed * 10_000, args, mode)['check'])
+            print(f'{mode} skill {"ideal" if args.ideal else args.skill}, {args.matches} matches: margin {m:+.2f} ± {se:.2f} a match')
         return
     names = list(SPACE)
     lo, hi = (np.array([SPACE[k][i] for k in names]) for i in (0, 1))
@@ -100,7 +112,17 @@ def main():
         # The current mean plays too, as a yardstick.
         draws[0] = mean
         pool = {f'c{k}': {n: round(float(v), 3) for n, v in zip(names, d)} for k, d in enumerate(draws)}
-        scores = {k: summary(v) for k, v in margins(pool, args.matches, args.seed * 1_000_000 + gen * 10_000, args).items()}
+        # Each mode's margins over its spread, then the mean over modes.
+        per = [margins(pool, args.matches, args.seed * 1_000_000 + gen * 10_000, args, mode) for mode in modes]
+        scores = {}
+        for k in pool:
+            fits = []
+            for by in per:
+                spread = summary([x for v in by.values() for x in v])[1] * math.sqrt(sum(len(v) for v in by.values())) or 1.0
+                fits.append([x / spread for x in by[k]])
+            mean = sum(summary(f)[0] for f in fits) / len(fits)
+            se = math.sqrt(sum(summary(f)[1] ** 2 for f in fits)) / len(fits)
+            scores[k] = (mean, se)
         order = sorted(range(args.pop), key=lambda k: -scores[f'c{k}'][0])
         elite = draws[order[: args.elite]]
         mean = 0.3 * mean + 0.7 * elite.mean(axis=0)

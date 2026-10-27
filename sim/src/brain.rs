@@ -25,7 +25,7 @@ pub enum Feature {
     Hit,
     /// Range to the target over the far edge of its band (over 1: too far to hold the band).
     Range,
-    /// Firing its gun, its secondary, or letting a pile driver go, this tick; carrying a pile driver.
+    /// Firing its gun, its secondary, or letting a rocket punch go, this tick; carrying a rocket punch.
     Fire,
     AltFire,
     Striking,
@@ -289,7 +289,7 @@ impl Default for Brain {
             // Camouflage for slipping away to mend, or for closing unseen on a target beyond the
             // band while still in shape to fight.
             (Action::Cloak, vec![with(back(), &[yes(Mending), no(InCover)]), with(engaged(), &[(Range, Above(1.2)), (Hull, AtLeast(0.6))])]),
-            // Power up a volley as it goes (a pile driver: its strike); boost a fight on target in range.
+            // Power up a volley as it goes (a rocket punch: its strike); boost a fight on target in range.
             (Action::Power, vec![with(engaged(), &[yes(Melee), yes(Striking)]), with(engaged(), &[no(Melee), yes(AltFire)])]),
             (Action::Barrage, vec![with(engaged(), &[yes(Fire), (Range, AtMost(1.0))])]),
             (Action::Artillery, vec![with(engaged(), &[yes(Fire), (Range, AtMost(1.0))])]),

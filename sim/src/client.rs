@@ -384,10 +384,13 @@ impl NetClient {
     }
 
     fn apply(&mut self, s: Snapshot, now_ms: f64) {
-        // A new match may be on a new map. Barriers are walls of it, which the replay below
-        // predicts against as the server will.
+        // A new match may be on a new map. Barriers are walls of it, and staging pens hold us in,
+        // which the replay below predicts against as the server will.
+        // ponytail: the pens open here a round trip after they did on the server, so pushing on
+        // one as it drops costs a small correction; send the opening's tick if that shows.
         self.load_map(s.state.map);
         self.arena.set_barriers(self.arsenal.get(MechClass::B, Loadout::default()), &s.deployables);
+        self.arena.penned = s.state.staging;
         // Smooth arrival jitter; snap when far off (first snapshot, or after a stalled tab).
         let sample = f64::from(s.tick) * f64::from(DT) * 1000.0 - now_ms;
         self.clock_offset = Some(match self.clock_offset {

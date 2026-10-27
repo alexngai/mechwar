@@ -32,6 +32,8 @@ pub const MAX_PLAYERS: usize = 2 * TEAM_SIZE;
 const _: () = assert!(MAX_PLAYERS <= 16, "Blast hits are a u16 bitmask of player ids");
 const _: () = assert!(MAX_PLAYERS <= deploy::TARGET as usize, "turrets' lock-on ids follow the players'");
 const POST_MATCH_SECONDS: f32 = 10.0;
+/// A team match opens with this long penned in the spawns (`Game::staging_seconds`).
+pub const STAGING_SECONDS: f32 = 10.0;
 /// A kill's worth in points, shared out as kill credit (`progress::KILLER_BONUS`).
 const POINTS_PER_KILL: f32 = 100.0;
 /// Points for each mech in a zone when its team takes it; a Siege pilot's for each EU they bank,
@@ -352,6 +354,9 @@ struct Flying {
 }
 
 enum Phase {
+    /// A team match's opening: everyone held in their team's pen round its spawns
+    /// (`Arena::penned`), shots doing no damage, until `until`; then it plays.
+    Staging { until: u32 },
     Playing { started_at: u32 },
     /// Shots do no damage until the next match starts at `restart_at`.
     Ended { winner: Option<u8>, restart_at: u32 },
@@ -374,6 +379,8 @@ pub struct Game {
     /// Team kills that win the match; in Deathmatch, as many solo kills' worth of points.
     pub score_limit: u16,
     pub match_seconds: f32,
+    /// How long each team match opens penned in its spawns, to launch and get ready (0 for none).
+    pub staging_seconds: f32,
     /// Index into `map::MAPS`; clients load the same map from their Welcome, and switch with
     /// the match state's.
     pub map: usize,
@@ -447,6 +454,7 @@ impl Game {
             headless: false,
             score_limit: 25,
             match_seconds: 600.0,
+            staging_seconds: 0.0,
             players: Vec::new(),
             projectiles: Vec::new(),
             orbs: Vec::new(),
@@ -655,6 +663,10 @@ impl Game {
         }
 
         match self.phase {
+            Phase::Staging { until } if self.tick >= until => {
+                self.phase = Phase::Playing { started_at: self.tick };
+                self.arena.penned = false;
+            }
             // (A co-op run lasts its waves.)
             Phase::Playing { started_at } if self.mode != Mode::Defense && self.tick >= started_at + secs(self.match_seconds) => self.end_match(),
             Phase::Ended { restart_at, .. } if self.tick >= restart_at => {
@@ -790,7 +802,9 @@ impl Game {
             bot.mates = mates;
             bot.engaged.clone_from(&engaged[team]);
             bot.smoke.clone_from(&self.clouds);
-            bot.domes.clone_from(&self.deployables);
+            bot.team = p.team;
+            bot.shields.clear();
+            bot.shields.extend(self.deployables.iter().filter(|d| matches!(d.kind, Kind::Dome | Kind::Barrier)));
             let focus = bot.perceive(&self.arena, t, &p.mech, &enemies, self.tick);
             radio[team].extend(bot.sightings().map(|(enemy, at)| (id, enemy, at)));
             seen.push((focus, enemies));
@@ -848,10 +862,16 @@ impl Game {
             bot.orbs.extend(self.orbs.iter().filter(|o| o.dropped.is_none_or(|(_, side)| usize::from(side) == team)).map(|o| o.pos));
             let (focus, enemies) = &seen[i];
             let target = focus.and_then(|id| enemies.iter().find(|e| e.0 == id)).map(|e| e.1);
-            let mut input = bot.think_with(&self.arena, self.nav, t, &p.mech, target.as_ref(), heal.as_ref().map(|(m, mid)| (m, *mid)), self.tick);
-            if p.mech.health > 0.0 {
-                p.tally.doing[bot.doing() as usize] += 1;
-            }
+            let mut input = if matches!(self.phase, Phase::Staging { .. }) {
+                // Penned in for the opening: it waits facing the other side, and sets off as the pens open.
+                bot.stand_by(t, &p.mech, self.arena.pens[1 - team].0)
+            } else {
+                let input = bot.think_with(&self.arena, self.nav, t, &p.mech, target.as_ref(), heal.as_ref().map(|(m, mid)| (m, *mid)), self.tick);
+                if p.mech.health > 0.0 {
+                    p.tally.doing[bot.doing() as usize] += 1;
+                }
+                input
+            };
             #[cfg(test)]
             {
                 bot.last = input;
@@ -1081,7 +1101,8 @@ impl Game {
             self.arena.set_barriers(items(&self.arsenal), &self.deployables);
         }
 
-        if matches!(self.phase, Phase::Playing { .. }) {
+        // Objectives are set out from the opening (nobody can reach them from the pens).
+        if !matches!(self.phase, Phase::Ended { .. }) {
             self.step_objectives();
         }
 
@@ -1093,8 +1114,9 @@ impl Game {
         }
     }
 
-    /// Fresh scores and objectives, and everyone back at their team spawn with full health.
-    fn start_match(&mut self) {
+    /// Fresh scores and objectives, and everyone back at their team spawn with full health. A new
+    /// game's first match opens this way once it's set up (a team match's staging with it).
+    pub fn start_match(&mut self) {
         self.scores = [0; 2];
         self.assault = None;
         self.siege = None;
@@ -1106,7 +1128,12 @@ impl Game {
         self.clouds.clear();
         self.deployables.clear();
         self.arena.set_barriers(items(&self.arsenal), &[]);
-        self.phase = Phase::Playing { started_at: self.tick };
+        self.phase = match self.mode {
+            Mode::Deathmatch => Phase::Playing { started_at: self.tick },
+            _ if self.staging_seconds <= 0.0 => Phase::Playing { started_at: self.tick },
+            _ => Phase::Staging { until: self.tick + secs(self.staging_seconds) },
+        };
+        self.arena.penned = matches!(self.phase, Phase::Staging { .. });
         let starts = self.start_points();
         for (p, start) in self.players.iter_mut().zip(starts) {
             (p.class, p.loadout) = (p.next_class, p.next_loadout);
@@ -1929,6 +1956,7 @@ impl Game {
     /// The match's map, score and clock, as players see them.
     pub fn match_state(&self) -> MatchState {
         let (ended, winner, until) = match self.phase {
+            Phase::Staging { until } => (false, None, until),
             Phase::Playing { started_at } => (false, None, started_at + secs(self.match_seconds)),
             Phase::Ended { winner, restart_at } => (true, winner, restart_at),
         };
@@ -1960,6 +1988,7 @@ impl Game {
                 _ => self.score_limit,
             },
             seconds_left: (until.saturating_sub(self.tick) as f32 / TICK_HZ).ceil() as u16,
+            staging: matches!(self.phase, Phase::Staging { .. }),
             ended,
             winner,
         }
@@ -2834,6 +2863,50 @@ mod tests {
     }
 
     #[test]
+    fn team_matches_open_penned_in_the_spawns() {
+        let mut game = Game::new(Tuning::default(), Map::index("isotope").unwrap());
+        game.staging_seconds = STAGING_SECONDS;
+        game.step(); // an empty room holds the opening till someone comes
+        let id = game.join().unwrap();
+        let out_of_pen = |game: &Game, p: &Player| {
+            let (c, r) = game.arena.pens[usize::from(p.team)];
+            (p.mech.pos - c).with_y(0.0).length() - r
+        };
+        // We hover and boost for the other side: the pen holds us at its wall, and the bots wait.
+        let rush = Input { move_z: 1.0, boost: true, hover: true, ..Input::default() };
+        for _ in 0..secs(STAGING_SECONDS) - 2 {
+            send(&mut game, id, rush);
+            game.step();
+            let s = game.match_state();
+            assert!(s.staging && !s.ended && s.seconds_left <= STAGING_SECONDS as u16);
+            for p in &game.players {
+                assert!(out_of_pen(&game, p) < -game.arsenal.of(&p.mech).mech_radius + 0.01, "{} left its pen", p.name);
+                let last = p.bot.as_ref().map(|b| b.last);
+                assert!(last.is_none_or(|i| i.move_x == 0.0 && i.move_z == 0.0 && !i.fire && !i.alt_fire), "{} didn't wait", p.name);
+            }
+        }
+        let me = game.players.iter().find(|p| p.id == id).unwrap();
+        assert!(out_of_pen(&game, me) > -2.0, "never reached the wall");
+        let waited: std::collections::HashMap<u8, Vector> = game.players.iter().map(|p| (p.id, p.mech.pos)).collect();
+        // Then the pens open, the clock starts, and everyone heads out.
+        for _ in 0..secs(10.0) {
+            send(&mut game, id, rush);
+            game.step();
+        }
+        let s = game.match_state();
+        assert!(!s.staging && !game.arena.penned && s.seconds_left > (game.match_seconds - 10.0) as u16);
+        let me = game.players.iter().find(|p| p.id == id).unwrap();
+        assert!(out_of_pen(&game, me) > 0.0, "still penned");
+        for p in game.players.iter().filter(|p| p.bot.is_some()) {
+            assert!(p.mech.pos.distance(waited[&p.id]) > 5.0, "{} stayed put", p.name);
+        }
+        // Deathmatch plays at once.
+        game.set_mode(Mode::Deathmatch);
+        game.start_match();
+        assert!(!game.match_state().staging && !game.arena.penned);
+    }
+
+    #[test]
     fn matches_rotate_to_another_map() {
         let (foundry, isotope) = (Map::index("foundry").unwrap(), Map::index("isotope").unwrap());
         let mut game = Game::new(Tuning::default(), foundry);
@@ -2988,6 +3061,31 @@ mod tests {
             }
         }
         panic!("bots took {} silos in a minute", owned(&game));
+    }
+
+    #[test]
+    fn bots_contesting_a_silo_out_of_sight_go_after_each_other() {
+        // Foundry's middle silo has a block in its middle. A bot of each side held a rally spot on
+        // either side of it, each knowing the other was there, and both stood: contested for good.
+        let (mut game, human) = assault(false);
+        game.dock(human);
+        let a = game.add_player(0, Some(Bot::with_skill(1, 0.9)), MechClass::B).unwrap();
+        let b = game.add_player(1, Some(Bot::with_skill(2, 0.9)), MechClass::B).unwrap();
+        unshield(&mut game);
+        let (pa, pb, tick) = (Vector::new(0.0, 0.1, 13.0), Vector::new(0.0, 0.1, -13.0), game.tick);
+        for (id, pos, other, at) in [(a, pa, b, pb), (b, pb, a, pa)] {
+            let p = game.players.iter_mut().find(|p| p.id == id).unwrap();
+            p.mech.pos = pos;
+            p.bot.as_mut().unwrap().told(other, at, tick);
+        }
+        let (ma, mb) = (mech(&game, a), mech(&game, b));
+        assert!(!bot::sees(&game.arena, game.arsenal.of(&ma), &ma, &mb), "in sight across the silo");
+        let fought = (0..secs(10.0)).any(|_| {
+            game.step();
+            game.players.iter().any(|p| p.tally.dealt > 0.0)
+        });
+        let zone = &game.assault.as_ref().unwrap().silos[1];
+        assert!(fought, "no shot in 10 s, silo {:?}, at {} and {}", zone.state, mech(&game, a).pos, mech(&game, b).pos);
     }
 
     #[test]
@@ -4694,6 +4792,132 @@ mod tests {
             }
         }
         assert!(game.deployables.is_empty(), "the bot left the turret standing");
+    }
+
+    /// A sharp bot with `gun` at z 30 and a human 25 m north of it, standing still, on blockout's
+    /// open west side with their shields down; and a dome or barrier, the human's side's
+    /// (`theirs`) or the bot's, up at `at` for a minute, whole or never to break.
+    fn shielded(gun: &str, kind: Kind, theirs: bool, at: Vector, unbreakable: bool) -> (Game, u8, u8) {
+        let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
+        game.bots = false;
+        let human = game.join().unwrap();
+        let bot = game.add_player(1, Some(Bot::with_skill(3, 0.9)), MechClass::B).unwrap();
+        for (id, pos) in [(human, Vector::new(-40.0, 0.1, 5.0)), (bot, Vector::new(-40.0, 0.1, 30.0))] {
+            game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = pos;
+        }
+        game.pick(bot, MechClass::B, Loadout::named(gun, "rocket"));
+        unshield(&mut game);
+        let owner = if theirs { human } else { bot };
+        let (team, tick) = (game.players.iter().find(|p| p.id == owner).unwrap().team, game.tick);
+        let i = items(&game.arsenal);
+        let hull = if unbreakable { f32::INFINITY } else if kind == Kind::Dome { i.dome_hull } else { i.barrier_hull };
+        game.deployables.push(Deployable { kind, team, owner, pos: at, yaw: 0.0, pitch: 0.0, hull, placed: tick, expires: tick + secs(60.0), ready: 0, burst: 0 });
+        game.arena.set_barriers(items(&game.arsenal), &game.deployables);
+        (game, bot, human)
+    }
+
+    /// Steps `game` `secs_` s with `human` kept whole, counting the shots, launches and throws
+    /// `bot` sent into its own side's dome or barrier.
+    fn wasted(game: &mut Game, bot: u8, human: u8, secs_: f32, mut each: impl FnMut(&Game)) -> u32 {
+        let mut wasted = 0;
+        for _ in 0..secs(secs_) {
+            let (b, h) = (mech(game, bot), mech(game, human));
+            let t = game.arsenal.of(&b);
+            let (eye, chest) = (b.pos + Vector::Y * t.eye_height, h.pos + Vector::Y * (game.arsenal.of(&h).mech_height * 0.5));
+            let ray = Ray::new(eye, (chest - eye).normalize());
+            let walled = deploy::shield(&game.deployables, items(&game.arsenal), &ray, chest.distance(eye)).is_some_and(|d| d.owner == bot);
+            game.step();
+            let b = mech(game, bot);
+            wasted += u32::from(walled && (b.shot || b.launched || b.threw));
+            let max = game.arsenal.of(&mech(game, human)).health_max;
+            game.players.iter_mut().find(|p| p.id == human).unwrap().mech.health = max;
+            each(game);
+        }
+        wasted
+    }
+
+    #[test]
+    fn bots_shoot_into_enemy_domes_and_walk_in() {
+        let dome = Vector::new(-40.0, 0.0, 5.0);
+        // Its shots wear the dome...
+        let (mut game, ..) = shielded("pike", Kind::Dome, true, dome, false);
+        let full = game.deployables[0].hull;
+        for _ in 0..secs(2.0) {
+            game.step();
+        }
+        assert!(game.deployables.first().is_none_or(|d| d.hull < full), "never fired on the dome");
+        // ...and with one that won't break, it walks in to get at the enemy under it.
+        let (mut game, bot, _) = shielded("pike", Kind::Dome, true, dome, true);
+        let r = items(&game.arsenal).dome_radius;
+        let mut inside = false;
+        for _ in 0..secs(8.0) {
+            game.step();
+            inside |= (mech(&game, bot).pos - dome).length() < r;
+        }
+        assert!(inside, "never went under it");
+        assert!(game.tally(bot).unwrap().0.dealt > 0.0, "never hit the enemy under it");
+    }
+
+    #[test]
+    fn bots_step_out_from_under_their_own_dome_to_fire_and_back_in_to_cool() {
+        // A rifle, which runs hot enough to go back in and cool; and a charged gun (let go, it
+        // fires: under the dome, it holds its charge), which doesn't.
+        for (gun, cools) in [("pike", true), ("kiln", false)] {
+            let dome = Vector::new(-40.0, 0.0, 30.0);
+            let (mut game, bot, human) = shielded(gun, Kind::Dome, false, dome, true);
+            let r = items(&game.arsenal).dome_radius;
+            // Out from under it, by its feet, then deep back in.
+            let (mut out, mut back) = (false, false);
+            let wasted = wasted(&mut game, bot, human, 15.0, |game| {
+                let off = (mech(game, bot).pos - dome).length();
+                (out, back) = (out || off > r, back || out && off < 0.5 * r);
+            });
+            let dealt = game.tally(bot).unwrap().0.dealt;
+            assert_eq!(wasted, 0, "{gun}: fired into its own dome");
+            assert!(dealt > 50.0, "{gun}: dealt only {dealt}");
+            assert!(out && (back || !cools), "{gun}: out {out}, back in {back}");
+        }
+    }
+
+    #[test]
+    fn bots_shoot_down_enemy_barriers_and_step_round_their_own() {
+        // The enemy's, across the way between: fired on, and worn.
+        let (mut game, ..) = shielded("pike", Kind::Barrier, true, Vector::new(-40.0, 0.0, 15.0), false);
+        let full = game.deployables[0].hull;
+        for _ in 0..secs(6.0) {
+            game.step();
+        }
+        assert!(game.deployables.first().is_none_or(|d| d.hull < full), "never fired on the barrier");
+        // Its own, just ahead: no fire into it, and round its end to hit.
+        let (mut game, bot, human) = shielded("pike", Kind::Barrier, false, Vector::new(-40.0, 0.0, 26.0), true);
+        let half = 0.5 * items(&game.arsenal).barrier_width;
+        let mut round = false;
+        assert_eq!(wasted(&mut game, bot, human, 8.0, |game| round |= (mech(game, bot).pos.x + 40.0).abs() > half), 0, "fired into its own barrier");
+        assert!(round, "never went round it");
+        assert!(game.tally(bot).unwrap().0.dealt > 50.0, "dealt only {}", game.tally(bot).unwrap().0.dealt);
+        // With the enemy close behind it off past its far end: round that end, the way the line
+        // of fire crosses, not the one it stands nearer.
+        let (mut game, bot, human) = shielded("pike", Kind::Barrier, false, Vector::new(-40.0, 0.0, 26.0), true);
+        for (id, pos) in [(bot, Vector::new(-41.0, 0.1, 29.0)), (human, Vector::new(-34.0, 0.1, 23.0))] {
+            game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = pos;
+        }
+        assert_eq!(wasted(&mut game, bot, human, 3.0, |_| {}), 0, "fired into its own barrier");
+        assert!(game.tally(bot).unwrap().0.dealt > 0.0, "never got a shot past it");
+        // A charged gun mid-charge when its own barrier comes between holds the charge.
+        let (mut game, bot, human) = shielded("kiln", Kind::Barrier, false, Vector::new(40.0, 0.0, -40.0), true);
+        for _ in 0..secs(5.0) {
+            if mech(&game, bot).charge >= 0.5 {
+                break;
+            }
+            game.step();
+        }
+        assert!(mech(&game, bot).charge >= 0.5, "never charged");
+        let (b, h) = (mech(&game, bot).pos, mech(&game, human).pos);
+        let d = h - b;
+        (game.deployables[0].pos, game.deployables[0].yaw) = (Vector::new(b.x + 0.3 * d.x, 0.0, b.z + 0.3 * d.z), libm::atan2f(-d.x, -d.z));
+        game.arena.set_barriers(items(&game.arsenal), &[]);
+        game.arena.set_barriers(items(&game.arsenal), &game.deployables);
+        assert_eq!(wasted(&mut game, bot, human, 1.0, |_| {}), 0, "let its charge go into its own barrier");
     }
 
     #[test]

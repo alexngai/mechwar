@@ -168,8 +168,11 @@ pub struct MatchState {
     pub scores: [u16; 2],
     /// Team kills that win it; in Deathmatch, as many solo kills' worth of points.
     pub limit: u16,
-    /// Until the match ends, or after it ends, until the next one starts.
+    /// Until the match ends, or after it ends, until the next one starts; while staging, until
+    /// the pens open.
     pub seconds_left: u16,
+    /// A team match's opening, everyone penned in their spawns (`game.rs`).
+    pub staging: bool,
     pub ended: bool,
     /// Set once ended; None for a draw.
     pub winner: Option<u8>,

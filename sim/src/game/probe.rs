@@ -1098,3 +1098,238 @@ fn post_probe() {
         println!("{name:10} fighting {:5.0} bot-s: at a post {:3.0}%, with cover to step out of {:3.0}%, hidden in it {:3.0}%", fighting as f32 / TICK_HZ, pct(posted), pct(covered), pct(hidden));
     }
 }
+
+/// Shield probe: two rifle bots 26 m apart on blockout, with a dome put up around one (or none,
+/// the baseline) or a barrier between them once they've met. Over its life, each side's share of
+/// time standing idle and firing, overall and with only the shield between them, and the hull
+/// worn off it; PROBE_SHOW logs what each bot was doing every third of a second.
+/// PROBE_SEEDS=<n> PROBE_SHOW=1 cargo test -p sim --release --lib shield_probe -- --ignored --nocapture
+#[test]
+#[ignore = "probe"]
+fn shield_probe() {
+    let seeds: u64 = std::env::var("PROBE_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(3);
+    let show = std::env::var("PROBE_SHOW").is_ok();
+    for case in ["none", "dome on A", "dome on B", "barrier"] {
+        // Per side (the shield's own, the other), ticks alive, idle (still and not firing), firing;
+        // and the shield's hull worn off.
+        let (mut alive, mut idle, mut fired, mut worn) = ([0u32; 2], [0u32; 2], [0u32; 2], 0.0);
+        // Ticks where only the shield stands between them (each in the other's clear line but for it).
+        let (mut walled, mut walled_idle, mut walled_fired) = ([0u32; 2], [0u32; 2], [0u32; 2]);
+        for seed in 0..seeds {
+            let t = Tuning::default();
+            let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+            (game.score_limit, game.match_seconds) = (u16::MAX, 1e7);
+            game.bots = false;
+            let human = game.join().unwrap();
+            game.dock(human);
+            let a = game.add_player(0, Some(Bot::new(10 + seed)), MechClass::B).unwrap();
+            let b = game.add_player(1, Some(Bot::new(20 + seed)), MechClass::B).unwrap();
+            let (pa, pb) = (Vector::new(0.0, 0.1, 40.0), Vector::new(0.0, 0.1, 14.0));
+            for (id, pos) in [(a, pa), (b, pb)] {
+                let p = game.players.iter_mut().find(|p| p.id == id).unwrap();
+                (p.mech.pos, p.mech.loadout) = (pos, Loadout::named("pike", "rocket"));
+            }
+            // Let them see each other and start fighting first.
+            for _ in 0..secs(0.4) {
+                game.step();
+            }
+            let at = |game: &Game, id| game.players.iter().find(|p| p.id == id).unwrap().mech.pos;
+            let tick = game.tick;
+            let i = items(&game.arsenal).clone();
+            // B's barrier goes up halfway, across the way to A.
+            let d = at(&game, a) - at(&game, b);
+            let (team, owner, pos, yaw, hull, kind, life) = match case {
+                "none" | "dome on A" => (0, a, at(&game, a), 0.0, i.dome_hull, Kind::Dome, i.dome_seconds),
+                "dome on B" => (1, b, at(&game, b), 0.0, i.dome_hull, Kind::Dome, i.dome_seconds),
+                _ => (1, b, at(&game, b) + d * 0.5, libm::atan2f(-d.x, -d.z), i.barrier_hull, Kind::Barrier, i.barrier_seconds),
+            };
+            let pos = Vector::new(pos.x, 0.0, pos.z);
+            if case != "none" {
+                game.deployables.push(Deployable { kind, team, owner, pos, yaw, pitch: 0.0, hull, placed: tick, expires: tick + secs(life), ready: 0, burst: 0 });
+            }
+            game.arena.set_barriers(&i, &game.deployables);
+            if show {
+                println!("--- {case} seed {seed}: up for {life} s, hull {hull}");
+            }
+            let mut log: BTreeMap<u8, Vec<String>> = BTreeMap::new();
+            for k in 0..secs(life) {
+                let before = [a, b].map(|id| at(&game, id));
+                for p in &mut game.players {
+                    if p.mech.health > 0.0 {
+                        p.mech.health = game.arsenal.of(&p.mech).health_max;
+                    }
+                }
+                let hull_before = game.deployables.iter().find(|d| d.kind == kind).map_or(0.0, |d| d.hull);
+                game.step();
+                worn += hull_before - game.deployables.iter().find(|d| d.kind == kind).map_or(hull_before, |d| d.hull);
+                for (n, id) in [a, b].into_iter().enumerate() {
+                    let p = game.players.iter().find(|p| p.id == id).unwrap();
+                    let bot = p.bot.as_ref().unwrap();
+                    let speed = flat(p.mech.pos - before[n]).length() * TICK_HZ;
+                    let side = usize::from(p.team != team);
+                    let other = game.players.iter().find(|q| q.id == if id == a { b } else { a }).unwrap();
+                    let ts = game.arsenal.of(&p.mech);
+                    let (eye, chest) = (p.mech.pos + Vector::Y * ts.eye_height, other.mech.pos + Vector::Y * (game.arsenal.of(&other.mech).mech_height * 0.5));
+                    let ray = Ray::new(eye, (chest - eye).normalize_or_zero());
+                    let len = chest.distance(eye);
+                    let clear = game.arena.cast_past_barriers(&ray, len).is_none();
+                    let shielded = case != "none" && (deploy::stops(&game.deployables, &i, &ray, len).is_some() || game.arena.cast_ray(&ray, len).is_some());
+                    if p.mech.health > 0.0 && other.mech.health > 0.0 && clear && shielded {
+                        walled[side] += 1;
+                        walled_idle[side] += u32::from(speed < 0.5 && !bot.last.fire);
+                        walled_fired[side] += u32::from(bot.last.fire);
+                    }
+                    if p.mech.health > 0.0 {
+                        alive[side] += 1;
+                        idle[side] += u32::from(speed < 0.5 && !bot.last.fire);
+                        fired[side] += u32::from(bot.last.fire);
+                    }
+                    if k % 10 == 0 {
+                        let inside = flat(p.mech.pos - pos).length() < i.dome_radius;
+                        log.entry(id).or_default().push(format!(
+                            "{:?}{}{}{}{} v{:.0}{}{}",
+                            bot.doing(),
+                            if p.mech.heat >= 0.6 * game.arsenal.of(&p.mech).heat_max { "H" } else { "" },
+                            if bot.post_state().is_some() { "P" } else { "" },
+                            if bot.focus().is_some() { "*" } else { "" },
+                            if kind == Kind::Dome && inside { "(in)" } else { "" },
+                            speed,
+                            if bot.last.fire { " F" } else { "" },
+                            if p.mech.health <= 0.0 { " DEAD" } else { "" },
+                        ));
+                    }
+                }
+            }
+            if show {
+                for (id, l) in log {
+                    println!("  {}: {}", if id == a { "A" } else { "B" }, l.join(" | "));
+                }
+            }
+        }
+        let pct = |n: u32, of: u32| 100.0 * n as f32 / of.max(1) as f32;
+        println!(
+            "{case:10} owner side idle {:3.0}% firing {:3.0}% | other side idle {:3.0}% firing {:3.0}% | hull worn {:.0} per shield",
+            pct(idle[0], alive[0]), pct(fired[0], alive[0]), pct(idle[1], alive[1]), pct(fired[1], alive[1]), worn / seeds as f32
+        );
+        for side in 0..2 {
+            println!(
+                "    {} side, {:.1} s/run with only the shield between: idle {:3.0}%, firing {:3.0}%",
+                ["owner", "other"][side], walled[side] as f32 / TICK_HZ / seeds as f32, pct(walled_idle[side], walled[side]), pct(walled_fired[side], walled[side])
+            );
+        }
+    }
+}
+
+/// Objective probe: bot-only Convoy and Missile Assault (or PROBE_MODE's) on every map that plays
+/// it. Of bot time alive with an order: the share standing still and not firing, by what it was
+/// about (holding at its order with no enemy in view, fighting one in view, keeping its post on
+/// one gone from view, falling back, mending or repairing, or walking but blocked); and the share
+/// on the objective (in a silo its side doesn't hold securely, or in reach of the hauler).
+/// PROBE_SHOW=1 logs each still stretch of 3 s or more.
+/// PROBE_MAP=<name> PROBE_MODE=<key> PROBE_SECS=<s> PROBE_SEEDS=<n> cargo test -p sim --release --lib objective_probe -- --ignored --nocapture
+#[test]
+#[ignore = "probe"]
+fn objective_probe() {
+    let only = std::env::var("PROBE_MAP").ok();
+    let run: f32 = std::env::var("PROBE_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(180.0);
+    let seeds: u64 = std::env::var("PROBE_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(3);
+    let show = std::env::var("PROBE_SHOW").is_ok();
+    let modes: Vec<Mode> = std::env::var("PROBE_MODE").ok().and_then(|m| Mode::from_key(&m)).map_or(vec![Mode::Convoy, Mode::MissileAssault], |m| vec![m]);
+    for mode in modes {
+        for (index, (name, _)) in crate::map::MAPS.iter().enumerate() {
+            if only.as_deref().is_some_and(|m| m != *name) || !mode.fits(&Map::load(index)) {
+                continue;
+            }
+            let (mut ordered, mut on_obj, mut still_on_obj) = (0u64, 0u64, 0u64);
+            let mut still: BTreeMap<&str, u64> = BTreeMap::new();
+            for seed in 0..seeds {
+                let mut game = Game::new(Tuning::default(), index);
+                game.mode = mode;
+                (game.score_limit, game.match_seconds, game.tick) = (u16::MAX, 1e7, seed as u32 * 7919);
+                let human = game.join().unwrap();
+                game.dock(human);
+                // Each bot's still stretch: since when, and what it was about at its start.
+                let mut stretch: BTreeMap<u8, (u32, &str, String)> = BTreeMap::new();
+                for _ in 0..secs(run) {
+                    let before: BTreeMap<u8, Vector> = game.players.iter().map(|p| (p.id, p.mech.pos)).collect();
+                    game.step();
+                    let hauler = game.deployables.iter().find(|d| d.kind == Kind::Hauler).map(|d| d.pos);
+                    for p in &game.players {
+                        let Some(bot) = &p.bot else { continue };
+                        let (alive, order) = (p.mech.health > 0.0 && p.respawn_at.is_none(), bot.order);
+                        let moved = before.get(&p.id).is_none_or(|&b| flat(p.mech.pos - b).length() > 0.5 * DT);
+                        let (i, t) = (&bot.last, game.arsenal.of(&p.mech));
+                        let Some(order) = order.filter(|_| alive) else {
+                            stretch.remove(&p.id);
+                            continue;
+                        };
+                        ordered += 1;
+                        let on = match (&game.assault, hauler) {
+                            (Some(a), _) => a.silos.iter().any(|z| z.holds(p.mech.pos) && !z.state.secure(p.team)),
+                            (_, Some(h)) => flat(p.mech.pos - h).length() <= convoy::ESCORT_RANGE && (p.mech.pos.y - h.y).abs() <= 6.0,
+                            _ => false,
+                        };
+                        on_obj += u64::from(on);
+                        if moved || i.fire || i.alt_fire {
+                            if let Some((from, kind, note)) = stretch.remove(&p.id)
+                                && show
+                                && game.tick - from >= secs(3.0)
+                            {
+                                println!("[{} {name} s{seed}] bot {} still {:.1}s {kind}{note}", mode.key(), p.id, (game.tick - from) as f32 * DT);
+                            }
+                            continue;
+                        }
+                        still_on_obj += u64::from(on);
+                        let seen = |q: &&Player| q.team != p.team && q.mech.health > 0.0 && bot::sees(&game.arena, t, &p.mech, &q.mech);
+                        let target = bot.focus().and_then(|f| game.players.iter().find(|q| q.id == f));
+                        let kind = match bot.doing() {
+                            bot::Doing::FallBack => "fallback",
+                            bot::Doing::Mend => "mend",
+                            _ if i.repair || p.mech.repair_time > 0.0 => "repair",
+                            _ if (i.move_x.abs() + i.move_z.abs()) > 0.3 => "blocked",
+                            _ if bot.focus().is_some() && target.is_none_or(|q| bot::sees(&game.arena, t, &p.mech, &q.mech)) => "fight",
+                            _ if bot.focus().is_some() => "post",
+                            _ if flat(order - p.mech.pos).length() < 3.0 && game.players.iter().any(|q| seen(&q)) => "hold, enemy in sight",
+                            _ if flat(order - p.mech.pos).length() < 3.0 && on => "hold, on it",
+                            _ if flat(order - p.mech.pos).length() < 3.0 => "hold, off it",
+                            _ => "other",
+                        };
+                        *still.entry(kind).or_insert(0) += 1;
+                        stretch.entry(p.id).or_insert_with(|| {
+                            let state = match (&game.assault, hauler) {
+                                (Some(a), _) => a.silos.iter().enumerate().filter(|(_, z)| z.holds(p.mech.pos)).map(|(k, z)| format!("silo {k} {:?} in it {:?}", z.state, [0, 1].map(|t| game.players.iter().filter(|q| q.team == t && q.mech.health > 0.0 && z.holds(q.mech.pos)).count()))).collect::<String>(),
+                                (_, Some(h)) => format!("hauler {:.0}m off, {:?}", flat(h - p.mech.pos).length(), game.convoy.as_ref().map(|c| (c.pusher, c.escorts, c.contested, c.stalled))),
+                                _ => String::new(),
+                            };
+                            let note = format!(
+                                "\n    pos={:.1} order={:.1} on={on} {state} team={} heat={:.0}% input move=({:.2},{:.2}) yaw={:.2} fire={}\n    {}",
+                                p.mech.pos,
+                                order,
+                                p.team,
+                                100.0 * p.mech.heat / t.heat_max,
+                                i.move_x,
+                                i.move_z,
+                                i.yaw,
+                                i.fire,
+                                bot.describe(game.nav, &p.mech)
+                            );
+                            (game.tick, kind, note)
+                        });
+                    }
+                }
+            }
+            let pct = |n: u64| 100.0 * n as f32 / ordered.max(1) as f32;
+            let total: u64 = still.values().sum();
+            let by: Vec<String> = still.iter().map(|(k, &n)| format!("{k} {:.1}%", pct(n))).collect();
+            println!(
+                "== {} {name}: {:.0} bot-s ordered; still {:.1}% ({}); on the objective {:.1}%, still there {:.1}%",
+                mode.key(),
+                ordered as f32 * DT,
+                pct(total),
+                by.join(", "),
+                pct(on_obj),
+                pct(still_on_obj)
+            );
+        }
+    }
+}

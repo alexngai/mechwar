@@ -15,7 +15,7 @@ import GUIDE_MAPS from '../guide/maps.json'; // each map's blurb and points of i
 // siege.rs, projectile.rs, progress.rs), and the server's match defaults (MATCH_SECONDS,
 // SCORE_LIMIT: game.rs's, which server/src/main.rs's env vars can change): keep these in step.
 const SIM = {
-  TEAM_SIZE: 4, MAX_PLAYERS: 8, POST_MATCH_SECONDS: 10, MATCH_SECONDS: 600, SCORE_LIMIT: 25, DM_MAX_SIZE: 200,
+  TEAM_SIZE: 4, MAX_PLAYERS: 8, POST_MATCH_SECONDS: 10, STAGING_SECONDS: 10, MATCH_SECONDS: 600, SCORE_LIMIT: 25, DM_MAX_SIZE: 200,
   POINTS_PER_KILL: 100, KILLER_BONUS: 0.25, ASSIST_WINDOW: 15, CAPTURE_POINTS: 50, EU_POINTS: 0.5, SHIP_POINTS: 0.05,
   ORB_HEALTH: 25, ORB_RADIUS: 6, ORB_RATE: 10, ORB_SECONDS: 30, EDGE_DAMAGE: 0.3,
   SENTRY_RANGE: 50, SENTRY_SHIP_RANGE: 90, SENTRY_BURST: 8, SENTRY_ROUND: 4, SENTRY_ACQUIRE: 0.6, SENTRY_SHIELD: 400, SENTRY_REGEN: 25, SENTRY_OFFLINE: 25, SENTRY_IMMUNE: 15,
@@ -94,6 +94,7 @@ function overview() {
     <ol class="steps">
       <li>On the <a href="/">home page</a>, pick a callsign and press QUICK PLAY. It finds a game with room or opens one, and bots fill the empty seats, so there's always a match.</li>
       <li>The hangar opens. Choose a mech, Light, Medium or Heavy, and what fills its five slots: a primary, a secondary, an item, a support item and an ability. Then LAUNCH.</li>
+      <li>A team match opens with ${SIM.STAGING_SECONDS} s behind a shield round each team's spawns, to launch and get ready; no shot does damage. It beeps down the last three seconds, and then the shields drop.</li>
       <li>Click into the game to take the mouse. Esc gives it back and opens the menu, which lists every control for what you're carrying.</li>
       <li>Downed, you can launch again after ${T('respawn_delay')} s, and change your build in the hangar first. A fresh launch is shielded for ${T('spawn_shield')} s, until you move or fire.</li>
       <li>Every match earns XP. Each level brings ${POINTS_PER_LEVEL} unlock points to spend in the hangar on more weapons, items and abilities, one mech at a time.</li>

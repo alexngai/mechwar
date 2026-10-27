@@ -11,14 +11,14 @@
     {
       "id": "triplet", "name": "Burst", "unlock": 1, "desc": "Three hard, accurate rounds a pull, then a beat", "sound": "burst", "recoil": "low", "use": [["LMB", "Each pull fires a three-round burst; pull again after the beat"], ["", "Accurate to mid range, fading past 40 m"]],
       "stats": {
-        "fire_rate": 2.2, "burst": 3, "burst_gap": 0.07, "shot_damage": 7.5, "heat_per_shot": 3.5,
+        "fire_rate": 1.65, "burst": 3, "burst_gap": 0.07, "shot_damage": 6.375, "heat_per_shot": 3.5,
         "spread_deg": 0.25, "bloom_per_shot": 0.25, "bloom_max": 1.5, "bloom_recovery": 4,
         "falloff_start": 40, "falloff_end": 90, "falloff_floor": 0.5
       }
     },
     {
       "id": "pike", "name": "Rifle", "unlock": 1, "desc": "Accurate, with mild bloom and long reach", "sound": "rifle", "recoil": "medium", "use": [["LMB", "Hold to fire 8 rounds a second"], ["", "Full damage out to 60 m, and still 60% at 120 m"]],
-      "stats": {}
+      "stats": { "shot_damage": 4.8 }
     },
     {
       "id": "gyre", "name": "Gatling", "unlock": 2, "desc": "A rotary cannon that spins up to a torrent, and runs hot", "sound": "rotary", "recoil": "high", "use": [["LMB", "Hold: it opens fire after 0.2 s and reaches full rate after 1.2 s"], ["", "Let go and it spins down over 0.8 s: fire long bursts, and watch your heat"]],
@@ -48,14 +48,14 @@
       "id": "hail", "name": "Auto-GL", "unlock": 3, "desc": "A drum-fed automatic grenade launcher: a stream of small, bouncing grenades", "sound": "mortar", "recoil": "medium", "projectile": "shell", "use": [["LMB", "Hold to fire about two grenades a second"], ["", "They drop, bounce off what they hit, and burst on a mech or after 1 s"], ["", "Bank them off walls and floors to reach behind cover"]],
       "stats": {
         "fire_rate": 1.95, "shot_damage": 21.5, "heat_per_shot": 12.3, "spread_deg": 0.4, "bloom_per_shot": 0.3, "bloom_max": 2, "bloom_recovery": 4,
-        "shot_speed": 45, "shot_gravity": 20, "shot_radius": 2.5, "shot_bounce": 0.5, "shot_fuse": 1
+        "shot_speed": 58.5, "shot_gravity": 20, "shot_radius": 2.5, "shot_bounce": 0.5, "shot_fuse": 1
       }
     },
     {
-      "id": "talon", "name": "Homing rocket", "unlock": 2, "desc": "Single rockets that curve onto the enemy you keep in your sights", "sound": "rocket", "recoil": "medium", "projectile": "rocket", "use": [["LMB", "Fire one rocket at a time"], ["", "Keep your crosshair within 6° of an enemy and rockets in flight turn toward it; a diamond marks it"], ["", "Look away and they fly straight; a quick dodge can shake them"]],
+      "id": "talon", "name": "Homing rocket", "unlock": 2, "desc": "Single rockets that curve onto the enemy you keep in your sights", "sound": "rocket", "recoil": "medium", "projectile": "rocket", "use": [["LMB", "Fire one rocket at a time"], ["", "Keep your crosshair within 3° of an enemy and rockets in flight turn toward it; a diamond marks it"], ["", "Look away and they fly straight; a quick dodge can shake them"]],
       "stats": {
-        "fire_rate": 1.5, "shot_damage": 18, "heat_per_shot": 13, "spread_deg": 0, "bloom_per_shot": 0, "bloom_max": 0,
-        "shot_speed": 60, "shot_gravity": 0, "shot_radius": 2, "shot_turn": 50, "shot_seek_cone": 6, "weapon_range": 150
+        "fire_rate": 1.5, "shot_damage": 13.5, "heat_per_shot": 13, "spread_deg": 0, "bloom_per_shot": 0, "bloom_max": 0,
+        "shot_speed": 48, "shot_gravity": 0, "shot_radius": 2, "shot_turn": 35, "shot_seek_cone": 3, "weapon_range": 150
       }
     }
   ],
@@ -119,9 +119,9 @@
       }
     },
     {
-      "id": "piston", "name": "Pile driver", "unlock": 2, "desc": "A rocket punch: a booster-driven spike that throws what it hits", "sound": "piston", "recoil": "high", "use": [["RMB", "Hold to spool up the booster: 0.8 s to full"], ["RMB", "Let go to punch. The longer the wind-up, the harder it hits (20 to 55) and the farther the booster carries you (up to 12 m)"], ["", "With an enemy ahead in range it homes in; otherwise it carries you along your aim, up too, as a dash"], ["", "A hit throws them along your aim, and a wall they slam into hurts. It works overheated, but locks your guns for 0.5 s"]],
+      "id": "piston", "name": "Rocket punch", "unlock": 2, "desc": "An outsized impact head on a ram, driven by boosters: it charges in and throws what it hits", "sound": "piston", "recoil": "high", "use": [["RMB", "Hold to spool up the boosters: 0.8 s to full"], ["RMB", "Let go to punch. The longer the wind-up, the harder it hits (20 to 55) and the farther the boosters carry you (up to 22 m)"], ["", "With an enemy ahead in range it homes in; otherwise it carries you along your aim, up too, as a dash"], ["", "A hit throws them along your aim, and a wall they slam into hurts. It works overheated, but locks your guns for 0.5 s"]],
       "stats": {
-        "alt_melee": 3, "alt_charge_time": 0.8, "alt_lunge": 12, "alt_lunge_speed": 36, "alt_impulse": 255, "alt_charge_damage": 2.75,
+        "alt_melee": 3, "alt_charge_time": 0.8, "alt_lunge": 22, "alt_lunge_speed": 42, "alt_impulse": 255, "alt_charge_damage": 2.75,
         "alt_release": 1, "alt_damage": 20, "alt_cooldown": 2.5, "alt_heat": 12
       }
     }

@@ -530,7 +530,15 @@ pub struct Arena {
     pub half: [f32; 2],
     /// Barriers standing (`deploy.rs`), and their walls.
     barriers: Vec<(deploy::Deployable, ColliderHandle)>,
+    /// Each team's staging pen: a circle (center, radius) round its spawns, PEN_MARGIN past the
+    /// farthest. While `penned` (a team match's opening, `game.rs`) no mech leaves the one it's
+    /// in, however high it flies.
+    pub pens: [(Vector, f32); 2],
+    pub penned: bool,
 }
+
+/// How far a staging pen's wall stands past its farthest spawn (m).
+pub const PEN_MARGIN: f32 = 8.0;
 
 /// A jump pad fires for feet this close to its center (and within half a meter of its height).
 pub const PAD_RADIUS: f32 = 2.5;
@@ -551,7 +559,12 @@ impl Arena {
         }
         // Builds the broad phase so scene queries see the static colliders. No physics step runs.
         world.detect_collisions(&(), &());
-        Self { world, pads: map.pads.clone(), half: map.size.map(|s| s / 2.0), barriers: Vec::new() }
+        let pens = map.spawns.each_ref().map(|team| {
+            let at: Vec<Vector> = team.iter().map(|p| Vector::from_array(*p)).collect();
+            let center = at.iter().sum::<Vector>() / at.len().max(1) as f32;
+            (center, at.iter().map(|p| (*p - center).with_y(0.0).length()).fold(0.0, f32::max) + PEN_MARGIN)
+        });
+        Self { world, pads: map.pads.clone(), half: map.size.map(|s| s / 2.0), barriers: Vec::new(), pens, penned: false }
     }
 }
 
@@ -937,6 +950,17 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
         m.pos.z = m.pos.z.clamp(-hz, hz);
         m.vel.z = 0.0;
     }
+    // Staging: the pen it's in (the nearer) holds it the same way.
+    if arena.penned {
+        let off = |(c, _): &(Vector, f32)| (m.pos - *c).with_y(0.0);
+        let pen = arena.pens.iter().min_by(|a, b| off(a).length().total_cmp(&off(b).length())).expect("two pens");
+        let (out, room) = (off(pen), pen.1 - radius);
+        if out.length() > room {
+            let n = out / out.length();
+            m.pos = pen.0.with_y(m.pos.y) + n * room;
+            m.vel -= n * m.vel.dot(n).max(0.0);
+        }
+    }
     if m.grounded {
         m.pad_arc = false;
         // Standing on a jump pad throws the mech (not one shut down for repairs).
@@ -1215,7 +1239,7 @@ mod tests {
     }
 
     #[test]
-    fn pile_drivers_wind_up_then_strike_on_release_even_overheated_locking_the_guns() {
+    fn rocket_punches_wind_up_then_strike_on_release_even_overheated_locking_the_guns() {
         let mut sim = weapon_sim(|t| (t.alt_melee, t.alt_charge_time, t.alt_release) = (3.0, 0.8, 1.0));
         let t = sim.tuning.clone();
         (sim.mech.heat, sim.mech.overheated) = (t.heat_max, true);

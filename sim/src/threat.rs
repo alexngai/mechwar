@@ -220,7 +220,7 @@ fn secondary_rate(t: &Tuning, target: &Tuning, range: f32, aim: f32) -> (f32, f3
     let damage = match alt_use(t) {
         // A torch burns what it's held on, and heats while held.
         AltUse::Beam => return if range <= t.alt_beam { (t.alt_damage * 0.9, t.alt_heat) } else { (0.0, 0.0) },
-        // A pile driver wound up and let go lunges its reach.
+        // A rocket punch wound up and let go lunges its reach.
         AltUse::Melee => {
             let cycle = cooldown + t.alt_charge_time;
             let lands = range <= t.alt_lunge + t.mech_radius + target.mech_radius;

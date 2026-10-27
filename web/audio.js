@@ -384,15 +384,17 @@ export class Sound {
       return;
     }
     if (sound === 'piston') {
-      // Pile driver: its booster lighting, a hard crack and a deep whump into a falling roar (the
-      // exhaust carries the burn on), as the ram thumps out and its latch clacks behind.
-      const out = this.voice(pos, 0.7, undefined, 0.15);
+      // Rocket punch: its boosters lighting, an igniter's crack and a deep thump, then a whoosh
+      // tearing up in pitch over a rough, crackling roar (the exhaust carries the burn on), as
+      // the head thumps out and its latch clacks behind.
+      const out = this.voice(pos, 1.0, undefined, 0.2);
       if (!out) return;
       out.gain.value = pos ? 1.6 : 1.1;
-      this.noise(out, 'white', 'highpass', 2200, 1200, 0.0005, 0.03, 0.7);
-      this.tone(out, 'sine', 110, 45, 0.003, 0.3, 1.0);
-      this.noise(out, 'brown', 'lowpass', 1600, 300, 0.01, 0.45, 0.8);
-      this.noise(out, 'white', 'bandpass', 1400, 500, 0.02, 0.4, 0.4, 0.8);
+      this.noise(out, 'white', 'highpass', 3000, 1500, 0.0005, 0.025, 0.6);
+      this.tone(out, 'sine', 110, 40, 0.003, 0.3, 1.0);
+      this.noise(out, 'white', 'bandpass', 300, 2400, 0.03, 0.55, 0.75, 1.2);
+      this.noise(out, 'brown', 'lowpass', 1800, 250, 0.02, 0.8, 0.9);
+      this.growl(out, 'sawtooth', 62, 44, 520, 0.02, 0.7, 0.3);
       this.tone(out, 'square', 900, 600, 0.001, 0.05, 0.1, 0.1);
       return;
     }
@@ -430,6 +432,22 @@ export class Sound {
     this.noise(out, 'brown', 'lowpass', 900, 90, 0.005, life, Math.min(0.7 + 0.3 * size, 1.3));
     this.tone(out, 'sine', 56, 19, 0.005, life + 0.2, Math.min(0.6 + 0.35 * size, 1.2));
     this.noise(out, 'white', 'lowpass', 2200, 600, 0.002, 0.1, 0.3 * size);
+  }
+
+  /**
+   * A rocket punch landing at `pos`, or a mech it threw slamming into a wall: a heavy, dull thump
+   * and its punch, a crunch of armor and the anvil's short clang, over a low rumble.
+   */
+  strike(pos) {
+    const out = this.voice(pos, 0.7, undefined, 0.25);
+    if (!out) return;
+    out.gain.value = 1.8;
+    this.tone(out, 'sine', 140, 38, 0.002, 0.35, 1.2);
+    this.tone(out, 'triangle', 220, 70, 0.001, 0.08, 0.5);
+    this.noise(out, 'white', 'lowpass', 3000, 400, 0.001, 0.07, 0.6);
+    this.noise(out, 'brown', 'lowpass', 700, 80, 0.004, 0.6, 0.9);
+    this.tone(out, 'square', 610, 590, 0.001, 0.12, 0.05);
+    this.tone(out, 'sine', 1430, 1400, 0.001, 0.2, 0.06);
   }
 
   /**
@@ -695,6 +713,25 @@ export class Sound {
     }
   }
 
+  /** A beep of the countdown to a match's start, each of its last three seconds; `go`, as it starts: higher and held. */
+  countdown(go) {
+    const out = this.voice(null, go ? 1.0 : 0.4, this.ui);
+    if (!out) return;
+    const f = go ? 1320 : 660, held = go ? 0.75 : 0.16;
+    this.tone(out, 'square', f, f, 0.003, held, 0.1);
+    this.tone(out, 'sine', f / 2, f / 2, 0.003, held, 0.25);
+  }
+
+  /** The staging pens' shields going down round us: a deep field collapsing, its hum sagging away under a fizz, and a thump. */
+  shieldsDown() {
+    const out = this.voice(null, 1.8, this.ui);
+    if (!out) return;
+    this.growl(out, 'sawtooth', 220, 35, 900, 0.01, 1.5, 0.22);
+    this.tone(out, 'sine', 520, 90, 0.01, 1.2, 0.14);
+    this.noise(out, 'white', 'highpass', 5000, 1200, 0.02, 1.0, 0.1);
+    this.tone(out, 'sine', 70, 32, 0.005, 0.7, 0.6, 0.05);
+  }
+
   /** Our hold just filled with energy: one soft, plain tone. */
   full() {
     const out = this.voice(null, 0.5, this.ui);
@@ -703,11 +740,97 @@ export class Sound {
     this.tone(out, 'triangle', 880, 880, 0.01, 0.2, 0.05);
   }
 
-  /** A mech destroyed: a big blast and a metal crunch. */
+  /**
+   * A mech destroyed: a big blast and a metal crunch, then its frame groaning as it gives way and
+   * its power winding down, ammunition cooking off inside it, debris clattering down, and the
+   * wreck slumping to the ground.
+   */
   death(pos) {
     this.blast(8, pos);
-    const out = this.voice(pos, 0.5);
-    if (out) this.noise(out, 'white', 'bandpass', 1400, 400, 0.01, 0.4, 0.4, 2);
+    const out = this.voice(pos, 2.6, undefined, 0.25);
+    if (!out) return;
+    const r = (lo, hi) => lo + Math.random() * (hi - lo);
+    this.noise(out, 'white', 'bandpass', 1400, 400, 0.01, 0.4, 0.4, 2);
+    // Two low, rough groans bending down, a shade off a fifth so they grind; the generator's whine sinking away.
+    this.growl(out, 'sawtooth', 95, 38, 450, 0.25, 1.6, 0.5, 0.12);
+    this.growl(out, 'sawtooth', 142, 51, 600, 0.3, 1.3, 0.3, 0.2);
+    this.growl(out, 'sawtooth', 520, 45, 1200, 0.02, 1.3, 0.1, 0.05);
+    for (const d of [r(0.3, 0.45), r(0.7, 0.9), r(1.2, 1.5)]) {
+      this.noise(out, 'brown', 'lowpass', 800, 90, 0.004, 0.45, 0.8, 1, d);
+      this.tone(out, 'sine', 60, 24, 0.004, 0.5, 0.7, d);
+      this.noise(out, 'white', 'lowpass', 2400, 600, 0.002, 0.08, 0.35, 1, d);
+    }
+    for (let k = 0; k < 5; k++) {
+      const f = r(400, 900), d = r(0.5, 2);
+      this.tone(out, 'triangle', f, f * 0.95, 0.001, 0.15, 0.12, d);
+      this.tone(out, 'square', f * 2.7, f * 2.6, 0.001, 0.05, 0.03, d);
+    }
+    this.tone(out, 'sine', 75, 28, 0.004, 0.45, 0.9, 1.0);
+    this.noise(out, 'brown', 'lowpass', 600, 70, 0.006, 0.6, 0.8, 1, 1.0);
+  }
+
+  /**
+   * Our mech coming online at launch, over about three seconds: the breaker clacking in, mains hum
+   * surging and the capacitors whining up; the engine cranking, coughing and catching, revving up
+   * and settling to idle; servos and hydraulics cycling as the frame is checked, the clamps
+   * letting go; and on the glass, processing chatter, a confirm per system, and an all-clear.
+   */
+  boot() {
+    const out = this.voice(null, 3.8), glass = this.voice(null, 3.5, this.ui);
+    if (!out || !glass) return;
+    const { ctx } = this, t = ctx.currentTime;
+    this.noise(out, 'white', 'bandpass', 2200, 1800, 0.001, 0.03, 0.5, 4);
+    this.tone(out, 'sine', 95, 40, 0.002, 0.18, 0.7);
+    this.growl(out, 'sawtooth', 50, 50, 240, 0.3, 2.4, 0.12);
+    this.tone(out, 'sine', 180, 3200, 0.7, 0.3, 0.05, 0.05);
+    [0.4, 0.58, 0.74, 0.88].forEach((d, k) => {
+      this.noise(out, 'brown', 'lowpass', 500, 120, 0.005, 0.12, 0.3 + 0.12 * k, 1, d);
+      this.tone(out, 'sine', 70, 35, 0.003, 0.1, 0.25 + 0.1 * k, d);
+    });
+    this.tone(out, 'sine', 80, 30, 0.004, 0.4, 0.9, 1.02);
+    this.noise(out, 'brown', 'lowpass', 900, 150, 0.005, 0.35, 0.7, 1, 1.02);
+    // Running: a rough roar and a turbine whine on one rev curve ([s, Hz]), fading out at idle.
+    const rev = [[0.95, 22], [1.15, 30], [1.6, 70], [1.9, 92], [2.5, 46], [3.6, 42]];
+    const follow = (param, k) => {
+      param.setValueAtTime(rev[0][1] * k, t);
+      for (const [d, f] of rev) param.linearRampToValueAtTime(f * k, t + d);
+    };
+    const engine = ctx.createGain(), body = ctx.createBiquadFilter();
+    engine.gain.setValueAtTime(0, t + 0.95);
+    for (const [d, v] of [[1.15, 0.3], [1.9, 0.45], [2.5, 0.25], [3.6, 0]]) engine.gain.linearRampToValueAtTime(v, t + d);
+    body.type = 'lowpass';
+    follow(body.frequency, 9);
+    body.connect(engine).connect(out);
+    const roar = ctx.createBufferSource();
+    roar.buffer = this.brown;
+    roar.loop = true;
+    roar.connect(body);
+    const sources = [roar];
+    for (const [type, k, level, to] of [['sawtooth', 1, 0.5, body], ['sawtooth', 2.02, 0.3, body], ['sine', 18, 0.06, engine]]) {
+      const osc = ctx.createOscillator();
+      osc.type = type;
+      follow(osc.frequency, k);
+      osc.connect(this.amp(level)).connect(to);
+      sources.push(osc);
+    }
+    for (const src of sources) {
+      src.start(t + 0.95);
+      src.stop(t + 3.7);
+    }
+    for (const [d, f] of [[1.3, 260], [1.55, 300], [2.0, 230]]) this.growl(out, 'square', f, f * 1.4, 1600, 0.04, 0.16, 0.05, d);
+    this.noise(out, 'white', 'highpass', 3500, 1500, 0.01, 0.35, 0.15, 1, 2.15);
+    this.tone(out, 'triangle', 140, 110, 0.002, 0.2, 0.4, 2.25);
+    this.noise(out, 'white', 'bandpass', 900, 700, 0.002, 0.08, 0.5, 3, 2.25);
+    for (let k = 0; k < 24; k++) {
+      const f = 1800 + Math.random() * 1800;
+      this.tone(glass, 'square', f, f, 0.001, 0.018, 0.025, 0.25 + Math.random() * 2.1);
+    }
+    [0.7, 1.15, 1.6, 2.05].forEach((d, k) => {
+      const f = 660 * 2 ** (k / 6);
+      this.tone(glass, 'triangle', f, f, 0.003, 0.06, 0.14, d);
+      this.tone(glass, 'triangle', 1.5 * f, 1.5 * f, 0.003, 0.09, 0.14, d + 0.07);
+    });
+    for (const [d, f, decay] of [[2.6, 660, 0.12], [2.7, 880, 0.12], [2.8, 1320, 0.6]]) this.tone(glass, 'sine', f, f, 0.005, decay, 0.18, d);
   }
 
   /** Our shot or splash landed: a soft, mid "tss" rather than a plink. */
