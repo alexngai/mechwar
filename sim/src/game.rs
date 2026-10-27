@@ -155,10 +155,11 @@ pub const NAME_MAX: usize = 16;
 /// A player may rename this often.
 const RENAME_SECONDS: f32 = 2.0;
 /// Bots' callsigns, by player id.
-/// A destroyed mech drops a health orb holding ORB_HEALTH, floating ORB_HEIGHT over the ground
+/// A destroyed mech drops a health orb holding `orb_health`, floating ORB_HEIGHT over the ground
 /// where it fell. It heals every mech whose chest is within ORB_RADIUS at ORB_RATE (either team)
 /// until it runs dry, or fades after ORB_SECONDS. A Salve drops the same orb for its side alone.
-pub const ORB_HEALTH: f32 = 25.0;
+#[cfg(test)]
+pub const ORB_HEALTH: f32 = 37.5;
 pub const ORB_RADIUS: f32 = 6.0;
 const ORB_RATE: f32 = 10.0;
 const ORB_SECONDS: f32 = 30.0;
@@ -349,7 +350,7 @@ impl Game {
             bots: true,
             bot_skill: 0.5,
             headless: false,
-            score_limit: 25,
+            score_limit: 20,
             match_seconds: 600.0,
             staging_seconds: 0.0,
             players: Vec::new(),
@@ -1393,7 +1394,7 @@ impl Game {
     /// Player `user`'s Salve: a repair orb at its feet, for its side.
     fn drop_orb(&mut self, user: usize) {
         let u = &self.players[user];
-        let orb = Orb { pos: self.orb_spot(u.mech.pos), health: ORB_HEALTH, fades_at: self.tick + secs(ORB_SECONDS), dropped: Some((u.id, u.team)) };
+        let orb = Orb { pos: self.orb_spot(u.mech.pos), health: self.arsenal.of(&u.mech).orb_health, fades_at: self.tick + secs(ORB_SECONDS), dropped: Some((u.id, u.team)) };
         self.orbs.push(orb);
     }
 
@@ -1703,7 +1704,8 @@ impl Game {
                 assists |= 1 << id;
             }
         }
-        self.orbs.push(Orb { pos: self.orb_spot(fell), health: ORB_HEALTH, fades_at: self.tick + secs(ORB_SECONDS), dropped: None });
+        let health = self.arsenal.of(&self.players[j].mech).orb_health;
+        self.orbs.push(Orb { pos: self.orb_spot(fell), health, fades_at: self.tick + secs(ORB_SECONDS), dropped: None });
         // What it carried falls with it, for anyone to pick up.
         let (eu, spot) = (std::mem::take(&mut self.players[j].eu), self.orb_spot(fell));
         if let Some(s) = self.siege.as_mut().filter(|_| eu > 0.0) {
@@ -2747,10 +2749,10 @@ mod tests {
             let i = at(&game, id);
             game.players[i].mech.health = 40.0;
         }
-        for _ in 0..(3.0 * TICK_HZ) as u32 {
+        for _ in 0..(4.5 * TICK_HZ) as u32 {
             game.step();
         }
-        // The killer, beside it, takes all 25 over 2.5 s; the one 20 m off gets none.
+        // The killer, beside it, takes all 37.5 over 3.75 s; the one 20 m off gets none.
         assert!((mech(&game, killer).health - (40.0 + ORB_HEALTH)).abs() < 1e-3, "killer at {}", mech(&game, killer).health);
         assert_eq!(mech(&game, far).health, 40.0);
         assert!(game.orbs.is_empty(), "a dry orb lingers");
@@ -3503,7 +3505,7 @@ mod tests {
     #[test]
     fn turrets_fall_to_enemy_fire() {
         let t = Tuning { spread_deg: 0.0, bloom_per_shot: 0.0, falloff_start: 1000.0, falloff_end: 1000.0, turret_warmup: 30.0, ..Tuning::default() };
-        assert_eq!(t.turret_hull, 25.0);
+        assert_eq!(t.turret_hull, 37.5);
         let (mut game, owner, foes) = turret_range(t.clone(), "mg_turret", &[Vector::new(0.0, 0.1, 22.0)]);
         send(&mut game, owner, Input { grenade: true, ..Input::default() });
         game.step();
