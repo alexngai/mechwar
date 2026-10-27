@@ -719,6 +719,7 @@ function launch(i) {
     sim.reset();
     prev = curr = sim.state();
     faceCenter();
+    sound.boot();
   }
 }
 
@@ -832,11 +833,12 @@ function frame(now) {
     cockpit.setWeapons(CLASS_KEYS[classIdx], me, T('eye_height'), T('mech_height') / me.height);
     retune();
   }
-  // Launching closes the hangar once the mech is out, facing into the map.
+  // Launching closes the hangar once the mech is out, facing into the map, and it comes online.
   const alive = curr[S.HEALTH] > 0;
   if (launching && alive) {
     launching = pickerOpen = false;
     faceCenter();
+    sound.boot();
   }
 
   // The render offset slides server corrections (bumps) in instead of snapping.
