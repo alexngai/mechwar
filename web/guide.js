@@ -18,7 +18,7 @@ const SIM = {
   TEAM_SIZE: 4, MAX_PLAYERS: 8, POST_MATCH_SECONDS: 10, STAGING_SECONDS: 10, MATCH_SECONDS: 600, SCORE_LIMIT: 25, DM_MAX_SIZE: 200,
   POINTS_PER_KILL: 100, KILLER_BONUS: 0.25, ASSIST_WINDOW: 15, CAPTURE_POINTS: 50, EU_POINTS: 0.5, SHIP_POINTS: 0.05,
   ORB_HEALTH: 25, ORB_RADIUS: 6, ORB_RATE: 10, ORB_SECONDS: 30, EDGE_DAMAGE: 0.3,
-  SENTRY_RANGE: 50, SENTRY_SHIP_RANGE: 90, SENTRY_BURST: 8, SENTRY_ROUND: 4, SENTRY_ACQUIRE: 0.6, SENTRY_SHIELD: 400, SENTRY_REGEN: 25, SENTRY_OFFLINE: 25, SENTRY_IMMUNE: 15,
+  SENTRY_RANGE: 35, SENTRY_SHIP_RANGE: 90, SENTRY_BURST: 8, SENTRY_ROUND: 4, SENTRY_ACQUIRE: 0.6, SENTRY_SHIELD: 400, SENTRY_OFFLINE: 25, SENTRY_IMMUNE: 15,
   CAPTURE_SECONDS: 8, CAPTURE_SPEEDUP: 0.5, CAPTURE_CREW: 3, DRIFT_SECONDS: 16,
   BASE_HULL: 1000, MISSILE_SECONDS: 10, MISSILE_FLIGHT: 10, MISSILE_DAMAGE: 20,
   STATION_CAP: 400, STATION_REFILL: 10, STATION_RATE: 30, CARRY_MAX: 100, BASE_RADIUS: 14, TRICKLE: 1, LAUNCH_EU: 500,
@@ -401,8 +401,8 @@ function mechanics() {
 
     <h2 id="base-guns">BASE GUNS</h2>
     ${figure('mech-base-guns', 'A blue base gun fires on a red mech sheltering under its shield dome.')}
-    <p>In the team modes each base has two guns. They open up ${SIM.SENTRY_ACQUIRE} s after an enemy mech shows within ${SIM.SENTRY_RANGE} m, in ${SIM.SENTRY_BURST}-round bursts of ${SIM.SENTRY_ROUND} damage a round, and in Siege fire on an enemy ship within ${SIM.SENTRY_SHIP_RANGE} m. They can't see through walls, smoke or shield domes, or spot a shielded or camouflaged mech.</p>
-    <p>Each has a ${SIM.SENTRY_SHIELD} shield that regains ${SIM.SENTRY_REGEN} a second. Shoot it through and the gun goes offline for ${SIM.SENTRY_OFFLINE} s, then comes back full and can't be hurt for ${SIM.SENTRY_IMMUNE} s: a window to push a base, or to get a flag out.</p>
+    <p>In the team modes each base has two guns, there to cover the spawns rather than hold the base. They open up ${SIM.SENTRY_ACQUIRE} s after an enemy mech shows within ${SIM.SENTRY_RANGE} m, in ${SIM.SENTRY_BURST}-round bursts of ${SIM.SENTRY_ROUND} damage a round, and in Siege fire on an enemy ship within ${SIM.SENTRY_SHIP_RANGE} m. They can't see through walls, smoke or shield domes, or spot a shielded or camouflaged mech.</p>
+    <p>Each has a ${SIM.SENTRY_SHIELD} shield that doesn't regenerate. Shoot it through and the gun goes offline for ${SIM.SENTRY_OFFLINE} s, then comes back full and can't be hurt for ${SIM.SENTRY_IMMUNE} s: a window to push a base, or to get a flag out.</p>
 
     <h2 id="deployables">TURRETS, DOMES AND BARRIERS</h2>
     ${figure('mech-deployables', 'A red shield dome. No shot crosses it but a rail slug; mechs walk straight through.')}
