@@ -7,7 +7,7 @@
 // tall and 3.6 m wide, so lanes and doors are 9+ m wide and clearances 6+ m; ramps stay near 23
 // degrees (walkable is 40); hover tops out at 3.5 m, so 3 m ledges are hover shortcuts and the 7 m
 // and 14 m tiers need ramps.
-import { bases, box, convoy, flagStand, flags, furnace, growth, lamp, once, pad, pipe, point, railing, ramp, sentries, siege, sign, silos, stack, turned, write } from './kit.mjs';
+import { bases, box, convoy, defense, flagStand, flags, furnace, growth, lamp, once, pad, pipe, point, railing, ramp, sentries, siege, sign, silos, stack, turned, write } from './kit.mjs';
 
 const SLAG = '#ff6a14';
 
@@ -169,6 +169,9 @@ point([-80, 0, 16], [-110, 0, 41], [-84, 0, 41], [-84, 0, 62], [-58, 0, 22], [-5
 // B in the smelter's arcade round the core, under the ring deck.
 bases([0, 0, 100]);
 // Base guns: one up on the gantry over the yard, one on the hangar roof.
+// Co-op Defense (a stand-in test ground until the co-op map is built): the reactor in the north
+// yard, walkers coming out of the south yard's spawns along the bots' routes.
+defense({ at: [0, 0, 100], radius: 8 }, [[4, 0, -96], [24, 0, -106]]);
 sentries([[22, 7, 110], [-9.5, 14, 86.5]]);
 // Capture the Flag: the stand outside the yard's east wall, by its east gate, its back to the base
 // guns and its doorways to the courtyard and the east lane.
