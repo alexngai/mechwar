@@ -1214,7 +1214,7 @@ mod tests {
     }
 
     #[test]
-    fn pile_drivers_wind_up_then_strike_on_release_even_overheated_locking_the_guns() {
+    fn rocket_punches_wind_up_then_strike_on_release_even_overheated_locking_the_guns() {
         let mut sim = weapon_sim(|t| (t.alt_melee, t.alt_charge_time, t.alt_release) = (3.0, 0.8, 1.0));
         let t = sim.tuning.clone();
         (sim.mech.heat, sim.mech.overheated) = (t.heat_max, true);

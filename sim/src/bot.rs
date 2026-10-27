@@ -483,10 +483,11 @@ fn preferred_range(t: &Tuning) -> f32 {
 }
 
 /// Engagement band around the preferred range: close in beyond `.1`, back off inside `.0`. A
-/// pile driver's carrier fights inside its lunge, no farther off than it carries.
+/// rocket punch's carrier fights inside half its lunge: a full one's flight is long enough for a
+/// target on the move to slip it.
 fn band(t: &Tuning, p: &Policy) -> (f32, f32) {
     if alt_use(t) == AltUse::Melee {
-        let r = preferred_range(t).min(t.alt_lunge);
+        let r = preferred_range(t).min(0.5 * t.alt_lunge);
         return (p.band_near * r, r);
     }
     let r = preferred_range(t);

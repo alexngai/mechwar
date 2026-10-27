@@ -1040,7 +1040,7 @@ function frame(now) {
       blastAt.set(x, y, z);
       fx.explosion(blastAt, 0.4);
       fx.muzzleLight(blastAt);
-      sound.blast(3, blastAt, 0.5);
+      sound.strike(blastAt);
       if (a === myId) {
         hits.push({ at: now, kill: false });
         sound.hitConfirm();
@@ -1118,7 +1118,7 @@ function frame(now) {
   debug.endShells(live);
   fx.projectiles(drawn, dt);
   jets.push(...objectives.exhausts());
-  // Pile drivers' boosters roar through a punch.
+  // Rocket punches' boosters roar through a punch.
   for (const m of [me, ...[...remotes.values()].map((e) => e.mech)]) if (m.jet) jets.push({ x: m.jet.x, y: m.jet.y, z: m.jet.z, big: true });
   sound.exhausts(jets);
   drawOrbs(now, dt, alive, myTeam);
@@ -1228,7 +1228,7 @@ function frame(now) {
   sound.cockpit({
     alive, heat: curr[S.HEAT] / T('heat_max'), overheated: !!curr[S.OVERHEATED],
     hull: curr[S.HEALTH] / T('health_max'), repairing: repairPhase(curr[S.REPAIR_T]), jammed: curr[S.JAMMED] > 0, beaming: !!curr[S.BEAM],
-    // A pile driver's booster spools up like the Gatling's barrels.
+    // A rocket punch's boosters spool up like the Gatling's barrels.
     spin: Math.max(curr[S.SPIN], T('alt_charge_time') > 0 ? curr[S.ALT_CHARGE] : 0), charge: curr[S.CHARGE], incoming,
     lock: curr[S.LOCK] > 0 ? Math.min(curr[S.LOCK_T] / Math.max(T('alt_lock_time'), 1e-6), 1) : 0,
   }, dt);

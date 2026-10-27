@@ -318,7 +318,7 @@ export const CLASSES = { A: WISP, B: LANCER, C: BULWARK };
 // its muzzle, or a raised tube's pivot, `bore`) runs through its class's arm mount, so every
 // weapon on an arm sits at the same height. Any class carries any weapon and at range an arm is a
 // dozen pixels, so each kit leads with one outline no other on its arm shares: a length, a bulk, a
-// drum, a dish, a spike, a box, or a tube raised, lowered or run out the back.
+// drum, a dish, a hammer, a box, or a tube raised, lowered or run out the back.
 const KITS = {
   // Close range: a stubby gun with a long magazine hanging straight down from its receiver.
   stitcher: { home: 'A', build(pod, m) {
@@ -475,23 +475,31 @@ const KITS = {
     put(pod, box(0.22, 0.1, 0.04, m.accent), 0, 1.02, -0.53); // its eye
     return put(pod, new THREE.Object3D(), 0, 0.05, -1.65);
   } },
-  // Melee: a pile driver, a long spike on a ram (`userData.ram`, driven out by `launch`) out of a
-  // housing, under the booster rocket that throws it, whose throat glows as it spools up
-  // (`userData.charge`) and whose bell (`userData.exhaust`) burns through a punch.
+  // Melee: a rocket punch, an impact driver's head far bigger than any gun, a drum with a blunt hex
+  // anvil for a nose, on a ram (`userData.ram`, driven out by `launch`) out of a housing. A booster
+  // rides each flank of the head, its throat glowing as it spools up (`userData.charge`) and its
+  // bell (`userData.exhausts`) burning through a punch.
   piston: { home: 'B', bore: [0, -0.05], build(pod, m) {
-    pod.add(box(0.6, 0.65, 1.3, m.pods)); // housing
-    put(pod, cyl(0.24, 0.24, 0.14, m.hazard), 0, -0.05, -0.68, ALONG_Z); // hazard collar at its mouth
+    pod.add(box(0.75, 0.8, 1.3, m.pods)); // housing
+    put(pod, cyl(0.3, 0.3, 0.14, m.hazard), 0, -0.05, -0.68, ALONG_Z); // hazard collar at its mouth
     const ram = put(pod, new THREE.Group(), 0, -0.05, -0.6);
-    put(ram, cyl(0.12, 0.12, 0.8, m.trim), 0, 0, -0.3, ALONG_Z); // ram rod
-    put(ram, cyl(0.32, 0.32, 0.2, m.barrels), 0, 0, -0.78, ALONG_Z); // ram head
-    put(ram, cyl(0, 0.3, 1.3, m.barrels), 0, 0, -1.53, -ALONG_Z); // spike
-    put(pod, cyl(0.2, 0.2, 1.1, m.trim), 0, 0.5, -0.1, ALONG_Z); // booster motor along the top
-    put(pod, cyl(0.23, 0.23, 0.12, m.hazard), 0, 0.5, -0.55, ALONG_Z); // its band
-    put(pod, cyl(0.3, 0.2, 0.3, m.barrels), 0, 0.5, 0.6, ALONG_Z); // bell, wide at the back
+    put(ram, cyl(0.15, 0.15, 0.8, m.trim), 0, 0, -0.3, ALONG_Z); // ram rod
+    put(ram, cyl(0.5, 0.5, 1.0, m.pods), 0, 0, -1.2, ALONG_Z); // head, 1 m across
+    put(ram, cyl(0.52, 0.52, 0.14, m.hazard), 0, 0, -0.95, ALONG_Z); // its band
+    put(ram, cyl(0.53, 0.53, 0.08, m.trim), 0, 0, -1.5, ALONG_Z); // its ring
+    put(ram, cyl(0.5, 0.4, 0.18, m.trim), 0, 0, -1.79, ALONG_Z); // its face, chamfered
+    put(ram, new THREE.Mesh(new THREE.CylinderGeometry(0.29, 0.29, 0.34, 6), m.barrels), 0, 0, -2.05, ALONG_Z); // hex anvil
     const glow = hot(new THREE.MeshBasicMaterial({ color: COILS_COLD }));
-    put(pod, cyl(0.18, 0.18, 0.05, glow), 0, 0.5, 0.74, ALONG_Z); // its throat
-    Object.assign(pod.userData, { ram, charge: glow, exhaust: put(pod, new THREE.Object3D(), 0, 0.5, 0.8) });
-    return put(ram, new THREE.Object3D(), 0, 0, -2.2);
+    const exhausts = [-1, 1].map((side) => {
+      const x = side * 0.6;
+      put(ram, cyl(0.17, 0.17, 0.65, m.trim), x, 0.1, -1.02, ALONG_Z); // booster
+      put(ram, cyl(0.19, 0.19, 0.09, m.hazard), x, 0.1, -1.15, ALONG_Z); // its band
+      put(ram, cyl(0.23, 0.15, 0.24, m.barrels), x, 0.1, -0.58, ALONG_Z); // bell, wide at the back
+      put(ram, cyl(0.19, 0.19, 0.04, glow), x, 0.1, -0.45, ALONG_Z); // its throat
+      return put(ram, new THREE.Object3D(), x, 0.1, -0.41);
+    });
+    Object.assign(pod.userData, { ram, charge: glow, exhausts });
+    return put(ram, new THREE.Object3D(), 0, 0, -2.22);
   } },
   // Burst: a long-range shot, a slim barrel between two rails that run on past its muzzle, longer
   // than any other weapon, out of a pod under a scope.
@@ -975,8 +983,8 @@ export class Mech {
     }
     if (look) look.opacity = s.cloak * (0.75 + 0.25 * Math.sin(this.t * 6));
 
-    // A pile driver: its booster's throat glows as it spools up, white-hot through a punch, which
-    // burns flame out of the bell (others' punches start with their swing); the ram rides back in.
+    // A rocket punch: its boosters' throats glow as they spool up, white-hot through a punch, which
+    // burns flame out of their bells (others' punches start with their swing); the ram rides back in.
     const kit = this.arms[1].userData, burn = alive ? s.burn ?? 0 : 0;
     this.jet = null;
     if (kit.ram) {
@@ -986,8 +994,9 @@ export class Mech {
       this.ramOut = damp(this.ramOut ?? 0, 0, 5, dt);
       kit.ram.position.z = -0.6 - 0.7 * this.ramOut;
       if (burn > 0 && !look) {
-        this.jet = kit.exhaust.getWorldPosition(new THREE.Vector3());
-        this.fx.thrust(this.jet, flame.set(0, 0, 1).transformDirection(this.arms[1].matrixWorld), 1.2 + burn, dt);
+        flame.set(0, 0, 1).transformDirection(this.arms[1].matrixWorld);
+        for (const bell of kit.exhausts) this.fx.thrust(bell.getWorldPosition(world), flame, 1 + burn, dt);
+        this.jet = kit.ram.getWorldPosition(new THREE.Vector3());
       }
     }
   }
@@ -1034,13 +1043,14 @@ export class Mech {
 
   /** Secondary fire leaving the launcher (or `from`, as in `fire`): a flash and a puff of flame and smoke. */
   launch(from = null) {
-    // A pile driver's booster lights from its bell, back, and drives the ram out.
-    const { exhaust } = this.arms[1].userData;
-    const tip = exhaust ? exhaust.getWorldPosition(world) : from ?? this.launcher.getWorldPosition(world);
-    this.fx.burst(tip, exhaust ? flame.set(0, 0, 1).transformDirection(this.arms[1].matrixWorld) : flame.set(0, 0.3, -1).normalize().applyQuaternion(this.root.quaternion));
-    this.fx.muzzleLight(tip, this.own);
-    Mech.audio?.launch(this.weapons.secondary.sound, this.own ? null : tip);
-    if (exhaust) this.ramOut = 1;
+    // A rocket punch's boosters light from their bells, back, and drive the ram out.
+    const { exhausts } = this.arms[1].userData;
+    const tips = exhausts?.map((bell) => bell.getWorldPosition(new THREE.Vector3())) ?? [from ?? this.launcher.getWorldPosition(world)];
+    const dir = exhausts ? flame.set(0, 0, 1).transformDirection(this.arms[1].matrixWorld) : flame.set(0, 0.3, -1).normalize().applyQuaternion(this.root.quaternion);
+    for (const tip of tips) this.fx.burst(tip, dir);
+    this.fx.muzzleLight(tips[0], this.own);
+    Mech.audio?.launch(this.weapons.secondary.sound, this.own ? null : tips[0]);
+    if (exhausts) this.ramOut = 1;
   }
 
   /**

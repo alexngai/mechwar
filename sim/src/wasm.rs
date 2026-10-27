@@ -350,7 +350,7 @@ impl WasmNetClient {
 
     /// Twenty-three floats per remote mech: id, team, class, feet xyz, yaw, pitch, health, boosting, hovering, bot,
     /// ability on, repairing, primary, secondary, docked (in the hangar: not drawn), shielded, ability (an
-    /// index into weapons.json's abilities), offensive and support item, and a pile driver's wind-up
+    /// index into weapons.json's abilities), offensive and support item, and a rocket punch's wind-up
     /// and booster burn (0-1).
     pub fn remotes(&self, now: f64) -> Vec<f32> {
         let b = |v: bool| if v { 1.0 } else { 0.0 };

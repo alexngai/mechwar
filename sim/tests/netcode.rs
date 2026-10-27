@@ -827,7 +827,7 @@ fn bots_use_secondaries() {
         game.step();
         let snap = game.snapshot(human);
         for e in &snap.events {
-            // A pile driver launches nothing: its strikes count.
+            // A rocket punch launches nothing: its strikes count.
             match *e {
                 Event::Launch(p) => launched[p.class.index()] = true,
                 Event::Strike { owner, .. } => snap.players.iter().filter(|q| q.id == owner).for_each(|q| launched[q.class.index()] = true),

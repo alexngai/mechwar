@@ -382,15 +382,17 @@ export class Sound {
       return;
     }
     if (sound === 'piston') {
-      // Pile driver: its booster lighting, a hard crack and a deep whump into a falling roar (the
-      // exhaust carries the burn on), as the ram thumps out and its latch clacks behind.
-      const out = this.voice(pos, 0.7, undefined, 0.15);
+      // Rocket punch: its boosters lighting, an igniter's crack and a deep thump, then a whoosh
+      // tearing up in pitch over a rough, crackling roar (the exhaust carries the burn on), as
+      // the head thumps out and its latch clacks behind.
+      const out = this.voice(pos, 1.0, undefined, 0.2);
       if (!out) return;
       out.gain.value = pos ? 1.6 : 1.1;
-      this.noise(out, 'white', 'highpass', 2200, 1200, 0.0005, 0.03, 0.7);
-      this.tone(out, 'sine', 110, 45, 0.003, 0.3, 1.0);
-      this.noise(out, 'brown', 'lowpass', 1600, 300, 0.01, 0.45, 0.8);
-      this.noise(out, 'white', 'bandpass', 1400, 500, 0.02, 0.4, 0.4, 0.8);
+      this.noise(out, 'white', 'highpass', 3000, 1500, 0.0005, 0.025, 0.6);
+      this.tone(out, 'sine', 110, 40, 0.003, 0.3, 1.0);
+      this.noise(out, 'white', 'bandpass', 300, 2400, 0.03, 0.55, 0.75, 1.2);
+      this.noise(out, 'brown', 'lowpass', 1800, 250, 0.02, 0.8, 0.9);
+      this.growl(out, 'sawtooth', 62, 44, 520, 0.02, 0.7, 0.3);
       this.tone(out, 'square', 900, 600, 0.001, 0.05, 0.1, 0.1);
       return;
     }
@@ -428,6 +430,22 @@ export class Sound {
     this.noise(out, 'brown', 'lowpass', 900, 90, 0.005, life, Math.min(0.7 + 0.3 * size, 1.3));
     this.tone(out, 'sine', 56, 19, 0.005, life + 0.2, Math.min(0.6 + 0.35 * size, 1.2));
     this.noise(out, 'white', 'lowpass', 2200, 600, 0.002, 0.1, 0.3 * size);
+  }
+
+  /**
+   * A rocket punch landing at `pos`, or a mech it threw slamming into a wall: a heavy, dull thump
+   * and its punch, a crunch of armor and the anvil's short clang, over a low rumble.
+   */
+  strike(pos) {
+    const out = this.voice(pos, 0.7, undefined, 0.25);
+    if (!out) return;
+    out.gain.value = 1.8;
+    this.tone(out, 'sine', 140, 38, 0.002, 0.35, 1.2);
+    this.tone(out, 'triangle', 220, 70, 0.001, 0.08, 0.5);
+    this.noise(out, 'white', 'lowpass', 3000, 400, 0.001, 0.07, 0.6);
+    this.noise(out, 'brown', 'lowpass', 700, 80, 0.004, 0.6, 0.9);
+    this.tone(out, 'square', 610, 590, 0.001, 0.12, 0.05);
+    this.tone(out, 'sine', 1430, 1400, 0.001, 0.2, 0.06);
   }
 
   /**
