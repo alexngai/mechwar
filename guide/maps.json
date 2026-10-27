@@ -671,34 +671,34 @@
       {
         "id": "the-galleries",
         "name": "The Galleries",
-        "text": "Galleries cut into the terraces' edges run beside the Stair's first three flights, with more over the turn at 72 and round the Shaft, and loading docks on Low Town's quay. All stand 8 m over the lane beside them, out of reach of crawlers' blasts and brutes' smashes. The trade-off is sight: a tower has to stand near the edge to see down onto the lane. This is the first flight's, looking down it to Low Town.",
+        "text": "Galleries cut into the terraces' edges run beside the Stair's first three flights, with more over the turn at 72 and round the Shaft, and loading docks on Low Town's quay. All stand 8 m over the lane beside them, out of reach of crawlers' blasts and brutes' smashes. The trade-off is sight: a tower has to stand near the edge to see down onto the lane. This is the third flight's, looking down it to the terrace at 48 and the Shaft.",
         "eye": [
-          8,
-          26.2,
-          -30.1
+          6,
+          73.6,
+          26.3
         ],
         "look": [
-          -20,
-          8,
-          -36
+          -26,
+          52,
+          9
         ],
         "fog": 1.8
       },
       {
         "id": "the-shaft",
         "name": "The Shaft",
-        "text": "On the west flank an old ore lift stands with a 28 m square core, and a 14 m ramp spirals up round it, a storey a side over seven sides. It is wide enough for brutes and bosses, so they come this way as well as by the Stair, and a one-way link at 48 m crosses over to the Stair. Two galleries cut into its walls stand 8 m over the ramp.",
+        "text": "On the west flank an old ore lift stands with a 28 m square core, and a 14 m ramp spirals up round it, a storey a side over seven sides. It is wide enough for brutes and bosses, so they come this way as well as by the Stair, and a one-way link at 48 m crosses over to the Stair. Two galleries cut into its walls stand 8 m over the ramp: the lower runs along the north wall from 32 to 44 m and round onto the east wall, the upper climbs from 80 m to the Crest. Here the upper is at the top, the lower below it, the core on the right.",
         "eye": [
-          -56,
-          50,
-          -42
+          -70,
+          108,
+          10
         ],
         "look": [
-          -121,
-          34,
-          12
+          -116,
+          54,
+          32
         ],
-        "fog": 1.8
+        "fog": 2.4
       },
       {
         "id": "the-warren",
