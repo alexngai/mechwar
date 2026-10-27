@@ -280,6 +280,22 @@ export class Hud {
       g.font = font(13, 'bold');
       g.fillText(`LOCKED ${Math.max(f.lock.left, 0).toFixed(1)} s`, cx, bottom + 56 * u);
     }
+    // A lock-on launcher with no lock: the cone a press searches, dashed round the aim point; a
+    // press that found nothing in it lights it a second and says so.
+    if (f.seeker) {
+      const { x, y } = f.aim ?? { x: cx, y: cy }, missed = f.now - f.seeker.missAt < 1000;
+      g.lineWidth = 1.5 * u;
+      g.strokeStyle = missed ? AMBER : DIM;
+      g.setLineDash([6 * u, 12 * u]);
+      arc(g, x, y, f.seeker.r * cy, 0, TAU);
+      g.setLineDash([]);
+      if (missed) {
+        g.textAlign = 'center';
+        g.fillStyle = AMBER;
+        g.font = font(13, 'bold');
+        g.fillText('NO TARGET', cx, bottom + 56 * u);
+      }
+    }
 
     // --- Reticle at the aim point, with hit markers -----------------------------------------
     if (f.aim) {

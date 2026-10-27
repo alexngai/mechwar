@@ -285,6 +285,7 @@ const LAUNCH_BLEND = 0.15; // s
 let hurt = 0, shake = 0, boostKick = 0, zoomKick = 0, message = '', messageUntil = 0;
 let burstable = false; // an own shell is armed in flight
 let incoming = null; // m to the nearest missile locked on us, or null
+let missAt = -Infinity, auxWas = false; // when an MMB press last found nothing to lock; last tick's MMB
 const BOOST_FOV = 6; // degrees
 // HUD feedback: own hits and kills, where hits on us came from, and when each player last fired.
 const hits = [], damageFrom = [], lastFired = new Map();
@@ -786,6 +787,8 @@ function frame(now) {
     if (ability && curr[S.ABILITY_CD] > prev[S.ABILITY_CD]) me.ability();
     dodge = 0;
     ability = grenade = emp = false;
+    if (aux && !auxWas && T('alt_lock_time') > 0 && !curr[S.LOCK]) missAt = now;
+    auxWas = aux;
     aux = auxHeld;
     acc -= DT;
     // Hitscan pellets, where each stopped against the arena; a tick's are one shot, from one barrel.
@@ -1791,6 +1794,8 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
       left: T('alt_lock_time') + T('alt_lock_hold') - curr[S.LOCK_T], // s the lock holds once made
     } : null,
     seek: curr[S.SEEK] > 0 ? curr[S.SEEK] - 1 : null,
+    // A lock-on launcher with no lock: its cone as a fraction of the half-height, and when a press last found nothing in it.
+    seeker: T('alt_lock_time') > 0 && !curr[S.LOCK] ? { r: Math.tan(THREE.MathUtils.degToRad(T('alt_lock_cone'))) / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)), missAt } : null,
     windup: T('alt_charge_time') > 0 && curr[S.ALT_CHARGE] > 0 ? curr[S.ALT_CHARGE] : T('charge_time') > 0 ? curr[S.CHARGE] : T('spin_up') > 0 ? curr[S.SPIN] : 0,
     // The cone the next shot lands in (base spread plus bloom) as a fraction of the half-height,
     // and a slow primary's refire, 0 to 1 (null for fast guns and spinning ones).
