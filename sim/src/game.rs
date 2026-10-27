@@ -678,7 +678,9 @@ impl Game {
             bot.mates = mates;
             bot.engaged.clone_from(&engaged[team]);
             bot.smoke.clone_from(&self.clouds);
-            bot.domes.clone_from(&self.deployables);
+            bot.team = p.team;
+            bot.shields.clear();
+            bot.shields.extend(self.deployables.iter().filter(|d| matches!(d.kind, Kind::Dome | Kind::Barrier)));
             let focus = bot.perceive(&self.arena, t, &p.mech, &enemies, self.tick);
             radio[team].extend(bot.sightings().map(|(enemy, at)| (id, enemy, at)));
             seen.push((focus, enemies));
@@ -3274,6 +3276,132 @@ mod tests {
             }
         }
         assert!(game.deployables.is_empty(), "the bot left the turret standing");
+    }
+
+    /// A sharp bot with `gun` at z 30 and a human 25 m north of it, standing still, on blockout's
+    /// open west side with their shields down; and a dome or barrier, the human's side's
+    /// (`theirs`) or the bot's, up at `at` for a minute, whole or never to break.
+    fn shielded(gun: &str, kind: Kind, theirs: bool, at: Vector, unbreakable: bool) -> (Game, u8, u8) {
+        let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
+        game.bots = false;
+        let human = game.join().unwrap();
+        let bot = game.add_player(1, Some(Bot::with_skill(3, 0.9)), MechClass::B).unwrap();
+        for (id, pos) in [(human, Vector::new(-40.0, 0.1, 5.0)), (bot, Vector::new(-40.0, 0.1, 30.0))] {
+            game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = pos;
+        }
+        game.pick(bot, MechClass::B, Loadout::named(gun, "rocket"));
+        unshield(&mut game);
+        let owner = if theirs { human } else { bot };
+        let (team, tick) = (game.players.iter().find(|p| p.id == owner).unwrap().team, game.tick);
+        let i = items(&game.arsenal);
+        let hull = if unbreakable { f32::INFINITY } else if kind == Kind::Dome { i.dome_hull } else { i.barrier_hull };
+        game.deployables.push(Deployable { kind, team, owner, pos: at, yaw: 0.0, pitch: 0.0, hull, placed: tick, expires: tick + secs(60.0), ready: 0, burst: 0 });
+        game.arena.set_barriers(items(&game.arsenal), &game.deployables);
+        (game, bot, human)
+    }
+
+    /// Steps `game` `secs_` s with `human` kept whole, counting the shots, launches and throws
+    /// `bot` sent into its own side's dome or barrier.
+    fn wasted(game: &mut Game, bot: u8, human: u8, secs_: f32, mut each: impl FnMut(&Game)) -> u32 {
+        let mut wasted = 0;
+        for _ in 0..secs(secs_) {
+            let (b, h) = (mech(game, bot), mech(game, human));
+            let t = game.arsenal.of(&b);
+            let (eye, chest) = (b.pos + Vector::Y * t.eye_height, h.pos + Vector::Y * (game.arsenal.of(&h).mech_height * 0.5));
+            let ray = Ray::new(eye, (chest - eye).normalize());
+            let walled = deploy::shield(&game.deployables, items(&game.arsenal), &ray, chest.distance(eye)).is_some_and(|d| d.owner == bot);
+            game.step();
+            let b = mech(game, bot);
+            wasted += u32::from(walled && (b.shot || b.launched || b.threw));
+            let max = game.arsenal.of(&mech(game, human)).health_max;
+            game.players.iter_mut().find(|p| p.id == human).unwrap().mech.health = max;
+            each(game);
+        }
+        wasted
+    }
+
+    #[test]
+    fn bots_shoot_into_enemy_domes_and_walk_in() {
+        let dome = Vector::new(-40.0, 0.0, 5.0);
+        // Its shots wear the dome...
+        let (mut game, ..) = shielded("pike", Kind::Dome, true, dome, false);
+        let full = game.deployables[0].hull;
+        for _ in 0..secs(2.0) {
+            game.step();
+        }
+        assert!(game.deployables.first().is_none_or(|d| d.hull < full), "never fired on the dome");
+        // ...and with one that won't break, it walks in to get at the enemy under it.
+        let (mut game, bot, _) = shielded("pike", Kind::Dome, true, dome, true);
+        let r = items(&game.arsenal).dome_radius;
+        let mut inside = false;
+        for _ in 0..secs(8.0) {
+            game.step();
+            inside |= (mech(&game, bot).pos - dome).length() < r;
+        }
+        assert!(inside, "never went under it");
+        assert!(game.tally(bot).unwrap().0.dealt > 0.0, "never hit the enemy under it");
+    }
+
+    #[test]
+    fn bots_step_out_from_under_their_own_dome_to_fire_and_back_in_to_cool() {
+        // A rifle, which runs hot enough to go back in and cool; and a charged gun (let go, it
+        // fires: under the dome, it holds its charge), which doesn't.
+        for (gun, cools) in [("pike", true), ("kiln", false)] {
+            let dome = Vector::new(-40.0, 0.0, 30.0);
+            let (mut game, bot, human) = shielded(gun, Kind::Dome, false, dome, true);
+            let r = items(&game.arsenal).dome_radius;
+            // Out from under it, by its feet, then deep back in.
+            let (mut out, mut back) = (false, false);
+            let wasted = wasted(&mut game, bot, human, 15.0, |game| {
+                let off = (mech(game, bot).pos - dome).length();
+                (out, back) = (out || off > r, back || out && off < 0.5 * r);
+            });
+            let dealt = game.tally(bot).unwrap().0.dealt;
+            assert_eq!(wasted, 0, "{gun}: fired into its own dome");
+            assert!(dealt > 50.0, "{gun}: dealt only {dealt}");
+            assert!(out && (back || !cools), "{gun}: out {out}, back in {back}");
+        }
+    }
+
+    #[test]
+    fn bots_shoot_down_enemy_barriers_and_step_round_their_own() {
+        // The enemy's, across the way between: fired on, and worn.
+        let (mut game, ..) = shielded("pike", Kind::Barrier, true, Vector::new(-40.0, 0.0, 15.0), false);
+        let full = game.deployables[0].hull;
+        for _ in 0..secs(6.0) {
+            game.step();
+        }
+        assert!(game.deployables.first().is_none_or(|d| d.hull < full), "never fired on the barrier");
+        // Its own, just ahead: no fire into it, and round its end to hit.
+        let (mut game, bot, human) = shielded("pike", Kind::Barrier, false, Vector::new(-40.0, 0.0, 26.0), true);
+        let half = 0.5 * items(&game.arsenal).barrier_width;
+        let mut round = false;
+        assert_eq!(wasted(&mut game, bot, human, 8.0, |game| round |= (mech(game, bot).pos.x + 40.0).abs() > half), 0, "fired into its own barrier");
+        assert!(round, "never went round it");
+        assert!(game.tally(bot).unwrap().0.dealt > 50.0, "dealt only {}", game.tally(bot).unwrap().0.dealt);
+        // With the enemy close behind it off past its far end: round that end, the way the line
+        // of fire crosses, not the one it stands nearer.
+        let (mut game, bot, human) = shielded("pike", Kind::Barrier, false, Vector::new(-40.0, 0.0, 26.0), true);
+        for (id, pos) in [(bot, Vector::new(-41.0, 0.1, 29.0)), (human, Vector::new(-34.0, 0.1, 23.0))] {
+            game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = pos;
+        }
+        assert_eq!(wasted(&mut game, bot, human, 3.0, |_| {}), 0, "fired into its own barrier");
+        assert!(game.tally(bot).unwrap().0.dealt > 0.0, "never got a shot past it");
+        // A charged gun mid-charge when its own barrier comes between holds the charge.
+        let (mut game, bot, human) = shielded("kiln", Kind::Barrier, false, Vector::new(40.0, 0.0, -40.0), true);
+        for _ in 0..secs(5.0) {
+            if mech(&game, bot).charge >= 0.5 {
+                break;
+            }
+            game.step();
+        }
+        assert!(mech(&game, bot).charge >= 0.5, "never charged");
+        let (b, h) = (mech(&game, bot).pos, mech(&game, human).pos);
+        let d = h - b;
+        (game.deployables[0].pos, game.deployables[0].yaw) = (Vector::new(b.x + 0.3 * d.x, 0.0, b.z + 0.3 * d.z), libm::atan2f(-d.x, -d.z));
+        game.arena.set_barriers(items(&game.arsenal), &[]);
+        game.arena.set_barriers(items(&game.arsenal), &game.deployables);
+        assert_eq!(wasted(&mut game, bot, human, 1.0, |_| {}), 0, "let its charge go into its own barrier");
     }
 
     #[test]

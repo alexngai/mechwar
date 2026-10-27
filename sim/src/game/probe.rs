@@ -1098,3 +1098,124 @@ fn post_probe() {
         println!("{name:10} fighting {:5.0} bot-s: at a post {:3.0}%, with cover to step out of {:3.0}%, hidden in it {:3.0}%", fighting as f32 / TICK_HZ, pct(posted), pct(covered), pct(hidden));
     }
 }
+
+/// Shield probe: two rifle bots 26 m apart on blockout, with a dome put up around one (or none,
+/// the baseline) or a barrier between them once they've met. Over its life, each side's share of
+/// time standing idle and firing, overall and with only the shield between them, and the hull
+/// worn off it; PROBE_SHOW logs what each bot was doing every third of a second.
+/// PROBE_SEEDS=<n> PROBE_SHOW=1 cargo test -p sim --release --lib shield_probe -- --ignored --nocapture
+#[test]
+#[ignore = "probe"]
+fn shield_probe() {
+    let seeds: u64 = std::env::var("PROBE_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(3);
+    let show = std::env::var("PROBE_SHOW").is_ok();
+    for case in ["none", "dome on A", "dome on B", "barrier"] {
+        // Per side (the shield's own, the other), ticks alive, idle (still and not firing), firing;
+        // and the shield's hull worn off.
+        let (mut alive, mut idle, mut fired, mut worn) = ([0u32; 2], [0u32; 2], [0u32; 2], 0.0);
+        // Ticks where only the shield stands between them (each in the other's clear line but for it).
+        let (mut walled, mut walled_idle, mut walled_fired) = ([0u32; 2], [0u32; 2], [0u32; 2]);
+        for seed in 0..seeds {
+            let t = Tuning::default();
+            let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+            (game.score_limit, game.match_seconds) = (u16::MAX, 1e7);
+            game.bots = false;
+            let human = game.join().unwrap();
+            game.dock(human);
+            let a = game.add_player(0, Some(Bot::new(10 + seed)), MechClass::B).unwrap();
+            let b = game.add_player(1, Some(Bot::new(20 + seed)), MechClass::B).unwrap();
+            let (pa, pb) = (Vector::new(0.0, 0.1, 40.0), Vector::new(0.0, 0.1, 14.0));
+            for (id, pos) in [(a, pa), (b, pb)] {
+                let p = game.players.iter_mut().find(|p| p.id == id).unwrap();
+                (p.mech.pos, p.mech.loadout) = (pos, Loadout::named("pike", "rocket"));
+            }
+            // Let them see each other and start fighting first.
+            for _ in 0..secs(0.4) {
+                game.step();
+            }
+            let at = |game: &Game, id| game.players.iter().find(|p| p.id == id).unwrap().mech.pos;
+            let tick = game.tick;
+            let i = items(&game.arsenal).clone();
+            // B's barrier goes up halfway, across the way to A.
+            let d = at(&game, a) - at(&game, b);
+            let (team, owner, pos, yaw, hull, kind, life) = match case {
+                "none" | "dome on A" => (0, a, at(&game, a), 0.0, i.dome_hull, Kind::Dome, i.dome_seconds),
+                "dome on B" => (1, b, at(&game, b), 0.0, i.dome_hull, Kind::Dome, i.dome_seconds),
+                _ => (1, b, at(&game, b) + d * 0.5, libm::atan2f(-d.x, -d.z), i.barrier_hull, Kind::Barrier, i.barrier_seconds),
+            };
+            let pos = Vector::new(pos.x, 0.0, pos.z);
+            if case != "none" {
+                game.deployables.push(Deployable { kind, team, owner, pos, yaw, pitch: 0.0, hull, placed: tick, expires: tick + secs(life), ready: 0, burst: 0 });
+            }
+            game.arena.set_barriers(&i, &game.deployables);
+            if show {
+                println!("--- {case} seed {seed}: up for {life} s, hull {hull}");
+            }
+            let mut log: BTreeMap<u8, Vec<String>> = BTreeMap::new();
+            for k in 0..secs(life) {
+                let before = [a, b].map(|id| at(&game, id));
+                for p in &mut game.players {
+                    if p.mech.health > 0.0 {
+                        p.mech.health = game.arsenal.of(&p.mech).health_max;
+                    }
+                }
+                let hull_before = game.deployables.iter().find(|d| d.kind == kind).map_or(0.0, |d| d.hull);
+                game.step();
+                worn += hull_before - game.deployables.iter().find(|d| d.kind == kind).map_or(hull_before, |d| d.hull);
+                for (n, id) in [a, b].into_iter().enumerate() {
+                    let p = game.players.iter().find(|p| p.id == id).unwrap();
+                    let bot = p.bot.as_ref().unwrap();
+                    let speed = flat(p.mech.pos - before[n]).length() * TICK_HZ;
+                    let side = usize::from(p.team != team);
+                    let other = game.players.iter().find(|q| q.id == if id == a { b } else { a }).unwrap();
+                    let ts = game.arsenal.of(&p.mech);
+                    let (eye, chest) = (p.mech.pos + Vector::Y * ts.eye_height, other.mech.pos + Vector::Y * (game.arsenal.of(&other.mech).mech_height * 0.5));
+                    let ray = Ray::new(eye, (chest - eye).normalize_or_zero());
+                    let len = chest.distance(eye);
+                    let clear = game.arena.cast_past_barriers(&ray, len).is_none();
+                    let shielded = case != "none" && (deploy::stops(&game.deployables, &i, &ray, len).is_some() || game.arena.cast_ray(&ray, len).is_some());
+                    if p.mech.health > 0.0 && other.mech.health > 0.0 && clear && shielded {
+                        walled[side] += 1;
+                        walled_idle[side] += u32::from(speed < 0.5 && !bot.last.fire);
+                        walled_fired[side] += u32::from(bot.last.fire);
+                    }
+                    if p.mech.health > 0.0 {
+                        alive[side] += 1;
+                        idle[side] += u32::from(speed < 0.5 && !bot.last.fire);
+                        fired[side] += u32::from(bot.last.fire);
+                    }
+                    if k % 10 == 0 {
+                        let inside = flat(p.mech.pos - pos).length() < i.dome_radius;
+                        log.entry(id).or_default().push(format!(
+                            "{:?}{}{}{}{} v{:.0}{}{}",
+                            bot.doing(),
+                            if p.mech.heat >= 0.6 * game.arsenal.of(&p.mech).heat_max { "H" } else { "" },
+                            if bot.post_state().is_some() { "P" } else { "" },
+                            if bot.focus().is_some() { "*" } else { "" },
+                            if kind == Kind::Dome && inside { "(in)" } else { "" },
+                            speed,
+                            if bot.last.fire { " F" } else { "" },
+                            if p.mech.health <= 0.0 { " DEAD" } else { "" },
+                        ));
+                    }
+                }
+            }
+            if show {
+                for (id, l) in log {
+                    println!("  {}: {}", if id == a { "A" } else { "B" }, l.join(" | "));
+                }
+            }
+        }
+        let pct = |n: u32, of: u32| 100.0 * n as f32 / of.max(1) as f32;
+        println!(
+            "{case:10} owner side idle {:3.0}% firing {:3.0}% | other side idle {:3.0}% firing {:3.0}% | hull worn {:.0} per shield",
+            pct(idle[0], alive[0]), pct(fired[0], alive[0]), pct(idle[1], alive[1]), pct(fired[1], alive[1]), worn / seeds as f32
+        );
+        for side in 0..2 {
+            println!(
+                "    {} side, {:.1} s/run with only the shield between: idle {:3.0}%, firing {:3.0}%",
+                ["owner", "other"][side], walled[side] as f32 / TICK_HZ / seeds as f32, pct(walled_idle[side], walled[side]), pct(walled_fired[side], walled[side])
+            );
+        }
+    }
+}

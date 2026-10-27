@@ -261,20 +261,34 @@ pub fn add(list: &mut Vec<Deployable>, d: Deployable) {
 /// How far along `ray` (a unit direction), within `max`, a dome's surface stops a shot: going in
 /// from outside, or out from inside, whoever fired it. A shot that stays inside passes.
 pub fn stops(list: &[Deployable], t: &Tuning, ray: &Ray, max: f32) -> Option<f32> {
+    list.iter().filter(|d| d.kind == Kind::Dome).filter_map(|d| surface(t, d, ray, max)).min_by(f32::total_cmp)
+}
+
+/// How far along `ray` (a unit direction), within `max`, a shot meets dome `d`'s surface.
+fn surface(t: &Tuning, d: &Deployable, ray: &Ray, max: f32) -> Option<f32> {
     let r = t.dome_radius;
-    list.iter()
-        .filter(|d| d.kind == Kind::Dome)
-        .filter_map(|d| {
-            let to = ray.origin - d.pos;
-            let b = to.dot(ray.dir);
-            let disc = b * b - (to.length_squared() - r * r);
-            // Where the line meets the sphere: from outside, the near side; from inside, the far.
-            let inside = to.length_squared() <= r * r;
-            let toi = -b + if inside { 1.0 } else { -1.0 } * disc.max(0.0).sqrt();
-            // Through the dome's upper half (the rest is underground), within reach.
-            (disc >= 0.0 && (0.0..=max).contains(&toi) && ray.point_at(toi).y >= d.pos.y).then_some(toi)
-        })
-        .min_by(f32::total_cmp)
+    let to = ray.origin - d.pos;
+    let b = to.dot(ray.dir);
+    let disc = b * b - (to.length_squared() - r * r);
+    // Where the line meets the sphere: from outside, the near side; from inside, the far.
+    let inside = to.length_squared() <= r * r;
+    let toi = -b + if inside { 1.0 } else { -1.0 } * disc.max(0.0).sqrt();
+    // Through the dome's upper half (the rest is underground), within reach.
+    (disc >= 0.0 && (0.0..=max).contains(&toi) && ray.point_at(toi).y >= d.pos.y).then_some(toi)
+}
+
+/// The dome or barrier in `list` a shot along `ray` (a unit direction) meets first within `max`:
+/// what it stops on, or wears if it's another side's.
+pub fn shield<'a>(list: &'a [Deployable], t: &Tuning, ray: &Ray, max: f32) -> Option<&'a Deployable> {
+    let toi = |d: &Deployable| match d.kind {
+        Kind::Dome => surface(t, d, ray, max),
+        Kind::Barrier => {
+            let wall = d.wall(t);
+            wall.shape().cast_ray(wall.position(), ray, max, true)
+        }
+        _ => None,
+    };
+    list.iter().filter_map(|d| toi(d).map(|at| (d, at))).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(d, _)| d)
 }
 
 impl Arena {
