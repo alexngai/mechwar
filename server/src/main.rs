@@ -1,7 +1,7 @@
 //! Serves the built client, a small lobby API and the game WebSocket on one port. Every room is
 //! its own match on its own 30 Hz loop (a tokio task); each connection gets a reader and a writer
 //! task and joins one room. Env: `PORT` (9001), `STATIC_DIR` (`dist`), `LAG_MS` (one-way delay
-//! for testing), and quick play's room settings: `MODE` (`tdm`, `dm`, `ma`, `siege`, `ctf` or `convoy`; else every mode in turn),
+//! for testing), and quick play's room settings: `MODE` (`tdm`, `dm`, `ma`, `siege`, `ctf`, `convoy` or `defense`; else every versus mode in turn),
 //! `MAP` (one map; else the rotation), `SCORE_LIMIT`, `MATCH_SECONDS`, `BOT_SKILL` (`easy`,
 //! `normal`, `hard`, or 0 to 1). And
 //! `PROGRESS_KEY`, the secret that signs progression records (a dev key stands in without it).
@@ -202,9 +202,9 @@ async fn main() {
         eprintln!("bot spots preloaded for {} of {} maps", sim::tactics::Spots::preload(&bakes), MAPS.len());
     }
 
-    let mut quick = Settings { name: "Quick play".into(), public: true, mode: None, map: None, score_limit: 25, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
+    let mut quick = Settings { name: "Quick play".into(), public: true, mode: None, map: None, score_limit: 20, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
     if let Ok(key) = env::var("MODE") {
-        quick.mode = Some(Mode::from_key(&key).expect("MODE must be tdm, dm, ma, siege, ctf or convoy"));
+        quick.mode = Some(Mode::from_key(&key).expect("MODE must be tdm, dm, ma, siege, ctf, convoy or defense"));
     }
     if let Ok(name) = env::var("MAP") {
         quick.map = Some(Map::index(&name).expect("MAP must name a map in maps/"));
@@ -441,7 +441,8 @@ fn deck(settings: &Settings) -> Vec<(Mode, usize)> {
         Some(map) => vec![map],
         None => ROTATION.iter().map(|name| Map::index(name).expect("rotation names a map")).collect(),
     };
-    let modes = settings.mode.map_or(Mode::ALL.to_vec(), |m| vec![m]);
+    // Co-op only when a room asks for it.
+    let modes = settings.mode.map_or(Mode::ALL.into_iter().filter(|m| m.versus()).collect(), |m| vec![m]);
     modes.iter().flat_map(|&mode| maps.iter().filter(move |&&map| PLAYS[map].contains(&mode)).map(move |&map| (mode, map))).collect()
 }
 
@@ -531,6 +532,8 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
                     game.pick(id, class, loadout);
                 }
                 Cmd::Msg(id, ClientMsg::Name(name)) => game.set_name(id, &name),
+                Cmd::Msg(id, ClientMsg::Build(order)) => game.build(id, order),
+                Cmd::Msg(id, ClientMsg::Draft(choice)) => game.draft(id, choice),
                 // Once a visit: taking another record mid-match would count the match twice.
                 Cmd::Msg(id, ClientMsg::Progress(token)) if !pilots.contains_key(&id) => {
                     let base = signer.verify(&token).unwrap_or_else(|| {
@@ -735,9 +738,13 @@ mod tests {
 
     #[test]
     fn rooms_deal_the_modes_and_maps_their_settings_allow() {
-        let settings = |mode, map: Option<&str>| Settings { name: String::new(), public: true, mode, map: map.map(|m| Map::index(m).unwrap()), score_limit: 25, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
+        let settings = |mode, map: Option<&str>| Settings { name: String::new(), public: true, mode, map: map.map(|m| Map::index(m).unwrap()), score_limit: 20, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
+        // Every map but the co-op one, which comes round only in co-op rooms.
         let every = deck(&settings(None, None));
-        assert_eq!(every.iter().filter(|(m, _)| *m == Mode::TeamDeathmatch).count(), ROTATION.len());
+        assert_eq!(every.iter().filter(|(m, _)| *m == Mode::TeamDeathmatch).count(), ROTATION.len() - 1);
+        assert!(every.iter().all(|&(_, map)| MAPS[map].0 != "hivewall"));
+        let coop: Vec<&str> = deck(&settings(Some(Mode::Defense), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
+        assert_eq!(coop, ["hivewall"]);
         // Deathmatch only on the smaller maps.
         let dm: Vec<&str> = deck(&settings(Some(Mode::Deathmatch), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
         assert_eq!(dm, ["isotope", "verdigris", "sump", "sinkhole", "ziggurat"]);
@@ -791,7 +798,7 @@ mod tests {
     /// bringing `record`: the room's task, the way to send it the player's messages (with their
     /// id), and what it sends them.
     async fn join_room(key: &[u8], match_seconds: f32, record: &str) -> (tokio::task::JoinHandle<()>, impl Fn(ClientMsg) + use<>, mpsc::UnboundedReceiver<(Instant, Vec<u8>)>) {
-        let settings = Settings { name: "Test".into(), public: false, mode: Some(Mode::TeamDeathmatch), map: None, score_limit: 25, match_seconds, bots: false, bot_skill: 0.5 };
+        let settings = Settings { name: "Test".into(), public: false, mode: Some(Mode::TeamDeathmatch), map: None, score_limit: 20, match_seconds, bots: false, bot_skill: 0.5 };
         let game = new_game(&settings, 1);
         let info = Arc::new(Mutex::new(describe("TEST", &settings, &game)));
         let (cmds, cmd_rx) = mpsc::unbounded_channel();

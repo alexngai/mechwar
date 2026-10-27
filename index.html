@@ -30,6 +30,15 @@
     #score .pip { display: inline-block; min-width: 20px; padding: 0 5px; border: 2px solid currentColor; border-radius: 3px; font-size: 15px; line-height: 20px; }
     #score .pip.contested { animation: blink 0.5s steps(2) infinite; }
     #score .track { position: relative; display: inline-block; width: 240px; height: 6px; background: #ffffff24; }
+    #draft { position: fixed; z-index: 2; bottom: 210px; left: 50%; transform: translateX(-50%); width: min(720px, calc(100vw - 32px)); padding: 8px 12px 10px; background: #000c; border: 1px solid #ffffff1c; border-radius: 4px; pointer-events: none; color: #e8edf2; }
+    #draft .head { font-size: 11px; letter-spacing: 2px; color: #a9b3bd; text-align: center; }
+    #draft .cards { display: flex; gap: 8px; margin-top: 6px; }
+    #draft .card { flex: 1; padding: 6px 8px; border: 1px solid #ffffff2a; border-radius: 3px; }
+    #draft .card.rare { border-color: #ff9a3c; }
+    #draft .card b { display: block; font-size: 13px; letter-spacing: 1px; color: var(--us); }
+    #draft .card.rare b { color: #ffb066; }
+    #draft .card span { font-size: 11px; color: #c7cfd6; }
+    #draft .mine { margin-top: 6px; font-size: 10px; letter-spacing: 1px; color: #8d969e; text-align: center; }
     #score .track i { position: absolute; top: -5px; width: 2px; height: 16px; margin-left: -1px; background: #ffffff70; }
     #score .track b { position: absolute; top: 50%; transform: translate(-50%, -52%); font-size: 18px; line-height: 1; }
     #score .track b.contested { animation: blink 0.5s steps(2) infinite; }
@@ -232,6 +241,7 @@
   <div id="stats" hidden></div>
   <pre id="debug-log" hidden></pre>
   <div id="score"></div>
+  <div id="draft" hidden></div>
   <div id="board" hidden></div>
   <div id="banner"></div>
   <div id="killcam" hidden></div>
