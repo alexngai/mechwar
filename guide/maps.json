@@ -716,5 +716,112 @@
         ]
       }
     ]
+  },
+  "walled": {
+    "blurb": "A walled city stacked 100 m deep on both sides of a gorge at dusk, crossed by the city itself at every height. Old money lives in warm plaster and lantern light on the west side; the east is tenements, neon and fluorescent tubes.",
+    "hero": {
+      "eye": [
+        -20,
+        165,
+        -122
+      ],
+      "look": [
+        0,
+        40,
+        30
+      ]
+    },
+    "spots": [
+      {
+        "id": "the-well",
+        "name": "The Wall and its Well",
+        "text": "The city spans the gorge at its middle around a well 32 m square, open from the canal to the sky, with galleries looking down it from every level. In Missile Assault silo B is on the canal at its foot, between two blocks moored for cover.",
+        "eye": [
+          -12,
+          5,
+          -2
+        ],
+        "look": [
+          2,
+          80,
+          8
+        ]
+      },
+      {
+        "id": "the-x",
+        "name": "The X",
+        "text": "Two enclosed blocks cross the gorge diagonally at level 3 and meet in the middle, with the Wall ahead split warm and cold down the gorge. Bridge blocks cross at other heights, and footbridges at odd angles at levels 6 and 8.",
+        "eye": [
+          0,
+          41,
+          72
+        ],
+        "look": [
+          0,
+          36,
+          -20
+        ]
+      },
+      {
+        "id": "the-canal",
+        "name": "The Canal",
+        "text": "Black water on the gorge floor, under every crossing, with boats moored as cover. Dock stairs climb both faces to the low bridges at level 1, and a pad mid-canal on each side throws you up onto the galleries by the Wall at level 2.",
+        "eye": [
+          4,
+          8,
+          44
+        ],
+        "look": [
+          -12,
+          6,
+          100
+        ]
+      },
+      {
+        "id": "the-monorail",
+        "name": "The Monorail",
+        "text": "A ring at level 5 round the whole city, jogging out to its outer wall and back so no stretch runs long, and crossing the gorge in enclosed bridges at both ends. Each base is on it, and in Convoy the hauler runs along its south side.",
+        "eye": [
+          -120,
+          65,
+          -118
+        ],
+        "look": [
+          -60,
+          61,
+          -120
+        ]
+      },
+      {
+        "id": "spawn-halls",
+        "name": "The Spawn Halls",
+        "text": "Each team spawns at level 4 in a hall of pillars, red lacquer in the west and rusted in the east, under the monorail, with its base guns covering it. In Capture the Flag its flag stand is 60 m on toward the gorge, where the hall's ways out meet.",
+        "eye": [
+          -150,
+          52,
+          -20
+        ],
+        "look": [
+          -100,
+          50,
+          30
+        ]
+      },
+      {
+        "id": "the-roofs",
+        "name": "The Roofs",
+        "text": "Walkable roofs at level 8 between towers rising to 128 m, cluttered with sheds, tanks, poles and cables: lantern strings in the west, washing and neon billboards in the east. Low parapets give cover from one roof to the next.",
+        "eye": [
+          -60,
+          104,
+          40
+        ],
+        "look": [
+          -100,
+          100,
+          70
+        ]
+      }
+    ]
   }
 }

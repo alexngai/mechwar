@@ -5,7 +5,7 @@
 // The north half (z > 0), the east district (straddling z = 0) and the center are authored here;
 // `write` (maps/kit.mjs) adds the 180-degree twin. Metrics as Foundry's: alleys and gates 9-10 m,
 // 6.5 m under every deck and street bridge, ramps near 23 degrees, 3 m hover ledges.
-import { bases, box, flagStand, flags, growth, lamp, once, pad, point, railing, ramp, sentries, sign, silos, write } from './kit.mjs';
+import { bases, box, deathmatch, flagStand, flags, growth, lamp, once, pad, point, railing, ramp, sentries, sign, silos, write } from './kit.mjs';
 
 const GREEN = '#3dff8a', TEAL = '#3de0ff', MAGENTA = '#ff4fd8';
 
@@ -145,6 +145,7 @@ silos({ at: [-65, 0, 8], radius: 10, band: 4, pad: [-67.5, 0, 8] }, { at: [0, 0,
 
 // --- Spawns, twin, write ---------------------------------------------------------------------------
 const north = [[-22, 0.1, 78], [-12, 0.1, 82], [12, 0.1, 82], [22, 0.1, 78]];
+deathmatch([-62, 0.1, 16], [76, 0.1, 47], [0, 0.1, 14], [-80, 0.1, 62]); // Deathmatch's own, out between the bases
 const palette = {
   sky: { horizon: '#1d3327', zenith: '#030907', sun: '#9fd0b4', stars: 0.25 },
   fog: [35, 165],

@@ -105,6 +105,8 @@ pub struct NetClient {
     /// Server time minus local time in ms, as seen by snapshot arrivals.
     clock_offset: Option<f64>,
     synced: bool,
+    /// The predicted position before the snapshots taken in since the last `settle`, if any.
+    unsettled: Option<Vector>,
 }
 
 impl Default for NetClient {
@@ -143,14 +145,34 @@ impl Default for NetClient {
             snapshots: VecDeque::new(),
             clock_offset: None,
             synced: false,
+            unsettled: None,
         }
     }
 }
 
 impl NetClient {
+    /// Replays the inputs the server hasn't seen onto its newest state, once for however many
+    /// snapshots came in since: replaying per snapshot made a backlog arriving at once (after a
+    /// stalled link) cost its length squared, and the client fell further behind as it worked.
+    pub fn settle(&mut self) {
+        let Some(predicted) = self.unsettled.take() else { return };
+        for (_, input, _) in self.pending.clone() {
+            self.predict(&input);
+        }
+        // The server clears a limpet that burst after its inputs (as `fly_own` does here), so
+        // the replay may have restored one that's gone.
+        self.mech.limpet &= self.projectiles.iter().any(|p| projectile::item(p) == Some(Item::Limpet));
+        let jump = predicted - self.mech.pos;
+        self.correction = if self.synced { jump.length() } else { 0.0 };
+        // Smooth small corrections (bumps); jump straight across teleports like respawns.
+        self.render_offset = if self.synced && jump.length() < 3.0 { self.render_offset + jump } else { Vector::ZERO };
+        self.synced = true;
+    }
+
     /// Predicts one tick and returns the message to send. Until the first snapshot the mech
     /// is a dead default, so prediction is a no-op and the server's state takes over.
     pub fn tick(&mut self, input: Input, now_ms: f64) -> Vec<u8> {
+        self.settle();
         self.seq += 1;
         self.predict(&input);
         // Only the first prediction of an input fires; reconciliation replays never do.
@@ -393,21 +415,10 @@ impl NetClient {
                     (p.id, p.team, Mech { class: p.class, loadout: p.loadout, pos: p.view.pos, health: p.view.health, repair_time, ability_time, ..Mech::default() })
                 })
                 .collect();
-            // Reconcile: take the server's state at ack_seq and replay what it hasn't seen yet.
-            let predicted = self.mech.pos;
+            // Reconcile: take the server's state at ack_seq; `settle` replays what it hasn't seen yet.
+            self.unsettled.get_or_insert(self.mech.pos);
             self.mech = s.me;
             (self.class, self.loadout) = (me.class, me.loadout);
-            for (_, input, _) in self.pending.clone() {
-                self.predict(&input);
-            }
-            // The server clears a limpet that burst after its inputs (as `fly_own` does here), so
-            // the replay may have restored one that's gone.
-            self.mech.limpet &= self.projectiles.iter().any(|p| projectile::item(p) == Some(Item::Limpet));
-            let jump = predicted - self.mech.pos;
-            self.correction = if self.synced { jump.length() } else { 0.0 };
-            // Smooth small corrections (bumps); jump straight across teleports like respawns.
-            self.render_offset = if self.synced && jump.length() < 3.0 { self.render_offset + jump } else { Vector::ZERO };
-            self.synced = true;
             self.kills = me.kills;
             self.deaths = me.deaths;
             self.team = me.team;
@@ -466,6 +477,7 @@ impl NetClient {
     /// Projectiles to draw now: own ones as predicted, everyone else's replayed at `render_tick`.
     /// Also releases held Blasts whose tick render time has reached.
     pub fn projectiles(&mut self, now_ms: f64) -> Vec<Drawn> {
+        self.settle();
         let at = self.render_tick(now_ms);
         let (blasts, replays) = (&mut self.blasts, &mut self.replays);
         self.held.retain(|&(tick, id, radius, pos, charge)| {

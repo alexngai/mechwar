@@ -6,7 +6,7 @@ use rapier3d::prelude::{ColliderBuilder, Rotation, Vector};
 use serde::Deserialize;
 
 /// Compiled-in maps. The index is what goes over the wire.
-pub const MAPS: [(&str, &str); 12] = [
+pub const MAPS: [(&str, &str); 13] = [
     ("isotope", include_str!("../../maps/isotope.json")),
     ("blockout", include_str!("../../maps/blockout.json")),
     ("foundry", include_str!("../../maps/foundry.json")),
@@ -18,13 +18,14 @@ pub const MAPS: [(&str, &str); 12] = [
     ("crashsite", include_str!("../../maps/crashsite.json")),
     ("ziggurat", include_str!("../../maps/ziggurat.json")),
     ("span", include_str!("../../maps/span.json")),
+    ("walled", include_str!("../../maps/walled.json")),
     ("hivewall", include_str!("../../maps/hivewall.json")),
 ];
 /// Foundry.
 pub const DEFAULT: usize = 2;
 /// Maps the server rotates through between matches (blockout is a test map; the modes a map plays
 /// pick from these, so a co-op map only comes round in co-op).
-pub const ROTATION: [&str; 11] = ["foundry", "isotope", "verdigris", "riftline", "sump", "sinkhole", "canopy", "crashsite", "ziggurat", "span", "hivewall"];
+pub const ROTATION: [&str; 12] = ["foundry", "isotope", "verdigris", "riftline", "sump", "sinkhole", "canopy", "crashsite", "ziggurat", "span", "walled", "hivewall"];
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct Solid {
@@ -155,6 +156,9 @@ pub struct Map {
     pub solids: Vec<Solid>,
     /// Feet positions per team, one per slot.
     pub spawns: [Vec<[f32; 3]>; 2],
+    /// Deathmatch's spawns beyond the teams' (it uses both); the team modes never spawn here.
+    #[serde(default)]
+    pub dm_spawns: Vec<[f32; 3]>,
     /// Bot waypoints; `bot::Nav` generates the edges by walking between them.
     pub nav: Vec<[f32; 3]>,
     #[serde(default)]
@@ -210,7 +214,7 @@ mod tests {
         let n = (size / cell) as usize + 1;
         let at = |i: usize| i as f32 * cell - size / 2.0;
         let heights = (0..n).map(|r| (0..n).map(|c| height(at(c), at(r))).collect()).collect();
-        Map { name: "hills".into(), solids: vec![], spawns: [vec![], vec![]], nav: vec![], pads: vec![], size: [size, size], terrain: Some(Terrain { cell, heights }), objectives: Objectives::default() }
+        Map { name: "hills".into(), solids: vec![], spawns: [vec![], vec![]], dm_spawns: vec![], nav: vec![], pads: vec![], size: [size, size], terrain: Some(Terrain { cell, heights }), objectives: Objectives::default() }
     }
 
     /// The ground at (x, z) on the triangles `Terrain` documents (maps/kit.mjs's `heightAt`).

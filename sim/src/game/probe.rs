@@ -1,7 +1,7 @@
 //! Stuck probe: bot-only matches on every map, logging each bot that stays within 2 m for 5 s or
 //! more, sorted by why (pushing but not moving, repairing, perched, or standing about), and the
 //! share of bot time spent so. A diagnostic, not a check (`--ignored`):
-//! PROBE_MAP=<name> PROBE_SECS=<s> PROBE_SEEDS=<n> PROBE_SHOW=<kind|all|none> \
+//! PROBE_MAP=<name> PROBE_MODE=<key> PROBE_SECS=<s> PROBE_SEEDS=<n> PROBE_SHOW=<kind|all|none> \
 //!   cargo test -p sim --release --lib stuck_probe -- --ignored --nocapture
 
 use std::collections::BTreeMap;
@@ -30,6 +30,9 @@ fn stuck_probe() {
         let mut kinds: BTreeMap<&str, f32> = BTreeMap::new();
         for seed in 0..seeds {
             let mut game = Game::new(Tuning::default(), index);
+            if let Some(mode) = std::env::var("PROBE_MODE").ok().and_then(|m| Mode::from_key(&m)) {
+                game.mode = mode;
+            }
             (game.score_limit, game.match_seconds, game.tick) = (u16::MAX, 1e7, seed as u32 * 7919);
             let human = game.join().unwrap();
             game.dock(human);

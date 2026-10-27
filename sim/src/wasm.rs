@@ -464,7 +464,8 @@ impl WasmNetClient {
     }
 
     /// `mech_state` plus the render offset (3 floats) that smooths corrections.
-    pub fn state(&self) -> Vec<f32> {
+    pub fn state(&mut self) -> Vec<f32> {
+        self.0.settle();
         let mut state = mech_state(&self.0.mech);
         state.extend(self.0.render_offset.to_array());
         state

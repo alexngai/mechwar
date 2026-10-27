@@ -203,6 +203,26 @@
     #room-row[hidden] { display: none; }
     #room-row b { color: #ffc46a; letter-spacing: 3px; }
     #help { position: fixed; left: 16px; top: 40px; padding: 6px 10px; background: #0009; pointer-events: none; max-width: calc(100vw - 300px); }
+    /* The splash (splash.js): the map's picture drifting in behind its name and the mode's rules. */
+    #splash { position: fixed; inset: 0; z-index: 3; overflow: hidden; background: #0a0d10; cursor: pointer; transition: opacity 0.5s; }
+    #splash[hidden] { display: none; }
+    #splash.out { opacity: 0; pointer-events: none; }
+    #splash::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, #0a0d10f2, #0a0d10b8 40%, transparent 75%), linear-gradient(transparent 50%, #0a0d10d8); }
+    #splash img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; animation: drift 9s ease-out both; }
+    #splash .info { position: absolute; z-index: 1; left: max(16px, 6vw); bottom: 14vh; box-sizing: border-box; width: min(560px, calc(100% - 32px)); padding: 20px 24px; background: rgba(10, 13, 16, 0.72); border: 1px solid #fff2; }
+    #splash small { font-size: 13px; letter-spacing: 5px; color: #ffc46a; }
+    #splash h1 { margin: 6px 0 12px; font-size: clamp(34px, 7vw, 72px); line-height: 1; letter-spacing: 0.14em; color: #fff; text-shadow: 0 2px 18px #000; }
+    #splash .blurb { margin: 0; font-size: 13px; line-height: 1.55; opacity: 0.75; }
+    #splash .mode { margin-top: 20px; padding-top: 16px; border-top: 1px solid #ffc46a55; font-size: 14px; line-height: 1.5; }
+    #splash .mode p { margin: 0 0 8px; color: #fff; }
+    #splash ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 5px; }
+    #splash li { padding-left: 18px; text-indent: -18px; opacity: 0.9; }
+    #splash li::before { content: '▸'; display: inline-block; width: 18px; text-indent: 0; color: #7fe0ff; }
+    #splash .go { position: absolute; z-index: 1; left: 50%; bottom: 28px; transform: translateX(-50%); font-size: 11px; letter-spacing: 3px; white-space: nowrap; opacity: 0.6; }
+    #splash .go i { display: block; height: 1px; margin-top: 8px; background: #7fe0ff; animation: wait linear both; }
+    @keyframes drift { from { transform: scale(1.12); } }
+    @keyframes wait { to { transform: scaleX(0); } }
+    @media (prefers-reduced-motion: reduce) { #splash img { animation: none; } }
     body.locked #help { display: none; }
   </style>
 </head>
@@ -245,6 +265,7 @@
     <div id="menu-body"></div>
   </div>
   <div id="lobby" hidden></div>
+  <div id="splash" hidden></div>
   <script type="module" src="/web/entry.js"></script>
 </body>
 </html>
