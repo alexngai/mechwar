@@ -7,7 +7,8 @@
 //! `PROGRESS_KEY`, the secret that signs progression records (a dev key stands in without it).
 //!
 //! Lobby API: `GET /api/rooms` lists the public rooms, the modes and the maps; `POST /api/rooms` opens one
-//! from JSON settings; `POST /api/quick` picks a quick-play room (opening one if none fits);
+//! from JSON settings; `POST /api/quick` picks a quick-play room (opening one if none fits), or
+//! with `{"coop": true}` a co-op one, since co-op is matched on its own;
 //! `GET /api/rooms/{code}` looks one up. Each room answers with its info, including the `code`
 //! that `/ws?room={code}` joins (`/ws` alone joins quick play). `POST /api/progress` checks a
 //! progression record (the body) and answers what it holds, or 400.
@@ -311,9 +312,17 @@ async fn create(State(app): State<App>, Json(new): Json<NewRoom>) -> Result<Json
     Ok(Json(rooms[&code].info.lock().expect("info lock").clone()))
 }
 
-async fn quick_play(State(app): State<App>) -> Result<Json<RoomInfo>, (StatusCode, &'static str)> {
+/// What the lobby's play buttons ask for: quick play, or co-op.
+#[derive(Deserialize)]
+struct Quick {
+    #[serde(default)]
+    coop: bool,
+}
+
+async fn quick_play(State(app): State<App>, Json(quick): Json<Quick>) -> Result<Json<RoomInfo>, (StatusCode, &'static str)> {
+    let settings = if quick.coop { Settings { name: "Co-op".into(), mode: Some(Mode::Defense), map: None, ..(*app.quick).clone() } } else { (*app.quick).clone() };
     let mut rooms = app.rooms.lock().expect("rooms lock");
-    let code = quick_room(&app, &mut rooms).ok_or((StatusCode::SERVICE_UNAVAILABLE, "too many rooms open"))?;
+    let code = quick_room(&app, &mut rooms, settings).ok_or((StatusCode::SERVICE_UNAVAILABLE, "too many rooms open"))?;
     Ok(Json(rooms[&code].info.lock().expect("info lock").clone()))
 }
 
@@ -332,7 +341,7 @@ async fn upgrade(ws: WebSocketUpgrade, Query(join): Query<Join>, State(app): Sta
         let mut rooms = app.rooms.lock().expect("rooms lock");
         let code = match join.room {
             Some(code) => Some(code.to_uppercase()).filter(|c| rooms.contains_key(c)),
-            None => quick_room(&app, &mut rooms),
+            None => quick_room(&app, &mut rooms, (*app.quick).clone()),
         };
         match code {
             Some(code) => rooms[&code].cmds.clone(),
@@ -362,20 +371,23 @@ fn infos(rooms: &Rooms) -> Vec<RoomInfo> {
     rooms.lock().expect("rooms lock").values().map(|r| r.info.lock().expect("info lock").clone()).collect()
 }
 
-/// The code of the room quick play joins: the public one with the most humans that has space
-/// for one more and enough of its match left (or is between matches), else a new one.
-fn quick_room(app: &App, rooms: &mut HashMap<String, Room>) -> Option<String> {
+/// The code of the room quick play (or co-op, by `settings`) joins: the public one of its kind with
+/// the most humans that has space for one more and enough of its match left (or is between
+/// matches), else a new one with `settings`.
+fn quick_room(app: &App, rooms: &mut HashMap<String, Room>, settings: Settings) -> Option<String> {
     let open_rooms: Vec<RoomInfo> = rooms.values().map(|r| r.info.lock().expect("info lock").clone()).collect();
-    match pick_quick(&open_rooms) {
+    match pick_quick(&open_rooms, settings.mode == Some(Mode::Defense)) {
         Some(code) => Some(code.to_string()),
-        None => open(app, rooms, (*app.quick).clone()),
+        None => open(app, rooms, settings),
     }
 }
 
-fn pick_quick(rooms: &[RoomInfo]) -> Option<&str> {
+/// Co-op rooms only for co-op, and versus ones only for quick play. A co-op run has no clock.
+fn pick_quick(rooms: &[RoomInfo], coop: bool) -> Option<&str> {
     rooms
         .iter()
-        .filter(|r| r.public && r.humans < r.capacity && (r.ended || r.seconds_left >= QUICK_MIN_LEFT))
+        .filter(|r| (r.mode == Mode::Defense.key()) == coop)
+        .filter(|r| r.public && r.humans < r.capacity && (r.ended || coop || r.seconds_left >= QUICK_MIN_LEFT))
         .max_by(|a, b| a.humans.cmp(&b.humans).then_with(|| b.code.cmp(&a.code)))
         .map(|r| r.code.as_str())
 }
@@ -462,7 +474,8 @@ fn describe(code: &str, settings: &Settings, game: &Game) -> RoomInfo {
         humans,
         bots,
         capacity: MAX_PLAYERS,
-        seconds_left: state.seconds_left,
+        // While the spawns are penned, the clock is the wait: the match's own is still to come.
+        seconds_left: if state.staging { state.seconds_left.saturating_add(game.match_seconds as u16) } else { state.seconds_left },
         ended: state.ended,
         scores: state.scores,
     }
@@ -703,9 +716,20 @@ mod tests {
             room("EEEE", true, 7, 60, false),   // about to end
             room("FFFF", true, 6, 0, true),     // between matches: fine
         ];
-        assert_eq!(pick_quick(&rooms), Some("FFFF"));
-        assert_eq!(pick_quick(&rooms[..2]), Some("BBBB"));
-        assert_eq!(pick_quick(&rooms[2..5]), None);
+        assert_eq!(pick_quick(&rooms, false), Some("FFFF"));
+        assert_eq!(pick_quick(&rooms[..2], false), Some("BBBB"));
+        assert_eq!(pick_quick(&rooms[2..5], false), None);
+        // Co-op is matched apart: quick play never lands in a co-op run, and co-op only in one.
+        let coop = |code, humans| RoomInfo { mode: Mode::Defense.key(), ..room(code, true, humans, 0, false) };
+        let rooms = [room("AAAA", true, 2, 400, false), coop("BBBB", 5), coop("CCCC", 3)];
+        assert_eq!(pick_quick(&rooms, false), Some("AAAA"));
+        assert_eq!(pick_quick(&rooms, true), Some("BBBB"));
+        assert_eq!(pick_quick(&rooms[..1], true), None);
+        // A room just opened, its spawns still penned, has its whole match to come.
+        let settings = Settings { name: "Test".into(), public: true, mode: Some(Mode::TeamDeathmatch), map: None, score_limit: 20, match_seconds: 600.0, bots: false, bot_skill: 0.5 };
+        let game = new_game(&settings, 1);
+        assert!(game.match_state().staging);
+        assert_eq!(pick_quick(&[describe("NEW", &settings, &game)], false), Some("NEW"));
     }
 
     #[test]

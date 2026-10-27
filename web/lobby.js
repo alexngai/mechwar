@@ -1,4 +1,4 @@
-// The landing page: quick play, the public games, opening a game (public or private) and joining
+// The landing page: quick play, co-op, the public games, opening a game (public or private) and joining
 // one by code. Rooms live on the server (`/api/...`, see server/src/main.rs); picking one loads
 // the game for it at `/?room=CODE`. The 3D game itself never loads here, only the hangar
 // backdrop behind the page (backdrop.js). It also shows the pilot's progression record (see
@@ -36,7 +36,8 @@ lobby.innerHTML = `
   <div class="hero">
     <h1>MECHWAR</h1>
     <label class="row">CALLSIGN <input id="lobby-callsign" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Pilot"></label>
-    <button id="quick">QUICK PLAY</button>
+    <button id="quick" class="play">QUICK PLAY</button>
+    <button id="coop" class="play">CO-OP DEFENSE</button>
     <div id="lobby-note"></div>
     <p class="hint">New here? The <a href="/guide/">field guide</a> covers the mechs, weapons, modes and maps.</p>
     <a id="more" href="#below">MORE<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M5 9l7 7 7-7" fill="none" stroke="currentColor" stroke-width="2"/></svg></a>
@@ -175,7 +176,7 @@ async function refresh() {
     ? lobbyState.rooms.map((r) => `<tr>
         <td>${esc(r.name)}</td><td>${esc(modeNames[r.mode] ?? r.mode)} · ${esc(mapNames[r.map] ?? r.map)}</td>
         <td>${r.humans}/${r.capacity} pilots${r.bots ? ` · ${r.bots} bots` : ''}</td>
-        <td>${r.ended ? 'between matches' : `${clock(r.seconds_left)} left · ${r.mode === 'dm' ? `leader ${r.scores[0]} pts` : `${r.scores[0]}–${r.scores[1]}`}`}</td>
+        <td>${r.ended ? 'between matches' : r.mode === 'defense' ? `wave ${r.scores[1]} · reactor ${r.scores[0]}` : `${clock(r.seconds_left)} left · ${r.mode === 'dm' ? `leader ${r.scores[0]} pts` : `${r.scores[0]}–${r.scores[1]}`}`}</td>
         <td><button data-code="${esc(r.code)}">JOIN</button></td></tr>`).join('')
     : '<tr><td>No listed games right now: quick play opens one.</td></tr>';
 }
@@ -183,15 +184,18 @@ $('games').addEventListener('click', (e) => { const code = e.target.closest('but
 refresh();
 setInterval(refresh, 3000);
 
-// Quick play can take a few seconds (the server may be waking up): the button spins until the
-// game's page takes over, and is itself again if Back restores this page.
-const quick = $('quick');
-const searching = (on) => { quick.disabled = on; quick.textContent = on ? 'FINDING A GAME' : 'QUICK PLAY'; };
-addEventListener('pageshow', () => searching(false));
-quick.addEventListener('click', async () => {
-  searching(true);
-  try { go((await api('/api/quick', {})).code); } catch (e) { searching(false); note(`Couldn't find a game: ${e.message}`); }
-});
+// Quick play (versus) and co-op are matched apart. Either can take a few seconds (the server may
+// be waking up): its button spins until the game's page takes over, and is itself again if Back
+// restores this page.
+for (const [id, label, coop] of [['quick', 'QUICK PLAY', false], ['coop', 'CO-OP DEFENSE', true]]) {
+  const button = $(id);
+  const searching = (on) => { button.disabled = on; button.textContent = on ? 'FINDING A GAME' : label; };
+  addEventListener('pageshow', () => searching(false));
+  button.addEventListener('click', async () => {
+    searching(true);
+    try { go((await api('/api/quick', { coop })).code); } catch (e) { searching(false); note(`Couldn't find a game: ${e.message}`); }
+  });
+}
 $('create').addEventListener('click', async () => {
   const skill = $('new-skill').value;
   const settings = {
