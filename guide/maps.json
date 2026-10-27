@@ -621,7 +621,7 @@
     ]
   },
   "hivewall": {
-    "blurb": "A mining colony carved into a cliff over a canyon and taken by the Bloom, a glowing orange fungus. Three mine mouths on the canyon floor feed three climbs, 96 m up to the reactor on the Crest.",
+    "blurb": "A mining colony carved into a cliff over a canyon and taken by the Bloom, a glowing orange fungus. Three mine mouths on the canyon floor feed three climbs, 96 m up to the reactor on the Crest. Galleries and docks cut 8 m over the lanes give towers high ground.",
     "hero": {
       "eye": [
         45,
@@ -655,7 +655,7 @@
       {
         "id": "the-stair",
         "name": "The Stair",
-        "text": "The main lane: four 14 m wide flights switch back up the middle of the face, 23 degrees each, with a terrace at 24, 48 and 72 m between them and the last flight onto the Crest. Towers go on the terraces and beside the landings, and a chain of jump pads takes pilots from Low Town up the face to the Crest.",
+        "text": "The main lane: four 14 m wide flights switch back up the middle of the face, 23 degrees each, with a terrace at 24, 48 and 72 m between them and the last flight onto the Crest. Towers go on the terraces, beside the landings and on the galleries cut beside the first three flights, and a chain of jump pads takes pilots from Low Town up the face to the Crest.",
         "eye": [
           38,
           28,
@@ -669,9 +669,25 @@
         "fog": 1.5
       },
       {
+        "id": "the-galleries",
+        "name": "The Galleries",
+        "text": "Galleries cut into the terraces' edges run beside the Stair's first three flights, with more over the turn at 72 and round the Shaft, and loading docks on Low Town's quay. All stand 8 m over the lane beside them, out of reach of crawlers' blasts and brutes' smashes. The trade-off is sight: a tower has to stand near the edge to see down onto the lane. This is the first flight's, looking down it to Low Town.",
+        "eye": [
+          8,
+          26.2,
+          -30.1
+        ],
+        "look": [
+          -20,
+          8,
+          -36
+        ],
+        "fog": 1.8
+      },
+      {
         "id": "the-shaft",
         "name": "The Shaft",
-        "text": "On the west flank an old ore lift stands with a 28 m square core, and a 14 m ramp spirals up round it, a storey a side over seven sides. It is wide enough for brutes and bosses, so they come this way as well as by the Stair, and a one-way link at 48 m crosses over to the Stair.",
+        "text": "On the west flank an old ore lift stands with a 28 m square core, and a 14 m ramp spirals up round it, a storey a side over seven sides. It is wide enough for brutes and bosses, so they come this way as well as by the Stair, and a one-way link at 48 m crosses over to the Stair. Two galleries cut into its walls stand 8 m over the ramp.",
         "eye": [
           -56,
           50,

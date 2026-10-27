@@ -278,6 +278,7 @@ async function modes() {
       <ul class="rules">
         <li>B opens the build menu, 1–4 pick a tower and the left button puts it down where you aim; a ghost shows green where it fits, or red with the reason. It needs flat ground with headroom, within ${C.REACH} m of you, ${C.LANE_CLEAR} m off any lane, and clear of other towers and the reactor.</li>
         <li>U raises the tower you aim at a tier, anyone's, up to tier ${C.TIERS}: more hull, reach and fire rate, for ${pct(C.UPGRADE)} of its price at tier 1 and ${pct(2 * C.UPGRADE)} at tier 2. X sells your own for ${pct(C.REFUND)} of what you put into it. The ${link('mender')} mends towers and the reactor.</li>
+        <li>High ground matters: a tower 5 m or more above a lane is out of crawlers' and brutes' reach.</li>
       </ul>
       ${table(['TOWER', 'PRICE', 'WHAT IT DOES'], [
         ['MG tower', C.PRICES[0], `Fast fire at single targets, ${C.TOWER_MG_POWER} times the ${link('mg_turret')}'s damage to the hive`],
