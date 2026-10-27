@@ -1129,7 +1129,8 @@ impl Game {
         self.deployables.clear();
         self.arena.set_barriers(items(&self.arsenal), &[]);
         self.phase = match self.mode {
-            Mode::Deathmatch => Phase::Playing { started_at: self.tick },
+            // (Co-op opens with its own break to get ready in, building.)
+            Mode::Deathmatch | Mode::Defense => Phase::Playing { started_at: self.tick },
             _ if self.staging_seconds <= 0.0 => Phase::Playing { started_at: self.tick },
             _ => Phase::Staging { until: self.tick + secs(self.staging_seconds) },
         };
@@ -2900,10 +2901,12 @@ mod tests {
         for p in game.players.iter().filter(|p| p.bot.is_some()) {
             assert!(p.mech.pos.distance(waited[&p.id]) > 5.0, "{} stayed put", p.name);
         }
-        // Deathmatch plays at once.
-        game.set_mode(Mode::Deathmatch);
-        game.start_match();
-        assert!(!game.match_state().staging && !game.arena.penned);
+        // Deathmatch plays at once, and so does co-op (it has its own break to build in).
+        for mode in [Mode::Deathmatch, Mode::Defense] {
+            game.set_mode(mode);
+            game.start_match();
+            assert!(!game.match_state().staging && !game.arena.penned, "{mode:?}");
+        }
     }
 
     #[test]
