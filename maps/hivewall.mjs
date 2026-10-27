@@ -19,8 +19,11 @@
 //   between landing rooms, in off Low Town by a tunnel; narrow, so brutes and bosses keep off it.
 // The side gates' walkers may take the street to the Stair's foot instead; the Shaft's lane crosses
 // to the Stair at 48, the Stair's to the Warren at 24, and the Warren's back to the Stair at 72 (one
-// way each, so no lane loops). Metrics as the other maps': 9 m+ over wide lanes, 6.5 m+ over
-// anything mechs walk, ramps near 23 degrees.
+// way each, so no lane loops). Overlooks, where towers stand 8 m over a lane, out of crawlers' and
+// brutes' reach and seeing over what walks it: a gallery cut in the terrace's edge along each of the
+// first three flights (and one in the Crest's corner over the turn at 72), two round the Shaft's
+// walls, and docks on the quay by two of the mine ramps. Metrics as the other maps': 9 m+ over wide
+// lanes, 6.5 m+ over anything mechs walk, ramps near 23 degrees.
 import { beam, box, coopOnly, cylinder, decor, defense, furnace, lamp, pad, pipe, point, r3, railing, sign, slope, solids, turned, write } from './kit.mjs';
 
 const SIZE = [300, 220];
@@ -28,6 +31,9 @@ const WORK = -12, CREST = 84;
 const BACK = -100, QUAY = -68, FACE = -45, STREET = -57; // the far wall, Low Town's two edges, its street
 const GATES = [-100, -35, 67], MOUTH = 8; // the mine mouths (under the Shaft, the Stair, the Warren), and half of one's width
 const BLOOM = '#ff7a1a', SICK = '#ffb347', COLD = '#7fe0ff', RED = '#ff3a2a';
+// The overlooks (the docks, galleries and ledges below) stand this high over the lanes beside them:
+// out of reach of crawlers' blasts and brutes' fists, and over the heads of what walks the lane.
+const LIFT = 8;
 
 /** A box between two corners in plan, from y0 to y1. */
 const block = (x0, z0, x1, z1, y0, y1, mat = 'concrete') => box([x0, y0, z0], [x1, y1, z1], mat);
@@ -90,38 +96,84 @@ for (const g of GATES) {
 
 // --- Low Town and the Stack's footing ------------------------------------------------------------------
 block(-150, QUAY, 150, 110, WORK, 0, 'ground');
+// Loading docks on the quay, LIFT high, beside the ramps up from the Stair's mine mouth (west of it)
+// and the Warren's (east): towers on one look down the ramp and the mouth, and along the street.
+// Each a slab from 15 to 25 m off the ramp's lane, a ramp up onto it from further along the quay.
+const DOCKS = [[GATES[1], -1], [GATES[2], 1]], DOCK = [15, 25, r3(25 + (56 * LIFT) / 24)], DZ = [QUAY, -62.5];
+/** Whether x is along the quay where a dock (and its ramp) stands, `pad` m round it. */
+const docked = (x, pad = 0) => DOCKS.some(([g, side]) => (x - g) * side > DOCK[0] - pad && (x - g) * side < DOCK[2] + pad);
+for (const [g, side] of DOCKS) {
+  block(Math.min(g + side * DOCK[0], g + side * DOCK[1]), DZ[0], Math.max(g + side * DOCK[0], g + side * DOCK[1]), DZ[1], 0, LIFT, 'concrete');
+  wedge([g + side * DOCK[2], 0, (DZ[0] + DZ[1]) / 2], [g + side * DOCK[1], LIFT, (DZ[0] + DZ[1]) / 2], DZ[1] - DZ[0], 0, 'metal');
+}
 
 // --- The Stair: four flights up the face's middle, terraces between ---------------------------------
 // Flight k runs along z = FLIGHTS[k], 14 m wide, from landing to landing: x = +-28 at its ends, the
 // landings (14 m) out to +-42, the lane down their middles (x = +-35).
 const FLIGHTS = [-38, -10, 18, 46];
+// Galleries: a strip of the terrace on each flight's uphill side, GW deep, cut down to LIFT over the
+// flight: flat over the landing at the flight's foot, then up along the flight, LIFT over it all the
+// way, to meet the terrace's top. Pilots walk down into one off the terrace and build looking down
+// onto the flight.
+const GW = 6;
+/**
+ * Flight `k`'s gallery: the flight's foot at (x0, y0), climbing toward `dir` (+-1 in x), the terrace
+ * it's cut from `top` high and reaching to x = `to`. Where it meets the terrace's top, from its foot.
+ */
+function gallery(k, [x0, y0], dir, top, to, mat) {
+  const [z0, z1] = [FLIGHTS[k] + 7, FLIGHTS[k] + 7 + GW], zc = (z0 + z1) / 2, y = y0 + LIFT;
+  const xj = r3(x0 + (dir * (top - y) * 56) / 24);
+  const span = (a, b, y1, m = mat) => block(Math.min(a, b), z0, Math.max(a, b), z1, 0, y1, m);
+  span(x0 - dir * 14, x0, y); // over the landing
+  wedge([x0, y, zc], [xj, top, zc], GW, 0, 'concrete');
+  span(x0, xj, y); // under it (a tilted slab's end leaves a gap under its foot)
+  span(xj, to, top); // the rest of the strip, at the terrace's height
+  return xj;
+}
+const GJ = [];
 {
   block(-86, FACE, -42, -31, 0, 24, 'tower'); // the terrace at 24's west wing, over Low Town
-  block(-86, -31, 28, -17, 0, 24, 'tower'); // the terrace at 24
+  block(-86, -31, -42, -17, 0, 24, 'tower'); // the terrace at 24, its gallery cut out of its edge
+  block(-42, -25, 28, -17, 0, 24, 'tower');
+  GJ.push(gallery(0, [-28, 0], 1, 24, 28, 'tower'));
   wedge([-28, 0, FLIGHTS[0]], [28, 24, FLIGHTS[0]], 14, 0); // flight 1: 0 -> 24, west to east
   block(28, FACE, 42, -3, 0, 24); // the east landing at 24
   block(-28, -17, 28, -3, 0, 24);
   wedge([28, 24, FLIGHTS[1]], [-28, 48, FLIGHTS[1]], 14, 24); // flight 2: 24 -> 48
   block(-42, -17, -28, 25, 0, 48); // the west landing at 48
-  block(-93, -17, -42, 39, 0, 48, 'tower'); // the terrace at 48's west wing, to the Shaft
-  block(-28, -3, 42, 11, 0, 48, 'tower'); // the terrace at 48
+  // The terrace at 48's west wing, to the Shaft, a gallery cut in its edge over the Shaft (see there).
+  block(-87, -17, -42, 39, 0, 48, 'tower');
+  block(-28, 3, 42, 11, 0, 48, 'tower'); // the terrace at 48, and its gallery
+  GJ.push(gallery(1, [28, 24], -1, 48, -28, 'tower'));
   block(-28, 11, 28, 25, 0, 48);
   wedge([-28, 48, FLIGHTS[2]], [28, 72, FLIGHTS[2]], 14, 48); // flight 3: 48 -> 72
   block(28, 11, 42, 53, 0, 72); // the east landing at 72
-  block(-42, 25, 28, 39, 0, 72, 'tower'); // the terrace at 72
+  block(-42, 31, 28, 39, 0, 72, 'tower'); // the terrace at 72, and its gallery
+  GJ.push(gallery(2, [-28, 48], 1, 72, 28, 'tower'));
   block(0, 39, 28, 53, 0, 72);
   wedge([28, 72, FLIGHTS[3]], [0, CREST, FLIGHTS[3]], 14, 72); // flight 4: 72 -> the Crest, a storey
 }
 
 // --- The Crest ---------------------------------------------------------------------------------------
-block(-150, 39, 0, 110, 0, CREST, 'rock'); // west, over the Shaft and the Stair's top
+// West, over the Shaft and the Stair's top, the Shaft's galleries cut in its face (see there).
+block(-150, 45, 0, 110, 0, CREST, 'rock');
+block(-87, 39, 0, 45, 0, CREST, 'rock');
 block(0, 53, 150, 110, 0, CREST, 'rock');
-block(42, 34, 150, 53, 0, CREST, 'rock');
+// East, over the Stair's turn at 72, a gallery cut in its corner: LIFT over the landing and the strip,
+// up beside the landing to the Crest's top (the Warren's lane out passes north of it).
+const TURN = [42, 48, 34, 41, r3(41 + (56 * (CREST - 72 - LIFT)) / 24)]; // x0, x1, z0, its ramp's foot, top
+block(TURN[1], 34, 150, 53, 0, CREST, 'rock');
+block(TURN[0], TURN[2], TURN[1], TURN[3], 0, 72 + LIFT, 'rock');
+wedge([45, 72 + LIFT, TURN[3]], [45, CREST, TURN[4]], TURN[1] - TURN[0], 0, 'concrete');
+block(TURN[0], TURN[3], TURN[1], TURN[4], 0, 72 + LIFT, 'rock');
+block(TURN[0], TURN[4], TURN[1], 53, 0, CREST, 'rock');
 
 // --- The Shaft: the ore lift's core, a ramp round it from Low Town to the Crest ----------------------
 // Corners SE at 0 (the foot, off Low Town), SW 12, NW 24, NE 36, SE 48, SW 60, NW 72, NE 84 (the
 // top, onto the Crest), each a 14 m landing; the sides between, ramps 28 m long.
 const HC = [-121, 11], CORE = 14, LR = 21;
+const EAST_LEDGE = 6.333; // where the ramp up the east side, from 36, passes 44
+const SHAFT_UP = -135 + (28 * (CREST - 72 - LIFT)) / 12; // where the upper gallery meets the Crest's top
 const CORNERS = [[1, -1], [-1, -1], [-1, 1], [1, 1]]; // SE, SW, NW, NE
 const corner = (k) => [HC[0] + CORNERS[k % 4][0] * LR, 12 * k, HC[1] + CORNERS[k % 4][1] * LR];
 {
@@ -146,6 +198,21 @@ const corner = (k) => [HC[0] + CORNERS[k % 4][0] * LR, 12 * k, HC[1] + CORNERS[k
   }
   block(HC[0] - 18, HC[1] - 18, HC[0] + 18, HC[1] + 18, 96, 97.5, 'rust'); // the headframe's cap
   cylinder([HC[0] - 9, 104, HC[1]], [HC[0] + 9, 104, HC[1]], 6.5, 'rust'); // its wheel
+  // Galleries cut in the walls round it, GW deep, LIFT over the ramps and corners beside them. The
+  // lower, in the north wall (the Crest's face) from over the corner at 24, up beside the ramp to
+  // over the corner at 36, round it and along the east wall (the terrace at 48's west wing) at 44, to
+  // meet the ramp on from 36 where that passes 44: walked onto off it there. The upper, over the
+  // corner at 72, up beside the ramp on from it to meet the Crest's top: walked down into off the Crest.
+  const [z0, z1] = [HC[1] + 28, HC[1] + 28 + GW], zc = (z0 + z1) / 2;
+  block(-150, z0, -135, z1, 0, 24 + LIFT, 'rock');
+  wedge([-135, 24 + LIFT, zc], [-107, 36 + LIFT, zc], GW, 0, 'metal');
+  block(-135, z0, -107, z1, 0, 24 + LIFT, 'rock');
+  block(-107, z0, -87, z1, 0, 36 + LIFT, 'rock');
+  block(-93, EAST_LEDGE, -87, z0, 0, 36 + LIFT, 'tower');
+  block(-93, -17, -87, EAST_LEDGE, 0, 48, 'tower');
+  block(-150, z0, SHAFT_UP, z1, 54, 72 + LIFT, 'rock'); // over the lower, under the upper
+  wedge([-135, 72 + LIFT, zc], [SHAFT_UP, CREST, zc], GW, 54, 'metal');
+  block(SHAFT_UP, z0, -87, z1, 54, CREST, 'rock');
 }
 
 // --- The west: the Shaft's foot, a block to 12 beside it ----------------------------------------------
@@ -340,16 +407,26 @@ const rail = (a, b) => railing(a.map(r3), b.map(r3));
     for (const [z0, z1] of [[-50.5, -46], [-67, -62.5]]) {
     for (let x = -146; x < 146; x += r(9, 14)) {
       const p = [x, 0, (z0 + z1) / 2];
-      if (!offLanes(p, 2.5, 5.4) || !roomy(x, 0, p[2], 3)) continue;
+      if (!offLanes(p, 2.5, 5.4) || !roomy(x, 0, p[2], 3) || (z0 < -60 && docked(x, 3))) continue;
       const [w, d] = [r(3, 5), z1 - z0];
       block(x - w / 2, z0, x + w / 2, z1, 0, r(2.6, 3.4), r() < 0.5 ? 'rust' : 'panel');
       decor.push({ kind: 'slab', from: [r3(x - w / 2 - 0.6), 3.5, r3(Math.min(z0, z1) - 1)], to: [r3(x + w / 2 + 0.6), 3.7, r3(Math.max(z0, z1) + 0.4)], mat: AWNINGS[Math.floor(r() * 3)] });
       if (r() < 0.6) sign([r3(x - 1.5), 4, r3(z0 < -60 ? z0 - 0.1 : z1 - 0.15)], [r3(x + 1.5), 5.2, r3(z0 < -60 ? z0 : z1 - 0.05)], [r3(x), 3, r3((z0 + z1) / 2 + (z0 < -60 ? 2 : -3))], NEON[Math.floor(r() * NEON.length)]);
     }
   }
-  for (let x = -140; x <= 140; x += 28) lamp([x, 0, -63.5]);
-  for (let x = -146; x <= 146; x += r(6, 12)) if (GATES.every((g) => Math.abs(x - g) > 9)) fungus(x, 0, QUAY + r(1, 3), r(1, 2.5));
-  [-150, ...GATES.flatMap((g) => [g - 7, g + 7]), 150].forEach((x, k, xs) => k % 2 === 0 && rail([x, 0, QUAY + 0.3], [xs[k + 1], 0, QUAY + 0.3]));
+  for (let x = -140; x <= 140; x += 28) if (!docked(x, 1)) lamp([x, 0, -63.5]);
+  for (let x = -146; x <= 146; x += r(6, 12)) if (GATES.every((g) => Math.abs(x - g) > 9) && !docked(x, 2)) fungus(x, 0, QUAY + r(1, 3), r(1, 2.5));
+  const ends = DOCKS.flatMap(([g, side]) => [g + side * DOCK[0], g + side * DOCK[2]]);
+  [-150, ...[...GATES.flatMap((g) => [g - 7, g + 7]), ...ends].sort((a, b) => a - b), 150].forEach((x, k, xs) => k % 2 === 0 && rail([x, 0, QUAY + 0.3], [xs[k + 1], 0, QUAY + 0.3]));
+  // The docks: rails round their tops and up their ramps' sides, a lamp, a sign, the Bloom at the foot.
+  for (const [g, side] of DOCKS) {
+    const [a, b, c] = DOCK.map((d) => r3(g + side * d));
+    for (const z of [DZ[0] + 0.3, DZ[1] - 0.3]) rail([a, LIFT, z], [b, LIFT, z]), rail([b, LIFT, z], [c, 0, z]);
+    rail([a - side * 0.3, LIFT, DZ[0]], [a - side * 0.3, LIFT, DZ[1]]);
+    lamp([r3(g + side * 23.5), LIFT, -63.5]);
+    sign([Math.min(a, b) + 2, 2.5, DZ[1] + 0.05], [Math.max(a, b) - 2, 4, DZ[1] + 0.15], [r3((a + b) / 2), 3, -59], side < 0 ? SICK : COLD);
+    fungus(r3(g + side * 14), 0, -64, 1.5);
+  }
   // Signs up the Stack's foot: the colony's name over the Stair, the Warren's tunnel marked, the
   // Shaft's foot, warnings where the Bloom came up.
   sign([-24, 9, FACE - 0.15], [-6, 12, FACE - 0.05], [-15, 8, FACE - 6], SICK);
@@ -363,14 +440,16 @@ const rail = (a, b) => railing(a.map(r3), b.map(r3));
   // The terraces: water tanks along their back walls, rails along their drops, lamps; the Bloom in
   // the corners, thinning as it climbs.
   const r = rng(37);
-  for (const [x0, x1, z, y] of [[-80, 20, -20, 24], [-80, -50, -42, 24], [48, 146, -20, 24], [-88, -50, 34, 48], [-20, 34, 8, 48], [-36, 20, 36, 72], [-144, -120, -20, 12]]) {
+  for (const [x0, x1, z, y] of [[-80, 20, -20, 24], [-80, -50, -42, 24], [48, 146, -20, 24], [-82, -50, 34, 48], [-20, 34, 8, 48], [-36, 20, 36, 72], [-144, -120, -20, 12]]) {
     for (let x = x0; x <= x1; x += r(14, 22)) tank(r3(x), y, z, r3(r(1.8, 2.6)), r3(r(4, 6.5)));
   }
-  for (const [x0, x1, z, y] of [[-86, 28, -31, 24], [-86, -42, FACE, 24], [42, 150, FACE, 24], [-28, 42, -3, 48], [-150, -114, FACE, 12], [-42, 28, 25, 72]]) rail([x0, y, z + 0.3], [x1, y, z + 0.3]);
-  for (const [x, y, z] of [[-60, 24, -24], [-20, 24, -24], [10, 24, -24], [-70, 24, -40], [60, 24, -26], [100, 24, -26], [140, 24, -30], [-80, 48, 10], [-60, 48, 30], [0, 48, 2], [-20, 72, 32], [56, 72, 20], [-130, 12, -30], [-108, 0, -30], [-92, 0, -30]]) {
+  for (const [x0, x1, z, y] of [[-86, -42, -31, 24], [GJ[0], 28, -31, 24], [-42, GJ[0], -25, 24], [-86, -42, FACE, 24], [42, 150, FACE, 24], [-28, GJ[1], -3, 48], [GJ[1], 42, 3, 48], [-150, -114, FACE, 12], [GJ[2], 28, 25, 72], [-42, GJ[2], 31, 72]]) {
+    rail([x0, y, z + 0.3], [x1, y, z + 0.3]);
+  }
+  for (const [x, y, z] of [[-60, 24, -24], [-20, 24, -22], [10, 24, -24], [-70, 24, -40], [60, 24, -26], [100, 24, -26], [140, 24, -30], [-80, 48, 10], [-60, 48, 30], [0, 48, 6], [-20, 72, 34], [56, 72, 20], [-130, 12, -30], [-108, 0, -30], [-92, 0, -30]]) {
     if (offLanes([x, y, z], 0.5, 4)) lamp([x, y, z]);
   }
-  for (const [x0, x1, z0, z1, y, n] of [[-86, 28, -30, -18, 24, 6], [-86, -42, -44, -32, 24, 4], [44, 148, -44, -18, 24, 7], [-92, -44, -16, 38, 48, 4], [-26, 40, -2, 10, 48, 2], [-40, 26, 26, 38, 72, 1], [-148, -116, -44, -18, 12, 4], [-112, -88, -44, -18, 0, 6]]) {
+  for (const [x0, x1, z0, z1, y, n] of [[-86, 28, -24, -18, 24, 6], [-86, -42, -44, -32, 24, 4], [44, 148, -44, -18, 24, 7], [-86, -44, -16, 38, 48, 4], [-26, 40, 4, 10, 48, 2], [-40, 26, 32, 38, 72, 1], [-148, -116, -44, -18, 12, 4], [-112, -88, -44, -18, 0, 6]]) {
     for (let k = 0; k < n; k++) fungus(r(x0, x1), y, r(z0, z1), r(1, 2.6));
   }
   // The Shaft's foot round its core, and the Warren's rooms: dark, and thick with it.
@@ -380,9 +459,10 @@ const rail = (a, b) => railing(a.map(r3), b.map(r3));
   for (let k = 0; k < 6; k++) fungus(67, 0, r(-44, -18), r(1, 2));
 }
 {
-  // Balconies and pipes on the terraces' faces, high over what's under them.
+  // Balconies and pipes on the terraces' faces, high over what's under them (not over the flights,
+  // where the galleries look out).
   const r = rng(53);
-  for (const [x0, x1, z, y0, y1, side] of [[-80, -45, FACE, 6, 20, -1], [-26, 20, -31, 10, 20, -1], [46, 146, FACE, 8, 20, -1], [-90, -46, -17, 32, 44, -1], [-26, 36, -3, 34, 44, -1], [-40, 20, 25, 58, 68, -1], [-146, -118, FACE, 7, 9, -1]]) {
+  for (const [x0, x1, z, y0, y1, side] of [[-80, -45, FACE, 6, 20, -1], [46, 146, FACE, 8, 20, -1], [-90, -46, -17, 32, 44, -1], [-146, -118, FACE, 7, 9, -1]]) {
     for (let x = x0 + r(0, 6); x < x1 - 4; x += r(10, 18)) {
       const y = r3(r(y0, y1)), w = r(3, 6);
       const arcs = PADS.every(([a, b]) => {
@@ -418,10 +498,11 @@ const rail = (a, b) => railing(a.map(r3), b.map(r3));
   }
   for (const [x, z] of [[-30, 70], [30, 70], [-14, 92], [14, 92], [-70, 70], [70, 70], [-110, 90], [110, 90]]) if (offLanes([x, CREST, z], 0.5, 4)) lamp([x, CREST, z]);
   rail([0, CREST, 53.3], [42, CREST, 53.3]);
-  rail([-150, CREST, 39.3], [-107, CREST, 39.3]);
+  rail([-150, CREST, 45.3], [SHAFT_UP, CREST, 45.3]);
+  rail([SHAFT_UP, CREST, 39.3], [-107, CREST, 39.3]);
   rail([-93, CREST, 39.3], [0, CREST, 39.3]);
-  rail([42, CREST, 34.3], [62, CREST, 34.3]);
-  for (let k = 0; k < 5; k++) fungus(r(-140, -110), CREST, r(42, 60), r(0.8, 1.6)); // creeping over the lip
+  rail([TURN[1], CREST, 34.3], [62, CREST, 34.3]);
+  for (let k = 0; k < 5; k++) fungus(r(-140, -110), CREST, r(47, 60), r(0.8, 1.6)); // creeping over the lip
   // The plant's sheds along the Crest's back, their vents steaming.
   for (const [x0, x1] of [[-140, -100], [-84, -50], [36, 70], [92, 140]]) {
     const z0 = r(100, 103);
@@ -445,6 +526,44 @@ const rail = (a, b) => railing(a.map(r3), b.map(r3));
   for (const n of [12, 36, 60]) sign([65, n + 10.6, 28], [81, n + 10.85, 30], [73, n + 6, 29], COLD);
   sign([64, 10.6, -38], [70, 10.85, -36], [67, 6, -37], COLD); // the tunnel
   sign([64, 10.6, -24], [70, 10.85, -22], [67, 6, -23], BLOOM);
+}
+{
+  // The overlooks: rails along their drops (props: a rail stops no shot), a lamp at each, pipes up
+  // the galleries' back walls, the Bloom at their low ends.
+  const r = rng(61);
+  [[-28, 0, 1, 24], [28, 24, -1, 48], [-28, 48, 1, 72]].forEach(([x0, y0, dir, top], k) => {
+    const [z, back, y] = [FLIGHTS[k] + 7.3, FLIGHTS[k] + 6.6 + GW, y0 + LIFT];
+    rail([x0 - dir * 14, y, z], [x0, y, z]);
+    rail([x0, y, z], [GJ[k], top, z]);
+    lamp([x0 - dir * 12, y, FLIGHTS[k] + 11]);
+    lamp([r3(x0 + dir * 20), r3(y + (20 * 24) / 56), FLIGHTS[k] + 11]);
+    pipe([x0 - dir * 6, y, back], [x0 - dir * 6, top + 2, back], 0.35);
+    pipe([x0 - dir * 14, y + 5, back], [x0 + dir * 4, y + 5, back], 0.25);
+    for (let n = 0; n < 3 - k; n++) fungus(x0 - dir * r(2, 12), y, FLIGHTS[k] + r(10, 12), r(0.8, 1.8));
+  });
+  rail([-42.3, 24, -31], [-42.3, 24, -25]); // the terrace at 24 over its gallery's end
+  rail([-41.7, 48 + LIFT, 25], [-41.7, 48 + LIFT, 31]); // the gallery at 56 over the terrace at 48's wing
+  // The gallery over the turn at 72, and the Crest round it.
+  rail([TURN[0] + 0.3, 72 + LIFT, TURN[2]], [TURN[0] + 0.3, 72 + LIFT, TURN[3]]);
+  rail([TURN[0] + 0.3, 72 + LIFT, TURN[3]], [TURN[0] + 0.3, CREST, TURN[4]]);
+  rail([TURN[0], 72 + LIFT, TURN[2] + 0.3], [TURN[1], 72 + LIFT, TURN[2] + 0.3]);
+  rail([TURN[1] + 0.3, CREST, TURN[2]], [TURN[1] + 0.3, CREST, TURN[4]]);
+  lamp([46.5, 72 + LIFT, 39.5]);
+  pipe([47.6, 72 + LIFT, 36], [47.6, CREST + 2, 36], 0.35);
+  // The Shaft's: the lower along the north wall and round onto the east, the upper.
+  const z = HC[1] + 28.3;
+  rail([-150, 24 + LIFT, z], [-135, 24 + LIFT, z]);
+  rail([-135, 24 + LIFT, z], [-107, 36 + LIFT, z]);
+  rail([-107, 36 + LIFT, z], [-93, 36 + LIFT, z]);
+  rail([-92.7, 36 + LIFT, 39], [-92.7, 36 + LIFT, EAST_LEDGE]);
+  rail([-86.7, 48, 39], [-86.7, 48, EAST_LEDGE]); // the wing over it
+  rail([-150, 72 + LIFT, z], [-135, 72 + LIFT, z]);
+  rail([-135, 72 + LIFT, z], [SHAFT_UP, CREST, z]);
+  for (const [x, y, zz] of [[-148, 24 + LIFT, 44], [-90, 36 + LIFT, 43], [-89, 36 + LIFT, 14], [-148, 72 + LIFT, 44]]) lamp([x, y, zz]);
+  for (const [x, y, zz, rad] of [[-146, 24, 42.5, 2], [-140, 24, 43.5, 1.4], [-100, 36, 43, 1], [-90, 36, 22, 1.2], [-144, 72, 43, 1]]) fungus(x, y + LIFT, zz, rad);
+  // The block at 12's edge over the Shaft's foot.
+  rail([-114.3, 12, FACE], [-114.3, 12, -17]);
+  lamp([-117, 12, -43]);
 }
 {
   // The Workings: ore carts on the floor, and the Bloom over everything down here.
@@ -482,16 +601,32 @@ grid(-148, -66, 148, -47, 0, 16); // Low Town
 grid(-148, -43, -116, -19, 12); // the block at 12 by the Shaft
 grid(-112, -43, -88, -19, 0); // the Shaft's foot
 grid(-84, -43, -44, -33, 24); // the terrace at 24
-grid(-84, -29, 26, -19, 24);
+grid(-84, -25, 26, -19, 24);
 grid(44, -43, 148, -19, 24); // the east ledge at 24
-grid(-91, -15, -44, 37, 48); // the terrace at 48
-grid(-26, -1, 40, 9, 48);
-grid(-40, 27, 26, 37, 72); // the terrace at 72
+grid(-85, -15, -44, 37, 48); // the terrace at 48
+grid(-26, 4, 40, 10, 48);
+grid(-40, 31, 26, 37, 72); // the terrace at 72
 grid(44, -15, 60, 32, 72); // the strip
 grid(-148, 41, -2, 108, CREST, 18); // the Crest
 grid(-2, 55, 148, 108, CREST, 18);
 grid(44, 36, 148, 53, CREST, 18);
 grid(86, -15, 148, 34, CREST, 18);
+// The overlooks: along each gallery 2 m in from its edge, over its landing and up along its flight;
+// along the Shaft's ledges, and on its ramps by where each meets them.
+[[-28, 0, 1], [28, 24, -1], [-28, 48, 1]].forEach(([x0, y0, dir], k) => {
+  const z = FLIGHTS[k] + 9;
+  for (const t of [-10, -4]) point([x0 + dir * t, y0 + LIFT, z]);
+  for (let t = 6; t < Math.abs(GJ[k] - x0) - 2; t += 9) point([x0 + dir * t, r3(y0 + LIFT + (t * 24) / 56), z]);
+});
+point([44, 72 + LIFT, 36], [44, 72 + LIFT, 39.5], [44, r3(72 + LIFT + (5 * 24) / 56), 46]); // over the turn at 72
+for (const y of [24, 72]) {
+  for (const x of [-145, -139]) point([x, y + LIFT, 41]);
+  for (let x = -131; x < (y < 72 ? -107 : -127); x += 9) point([x, r3(y + LIFT + ((x + 135) * 12) / 28), 41]);
+}
+for (const z of [41, 33, 24, 15]) point([z > 39 ? -99 : -91, 36 + LIFT, z]);
+point([-97, r3(36 + ((25 - 5) * 12) / 28), 5]); // on the ramp, by where the lower gallery meets it
+for (const z of [-41, -31, -21]) point([-116.5, 12, z]); // the block at 12's edge, over the Shaft's foot
+for (const [g, side] of DOCKS) point([g + side * 17, LIFT, -66], [g + side * 22, LIFT, -64.5], [g + side * 34, r3(((DOCK[2] - 34) * LIFT) / (DOCK[2] - DOCK[1])), -65.25]);
 // Round the Shaft's core at its foot.
 for (const p of [[-100, 0, 4], [-100, 0, 20], [-100, 0, 32], [-121, 0, 32], [-142, 0, 32], [-142, 0, 15], [-142, 0, -6]]) point(p);
 
