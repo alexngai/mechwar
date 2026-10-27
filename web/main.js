@@ -1069,7 +1069,7 @@ function frame(now) {
   incoming = null;
   for (let i = 0; i < pr.length; i += 16) {
     const [owner, seq, n, , x, y, z, vx, vy, vz, age, predicted, primary, weapon, charge, target] = pr.subarray(i, i + 16);
-    if (alive && myId >= 0 && target - 1 === myId) incoming = Math.min(incoming ?? Infinity, Math.hypot(x - pos.x, y - pos.y, z - pos.z));
+    if (alive && myId >= 0 && !primary && target - 1 === myId) incoming = Math.min(incoming ?? Infinity, Math.hypot(x - pos.x, y - pos.y, z - pos.z));
     const secondary = primary ? null : weapons.secondaries[weapon];
     const key = `${owner}:${seq}:${n}:${primary}`, ahead = predicted ? a * DT : 0;
     const mech = predicted ? me : remotes.get(owner)?.mech;
