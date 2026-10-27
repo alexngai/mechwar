@@ -619,5 +619,102 @@
         ]
       }
     ]
+  },
+  "hivewall": {
+    "blurb": "A mining colony carved into a cliff over a canyon and taken by the Bloom, a glowing orange fungus. Three mine mouths on the canyon floor feed three climbs, 96 m up to the reactor on the Crest.",
+    "hero": {
+      "eye": [
+        45,
+        130,
+        -150
+      ],
+      "look": [
+        -15,
+        42,
+        25
+      ],
+      "fog": 2.2
+    },
+    "spots": [
+      {
+        "id": "the-workings",
+        "name": "The Workings",
+        "text": "The flooded mine galleries on the canyon floor lie 12 m below Low Town, the Bloom's light deep in them. The three mine mouths in the far wall are Co-op Defense's gates, one under the foot of each climb, and a 14 m ramp runs up from each to Low Town.",
+        "eye": [
+          -24,
+          -3,
+          -80
+        ],
+        "look": [
+          -36,
+          -6,
+          -106
+        ],
+        "fog": 1.2
+      },
+      {
+        "id": "the-stair",
+        "name": "The Stair",
+        "text": "The main lane: four 14 m wide flights switch back up the middle of the face, 23 degrees each, with a terrace at 24, 48 and 72 m between them and the last flight onto the Crest. Towers go on the terraces and beside the landings, and a chain of jump pads takes pilots from Low Town up the face to the Crest.",
+        "eye": [
+          38,
+          28,
+          -22
+        ],
+        "look": [
+          -30,
+          50,
+          -8
+        ],
+        "fog": 1.5
+      },
+      {
+        "id": "the-shaft",
+        "name": "The Shaft",
+        "text": "On the west flank an old ore lift stands with a 28 m square core, and a 14 m ramp spirals up round it, a storey a side over seven sides. It is wide enough for brutes and bosses, so they come this way as well as by the Stair, and a one-way link at 48 m crosses over to the Stair.",
+        "eye": [
+          -56,
+          50,
+          -42
+        ],
+        "look": [
+          -121,
+          34,
+          12
+        ],
+        "fog": 1.8
+      },
+      {
+        "id": "the-warren",
+        "name": "The Warren",
+        "text": "The east climb runs through the insides of a tenement: seven 10 m halls switch back between landing rooms lit by cold tubes, in by a tunnel off Low Town and out onto the Crest. Its lane is too narrow for brutes and bosses, which keep to the Stair and the Shaft where they can.",
+        "eye": [
+          70,
+          4.5,
+          -62
+        ],
+        "look": [
+          66,
+          6,
+          -30
+        ],
+        "fog": 1.2
+      },
+      {
+        "id": "the-crest",
+        "name": "The Crest and Reactor",
+        "text": "At the top of the cliff, 84 m over Low Town, the atmosphere plant's plaza holds the reactor, and the pilots' spawns are behind it. All three climbs come out on the Crest and end at the reactor, with open ground round it to fight on and no tower nearer than 12 m.",
+        "eye": [
+          -4,
+          92,
+          40
+        ],
+        "look": [
+          -12,
+          91,
+          72
+        ]
+      }
+    ]
   }
 }
