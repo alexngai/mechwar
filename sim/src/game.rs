@@ -31,6 +31,8 @@ pub const MAX_PLAYERS: usize = 2 * TEAM_SIZE;
 const _: () = assert!(MAX_PLAYERS <= 16, "Blast hits are a u16 bitmask of player ids");
 const _: () = assert!(MAX_PLAYERS <= deploy::TARGET as usize, "turrets' lock-on ids follow the players'");
 const POST_MATCH_SECONDS: f32 = 10.0;
+/// A team match opens with this long penned in the spawns (`Game::staging_seconds`).
+pub const STAGING_SECONDS: f32 = 10.0;
 /// A kill's worth in points, shared out as kill credit (`progress::KILLER_BONUS`).
 const POINTS_PER_KILL: f32 = 100.0;
 /// Points for each mech in a zone when its team takes it; a Siege pilot's for each EU they bank,
@@ -251,6 +253,9 @@ struct Flying {
 }
 
 enum Phase {
+    /// A team match's opening: everyone held in their team's pen round its spawns
+    /// (`Arena::penned`), shots doing no damage, until `until`; then it plays.
+    Staging { until: u32 },
     Playing { started_at: u32 },
     /// Shots do no damage until the next match starts at `restart_at`.
     Ended { winner: Option<u8>, restart_at: u32 },
@@ -273,6 +278,8 @@ pub struct Game {
     /// Team kills that win the match; in Deathmatch, as many solo kills' worth of points.
     pub score_limit: u16,
     pub match_seconds: f32,
+    /// How long each team match opens penned in its spawns, to launch and get ready (0 for none).
+    pub staging_seconds: f32,
     /// Index into `map::MAPS`; clients load the same map from their Welcome, and switch with
     /// the match state's.
     pub map: usize,
@@ -344,6 +351,7 @@ impl Game {
             headless: false,
             score_limit: 25,
             match_seconds: 600.0,
+            staging_seconds: 0.0,
             players: Vec::new(),
             projectiles: Vec::new(),
             orbs: Vec::new(),
@@ -549,6 +557,10 @@ impl Game {
         }
 
         match self.phase {
+            Phase::Staging { until } if self.tick >= until => {
+                self.phase = Phase::Playing { started_at: self.tick };
+                self.arena.penned = false;
+            }
             Phase::Playing { started_at } if self.tick >= started_at + secs(self.match_seconds) => self.end_match(),
             Phase::Ended { restart_at, .. } if self.tick >= restart_at => {
                 self.load_map(self.next.1);
@@ -738,10 +750,16 @@ impl Game {
             bot.orbs.extend(self.orbs.iter().filter(|o| o.dropped.is_none_or(|(_, side)| usize::from(side) == team)).map(|o| o.pos));
             let (focus, enemies) = &seen[i];
             let target = focus.and_then(|id| enemies.iter().find(|e| e.0 == id)).map(|e| e.1);
-            let mut input = bot.think_with(&self.arena, self.nav, t, &p.mech, target.as_ref(), heal.as_ref().map(|(m, mid)| (m, *mid)), self.tick);
-            if p.mech.health > 0.0 {
-                p.tally.doing[bot.doing() as usize] += 1;
-            }
+            let mut input = if matches!(self.phase, Phase::Staging { .. }) {
+                // Penned in for the opening: it waits facing the other side, and sets off as the pens open.
+                bot.stand_by(t, &p.mech, self.arena.pens[1 - team].0)
+            } else {
+                let input = bot.think_with(&self.arena, self.nav, t, &p.mech, target.as_ref(), heal.as_ref().map(|(m, mid)| (m, *mid)), self.tick);
+                if p.mech.health > 0.0 {
+                    p.tally.doing[bot.doing() as usize] += 1;
+                }
+                input
+            };
             #[cfg(test)]
             {
                 bot.last = input;
@@ -971,7 +989,8 @@ impl Game {
             self.arena.set_barriers(items(&self.arsenal), &self.deployables);
         }
 
-        if matches!(self.phase, Phase::Playing { .. }) {
+        // Objectives are set out from the opening (nobody can reach them from the pens).
+        if !matches!(self.phase, Phase::Ended { .. }) {
             self.step_objectives();
         }
 
@@ -983,8 +1002,9 @@ impl Game {
         }
     }
 
-    /// Fresh scores and objectives, and everyone back at their team spawn with full health.
-    fn start_match(&mut self) {
+    /// Fresh scores and objectives, and everyone back at their team spawn with full health. A new
+    /// game's first match opens this way once it's set up (a team match's staging with it).
+    pub fn start_match(&mut self) {
         self.scores = [0; 2];
         self.assault = None;
         self.siege = None;
@@ -995,7 +1015,12 @@ impl Game {
         self.clouds.clear();
         self.deployables.clear();
         self.arena.set_barriers(items(&self.arsenal), &[]);
-        self.phase = Phase::Playing { started_at: self.tick };
+        self.phase = match self.mode {
+            Mode::Deathmatch => Phase::Playing { started_at: self.tick },
+            _ if self.staging_seconds <= 0.0 => Phase::Playing { started_at: self.tick },
+            _ => Phase::Staging { until: self.tick + secs(self.staging_seconds) },
+        };
+        self.arena.penned = matches!(self.phase, Phase::Staging { .. });
         let starts = self.start_points();
         for (p, start) in self.players.iter_mut().zip(starts) {
             (p.class, p.loadout) = (p.next_class, p.next_loadout);
@@ -1715,6 +1740,7 @@ impl Game {
     /// The match's map, score and clock, as players see them.
     pub fn match_state(&self) -> MatchState {
         let (ended, winner, until) = match self.phase {
+            Phase::Staging { until } => (false, None, until),
             Phase::Playing { started_at } => (false, None, started_at + secs(self.match_seconds)),
             Phase::Ended { winner, restart_at } => (true, winner, restart_at),
         };
@@ -1743,6 +1769,7 @@ impl Game {
                 _ => self.score_limit,
             },
             seconds_left: (until.saturating_sub(self.tick) as f32 / TICK_HZ).ceil() as u16,
+            staging: matches!(self.phase, Phase::Staging { .. }),
             ended,
             winner,
         }
@@ -2102,6 +2129,50 @@ mod tests {
                 assert!((5..=7).contains(&n), "seed {seed}: {pair:?} played {n} times in 6 decks");
             }
         }
+    }
+
+    #[test]
+    fn team_matches_open_penned_in_the_spawns() {
+        let mut game = Game::new(Tuning::default(), Map::index("isotope").unwrap());
+        game.staging_seconds = STAGING_SECONDS;
+        game.step(); // an empty room holds the opening till someone comes
+        let id = game.join().unwrap();
+        let out_of_pen = |game: &Game, p: &Player| {
+            let (c, r) = game.arena.pens[usize::from(p.team)];
+            (p.mech.pos - c).with_y(0.0).length() - r
+        };
+        // We hover and boost for the other side: the pen holds us at its wall, and the bots wait.
+        let rush = Input { move_z: 1.0, boost: true, hover: true, ..Input::default() };
+        for _ in 0..secs(STAGING_SECONDS) - 2 {
+            send(&mut game, id, rush);
+            game.step();
+            let s = game.match_state();
+            assert!(s.staging && !s.ended && s.seconds_left <= STAGING_SECONDS as u16);
+            for p in &game.players {
+                assert!(out_of_pen(&game, p) < -game.arsenal.of(&p.mech).mech_radius + 0.01, "{} left its pen", p.name);
+                let last = p.bot.as_ref().map(|b| b.last);
+                assert!(last.is_none_or(|i| i.move_x == 0.0 && i.move_z == 0.0 && !i.fire && !i.alt_fire), "{} didn't wait", p.name);
+            }
+        }
+        let me = game.players.iter().find(|p| p.id == id).unwrap();
+        assert!(out_of_pen(&game, me) > -2.0, "never reached the wall");
+        let waited: std::collections::HashMap<u8, Vector> = game.players.iter().map(|p| (p.id, p.mech.pos)).collect();
+        // Then the pens open, the clock starts, and everyone heads out.
+        for _ in 0..secs(10.0) {
+            send(&mut game, id, rush);
+            game.step();
+        }
+        let s = game.match_state();
+        assert!(!s.staging && !game.arena.penned && s.seconds_left > (game.match_seconds - 10.0) as u16);
+        let me = game.players.iter().find(|p| p.id == id).unwrap();
+        assert!(out_of_pen(&game, me) > 0.0, "still penned");
+        for p in game.players.iter().filter(|p| p.bot.is_some()) {
+            assert!(p.mech.pos.distance(waited[&p.id]) > 5.0, "{} stayed put", p.name);
+        }
+        // Deathmatch plays at once.
+        game.set_mode(Mode::Deathmatch);
+        game.start_match();
+        assert!(!game.match_state().staging && !game.arena.penned);
     }
 
     #[test]

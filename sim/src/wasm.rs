@@ -422,7 +422,8 @@ impl WasmNetClient {
     /// winner (-1 for none or a draw; in Deathmatch a player id), class, next match's map, primary,
     /// secondary, seconds until we can launch from the hangar (-1 when out in the arena), offensive
     /// item, support item, ability, mode, next match's mode (modes index `Mode::ALL`), Siege energy
-    /// carried, the score limit (team kills; in Deathmatch, solo kills' worth of points).
+    /// carried, the score limit (team kills; in Deathmatch, solo kills' worth of points), staging
+    /// (0/1: penned in the spawns, `seconds left` till the pens open).
     pub fn hud(&self) -> Vec<f32> {
         let (c, s) = (&self.0, &self.0.state);
         vec![
@@ -450,7 +451,13 @@ impl WasmNetClient {
             mode_index(s.next_mode),
             c.board().iter().find(|p| Some(p.id) == c.id).map_or(0.0, |p| f32::from(p.eu)),
             f32::from(s.limit),
+            if s.staging { 1.0 } else { 0.0 },
         ]
+    }
+
+    /// Each team's staging pen, team 0's first: its center (xyz) and radius.
+    pub fn pens(&self) -> Vec<f32> {
+        self.0.arena().pens.iter().flat_map(|(c, r)| [c.x, c.y, c.z, *r]).collect()
     }
 }
 

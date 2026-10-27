@@ -915,6 +915,14 @@ impl Bot {
         Input { yaw: new_yaw, pitch: new_pitch, grenade: on, ..Input::default() }
     }
 
+    /// Waiting out a match's staging (`game.rs`): standing, weapons quiet, turning level toward
+    /// `toward`.
+    pub fn stand_by(&self, t: &Tuning, me: &Mech, toward: Vector) -> Input {
+        let (yaw, _) = look_at(me.pos, toward);
+        let max_turn = self.max_turn(t);
+        Input { yaw: me.yaw + wrap(yaw - me.yaw).clamp(-max_turn, max_turn), pitch: me.pitch - me.pitch.clamp(-max_turn, max_turn), ..Input::default() }
+    }
+
     /// A bot of a skill spread around `around` (each one rolls its own), and a personality
     /// (`Policy::personalities`).
     pub fn with_skill(seed: u64, around: f32) -> Self {

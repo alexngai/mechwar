@@ -711,6 +711,25 @@ export class Sound {
     }
   }
 
+  /** A beep of the countdown to a match's start, each of its last three seconds; `go`, as it starts: higher and held. */
+  countdown(go) {
+    const out = this.voice(null, go ? 1.0 : 0.4, this.ui);
+    if (!out) return;
+    const f = go ? 1320 : 660, held = go ? 0.75 : 0.16;
+    this.tone(out, 'square', f, f, 0.003, held, 0.1);
+    this.tone(out, 'sine', f / 2, f / 2, 0.003, held, 0.25);
+  }
+
+  /** The staging pens' shields going down round us: a deep field collapsing, its hum sagging away under a fizz, and a thump. */
+  shieldsDown() {
+    const out = this.voice(null, 1.8, this.ui);
+    if (!out) return;
+    this.growl(out, 'sawtooth', 220, 35, 900, 0.01, 1.5, 0.22);
+    this.tone(out, 'sine', 520, 90, 0.01, 1.2, 0.14);
+    this.noise(out, 'white', 'highpass', 5000, 1200, 0.02, 1.0, 0.1);
+    this.tone(out, 'sine', 70, 32, 0.005, 0.7, 0.6, 0.05);
+  }
+
   /** Our hold just filled with energy: one soft, plain tone. */
   full() {
     const out = this.voice(null, 0.5, this.ui);

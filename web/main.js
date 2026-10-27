@@ -1129,6 +1129,7 @@ function frame(now) {
   drawOrbs(now, dt, alive, myTeam);
   drawSmoke(dt);
   drawDeployables(now, myTeam);
+  if (net) drawPens(now, hudState, myTeam);
   objectives.drawShips(game.deployables(), zones, myTeam, FRIEND.accent, FOE.accent, now, dt, turretGuns);
   objectives.drawSentries(game.deployables(), myTeam, FRIEND.accent, FOE.accent, dt, turretGuns);
   objectives.drawFlags(ctf, myTeam, FRIEND.accent, FOE.accent, top, now);
@@ -1296,12 +1297,12 @@ function frame(now) {
     const nextMode = hudState[21];
     const state = full ? 'server full' : connection || (curr[S.HEALTH] <= 0 ? (picked === null ? 'in the hangar' : 'DESTROYED · launch when ready') : '');
     hud.net.textContent = `K ${kills}  D ${deaths}  ping ${Math.round(ping)} ms  corr ${correction.toFixed(3)} m  ${now < messageUntil ? message : state}`;
-    const clock = `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')}`;
+    const clock = matchClock(hudState);
     const html = topPanel(hudState, myId, zones, siege, clock);
     if (html !== scoreHtml) hud.score.innerHTML = scoreHtml = html;
     const next = `${mode_name(nextMode)} on ${MAPS[map_name(nextMap)]?.name ?? ''}`;
     const result = winner < 0 ? 'DRAW' : winner === team ? 'VICTORY' : dm ? `${nameOf(winner)} WINS` : 'DEFEAT';
-    hud.banner.textContent = ended ? `${result} · next: ${next} in ${secondsLeft}s` : '';
+    hud.banner.textContent = ended ? `${result} · next: ${next} in ${secondsLeft}s` : hudState[24] && $('picker').hidden ? `GET READY · SHIELDS DROP IN ${secondsLeft}` : '';
     // Progression: keep each record the server sends; a match's end brings its XP.
     const got = net.take_progress();
     if (got) {
@@ -1473,12 +1474,18 @@ function boardRows() {
 const standings = (rows) => rows.sort((x, y) => y.points - x.points || y.kills - x.kills || x.deaths - y.deaths);
 const ordinal = (n) => `${n}${['TH', 'ST', 'ND', 'RD'][n % 100 > 10 && n % 100 < 14 ? 0 : n % 10] ?? 'TH'}`;
 
+/** The match clock, or while the match opens penned in the spawns, the wait till it starts. */
+function matchClock(hudState) {
+  const s = hudState[9];
+  return hudState[24] ? `STARTS IN ${s}s` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
 /** The Tab scoreboard: each team (in Deathmatch, everyone) by points, our row marked. */
 function renderBoard(myId, hudState) {
   const rows = boardRows();
   if (!net) rows.push({ id: -1, team: 0, cls: classIdx, bot: 0, kills: 0, deaths: 0, points: 0 });
-  const [blue, red, secondsLeft] = hudState ? [hudState[7], hudState[8], hudState[9]] : [0, 0, 0];
-  const clock = `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')}`;
+  const [blue, red] = hudState ? [hudState[7], hudState[8]] : [0, 0];
+  const clock = hudState ? matchClock(hudState) : '0:00';
   const table = (label, cls, which) => {
     const body = standings(rows.filter(which))
       .map((r) => `<tr class="${r.id === myId ? 'me' : ''}"><td>${esc(nameOf(r.id))}${r.bot ? ' <i>BOT</i>' : levelOf(r.id) ? ` <i>LV${levelOf(r.id)}</i>` : ''}</td>`
@@ -1684,6 +1691,73 @@ function drawDeployables(now, myTeam) {
   for (const kind of [0, 1, 2, 3]) for (let k = used[kind]; k < deployMeshes[kind].length; k++) deployMeshes[kind][k].visible = false;
   deployed.clear();
   for (const [key, value] of live) deployed.set(key, value);
+}
+
+// Staging pens (sim/src/lib.rs `Arena::pens`): while a team match opens, a shield wall round each
+// team's spawns in its side's color, bright at its foot and fading up. It pulses with each beep of
+// the last three seconds' countdown, then drops: it sinks into the ground shedding motes as the
+// shields go down.
+const PEN_HEIGHT = 30; // m drawn; the pen holds anyone however high they fly
+const PEN_FALL = 0.8; // s it takes to sink
+const penMeshes = [];
+let penUp = false, penAt = -1e9, penCount = 0; // drawn, when it last beeped or dropped, and its last count
+function penMesh() {
+  // A unit cylinder standing on y 0, shaded from its foot (1) to nothing at its top (additive: black adds nothing).
+  const fade = (geo) => {
+    const y = geo.attributes.position;
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(Array.from({ length: y.count * 3 }, (_, i) => 1 - y.getY(Math.floor(i / 3))), 3));
+    return geo;
+  };
+  const glow = { vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending };
+  const mesh = new THREE.Mesh(fade(new THREE.CylinderGeometry(1, 1, 1, 64, 8, true).translate(0, 0.5, 0)), new THREE.MeshBasicMaterial({ ...glow, side: THREE.DoubleSide }));
+  // A lattice over it: posts round it, and rings up its lower part.
+  const lines = [];
+  for (let k = 0; k < 48; k++) {
+    const [a, b] = [k, k + 1].map((i) => (i / 48) * Math.PI * 2);
+    lines.push(Math.cos(a), 0, Math.sin(a), Math.cos(a), 0.7, Math.sin(a));
+    for (const h of [0.02, 0.12, 0.25]) lines.push(Math.cos(a), h, Math.sin(a), Math.cos(b), h, Math.sin(b));
+  }
+  const lattice = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+  mesh.add(new THREE.LineSegments(fade(lattice), new THREE.LineBasicMaterial(glow)));
+  scene.add(mesh);
+  return mesh;
+}
+/** `n` points on pen `(x, y, z, r)`'s wall, up to `up` m, facing out. */
+function penPoints([x, y, z, r], n, up) {
+  return Array.from({ length: n }, () => {
+    const a = Math.random() * Math.PI * 2, normal = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
+    return { p: new THREE.Vector3(x + r * normal.x, y + Math.random() * up, z + r * normal.z), n: normal };
+  });
+}
+function drawPens(now, hudState, myTeam) {
+  const staging = hudState[24] === 1, count = hudState[9], pens = net.pens();
+  const pen = (t) => pens.subarray(4 * t, 4 * t + 4);
+  const accent = (t) => (t === myTeam || myTeam < 0 ? FRIEND : FOE).accent;
+  if (staging && count <= 3 && count !== penCount) {
+    sound.countdown(false);
+    penAt = now;
+  }
+  penCount = staging ? count : 0;
+  if (penUp && !staging) {
+    // The pens open: the last beep, the shields going down, and every wall shedding motes as it sinks.
+    sound.countdown(true);
+    sound.shieldsDown();
+    callout = { text: 'SHIELDS DOWN', color: hex(FRIEND.accent), at: now };
+    penAt = now;
+    for (const t of [0, 1]) fx.field(penPoints(pen(t), 220, 12), fieldColor(accent(t)), false);
+  }
+  penUp = staging;
+  const sink = staging ? 1 : 1 - (now - penAt) / 1000 / PEN_FALL;
+  for (const t of [0, 1]) {
+    const mesh = (penMeshes[t] ??= penMesh()), [x, y, z, r] = pen(t);
+    mesh.visible = sink > 0;
+    if (!mesh.visible) continue;
+    const beat = staging ? Math.max(1 - (now - penAt) / 400, 0) : 0;
+    mesh.position.set(x, y - 1, z);
+    mesh.scale.set(r, PEN_HEIGHT * easeOut(sink), r);
+    mesh.material.color.setHex(accent(t)).multiplyScalar(0.3 * (1 + 1.5 * beat) * (0.9 + 0.1 * Math.sin(now / 120)));
+    mesh.children[0].material.color.setHex(accent(t)).multiplyScalar(0.7 * (1 + beat));
+  }
 }
 
 /** Whether smoke lies across the sight line from `a` to `b`. */

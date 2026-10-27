@@ -38,7 +38,7 @@ use futures_util::{SinkExt, StreamExt};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use sim::game::{Game, MAX_PLAYERS, Mode};
+use sim::game::{Game, MAX_PLAYERS, Mode, STAGING_SECONDS};
 use sim::map::{MAPS, ROTATION};
 use sim::client::INTERP_TICKS;
 use sim::net::{self, ClientMsg, Event, ServerMsg};
@@ -445,6 +445,8 @@ fn new_game(settings: &Settings, seed: u64) -> Game {
     game.mode = mode;
     game.rotate(deck, seed);
     (game.score_limit, game.match_seconds, game.bots, game.bot_skill) = (settings.score_limit, settings.match_seconds, settings.bots, settings.bot_skill);
+    game.staging_seconds = STAGING_SECONDS;
+    game.start_match();
     game
 }
 
