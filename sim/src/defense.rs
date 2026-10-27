@@ -205,8 +205,10 @@ pub enum Refusal {
     Scrap,
     /// No tower aimed at, or (to sell) not theirs.
     Tower,
-    /// The tower's at its top tier, or there's no room for another.
+    /// The tower's at its top tier.
     Full,
+    /// The team has as many towers as there can be (LAST_TOWER - FIRST_TOWER + 1).
+    Towers,
 }
 
 /// A pilot's perks for the run, drafted one in three after each wave beaten and from salvage
@@ -290,13 +292,16 @@ pub struct Shell {
     pub owner: u8,
 }
 
-/// A tower: its owner id among the deployables, who built it, its tier, and the scrap gone into it.
+/// A tower: its owner id among the deployables, who built it, its tier, and the scrap gone into
+/// it, and of that its builder's own (what selling it refunds them from: others' upgrades are
+/// theirs to lose, not the builder's to cash in).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Tower {
     pub owner: u8,
     pub by: u8,
     pub tier: u8,
     pub spent: f32,
+    pub own: f32,
 }
 
 impl Tower {
@@ -305,9 +310,9 @@ impl Tower {
         price(kind) * UPGRADE * f32::from(self.tier)
     }
 
-    /// What selling it refunds.
+    /// What selling it refunds its builder.
     pub fn refund(&self) -> f32 {
-        REFUND * self.spent
+        REFUND * self.own
     }
 }
 
@@ -341,6 +346,8 @@ pub struct DefenseNet {
     pub scrap: Vec<u16>,
     pub towers: Vec<Tower>,
     pub offers: Vec<(u8, Vec<Perk>)>,
+    /// How many more drafts wait behind each pilot's on offer.
+    pub waiting: Vec<(u8, u8)>,
     pub perks: Vec<(u8, Perk, u8)>,
     pub cores: Vec<(Vector, bool)>,
     /// In a break, the wave to come: its theme, and how many of each foe.
@@ -553,7 +560,7 @@ impl Defense {
     /// a sealed one open; which, if any.
     fn bloom(&mut self, seal: bool) -> Option<News> {
         let choices: Vec<usize> = if seal {
-            (0..self.seals.len()).filter(|k| !self.sealed.contains(k)).filter(|&k| self.reaches(&[self.sealed_edges(), vec![self.seals[k].0]].concat())).collect()
+            (0..self.seals.len()).filter(|k| !self.sealed.contains(k)).filter(|&k| self.passable(&[self.sealed_edges(), vec![self.seals[k].0]].concat())).collect()
         } else {
             self.sealed.clone()
         };
@@ -572,6 +579,13 @@ impl Defense {
     /// The edges sealed.
     fn sealed_edges(&self) -> Vec<usize> {
         self.sealed.iter().map(|&k| self.seals[k].0).collect()
+    }
+
+    /// Whether, with `sealed` edges shut, every gate still has a way to the reactor, and (if the
+    /// lanes give them one at all) one for big foes, off the narrow edges: a seal mustn't force a
+    /// brute or boss through the Warren.
+    fn passable(&self, sealed: &[usize]) -> bool {
+        self.reaches(sealed) && (!self.reaches(&self.narrow) || self.reaches(&[sealed, &self.narrow[..]].concat()))
     }
 
     /// Whether every gate still has a way to the reactor with `sealed` edges shut.
@@ -692,7 +706,7 @@ impl Defense {
 
     /// What selling `tower` refunds its builder.
     pub fn refund_of(&self, tower: &Tower) -> f32 {
-        if self.perk(tower.by, Perk::Salvage) > 0.0 { tower.spent } else { tower.refund() }
+        if self.perk(tower.by, Perk::Salvage) > 0.0 { tower.own } else { tower.refund() }
     }
 
     /// A draft for player `id`: three perks they can still take (blueprints if `rare`, made up
@@ -743,10 +757,14 @@ impl Defense {
             _ => 0,
         };
         let scrap = self.scrap.iter().map(|s| s.round() as u16).collect();
-        let mut offers: Vec<(u8, Vec<Perk>)> = Vec::new();
+        let (mut offers, mut waiting): (Vec<(u8, Vec<Perk>)>, Vec<(u8, u8)>) = (Vec::new(), Vec::new());
         for (id, o) in &self.offers {
             if !offers.iter().any(|(i, _)| i == id) {
                 offers.push((*id, o.clone()));
+            } else if let Some(w) = waiting.iter_mut().find(|w| w.0 == *id) {
+                w.1 += 1;
+            } else {
+                waiting.push((*id, 1));
             }
         }
         let perks = (0..MAX_PLAYERS as u8).flat_map(|id| PERKS.iter().filter(move |&&p| self.perk(id, p) > 0.0).map(move |&p| (id, p, self.perk(id, p) as u8))).collect();
@@ -761,7 +779,7 @@ impl Defense {
         }
         let open = self.open_gates(self.wave).into_iter().map(|g| g as u8).collect();
         let sealed = self.sealed.iter().map(|&k| k as u8).collect();
-        DefenseNet { wave: self.wave, waves: WAVES, break_left, hull: self.hull, left, scrap, towers: self.towers.clone(), offers, perks, cores: self.cores.clone(), theme: self.theme, next, open, sealed, caches: self.caches.clone() }
+        DefenseNet { wave: self.wave, waves: WAVES, break_left, hull: self.hull, left, scrap, towers: self.towers.clone(), offers, waiting, perks, cores: self.cores.clone(), theme: self.theme, next, open, sealed, caches: self.caches.clone() }
     }
 
     /// Where each mech (its id, its team, whether it's a living bot) should head with lane enemies standing
@@ -1134,6 +1152,17 @@ mod tests {
             }
             assert_eq!(d.sealed.len(), 1);
             assert!(d.reaches(&d.sealed_edges()));
+        }
+        // A seal never forces big foes onto a narrow lane: with the hub's east way narrow, the
+        // west way is never sealed.
+        let mut spots = spots.clone();
+        spots.lanes.narrow = vec![3, 5];
+        for seed in 0..20 {
+            let mut d = Defense::new(&spots, seed, |_, _| Vec::new()).unwrap();
+            for _ in 0..5 {
+                d.bloom(true);
+            }
+            assert!(!d.sealed.contains(&1), "seed {seed}: the wide way sealed");
             // A walker at the hub takes the open way.
             let open_edge = if d.sealed == [0] { 4 } else { 3 };
             assert!((0..20).all(|_| d.fork(3, Kind::Walker) == Some(open_edge)));

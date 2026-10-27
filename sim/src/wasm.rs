@@ -356,6 +356,12 @@ impl WasmNetClient {
         d.offers.iter().find(|o| o.0 == me).map_or_else(Vec::new, |o| o.1.iter().map(|&p| p as u8).collect())
     }
 
+    /// Co-op: how many more drafts wait behind the player's on offer.
+    pub fn drafts_waiting(&self) -> u8 {
+        let (Some(d), Some(me)) = (self.0.defense(), self.0.id) else { return 0 };
+        d.waiting.iter().find(|w| w.0 == me).map_or(0, |w| w.1)
+    }
+
     /// Co-op: how many of each perk (`defense::PERKS`' order) the player holds.
     pub fn perks(&self) -> Vec<u8> {
         let mut out = vec![0; crate::defense::PERKS.len()];

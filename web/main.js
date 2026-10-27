@@ -607,7 +607,7 @@ const coopResult = (won) => {
 /** A co-op wave's theme as the panel calls it (defense.rs `Theme`, in order; mixed says nothing). */
 const THEMES = ['', 'SWARM', 'ARMOR', 'SIEGE', 'SHIELDED', 'FLANKING'];
 /** Why a build order didn't go (defense.rs `Refusal`, in order). */
-const REFUSALS = ['NOTHING IN REACH', 'NO ROOM HERE', 'TOO CLOSE TO A LANE', 'TOO CLOSE TO A TOWER', 'TOO CLOSE TO THE REACTOR', 'NOT ENOUGH SCRAP', 'AIM AT A TOWER (YOUR OWN TO SELL)', 'AS HIGH AS IT GOES'];
+const REFUSALS = ['NOTHING IN REACH', 'NO ROOM HERE', 'TOO CLOSE TO A LANE', 'TOO CLOSE TO A TOWER', 'TOO CLOSE TO THE REACTOR', 'NOT ENOUGH SCRAP', 'AIM AT A TOWER (YOUR OWN TO SELL)', 'AS HIGH AS IT GOES', 'THE TEAM HAS ALL THE TOWERS IT CAN'];
 /** Siege energy we carried as of the last frame; CARRY_MAX matches siege::CARRY_MAX. */
 let heldBefore = 0, bankBefore = 0;
 const ENERGY_COLOR = 0x5dff9a;
@@ -1720,7 +1720,7 @@ function drawDraft() {
   const info = (i) => perk_info(i).split('\n');
   const mine = [...perks].map((n, i) => (n ? `${info(i)[0]}${n > 1 ? ' ×' + n : ''}` : '')).filter(Boolean).join(' · ');
   const html = offer.length
-    ? `<div class="head">PICK ONE · 1-${offer.length}</div><div class="cards">${[...offer]
+    ? `<div class="head">PICK ONE · 1-${offer.length}${net.drafts_waiting() ? ` · ${net.drafts_waiting()} MORE WAITING` : ''}</div><div class="cards">${[...offer]
         .map((p, k) => {
           const [name, text] = info(p);
           return `<div class="card${name.startsWith('Blueprint') ? ' rare' : ''}"><b>${k + 1} ${esc(name.toUpperCase())}</b><span>${esc(text)}</span></div>`;

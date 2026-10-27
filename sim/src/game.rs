@@ -2296,7 +2296,7 @@ impl Game {
                 let towers = self.deployables.iter().filter(|e| d.tower(e.owner).is_some()).map(|e| e.pos);
                 match (d.spot(&self.arena, &aim, towers), d.free_tower()) {
                     (Err(why), _) => Some(why),
-                    (_, None) => Some(defense::Refusal::Full),
+                    (_, None) => Some(defense::Refusal::Towers),
                     _ if d.scrap[usize::from(id)] < d.price_for(id, kind) => Some(defense::Refusal::Scrap),
                     (Ok(pos), Some(owner)) => {
                         let (tick, hull, cost) = (self.tick, defense::tower_hull(1) * (1.0 + 0.25 * d.perk(id, defense::Perk::Plating)), d.price_for(id, kind));
@@ -2304,7 +2304,7 @@ impl Game {
                         self.deployables.push(Deployable { kind, team: 0, owner, pos, yaw: m.yaw, pitch: 0.0, hull, placed: tick, expires: u32::MAX, ready, burst: 0 });
                         let d = self.defense.as_mut().unwrap();
                         d.scrap[usize::from(id)] -= cost;
-                        d.towers.push(defense::Tower { owner, by: id, tier: 1, spent: cost });
+                        d.towers.push(defense::Tower { owner, by: id, tier: 1, spent: cost, own: cost });
                         None
                     }
                 }
@@ -2336,6 +2336,9 @@ impl Game {
                                 let before = d.hull_max(e.owner);
                                 let tower = d.towers.iter_mut().find(|t| t.owner == e.owner).unwrap();
                                 (tower.tier, tower.spent) = (tower.tier + 1, tower.spent + cost);
+                                if tower.by == id {
+                                    tower.own += cost;
+                                }
                                 // Its new hull, less what it's lost.
                                 self.deployables[k].hull += d.hull_max(e.owner) - before;
                                 None
@@ -3364,7 +3367,9 @@ mod tests {
         let had = scrap(&game, id);
         game.build(id, defense::Build::Sell);
         assert!(towers(&game).is_empty());
-        assert!((scrap(&game, id) - had - 0.7 * t.spent).abs() < 1e-3);
+        // (Of what it cost them: the other pilot's upgrades are theirs to lose.)
+        assert!((scrap(&game, id) - had - 0.7 * defense::PRICES[1]).abs() < 1e-3, "{}", scrap(&game, id) - had);
+        assert!(t.spent > t.own);
     }
 
     #[test]
