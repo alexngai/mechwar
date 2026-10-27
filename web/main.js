@@ -1623,9 +1623,9 @@ function renderBoard(myId, hudState) {
  * contacts (enemies only while seen or just after firing), the reticle at the aim point.
  */
 // Health orbs (online only: nothing dies offline, and the Salve's orb is the server's). Radius and
-// full health match ORB_RADIUS and ORB_HEALTH in sim/src/game.rs. The other side's Salve orbs,
+// full health match ORB_RADIUS in sim/src/game.rs and orb_health in tuning.json. The other side's Salve orbs,
 // which won't heal us, glow red.
-const ORB_RADIUS = 6, ORB_HEALTH = 25, ORB_COLOR = 0x6dff9a, FOE_ORB_COLOR = 0xff5a4a;
+const ORB_RADIUS = 6, ORB_HEALTH = 37.5, ORB_COLOR = 0x6dff9a, FOE_ORB_COLOR = 0xff5a4a;
 const orbGeometry = new THREE.IcosahedronGeometry(0.7, 1);
 const orbMaterials = { [ORB_COLOR]: hot(new THREE.MeshBasicMaterial({ color: ORB_COLOR })), [FOE_ORB_COLOR]: hot(new THREE.MeshBasicMaterial({ color: FOE_ORB_COLOR })) };
 const orbMeshes = [];

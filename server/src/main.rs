@@ -196,7 +196,7 @@ async fn main() {
         eprintln!("bot spots preloaded for {} of {} maps", sim::tactics::Spots::preload(&bakes), MAPS.len());
     }
 
-    let mut quick = Settings { name: "Quick play".into(), public: true, mode: None, map: None, score_limit: 25, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
+    let mut quick = Settings { name: "Quick play".into(), public: true, mode: None, map: None, score_limit: 20, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
     if let Ok(key) = env::var("MODE") {
         quick.mode = Some(Mode::from_key(&key).expect("MODE must be tdm, dm, ma, siege, ctf, convoy or defense"));
     }
@@ -723,7 +723,7 @@ mod tests {
 
     #[test]
     fn rooms_deal_the_modes_and_maps_their_settings_allow() {
-        let settings = |mode, map: Option<&str>| Settings { name: String::new(), public: true, mode, map: map.map(|m| Map::index(m).unwrap()), score_limit: 25, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
+        let settings = |mode, map: Option<&str>| Settings { name: String::new(), public: true, mode, map: map.map(|m| Map::index(m).unwrap()), score_limit: 20, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
         // Every map but the co-op one, which comes round only in co-op rooms.
         let every = deck(&settings(None, None));
         assert_eq!(every.iter().filter(|(m, _)| *m == Mode::TeamDeathmatch).count(), ROTATION.len() - 1);
@@ -783,7 +783,7 @@ mod tests {
     /// bringing `record`: the room's task, the way to send it the player's messages (with their
     /// id), and what it sends them.
     async fn join_room(key: &[u8], match_seconds: f32, record: &str) -> (tokio::task::JoinHandle<()>, impl Fn(ClientMsg) + use<>, mpsc::UnboundedReceiver<(Instant, Vec<u8>)>) {
-        let settings = Settings { name: "Test".into(), public: false, mode: Some(Mode::TeamDeathmatch), map: None, score_limit: 25, match_seconds, bots: false, bot_skill: 0.5 };
+        let settings = Settings { name: "Test".into(), public: false, mode: Some(Mode::TeamDeathmatch), map: None, score_limit: 20, match_seconds, bots: false, bot_skill: 0.5 };
         let game = new_game(&settings, 1);
         let info = Arc::new(Mutex::new(describe("TEST", &settings, &game)));
         let (cmds, cmd_rx) = mpsc::unbounded_channel();
