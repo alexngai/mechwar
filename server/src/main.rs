@@ -218,7 +218,8 @@ async fn main() {
         DEV_KEY.to_vec()
     }));
     let app = App { rooms: Rooms::default(), lag, quick: Arc::new(quick), seed: Arc::new(AtomicU64::new(seed)), signer };
-    let client = ServeDir::new(&static_dir).fallback(ServeFile::new(format!("{static_dir}/index.html")));
+    // Any other path gets the game page too, but as a 404, so search engines don't index it as one more copy.
+    let client = ServeDir::new(&static_dir).not_found_service(ServeFile::new(format!("{static_dir}/index.html")));
     // The guide is one page for all its sections and pages (/guide/ itself is ServeDir's guide/index.html).
     let guide = ServeFile::new(format!("{static_dir}/guide/index.html"));
     let router = Router::new()

@@ -429,8 +429,13 @@ const SECTIONS = [
 // /guide/<section>[/<page>]: a map has a page of its own.
 const [path, page] = location.pathname.replace(/^\/guide\/?/, '').replace(/\/$/, '').split('/');
 const [here, title, draw, after] = SECTIONS.find(([p]) => p === path) ?? SECTIONS[0];
-$('nav').innerHTML = SECTIONS.map(([p, name]) => `<a href="/guide/${p}"${p === here ? ' class="on" aria-current="page"' : ''}>${name}</a>`).join('');
+// The nav's links are in the page itself (guide/index.html), for search engines to follow: mark this one's.
+const on = document.querySelector(`#nav a[href="/guide/${here}"]`);
+on.className = 'on';
+on.setAttribute('aria-current', 'page');
 document.title = here ? `${title[0]}${title.slice(1).toLowerCase()} · MECHWAR guide` : 'Guide · MECHWAR';
+// One address per page for search engines, whatever host, slash or hash it was reached by.
+document.head.insertAdjacentHTML('beforeend', `<link rel="canonical" href="https://mechwar.online/guide/${[here, page].filter(Boolean).join('/')}">`);
 $('page').innerHTML = await draw(page);
 // The section's own target (a weapon, a map, a heading), marked and scrolled to once it's drawn.
 const mark = () => {
