@@ -319,4 +319,18 @@ mod tests {
         assert_eq!((orders[0], orders[3]), (Some(mechs[5].2), Some(mechs[5].2)));
         assert_eq!(orders[2], Some(mechs[1].2), "one escorts our carrier");
     }
+
+    #[test]
+    fn a_teams_squads_set_how_many_go_to_each_job() {
+        let c = ctf();
+        let mechs: Vec<(u8, u8, Vector, bool)> = (0..4).map(|id| (id, 0, Vector::new(0.0, 0.0, 10.0 * f32::from(id)), true)).collect();
+        let (theirs, ours) = (c.stands[1].at, c.stands[0].at);
+        let all_in = Squads { raid: 4, escort: 0, chase: 0, guard: 1 };
+        let orders = c.orders_by(&mechs, [all_in, Squads::default()]);
+        assert!(orders.iter().all(|o| *o == Some(theirs)), "the raid takes all four before the guard: {orders:?}");
+        let home = Squads { raid: 0, escort: 0, chase: 0, guard: 2 };
+        let orders = c.orders_by(&mechs, [home, Squads::default()]);
+        assert_eq!(orders.iter().filter(|o| **o == Some(ours)).count(), 2);
+        assert_eq!(orders.iter().filter(|o| o.is_none()).count(), 2, "the rest roam");
+    }
 }
