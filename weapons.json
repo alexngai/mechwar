@@ -11,7 +11,7 @@
     {
       "id": "triplet", "name": "Burst", "unlock": 1, "desc": "Three hard, accurate rounds a pull, then a beat", "sound": "burst", "recoil": "low", "use": [["LMB", "Each pull fires a three-round burst; pull again after the beat"], ["", "Accurate to mid range, fading past 40 m"]],
       "stats": {
-        "fire_rate": 2.2, "burst": 3, "burst_gap": 0.07, "shot_damage": 7.5, "heat_per_shot": 3.5,
+        "fire_rate": 1.65, "burst": 3, "burst_gap": 0.07, "shot_damage": 7.5, "heat_per_shot": 3.5,
         "spread_deg": 0.25, "bloom_per_shot": 0.25, "bloom_max": 1.5, "bloom_recovery": 4,
         "falloff_start": 40, "falloff_end": 90, "falloff_floor": 0.5
       }
@@ -52,10 +52,10 @@
       }
     },
     {
-      "id": "talon", "name": "Homing rocket", "unlock": 2, "desc": "Single rockets that curve onto the enemy you keep in your sights", "sound": "rocket", "recoil": "medium", "projectile": "rocket", "use": [["LMB", "Fire one rocket at a time"], ["", "Keep your crosshair within 6° of an enemy and rockets in flight turn toward it; a diamond marks it"], ["", "Look away and they fly straight; a quick dodge can shake them"]],
+      "id": "talon", "name": "Homing rocket", "unlock": 2, "desc": "Single rockets that curve onto the enemy you keep in your sights", "sound": "rocket", "recoil": "medium", "projectile": "rocket", "use": [["LMB", "Fire one rocket at a time"], ["", "Keep your crosshair within 3° of an enemy and rockets in flight turn toward it; a diamond marks it"], ["", "Look away and they fly straight; a quick dodge can shake them"]],
       "stats": {
-        "fire_rate": 1.5, "shot_damage": 18, "heat_per_shot": 13, "spread_deg": 0, "bloom_per_shot": 0, "bloom_max": 0,
-        "shot_speed": 60, "shot_gravity": 0, "shot_radius": 2, "shot_turn": 50, "shot_seek_cone": 6, "weapon_range": 150
+        "fire_rate": 1.5, "shot_damage": 13.5, "heat_per_shot": 13, "spread_deg": 0, "bloom_per_shot": 0, "bloom_max": 0,
+        "shot_speed": 60, "shot_gravity": 0, "shot_radius": 2, "shot_turn": 50, "shot_seek_cone": 3, "weapon_range": 150
       }
     }
   ],
