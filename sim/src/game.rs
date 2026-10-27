@@ -3830,6 +3830,70 @@ mod tests {
         assert_eq!(scrap(&game, id), start + 100.0);
     }
 
+    /// Co-op's balance, bot-only: 32 runs on a co-op map (`COOP_MAP`, else Hivewall), four bot
+    /// skills by eight seeds, in parallel, one docked human and three bots fighting full-size waves
+    /// (bots count as pilots). A line a run: won, the wave reached, the reactor's hull, minutes,
+    /// towers standing and at most, the reactor's losses by wave, and what reached it (kind@wave).
+    /// `cargo test --release -p sim --lib coop_balance_sweep -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn coop_balance_sweep() {
+        let map = std::env::var("COOP_MAP").unwrap_or_else(|_| "hivewall".into());
+        let runs: Vec<(u32, f32)> = [0.3f32, 0.5, 0.7, 0.9].into_iter().flat_map(|skill| (1..=8u32).map(move |seed| (seed, skill))).collect();
+        let out: Vec<String> = std::thread::scope(|scope| {
+            let handles: Vec<_> = runs
+                .iter()
+                .map(|&(seed, skill)| {
+                    let map = &map;
+                    scope.spawn(move || {
+                        let mut game = Game::new(Tuning::default(), Map::index(map).unwrap());
+                        (game.mode, game.bots, game.bot_skill) = (Mode::Defense, true, skill);
+                        game.tick = seed * 977;
+                        let id = game.join().unwrap();
+                        game.dock(id);
+                        let mut lost_by_wave = [0f32; 11];
+                        let mut leaked: Vec<(u8, String)> = Vec::new();
+                        let (mut last_hull, mut towers_peak) = (defense::REACTOR_HULL, 0);
+                        for _ in 0..secs(2600.0) {
+                            let near: Vec<(u8, Kind)> = game.deployables.iter().filter(|w| w.kind.lane_enemy() && w.hull > 0.0).filter(|w| game.defense.as_ref().is_some_and(|d| (w.pos - d.reactor).with_y(0.0).length() <= d.radius + 6.0)).map(|w| (w.owner, w.kind)).collect();
+                            let elites_near: usize = game.players.iter().filter(|p| p.team == 1 && p.mech.health > 0.0 && game.defense.as_ref().is_some_and(|d| (p.mech.pos - d.reactor).with_y(0.0).length() <= d.radius + 6.0)).count();
+                            game.step();
+                            let Some(d) = game.defense.as_ref() else { continue };
+                            let wave = usize::from(d.wave);
+                            if d.hull < last_hull {
+                                lost_by_wave[wave] += last_hull - d.hull;
+                                for (owner, kind) in &near {
+                                    if !game.deployables.iter().any(|w| w.owner == *owner && w.kind == *kind) {
+                                        leaked.push((d.wave, format!("{kind:?}")));
+                                    }
+                                }
+                                if elites_near > 0 && near.is_empty() {
+                                    leaked.push((d.wave, "Elite".into()));
+                                }
+                            }
+                            last_hull = d.hull;
+                            towers_peak = towers_peak.max(d.towers.len());
+                            if game.match_state().ended {
+                                break;
+                            }
+                        }
+                        let d = game.defense.as_ref().unwrap();
+                        let won = game.match_state().winner == Some(0);
+                        let mins = (game.tick - seed * 977) as f32 / TICK_HZ / 60.0;
+                        let lost: Vec<String> = (1..=10).filter(|&w| lost_by_wave[w] > 0.0).map(|w| format!("w{w}:{:.0}", lost_by_wave[w])).collect();
+                        let mut what: Vec<String> = leaked.iter().map(|(w, k)| format!("{k}@{w}")).collect();
+                        what.dedup();
+                        format!("RUN skill={skill} seed={seed} won={won} wave={} hull={:.0} mins={mins:.1} towers_end={} towers_peak={towers_peak} lost=[{}] leaked=[{}]", d.wave, d.hull, d.towers.len(), lost.join(" "), what.join(" "))
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        for line in out {
+            println!("{line}");
+        }
+    }
+
     #[test]
     fn bots_bank_energy_on_their_own() {
         let (mut game, _) = siege(true);
