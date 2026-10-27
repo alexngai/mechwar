@@ -267,6 +267,8 @@ pub struct Tuning {
     /// Support: a repair orb dropped at the feet, healing the mech's side (see game.rs `ORB_*`).
     pub orb_charges: f32,
     pub orb_recharge: f32,
+    /// What a wreck's or a Salve's orb holds.
+    pub orb_health: f32,
     /// Support: a half-sphere shield at the feet that the other side's shots stop at
     /// (`deploy.rs`), for `dome_seconds` or until they've worn off its `dome_hull`.
     pub dome_charges: f32,
