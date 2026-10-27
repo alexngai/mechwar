@@ -37,6 +37,7 @@ import { Hud, hex } from './hud.js';
 import { createSky } from './sky.js';
 import { heatShimmer } from './heat.js';
 import { STORE, fits, levelAt, levelXp, owns, pointsLeft, readRecord } from './progress.js';
+import { splash } from './splash.js';
 
 await init();
 const DT = tick_dt();
@@ -249,6 +250,7 @@ const ensureArena = (index) => {
   fx.setNight(!!map.night);
 };
 ensureArena(sim ? mapIndex(params.get('map') ?? 'foundry') : -1);
+if (sim) splash(map_name(arenaMap), MAPS[map_name(arenaMap)].name, 'Practice');
 
 function applyQuality() {
   const high = quality === 'high', bloomed = high && gfx.bloom;
@@ -574,7 +576,7 @@ const nameOf = (id) => (net ? net.name(id) || `Pilot-${String(id).padStart(2, '0
 /** Player `id`'s level (0 for bots and offline). */
 const levelOf = (id) => (net ? net.level(id) : 0);
 // The last match's XP, shown with the banner until the next match starts.
-let summary = null, wasEnded = false;
+let summary = null, wasEnded = false, splashed = false;
 const esc = (text) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 // Recent kills for the feed: names and team colors when they happened.
 const feed = [];
@@ -1308,6 +1310,12 @@ function frame(now) {
       if (changed) showBay(bay);
     }
     if (wasEnded && !ended) summary = null;
+    // The splash on joining (once the first snapshot sets the limit) and as each match starts.
+    if (!ended && hudState[23] > 0 && (!splashed || wasEnded)) {
+      splashed = true;
+      const mode = hudState[20], id = map_name(net.map());
+      splash(id, MAPS[id]?.name ?? id, mode_name(mode), mode === DEATHMATCH ? hudState[23] * DM_POINTS_PER_KILL : hudState[23]);
+    }
     wasEnded = ended;
     hud.summary.innerHTML = ended && summary ? summaryHtml(summary) : '';
   }
