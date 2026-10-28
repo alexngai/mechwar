@@ -37,7 +37,7 @@ SPACE = {
     'trade_reach': (0.0, 90.0),
 }
 # Each mode's own weights, tuned with --space: Capture the Flag's squads and when a carrier falls
-# back; Missile Assault's spread; Siege's crew; Convoy's escort.
+# back; Missile Assault's spread; Siege's crew; Convoy's escort. And when a rocket punch goes in.
 MODE_SPACE = {
     'ctf_raid': (0.0, 4.0),
     'ctf_escort': (0.0, 3.0),
@@ -51,6 +51,10 @@ MODE_SPACE = {
     'convoy_cover': (0.0, 20.0),
     'convoy_spare': (1.0, 4.0),
     'convoy_scout': (10.0, 60.0),
+    'punch_focus': (0.0, 3.0),
+    'punch_low': (0.0, 1.0),
+    'punch_alone': (0.0, 40.0),
+    'punch_slip': (0.5, 3.0),
 }
 MAPS = {'tdm': ['foundry', 'isotope', 'verdigris', 'riftline', 'sump', 'sinkhole', 'canopy', 'crashsite', 'ziggurat', 'span', 'walled'],
         'ma': ['foundry', 'verdigris', 'riftline', 'sinkhole', 'canopy', 'crashsite', 'ziggurat', 'span', 'walled'],
