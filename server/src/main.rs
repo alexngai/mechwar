@@ -255,17 +255,25 @@ async fn main() {
 }
 
 /// The lobby's view: public rooms, busiest first, and the modes and maps a room can be pinned
-/// to, each as [key, name] ("crashsite", "Crash Site").
+/// to, each as [key, name] ("crashsite", "Crash Site"); a map also lists the modes it plays
+/// ["crashsite", "Crash Site", ["tdm", …]].
 #[derive(Serialize)]
 struct Lobby {
     rooms: Vec<RoomInfo>,
     modes: Vec<(&'static str, &'static str)>,
-    maps: &'static [(&'static str, String)],
+    maps: &'static [(&'static str, String, Vec<&'static str>)],
 }
 
-/// The rotation's maps with their names, read from the maps once.
-static MAP_NAMES: LazyLock<Vec<(&'static str, String)>> =
-    LazyLock::new(|| ROTATION.iter().map(|&key| (key, Map::load(Map::index(key).expect("rotation names a map")).name)).collect());
+/// The rotation's maps with their names and the modes they play, read from the maps once.
+static MAP_NAMES: LazyLock<Vec<(&'static str, String, Vec<&'static str>)>> = LazyLock::new(|| {
+    ROTATION
+        .iter()
+        .map(|&key| {
+            let map = Map::index(key).expect("rotation names a map");
+            (key, Map::load(map).name, PLAYS[map].iter().map(|m| m.key()).collect())
+        })
+        .collect()
+});
 
 async fn list(State(app): State<App>) -> Json<Lobby> {
     let mut rooms: Vec<RoomInfo> = infos(&app.rooms).into_iter().filter(|r| r.public).collect();
@@ -753,6 +761,8 @@ mod tests {
         let canopy_modes = [Mode::TeamDeathmatch, Mode::MissileAssault, Mode::Siege, Mode::CaptureTheFlag, Mode::Convoy];
         assert_eq!(deck(&settings(None, Some("canopy"))), canopy_modes.map(|m| (m, canopy)));
         assert!(deck(&settings(Some(Mode::Deathmatch), Some("canopy"))).is_empty());
+        // The lobby lists the same modes for it.
+        assert_eq!(MAP_NAMES.iter().find(|m| m.0 == "canopy").unwrap().2, canopy_modes.map(|m| m.key()));
         // A room starts on a pair from its deck.
         let game = new_game(&settings(Some(Mode::Deathmatch), None), 3);
         assert_eq!(game.mode, Mode::Deathmatch);
