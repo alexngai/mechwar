@@ -15,7 +15,7 @@
 //! (`first_turret`).
 //!
 //! A Siege battleship is one too (`Kind::Ship`, owned by no player: see `ship_owner`), so it's
-//! shot, locked onto and fought like a turret, and guns mechs down like an MG turret; `siege.rs`
+//! shot, locked onto and fought like a turret, but holds its fire for the enemy base; `siege.rs`
 //! flies it. So are the base guns of the team modes (`Kind::Sentry`, nobody's either: see
 //! `sentry_owner`), manned like MG turrets; shot down, one goes offline a while, not away
 //! (game.rs). So, unarmed, is Convoy's hauler (`Kind::Hauler`, on no side: `NEUTRAL`), shot and
@@ -58,8 +58,8 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// Shot at, locked onto and fought like a turret, and manned: trains on enemies and fires
-    /// (`Game::man_turrets`).
+    /// Shot at, locked onto and fought like a turret, and manned (all but the battleship): trains
+    /// on enemies and fires (`Game::man_turrets`).
     pub fn turret(self) -> bool {
         matches!(self, Kind::MgTurret | Kind::RocketTurret | Kind::Ship | Kind::Sentry | Kind::Walker)
     }

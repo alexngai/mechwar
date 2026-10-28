@@ -135,14 +135,6 @@ const ESCORT_POINTS: f32 = 2.0;
 /// A dropped flag nobody can reach (no waypoint this near, or nothing under it) goes home.
 const FLAG_REACH: f32 = 12.0;
 const SHIP_POINTS: f32 = 0.05;
-/// A Siege battleship's guns: how far they reach (m; from its cruising height, a wide circle
-/// below), and their heavy, slow bursts: SHIP_BURST rounds SHIP_RATE a second apart, SHIP_PAUSE s
-/// between bursts, each round dealing SHIP_ROUND.
-const SHIP_GUN_RANGE: f32 = 110.0;
-const SHIP_BURST: u8 = 3;
-const SHIP_RATE: f32 = 2.5;
-const SHIP_PAUSE: f32 = 2.0;
-const SHIP_ROUND: f32 = 15.0;
 /// The team modes' base guns: they fire on enemies within SENTRY_RANGE of them, and in Siege on
 /// the enemy ship within SENTRY_SHIP_RANGE; bursts of SENTRY_BURST rounds SENTRY_RATE a second
 /// apart, SENTRY_PAUSE s between bursts, each round dealing SENTRY_ROUND, opening up on a fresh
@@ -1572,7 +1564,8 @@ impl Game {
         let tick = self.tick;
         for k in 0..self.deployables.len() {
             let d = self.deployables[k];
-            if !d.kind.turret() || d.hull <= 0.0 {
+            // A battleship's fought like a turret but doesn't fire on mechs: only the base, in siege.rs.
+            if !d.kind.turret() || d.kind == Kind::Ship || d.hull <= 0.0 {
                 continue;
             }
             let (t, rt) = (items(&self.arsenal), self.arsenal.get(MechClass::B, rocket));
@@ -1581,7 +1574,6 @@ impl Game {
             let (reach, rate) = self.defense.as_ref().map_or((1.0, 1.0), |df| (df.reach_of(d.owner), df.rate_of(d.owner)));
             let (range, speed) = match d.kind {
                 Kind::MgTurret => (t.mg_turret_range, f32::INFINITY),
-                Kind::Ship => (SHIP_GUN_RANGE, f32::INFINITY),
                 Kind::Sentry => (SENTRY_RANGE, f32::INFINITY),
                 Kind::Walker => (WALKER_RANGE, f32::INFINITY),
                 _ => (t.rocket_turret_range, rt.alt_speed),
@@ -1629,7 +1621,6 @@ impl Game {
             let d = &mut self.deployables[k];
             if d.kind != Kind::RocketTurret {
                 let (burst, rate_hz, pause) = match d.kind {
-                    Kind::Ship => (SHIP_BURST, SHIP_RATE, SHIP_PAUSE),
                     Kind::Sentry => (SENTRY_BURST, SENTRY_RATE, SENTRY_PAUSE),
                     Kind::Walker => (WALKER_BURST, WALKER_RATE, WALKER_PAUSE),
                     _ => (t.mg_turret_burst as u8, t.mg_turret_rate, t.mg_turret_pause),
@@ -1660,7 +1651,6 @@ impl Game {
         let ray = Ray::new(deploy::gun(t, &d), weapon::in_cone(d.yaw, d.pitch, t.mg_turret_spread_deg.to_radians(), self.tick, u32::from(d.owner)));
         let reach = self.defense.as_ref().map_or(1.0, |df| df.reach_of(d.owner));
         let range = match d.kind {
-            Kind::Ship => SHIP_GUN_RANGE,
             Kind::Sentry => SENTRY_SHIP_RANGE,
             Kind::Walker => WALKER_RANGE,
             _ => t.mg_turret_range * reach,
@@ -1681,7 +1671,6 @@ impl Game {
         let worn = worn(&self.deployables, t, d.team, turret, hit.is_some(), ray.point_at(best));
         let hit = hit.filter(|_| matches!(self.phase, Phase::Playing { .. }));
         let damage = match d.kind {
-            Kind::Ship => SHIP_ROUND,
             Kind::Sentry => SENTRY_ROUND,
             Kind::Walker => WALKER_ROUND,
             _ => t.mg_turret_damage,
@@ -4101,6 +4090,24 @@ mod tests {
         }
         let hull = game.deployables.iter().find(|d| d.kind == Kind::Ship).map_or(0.0, |s| s.hull);
         assert!(hull < siege::SHIP_HULL, "the base guns let the ship be");
+    }
+
+    #[test]
+    fn a_ship_holds_its_fire_on_mechs() {
+        let (mut game, id) = siege(false);
+        let me = game.players.iter().position(|p| p.id == id).unwrap();
+        let (team, feet) = (game.players[me].team, game.players[me].mech.pos);
+        let pos = feet + Vector::new(0.0, 30.0, 0.0);
+        game.deployables.push(Deployable { kind: Kind::Ship, team: 1 - team, owner: deploy::ship_owner(1 - team), pos, yaw: 0.0, pitch: 0.0, hull: siege::SHIP_HULL, placed: 0, expires: u32::MAX, ready: 0, burst: 0 });
+        for _ in 0..secs(4.0) {
+            if let Some(s) = game.deployables.iter_mut().find(|d| d.kind == Kind::Ship) {
+                s.pos = pos;
+            }
+            (game.players[me].mech.pos, game.players[me].mech.shield) = (feet, 0.0);
+            game.step();
+            assert!(!game.events.iter().any(|e| matches!(e, Event::TurretShot { owner, .. } if *owner == deploy::ship_owner(1 - team))), "the ship fired");
+        }
+        assert_eq!(game.players[me].mech.health, game.arsenal.of(&game.players[me].mech).health_max);
     }
 
     #[test]

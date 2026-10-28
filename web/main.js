@@ -114,8 +114,6 @@ const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTI
 // The HUD marks our side in blue and the other side in red, whichever team we're on.
 const FRIEND = TEAMS[0], FOE = TEAMS[1];
 const DEATHMATCH = 1, MISSILE_ASSAULT = 2, SIEGE = 3, CAPTURE_THE_FLAG = 4, CONVOY = 5, DEFENSE = 6; // their indices in the sim's Mode::ALL
-/** Battleships' owner ids start here, past every player's (deploy::ship_owner). */
-const SHIP_OWNERS = 8;
 /** Base guns' owner ids start here, past the ships' (deploy::sentry_owner). */
 const SENTRY_OWNERS = 10;
 /** A solo kill's points in Deathmatch (Game's POINTS_PER_KILL with the killer's bonus); a Siege
@@ -1122,10 +1120,8 @@ function frame(now) {
         fx.muzzle(from, heading.subVectors(end, from).normalize());
         fx.beam(from, end);
         fx.impact(end);
-        // A battleship's guns (owners past every player's) boom; a turret rattles.
-        if (a >= SENTRY_OWNERS) sound.shot('rotary', from);
-        else if (a >= SHIP_OWNERS) sound.shipGun(from);
-        else sound.shot('vulcan', from);
+        // A base gun (owners past every player's) whirs; a turret rattles.
+        sound.shot(a >= SENTRY_OWNERS ? 'rotary' : 'vulcan', from);
       }
       if (b >= 0 && a === myId) hits.push({ at: now, kill: false });
       if (b === myId) tookHit(a, now, from);
@@ -1221,7 +1217,7 @@ function frame(now) {
   drawSmoke(dt);
   drawDeployables(now, myTeam);
   if (net) drawPens(now, hudState, myTeam);
-  objectives.drawShips(game.deployables(), zones, myTeam, FRIEND.accent, FOE.accent, now, dt, turretGuns);
+  objectives.drawShips(game.deployables(), zones, myTeam, FRIEND.accent, FOE.accent, now, dt);
   objectives.drawSentries(game.deployables(), myTeam, FRIEND.accent, FOE.accent, dt, turretGuns);
   objectives.drawFlags(ctf, myTeam, FRIEND.accent, FOE.accent, top, now);
   objectives.drawHauler(game.deployables(), convoy, myTeam, FRIEND.accent, FOE.accent, dt, now);
