@@ -891,6 +891,8 @@ function frame(now) {
     ability: curr[S.ABILITY_T] > 0, damage: 1 - curr[S.HEALTH] / T('health_max'), shielded: !!curr[S.SHIELD],
     repair: repairPhase(curr[S.REPAIR_T]), cloak: myCloak,
     wind: T('alt_charge_time') > 0 ? curr[S.ALT_CHARGE] : 0, burn: curr[S.BURN],
+    // A new match docks us with no launch wait; a kill leaves the respawn delay to sit out.
+    docked: hudState?.[16] === 0,
   });
   if (curr[S.JAMMED] > 0) fx.jam(toChest(spark.copy(pos), classIdx), dt);
 
