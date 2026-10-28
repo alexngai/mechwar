@@ -23,7 +23,7 @@ const SIM = {
   BASE_HULL: 1000, MISSILE_SECONDS: 10, MISSILE_FLIGHT: 10, MISSILE_DAMAGE: 20,
   STATION_CAP: 400, STATION_REFILL: 10, STATION_RATE: 30, CARRY_MAX: 100, BASE_RADIUS: 14, TRICKLE: 1, LAUNCH_EU: 500,
   DROP_RADIUS: 4, DROP_SECONDS: 30, SHIP_HULL: 3000, SHIP_SPEED: 4, DUEL_RANGE: 120, DUEL_DPS: 30, BOMBARD_DPS: 15,
-  SHIP_GUN_RANGE: 110, AA_RANGE: 150, AA_DPS: 25,
+  AA_RANGE: 150, AA_DPS: 25,
   TAKE_SECONDS: 3, CAPTURES_TO_WIN: 3, PICKUP_RADIUS: 3, FLAG_CAPTURE_POINTS: 200, FLAG_RETURN_POINTS: 50, LADEN_SPEED: 0.8, // ctf.rs, lib.rs
   SPEED: 10, ESCORT_SPEEDS: [0.75, 1, 1.25, 1.5], ESCORT_RANGE: 30, SHIELD: 1500, STALL_SECONDS: 8, ESCORT_POINTS: 2, // convoy.rs
   KILL_XP: 100, BOT_KILL_XP: 25, HEAL_XP: 0.5, MATCH_XP: 100, WIN_XP: 150, CAPTURE_XP: 50, EU_XP: 0.5, SHIP_XP: 0.05, ESCORT_XP: 1, MAX_LEVEL: 99,
@@ -234,7 +234,7 @@ async function modes() {
       `Each team has a base with ${SIM.BASE_HULL.toLocaleString('en')} hull, and only battleships can hurt it. Fill your bank with ${SIM.LAUNCH_EU} energy (EU) to launch yours.`,
       `Draw EU at the energy station mid-map: it gives ${SIM.STATION_RATE} EU/s in all, shared by everyone in its zone, either side, and holds ${SIM.STATION_CAP}, refilling ${SIM.STATION_REFILL}/s. Carry up to ${SIM.CARRY_MAX} home and bank it within ${SIM.BASE_RADIUS} m of your base. While no ship is up, each bank also trickles in ${SIM.TRICKLE} EU/s.`,
       `A downed mech drops what it carried, for anyone within ${SIM.DROP_RADIUS} m to pick up for ${SIM.DROP_SECONDS} s.`,
-      `A battleship has ${SIM.SHIP_HULL.toLocaleString('en')} hull. It flies at ${SIM.SHIP_SPEED} m/s for the enemy base, gunning down mechs within ${SIM.SHIP_GUN_RANGE} m, and bombards the base at ${SIM.BOMBARD_DPS}/s once over it. Two ships within ${SIM.DUEL_RANGE} m stop to duel, ${SIM.DUEL_DPS}/s each.`,
+      `A battleship has ${SIM.SHIP_HULL.toLocaleString('en')} hull. It flies at ${SIM.SHIP_SPEED} m/s for the enemy base, holding its fire on mechs, and bombards the base at ${SIM.BOMBARD_DPS}/s once over it. Two ships within ${SIM.DUEL_RANGE} m stop to duel, ${SIM.DUEL_DPS}/s each.`,
       `Whoever holds the anti-air (AA) zone, taken like a silo, hits the enemy ship within ${SIM.AA_RANGE} m for ${SIM.AA_DPS}/s; base guns fire on it within ${SIM.SENTRY_SHIP_RANGE} m.`,
       `Destroy the enemy base to win; at time, more hull left wins. Pilots score ${SIM.CAPTURE_POINTS} for taking the AA, ${SIM.EU_POINTS} per EU banked and ${SIM.SHIP_POINTS} per point of hull shot off the enemy ship.`,
     ],

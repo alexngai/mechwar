@@ -369,13 +369,13 @@ export class Objectives {
   /**
    * The battleships among `list` (WasmNetClient.deployables), colored by side for `myTeam`, and the
    * fire they trade: with each other in range, with the AA gun's holder (`zones`), and on the base
-   * they've reached. `guns` gets each ship's gun, by `${owner}:2` as MG turrets' are.
+   * they've reached.
    */
-  drawShips(list, zones, myTeam, friend, foe, now, dt, guns) {
+  drawShips(list, zones, myTeam, friend, foe, now, dt) {
     const live = new Set();
     for (let i = 0; i < list.length; i += 10) {
       if (list[i] !== SHIP) continue;
-      const [, team, owner, x, y, z, , , , hull] = list.subarray(i, i + 10);
+      const [, team, , x, y, z, , , , hull] = list.subarray(i, i + 10);
       let s = this.ships.get(team);
       if (!s) {
         s = { group: shipMesh(), team, pos: new THREE.Vector3(x, y, z) };
@@ -389,7 +389,6 @@ export class Objectives {
       s.hull = hull;
       s.group.position.lerp(s.pos, s.group.position.lengthSq() ? 1 - Math.exp(-8 * dt) : 1);
       s.group.userData.accent.color.setHex(team === myTeam ? friend : foe);
-      guns.set(`${owner}:2`, s.group.position.clone().addScaledVector(UP, -6));
       // Engines.
       for (const e of s.group.userData.engines) this.fx.thrust(e.getWorldPosition(new THREE.Vector3()), backward(s.group), 2.2, dt, true);
     }
