@@ -490,29 +490,32 @@ fn preferred_range(t: &Tuning) -> f32 {
 }
 
 /// Engagement band around the preferred range: close in beyond `.1`, back off inside `.0`. A
-/// rocket punch's carrier fights inside half its lunge: a full one's flight is long enough for a
-/// target on the move to slip it.
-fn band(t: &Tuning, p: &Policy) -> (f32, f32) {
-    if alt_use(t) == AltUse::Melee {
-        let r = preferred_range(t).min(0.5 * t.alt_lunge);
+/// rocket punch's carrier going in fights inside half its lunge: a full one's flight is long
+/// enough for a target on the move to slip it.
+fn band(t: &Tuning, p: &Policy, going_in: bool) -> (f32, f32) {
+    let r = preferred_range(t);
+    if going_in {
+        let r = r.min(0.5 * t.alt_lunge);
         return (p.band_near * r, r);
     }
-    let r = preferred_range(t);
     (p.band_near * r, p.band_far * r)
 }
 
 /// Whether a pile driver wound `charge` (0-1) and let go now lunges onto `target`: in the lunge's
 /// reach with nothing in the way (low cover it sees over would stop the dash), and the target not
-/// moving off more than the strike reaches in the time the lunge takes to get where it stands (a
-/// dash a dodge's drag eases off, as `melee::lunge`'s).
-fn lunge_lands(arena: &Arena, t: &Tuning, me: &Mech, target: &Mech, charge: f32) -> bool {
+/// moving off (across, or away: coming on, it meets the lunge) more than `slip` times the strike's
+/// reach in the time the lunge takes to get where it stands (a dash a dodge's drag eases off, as
+/// `melee::lunge`'s).
+pub(crate) fn lunge_lands(arena: &Arena, t: &Tuning, me: &Mech, target: &Mech, charge: f32, slip: f32) -> bool {
     let gap = (flat(target.pos - me.pos).length() - 2.0 * t.mech_radius).max(0.0);
     let flight = (2.0 * gap / t.dodge_drag.max(1.0)).sqrt();
     // Along both flanks of the hull, so it doesn't clip a corner.
     let d = target.pos - me.pos;
     let side = Vector::new(-d.z, 0.0, d.x).normalize_or_zero() * t.mech_radius;
     let clear = || [side, -side].iter().all(|&s| arena.cast_ray(&Ray::new(me.pos + s + Vector::Y * (0.3 * t.mech_height), d.normalize_or_zero()), d.length()).is_none());
-    gap <= t.alt_lunge * charge && flat(target.vel).length() * flight <= t.alt_melee && clear()
+    let (way, v) = (flat(d).normalize_or_zero(), flat(target.vel));
+    let off = v - way * v.dot(way).min(0.0);
+    gap <= t.alt_lunge * charge && off.length() * flight <= slip * t.alt_melee && clear()
 }
 
 /// Guardrails on a random build: a repair torch wants a gun that reaches well past its beam (it
@@ -646,6 +649,19 @@ pub struct Policy {
     pub post_reach: f32,
     /// How far it strafes about a post out in the open (m).
     pub post_leash: f32,
+    /// A rocket punch's carrier goes in on its target only on an opening (`Bot::opening`): this
+    /// many teammates on it, its hull at most this share, or (above 0) no other enemy it knows of
+    /// within this of it (m). Otherwise it fights with its gun from posts, wound up, and lets go
+    /// from there when the lunge would land. It lets go when the target would move off no more
+    /// than `punch_slip` times the strike's reach while the lunge flies (`lunge_lands`). In
+    /// bot-only matches (`piston_match_probe`, 6 seeds), against going in on every target: releases
+    /// 2.02 -> 2.71 a minute, deaths 2.57 -> 2.30, its side's share of kills 47.2 -> 50.5%. With
+    /// only enemies in view counting against alone (the target mostly is the one in view), deaths
+    /// went back up to 2.5 a minute.
+    pub punch_focus: f32,
+    pub punch_low: f32,
+    pub punch_alone: f32,
+    pub punch_slip: f32,
 }
 
 impl Default for Policy {
@@ -692,6 +708,10 @@ impl Default for Policy {
             post_stay: 0.09,
             post_reach: 23.0,
             post_leash: 3.5,
+            punch_focus: 2.0,
+            punch_low: 0.5,
+            punch_alone: 60.0,
+            punch_slip: 2.0,
         }
     }
 }
@@ -776,6 +796,8 @@ pub struct Bot {
     cooling: bool,
     /// Letting a wound pile driver go this tick, to strike; otherwise it stays wound.
     striking: bool,
+    /// The enemy a rocket punch's carrier is going in on (`opening`).
+    going_in: Option<u8>,
     /// Enemies it knows of (see `perceive`), the one it's fighting, and the waypoint it's
     /// patrolling to (and until when) with none known.
     contacts: Vec<Contact>,
@@ -861,6 +883,7 @@ impl Bot {
             grenade_at: 0,
             cooling: false,
             striking: false,
+            going_in: None,
             contacts: Vec::new(),
             focus: None,
             patrol: None,
@@ -909,8 +932,20 @@ impl Bot {
         };
         (self.path_goal, self.vantage, self.reached) = (None, None, None);
         self.cooling = false;
-        (self.focus, self.patrol, self.retreat, self.post, self.support) = (None, None, None, None, None);
+        (self.focus, self.patrol, self.retreat, self.post, self.support, self.going_in) = (None, None, None, None, None, None);
         self.contacts.clear();
+    }
+
+    /// Whether it holds fire to cool: firing in bursts, it stops near the lockout and lets heat
+    /// fall well down (it sheds fastest low) before firing again.
+    fn cool(&mut self, t: &Tuning, me: &Mech) -> bool {
+        let p = &self.policy;
+        if me.overheated || me.heat >= p.cool_high * t.heat_max {
+            self.cooling = true;
+        } else if me.heat <= p.cool_low * t.heat_max {
+            self.cooling = false;
+        }
+        self.cooling
     }
 
     /// Somewhere to fall back to from an enemy at `threat` (its eye): an orb in reach to mend
@@ -1048,6 +1083,12 @@ impl Bot {
     /// The enemy it's fighting, as of its last `perceive`.
     pub fn focus(&self) -> Option<u8> {
         self.focus
+    }
+
+    /// The enemy its rocket punch is going in on, if any.
+    #[cfg(test)]
+    pub(crate) fn going_in(&self) -> Option<u8> {
+        self.going_in
     }
 
     /// The enemies it has in view, and where: what it tells its teammates.
@@ -1221,7 +1262,7 @@ impl Bot {
     }
 
     /// `think`, with a hurt teammate a repair torch could mend, and how high its middle is off its
-    /// feet: it does when no enemy is in sight.
+    /// feet: it does when no enemy is in sight (and, beam bent onto it, as it fights).
     #[allow(clippy::too_many_arguments)]
     pub fn think_with(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: Option<&Mech>, heal: Option<(&Mech, f32)>, tick: u32) -> Input {
         self.striking = false;
@@ -1285,7 +1326,8 @@ impl Bot {
         }
         if let Some((mate, mid)) = heal.filter(|_| alt_use(t) == AltUse::Beam && !target.is_some_and(|m| m.health > 0.0 && sees_at(arena, t, me, self.chest(t, self.focus, m.pos)))) {
             self.mending = true;
-            return mend(t, me, mate, mid, max_turn);
+            let cooling = self.cool(t, me);
+            return mend(t, me, mate, mid, max_turn, cooling);
         }
         let Some(target) = target.filter(|m| m.health > 0.0) else {
             // Nothing to fight in view. One that just ducked out of view nearby gets a grenade at
@@ -1351,7 +1393,8 @@ impl Bot {
         self.seen_step = step.unwrap_or(Vector::ZERO);
         self.seen_last = Some(self.seen[0]);
         let range = flat(target.pos - me.pos).length();
-        let (near, far) = band(t, &self.policy);
+        self.going_in = (alt_use(t) == AltUse::Melee).then(|| self.focus.filter(|&id| self.opening(t, target, id, range))).flatten();
+        let (near, far) = band(t, &self.policy, self.going_in.is_some());
 
         if sees_past_barriers(arena, t, me, chest) {
             let err = self.aim_error(t);
@@ -1385,7 +1428,9 @@ impl Bot {
             let mut at = Features::default();
             at.flag(Feature::Engaged, true).set(Feature::Hull, me.health / t.health_max).set(Feature::Heat, me.heat / t.heat_max);
             at.flag(Feature::Overheated, me.overheated).flag(Feature::Hit, took_damage).set(Feature::Range, range / far);
-            at.set(Feature::Throws, f32::from(me.grenades)).set(Feature::Charges, f32::from(me.emps)).flag(Feature::AltReady, alt);
+            // A beam doesn't take the aim, so grenades needn't wait on it (they did, and a torch
+            // never threw one: its beam is ready the whole of a grenade's reach).
+            at.set(Feature::Throws, f32::from(me.grenades)).set(Feature::Charges, f32::from(me.emps)).flag(Feature::AltReady, alt && use_ != AltUse::Beam);
             at.flag(Feature::GrenadeReady, tick >= self.grenade_at && dist < self.policy.grenade_range && dist > t.grenade_radius + 2.0);
             at.flag(Feature::FirstSight, self.seen.len() == 1).flag(Feature::Melee, use_ == AltUse::Melee).flag(Feature::LimpetOut, me.limpet);
             at.flag(Feature::OrbNear, self.orbs.iter().any(|o| o.distance(me.pos) < self.policy.orb_range));
@@ -1436,14 +1481,7 @@ impl Bot {
                 self.strafe_until = tick + secs(0.8 + 1.2 * self.rand());
             }
             let dodge = took_damage && me.dodge_cooldown <= 0.0 && self.rand() < self.policy.dodge_chance;
-            // Fire in bursts: stop near the lockout and let heat fall well down (it sheds fastest
-            // low) before firing again.
-            let p = &self.policy;
-            if me.overheated || me.heat >= p.cool_high * t.heat_max {
-                self.cooling = true;
-            } else if me.heat <= p.cool_low * t.heat_max {
-                self.cooling = false;
-            }
+            self.cool(t, me);
             // The dome or barrier its shots would meet on the way: the other side's they wear down,
             // so it fires on; its own side's stops them for nothing, so it holds fire (and steps
             // out past it, in `weave`).
@@ -1469,7 +1507,7 @@ impl Bot {
             if let Some(why) = why
                 && let Some(r) = self.shelter(arena, nav, t, me, self.eye(t, self.focus, target.pos), why, tick)
             {
-                (self.retreat, self.post) = (Some(r), None);
+                (self.retreat, self.post, self.going_in) = (Some(r), None, None);
                 let mut input = self.hold(arena, nav, t, me, r, Some(target), took_damage, tick);
                 // A barrier raised toward the threat (turning to it for the tick) covers the fall
                 // back, if the threat's not where the barrier would go up.
@@ -1493,15 +1531,17 @@ impl Bot {
             // Perches keep climbing to their vantage too, then hold it, and a bot cooling off
             // repositions along its route. In range, hold the band and strafe.
             // On its way to an order, it keeps going there, firing as it goes.
-            // A pile driver fully wound goes straight in, and lets go, facing the target so the
-            // lunge goes for it, once the lunge would land; it steers the lunge onto it as it flies.
+            // A pile driver fully wound and going in goes straight in; wherever it stands, it lets
+            // go, facing the target so the lunge goes for it, once the lunge would land. It steers
+            // the lunge onto it as it flies.
             let to = flat(target.pos - me.pos);
             let wound = use_ == AltUse::Melee && me.alt_held && me.alt_charge >= 1.0;
+            let charging = wound && self.going_in.is_some();
             let lunging = use_ == AltUse::Melee && me.strike > 0.0;
-            self.striking = wound && wrap(atan2f(-to.x, -to.z) - new_yaw).abs() < STRIKE_CONE && lunge_lands(arena, t, me, target, me.alt_charge);
+            self.striking = wound && wrap(atan2f(-to.x, -to.z) - new_yaw).abs() < STRIKE_CONE && lunge_lands(arena, t, me, target, me.alt_charge, self.policy.punch_slip);
             at.flag(Feature::PerchRole, perch).flag(Feature::Errand, errand.is_some()).flag(Feature::Cooling, self.cooling);
             at.set(Feature::RangeNear, range / near).set(Feature::TargetHull, self.contacts.iter().find(|c| Some(c.id) == self.focus).map_or(1.0, |c| c.hull));
-            let (move_x, move_z) = if (wound && range <= far) || lunging {
+            let (move_x, move_z) = if (charging && range <= far) || lunging {
                 let (dir, rot) = (to.normalize_or_zero(), Rotation::from_rotation_y(new_yaw));
                 (dir.dot(rot * Vector::X), dir.dot(rot * Vector::NEG_Z))
             } else if let Some(way) = (!perch && errand.is_none()).then(|| self.weave(arena, t, me, target, shield, haven)).flatten().filter(|&w| ledge_free(arena, me.pos, w)) {
@@ -1551,7 +1591,9 @@ impl Bot {
             // Behind its own side's shield, a charged gun holds what it has: let go, it would fire
             // into it.
             let fire = (blocked && t.charge_time > 0.0) || (shell.is_none() && !self.cooling && reaches && !hidden && if t.charge_time > 0.0 { !(on_target && me.charge >= 0.85 && sure) } else { on_target && !blocked });
-            let alt_fire = alt
+            // A hurt teammate in reach just off the aim: the beam bends onto it as the gun fires on.
+            let bend = use_ == AltUse::Beam && heal.is_some_and(|(mate, mid)| bends_to(t, eye, new_yaw, new_pitch, mate.pos + Vector::Y * mid));
+            let alt_fire = (alt || bend)
                 && alt_cool
                 && !hidden
                 && !(blocked && t.alt_pierce <= 0.5)
@@ -1559,6 +1601,9 @@ impl Bot {
                     AltUse::Lock => me.lock != 0 && me.lock_time >= t.alt_lock_time,
                     AltUse::Release => on_target && !me.alt_held,
                     AltUse::Melee => !self.striking,
+                    // A beam cools with the gun: held on as the gun cools, it holds the heat up (a
+                    // beam sheds none), and the gun waits on heat that never falls.
+                    AltUse::Beam => (bend || on_target) && !self.cooling,
                     _ => on_target,
                 };
             at.flag(Feature::Fire, fire && !blocked).flag(Feature::AltFire, alt_fire).flag(Feature::Striking, self.striking);
@@ -1579,7 +1624,7 @@ impl Bot {
                 // Wound and going in, on thrusters while there's fuel to spare; or fallen behind its
                 // order (an objective on the move, as Convoy's hauler is), catching up while the
                 // fuel lasts.
-                boost: (wound && range <= far && !self.striking && me.fuel > 0.5 * t.fuel_max)
+                boost: (charging && range <= far && !self.striking && me.fuel > 0.5 * t.fuel_max)
                     || (errand.as_ref().is_some_and(|o| flat(o.pos - me.pos).length() > CATCH_UP) && me.fuel > 0.3 * t.fuel_max),
                 hover: tick < self.hover_until,
                 // An EMP when it would land (taking the target for our size) on one not jammed
@@ -1601,12 +1646,26 @@ impl Bot {
         self.walk(arena, nav, t, me, errand.as_ref().unwrap_or(target), false, tick)
     }
 
+    /// Whether a rocket punch's carrier goes in on enemy `id` (`target`, `range` off): it's going
+    /// in on it already, or it's come within the punch's band anyway, or there's an opening:
+    /// teammates on it (`punch_focus` of them), it's low (`punch_low`), or it's alone (no other
+    /// enemy it knows of within `punch_alone` of it). Going in on every target, it fell back hurt
+    /// from close in and was shot down on the way half again as often as other bots.
+    fn opening(&self, t: &Tuning, target: &Mech, id: u8, range: f32) -> bool {
+        let p = &self.policy;
+        let mates = self.mates.iter().filter(|(_, f)| *f == Some(id)).count() as f32;
+        let hull = self.contacts.iter().find(|c| c.id == id).map_or(1.0, |c| c.hull);
+        let alone = p.punch_alone > 0.0 && !self.contacts.iter().any(|c| c.id != id && flat(c.pos - target.pos).length() < p.punch_alone);
+        self.going_in == Some(id) || range <= band(t, p, true).1 || mates >= p.punch_focus || hull <= p.punch_low || alone
+    }
+
     /// Its post against `target` (weighed again every POST_EVERY, or for a new target), and where
     /// to stand on it now: in its cover while it cools, stepped out to fire otherwise. None where
-    /// there are no spots to weigh, or no kit known for the target; and for a pile driver's
-    /// carrier, which fights by going in.
+    /// there are no spots to weigh, or no kit known for the target; and for a rocket punch's
+    /// carrier going in.
     fn post_point(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: &Mech, tick: u32) -> Option<Stand> {
-        if alt_use(t) == AltUse::Melee {
+        if self.going_in.is_some() {
+            self.post = None;
             return None;
         }
         let spots = nav.spots()?;
@@ -1693,23 +1752,18 @@ impl Bot {
     fn keep_post(&mut self, nav: &Nav, t: &Tuning, me: &Mech, tick: u32) -> Option<Input> {
         let (post, id) = self.post?;
         let spots = nav.spots()?;
-        let c = self.contacts.iter().find(|c| c.id == id && c.seen_at.is_some_and(|at| tick.saturating_sub(at) < secs(POST_HOLD)));
-        let Some(c) = c else {
+        let seen = self.contacts.iter().find(|c| c.id == id && c.seen_at.is_some_and(|at| tick.saturating_sub(at) < secs(POST_HOLD))).map(|c| c.pos);
+        let Some(seen) = seen else {
             self.post = None;
             return None;
         };
-        let p = &self.policy;
-        if me.overheated || me.heat >= p.cool_high * t.heat_max {
-            self.cooling = true;
-        } else if me.heat <= p.cool_low * t.heat_max {
-            self.cooling = false;
-        }
+        let cooling = self.cool(t, me);
         let at = match post.peek {
-            Some(p) if !self.cooling => spots.spots[p].pos,
+            Some(p) if !cooling => spots.spots[p].pos,
             _ => spots.spots[post.spot].pos,
         };
         let max_turn = self.max_turn(t);
-        let (yaw, pitch) = look_at(me.pos + Vector::Y * t.eye_height, self.chest(t, Some(id), c.pos));
+        let (yaw, pitch) = look_at(me.pos + Vector::Y * t.eye_height, self.chest(t, Some(id), seen));
         let new_yaw = me.yaw + wrap(yaw - me.yaw).clamp(-max_turn, max_turn);
         let new_pitch = me.pitch + (pitch - me.pitch).clamp(-max_turn, max_turn);
         let off = flat(at - me.pos);
@@ -1763,7 +1817,7 @@ impl Bot {
         let (r, to, clear) = (t.dome_radius, flat(target.pos - me.pos), 2.0 * t.mech_radius);
         let off = |d: &Deployable, m: &Mech| (m.pos - d.pos).length();
         let walled = shield.filter(|d| d.team == self.team && d.kind == Kind::Barrier);
-        if walled.is_none() && to.length() <= band(t, &self.policy).1 && self.shields.iter().any(|d| d.kind == Kind::Dome && off(d, target) < r && off(d, me) > 0.6 * r) {
+        if walled.is_none() && to.length() <= band(t, &self.policy, self.going_in.is_some()).1 && self.shields.iter().any(|d| d.kind == Kind::Dome && off(d, target) < r && off(d, me) > 0.6 * r) {
             return Some(to);
         }
         if self.shields.iter().any(|d| d.kind == Kind::Dome && d.team == self.team && off(d, me) < r + clear && off(d, target) >= r) {
@@ -1786,7 +1840,7 @@ impl Bot {
     #[allow(clippy::too_many_arguments)]
     fn walk(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: &Mech, watch: bool, tick: u32) -> Input {
         let max_turn = self.max_turn(t);
-        let (range, far) = (flat(target.pos - me.pos).length(), band(t, &self.policy).1);
+        let (range, far) = (flat(target.pos - me.pos).length(), band(t, &self.policy, self.going_in.is_some()).1);
         let toward = self.route(arena, nav, t, me, target, tick);
         let dir = toward.normalize_or_zero();
         let face = if watch { flat(target.pos - me.pos) } else { dir };
@@ -1981,13 +2035,20 @@ fn noise(m: &Mech) -> f32 {
     }
 }
 
+/// Whether a beam held along (`yaw`, `pitch`) from `eye` bends onto a mech with its middle at
+/// `mid`: in reach, and within `weapon::BEAM_SNAP_COS` of the aim.
+fn bends_to(t: &Tuning, eye: Vector, yaw: f32, pitch: f32, mid: Vector) -> bool {
+    let to = mid - eye;
+    let aim = Rotation::from_rotation_y(yaw) * Rotation::from_rotation_x(pitch) * Vector::NEG_Z;
+    to.length() < t.alt_beam && to.normalize_or_zero().dot(aim) > weapon::BEAM_SNAP_COS
+}
+
 /// A repair torch's input for mending `mate`: square on, closing to half the beam's reach, the
-/// beam held while it's on them and the heat allows.
-fn mend(t: &Tuning, me: &Mech, mate: &Mech, mid: f32, max_turn: f32) -> Input {
+/// beam held once it bends onto them and while not `cooling` (`Bot::cool`).
+fn mend(t: &Tuning, me: &Mech, mate: &Mech, mid: f32, max_turn: f32, cooling: bool) -> Input {
     let (yaw, pitch) = look_at(me.pos + Vector::Y * t.eye_height, mate.pos + Vector::Y * mid);
     let new_yaw = me.yaw + wrap(yaw - me.yaw).clamp(-max_turn, max_turn);
     let new_pitch = me.pitch + (pitch - me.pitch).clamp(-max_turn, max_turn);
-    let on = wrap(yaw - new_yaw).abs() < AIM_TOLERANCE && (pitch - new_pitch).abs() < AIM_TOLERANCE;
     let to = flat(mate.pos - me.pos);
     let dir = if to.length() > 0.5 * t.alt_beam { to.normalize_or_zero() } else { Vector::ZERO };
     let rot = Rotation::from_rotation_y(new_yaw);
@@ -1996,7 +2057,7 @@ fn mend(t: &Tuning, me: &Mech, mate: &Mech, mid: f32, max_turn: f32) -> Input {
         move_z: dir.dot(rot * Vector::NEG_Z),
         yaw: new_yaw,
         pitch: new_pitch,
-        alt_fire: on && to.length() < t.alt_beam && !me.overheated && me.heat < 0.85 * t.heat_max,
+        alt_fire: bends_to(t, me.pos + Vector::Y * t.eye_height, new_yaw, new_pitch, mate.pos + Vector::Y * mid) && !cooling,
         ..Input::default()
     }
 }
@@ -2494,7 +2555,7 @@ mod tests {
         // A Light speed boosts to close on a target beyond its band.
         let light = t.for_class(MechClass::A);
         let me = Mech { class: MechClass::A, ..spawn_mech(&light, Vector::new(0.0, 0.1, 40.0)) };
-        let far = spawn_mech(&light, Vector::new(0.0, 0.1, 40.0 - band(&light, &Policy::default()).1 - 4.0));
+        let far = spawn_mech(&light, Vector::new(0.0, 0.1, 40.0 - band(&light, &Policy::default(), false).1 - 4.0));
         assert!(Bot::new(1).think(&arena, nav, &light, &me, Some(&far), 0).ability, "no speed boost toward a far target");
 
         // A target seen 21 m off that ducks behind the wall gets a grenade at its last spot.
@@ -2610,6 +2671,29 @@ mod tests {
     }
 
     #[test]
+    fn rocket_punches_go_in_on_an_opening() {
+        // A rocket punch's carrier 20 m from its target, a second enemy at the target's side: it
+        // holds off with its gun, and goes in once the target's alone, low, or two teammates are on it.
+        let (arena, nav, t) = blockout();
+        let loadout = Loadout::named("stitcher", "piston");
+        let t = Arsenal::new(&t).get(MechClass::B, loadout).clone();
+        let me = Mech { loadout, ..spawn_mech(&t, Vector::new(0.0, 0.1, 40.0)) };
+        let (target, other) = (spawn_mech(&t, Vector::new(0.0, 0.1, 20.0)), spawn_mech(&t, Vector::new(5.0, 0.1, 19.0)));
+        let goes_in = |crowd: bool, hull: f32, mate: bool| {
+            let mut bot = Bot::new(1);
+            bot.mates = if mate { vec![(Vector::ZERO, Some(1)); 2] } else { Vec::new() };
+            let enemies: Vec<_> = [(1, target, hull), (2, other, 1.0)].into_iter().take(if crowd { 2 } else { 1 }).collect();
+            assert_eq!(bot.perceive(&arena, &t, &me, &enemies, 1), Some(1));
+            bot.think(&arena, nav, &t, &me, Some(&target), 1);
+            bot.going_in.is_some()
+        };
+        assert!(!goes_in(true, 1.0, false), "went in on a crowd");
+        assert!(goes_in(false, 1.0, false), "not on a target alone");
+        assert!(goes_in(true, 0.4, false), "not on a low one");
+        assert!(goes_in(true, 1.0, true), "not on one teammates are on");
+    }
+
+    #[test]
     fn bots_work_every_secondary() {
         let blockout = Map::index("blockout").unwrap();
         let (arena, nav, arsenal) = (Arena::new(&Map::load(blockout)), Nav::for_map(blockout), Arsenal::new(&Tuning::default()));
@@ -2658,6 +2742,31 @@ mod tests {
     }
 
     #[test]
+    fn repair_torches_throw_grenades_and_cool_with_the_gun() {
+        let blockout = Map::index("blockout").unwrap();
+        let (arena, nav, arsenal) = (Arena::new(&Map::load(blockout)), Nav::for_map(blockout), Arsenal::new(&Tuning::default()));
+        let torch = (0..arsenal.counts().1 as u8).find(|&s| alt_use(build(&arsenal, 0, s)) == AltUse::Beam).expect("a beam secondary");
+        let loadout = with_secondary(&arsenal, torch);
+        let t = arsenal.get(MechClass::B, loadout);
+        // A target in the open 20 m north, inside the beam's reach and a grenade's; no vent to hand.
+        let target = spawn_mech(t, Vector::new(0.0, 0.1, 20.0));
+        let run = |heat: f32| {
+            let mut me = Mech { loadout, heat: heat * t.heat_max, ability_cooldown: 30.0, ..spawn_mech(t, Vector::new(0.0, 0.1, 40.0)) };
+            let mut bot = Bot::new(1);
+            let (mut threw, mut beamed_cooling) = (false, false);
+            for tick in 0..secs(6.0) {
+                let input = bot.think(&arena, nav, t, &me, Some(&target), tick);
+                step_mech(&arena, t, &mut me, &input);
+                (threw, beamed_cooling) = (threw || me.threw, beamed_cooling || me.beaming && bot.cooling);
+            }
+            (threw, beamed_cooling)
+        };
+        assert!(run(0.0).0, "never threw a grenade with the beam in reach");
+        // Hot: the beam waits with the gun, rather than holding the heat up so the gun never fires.
+        assert!(!run(0.9).1, "held the beam on while cooling");
+    }
+
+    #[test]
     fn camouflaged_bots_close_in_unseen_then_fight() {
         let blockout = Map::index("blockout").unwrap();
         let (arena, nav) = (Arena::new(&Map::load(blockout)), Nav::for_map(blockout));
@@ -2666,7 +2775,7 @@ mod tests {
         let t = Arsenal::new(&Tuning::default()).get(MechClass::A, loadout).clone();
         let mut me = Mech { loadout, grenades: 0, emps: 0, ..spawn_mech(&t, Vector::new(0.0, 0.1, 40.0)) };
         let target = spawn_mech(&t, Vector::new(0.0, 0.1, -20.0));
-        let (mut bot, far) = (Bot::new(2), band(&t, &Policy::default()).1);
+        let (mut bot, far) = (Bot::new(2), band(&t, &Policy::default(), false).1);
         let (mut cloaked, mut fired_hidden, mut fought) = (false, false, false);
         for tick in 0..secs(10.0) {
             let input = bot.think(&arena, nav, &t, &me, Some(&target), tick);
@@ -2702,7 +2811,7 @@ mod tests {
         };
         let (near, held) = (settle(close), settle(far));
         // Each inside its own gun's band, the short one well short of the long.
-        let (close_band, far_band) = (band(build(&arsenal, close, 0), &Policy::default()), band(build(&arsenal, far, 0), &Policy::default()));
+        let (close_band, far_band) = (band(build(&arsenal, close, 0), &Policy::default(), false), band(build(&arsenal, far, 0), &Policy::default(), false));
         assert!(near < close_band.1 && held > far_band.0 && near + 10.0 < held, "short-range gun ended {near} m off (band {close_band:?}), long-range {held} m (band {far_band:?})");
     }
 
