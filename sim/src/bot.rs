@@ -936,6 +936,18 @@ impl Bot {
         self.contacts.clear();
     }
 
+    /// Whether it holds fire to cool: firing in bursts, it stops near the lockout and lets heat
+    /// fall well down (it sheds fastest low) before firing again.
+    fn cool(&mut self, t: &Tuning, me: &Mech) -> bool {
+        let p = &self.policy;
+        if me.overheated || me.heat >= p.cool_high * t.heat_max {
+            self.cooling = true;
+        } else if me.heat <= p.cool_low * t.heat_max {
+            self.cooling = false;
+        }
+        self.cooling
+    }
+
     /// Somewhere to fall back to from an enemy at `threat` (its eye): an orb in reach to mend
     /// at, else the nearest cover. None when there's neither.
     #[allow(clippy::too_many_arguments)]
@@ -1250,7 +1262,7 @@ impl Bot {
     }
 
     /// `think`, with a hurt teammate a repair torch could mend, and how high its middle is off its
-    /// feet: it does when no enemy is in sight.
+    /// feet: it does when no enemy is in sight (and, beam bent onto it, as it fights).
     #[allow(clippy::too_many_arguments)]
     pub fn think_with(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: Option<&Mech>, heal: Option<(&Mech, f32)>, tick: u32) -> Input {
         self.striking = false;
@@ -1314,7 +1326,8 @@ impl Bot {
         }
         if let Some((mate, mid)) = heal.filter(|_| alt_use(t) == AltUse::Beam && !target.is_some_and(|m| m.health > 0.0 && sees_at(arena, t, me, self.chest(t, self.focus, m.pos)))) {
             self.mending = true;
-            return mend(t, me, mate, mid, max_turn);
+            let cooling = self.cool(t, me);
+            return mend(t, me, mate, mid, max_turn, cooling);
         }
         let Some(target) = target.filter(|m| m.health > 0.0) else {
             // Nothing to fight in view. One that just ducked out of view nearby gets a grenade at
@@ -1415,7 +1428,9 @@ impl Bot {
             let mut at = Features::default();
             at.flag(Feature::Engaged, true).set(Feature::Hull, me.health / t.health_max).set(Feature::Heat, me.heat / t.heat_max);
             at.flag(Feature::Overheated, me.overheated).flag(Feature::Hit, took_damage).set(Feature::Range, range / far);
-            at.set(Feature::Throws, f32::from(me.grenades)).set(Feature::Charges, f32::from(me.emps)).flag(Feature::AltReady, alt);
+            // A beam doesn't take the aim, so grenades needn't wait on it (they did, and a torch
+            // never threw one: its beam is ready the whole of a grenade's reach).
+            at.set(Feature::Throws, f32::from(me.grenades)).set(Feature::Charges, f32::from(me.emps)).flag(Feature::AltReady, alt && use_ != AltUse::Beam);
             at.flag(Feature::GrenadeReady, tick >= self.grenade_at && dist < self.policy.grenade_range && dist > t.grenade_radius + 2.0);
             at.flag(Feature::FirstSight, self.seen.len() == 1).flag(Feature::Melee, use_ == AltUse::Melee).flag(Feature::LimpetOut, me.limpet);
             at.flag(Feature::OrbNear, self.orbs.iter().any(|o| o.distance(me.pos) < self.policy.orb_range));
@@ -1466,14 +1481,7 @@ impl Bot {
                 self.strafe_until = tick + secs(0.8 + 1.2 * self.rand());
             }
             let dodge = took_damage && me.dodge_cooldown <= 0.0 && self.rand() < self.policy.dodge_chance;
-            // Fire in bursts: stop near the lockout and let heat fall well down (it sheds fastest
-            // low) before firing again.
-            let p = &self.policy;
-            if me.overheated || me.heat >= p.cool_high * t.heat_max {
-                self.cooling = true;
-            } else if me.heat <= p.cool_low * t.heat_max {
-                self.cooling = false;
-            }
+            self.cool(t, me);
             // The dome or barrier its shots would meet on the way: the other side's they wear down,
             // so it fires on; its own side's stops them for nothing, so it holds fire (and steps
             // out past it, in `weave`).
@@ -1583,7 +1591,9 @@ impl Bot {
             // Behind its own side's shield, a charged gun holds what it has: let go, it would fire
             // into it.
             let fire = (blocked && t.charge_time > 0.0) || (shell.is_none() && !self.cooling && reaches && !hidden && if t.charge_time > 0.0 { !(on_target && me.charge >= 0.85 && sure) } else { on_target && !blocked });
-            let alt_fire = alt
+            // A hurt teammate in reach just off the aim: the beam bends onto it as the gun fires on.
+            let bend = use_ == AltUse::Beam && heal.is_some_and(|(mate, mid)| bends_to(t, eye, new_yaw, new_pitch, mate.pos + Vector::Y * mid));
+            let alt_fire = (alt || bend)
                 && alt_cool
                 && !hidden
                 && !(blocked && t.alt_pierce <= 0.5)
@@ -1591,6 +1601,9 @@ impl Bot {
                     AltUse::Lock => me.lock != 0 && me.lock_time >= t.alt_lock_time,
                     AltUse::Release => on_target && !me.alt_held,
                     AltUse::Melee => !self.striking,
+                    // A beam cools with the gun: held on as the gun cools, it holds the heat up (a
+                    // beam sheds none), and the gun waits on heat that never falls.
+                    AltUse::Beam => (bend || on_target) && !self.cooling,
                     _ => on_target,
                 };
             at.flag(Feature::Fire, fire && !blocked).flag(Feature::AltFire, alt_fire).flag(Feature::Striking, self.striking);
@@ -1739,23 +1752,18 @@ impl Bot {
     fn keep_post(&mut self, nav: &Nav, t: &Tuning, me: &Mech, tick: u32) -> Option<Input> {
         let (post, id) = self.post?;
         let spots = nav.spots()?;
-        let c = self.contacts.iter().find(|c| c.id == id && c.seen_at.is_some_and(|at| tick.saturating_sub(at) < secs(POST_HOLD)));
-        let Some(c) = c else {
+        let seen = self.contacts.iter().find(|c| c.id == id && c.seen_at.is_some_and(|at| tick.saturating_sub(at) < secs(POST_HOLD))).map(|c| c.pos);
+        let Some(seen) = seen else {
             self.post = None;
             return None;
         };
-        let p = &self.policy;
-        if me.overheated || me.heat >= p.cool_high * t.heat_max {
-            self.cooling = true;
-        } else if me.heat <= p.cool_low * t.heat_max {
-            self.cooling = false;
-        }
+        let cooling = self.cool(t, me);
         let at = match post.peek {
-            Some(p) if !self.cooling => spots.spots[p].pos,
+            Some(p) if !cooling => spots.spots[p].pos,
             _ => spots.spots[post.spot].pos,
         };
         let max_turn = self.max_turn(t);
-        let (yaw, pitch) = look_at(me.pos + Vector::Y * t.eye_height, self.chest(t, Some(id), c.pos));
+        let (yaw, pitch) = look_at(me.pos + Vector::Y * t.eye_height, self.chest(t, Some(id), seen));
         let new_yaw = me.yaw + wrap(yaw - me.yaw).clamp(-max_turn, max_turn);
         let new_pitch = me.pitch + (pitch - me.pitch).clamp(-max_turn, max_turn);
         let off = flat(at - me.pos);
@@ -2027,13 +2035,20 @@ fn noise(m: &Mech) -> f32 {
     }
 }
 
+/// Whether a beam held along (`yaw`, `pitch`) from `eye` bends onto a mech with its middle at
+/// `mid`: in reach, and within `weapon::BEAM_SNAP_COS` of the aim.
+fn bends_to(t: &Tuning, eye: Vector, yaw: f32, pitch: f32, mid: Vector) -> bool {
+    let to = mid - eye;
+    let aim = Rotation::from_rotation_y(yaw) * Rotation::from_rotation_x(pitch) * Vector::NEG_Z;
+    to.length() < t.alt_beam && to.normalize_or_zero().dot(aim) > weapon::BEAM_SNAP_COS
+}
+
 /// A repair torch's input for mending `mate`: square on, closing to half the beam's reach, the
-/// beam held while it's on them and the heat allows.
-fn mend(t: &Tuning, me: &Mech, mate: &Mech, mid: f32, max_turn: f32) -> Input {
+/// beam held once it bends onto them and while not `cooling` (`Bot::cool`).
+fn mend(t: &Tuning, me: &Mech, mate: &Mech, mid: f32, max_turn: f32, cooling: bool) -> Input {
     let (yaw, pitch) = look_at(me.pos + Vector::Y * t.eye_height, mate.pos + Vector::Y * mid);
     let new_yaw = me.yaw + wrap(yaw - me.yaw).clamp(-max_turn, max_turn);
     let new_pitch = me.pitch + (pitch - me.pitch).clamp(-max_turn, max_turn);
-    let on = wrap(yaw - new_yaw).abs() < AIM_TOLERANCE && (pitch - new_pitch).abs() < AIM_TOLERANCE;
     let to = flat(mate.pos - me.pos);
     let dir = if to.length() > 0.5 * t.alt_beam { to.normalize_or_zero() } else { Vector::ZERO };
     let rot = Rotation::from_rotation_y(new_yaw);
@@ -2042,7 +2057,7 @@ fn mend(t: &Tuning, me: &Mech, mate: &Mech, mid: f32, max_turn: f32) -> Input {
         move_z: dir.dot(rot * Vector::NEG_Z),
         yaw: new_yaw,
         pitch: new_pitch,
-        alt_fire: on && to.length() < t.alt_beam && !me.overheated && me.heat < 0.85 * t.heat_max,
+        alt_fire: bends_to(t, me.pos + Vector::Y * t.eye_height, new_yaw, new_pitch, mate.pos + Vector::Y * mid) && !cooling,
         ..Input::default()
     }
 }
@@ -2724,6 +2739,31 @@ mod tests {
             let off = ray.point_at(flat(mate.pos - ray.origin).length() / flat(ray.dir).length()).y - (mate.pos.y + tm.mech_height * 0.5);
             assert!(off.abs() < 0.3, "a {class:?} aimed {off} m off a {of:?}'s middle");
         }
+    }
+
+    #[test]
+    fn repair_torches_throw_grenades_and_cool_with_the_gun() {
+        let blockout = Map::index("blockout").unwrap();
+        let (arena, nav, arsenal) = (Arena::new(&Map::load(blockout)), Nav::for_map(blockout), Arsenal::new(&Tuning::default()));
+        let torch = (0..arsenal.counts().1 as u8).find(|&s| alt_use(build(&arsenal, 0, s)) == AltUse::Beam).expect("a beam secondary");
+        let loadout = with_secondary(&arsenal, torch);
+        let t = arsenal.get(MechClass::B, loadout);
+        // A target in the open 20 m north, inside the beam's reach and a grenade's; no vent to hand.
+        let target = spawn_mech(t, Vector::new(0.0, 0.1, 20.0));
+        let run = |heat: f32| {
+            let mut me = Mech { loadout, heat: heat * t.heat_max, ability_cooldown: 30.0, ..spawn_mech(t, Vector::new(0.0, 0.1, 40.0)) };
+            let mut bot = Bot::new(1);
+            let (mut threw, mut beamed_cooling) = (false, false);
+            for tick in 0..secs(6.0) {
+                let input = bot.think(&arena, nav, t, &me, Some(&target), tick);
+                step_mech(&arena, t, &mut me, &input);
+                (threw, beamed_cooling) = (threw || me.threw, beamed_cooling || me.beaming && bot.cooling);
+            }
+            (threw, beamed_cooling)
+        };
+        assert!(run(0.0).0, "never threw a grenade with the beam in reach");
+        // Hot: the beam waits with the gun, rather than holding the heat up so the gun never fires.
+        assert!(!run(0.9).1, "held the beam on while cooling");
     }
 
     #[test]
