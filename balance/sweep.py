@@ -108,6 +108,7 @@ def main():
     family = 'items and abilities' if args.items else 'guns'
     lines = [f'# Build sweep, {family}, {aim}', '', f'{len(ids)} builds, {args.appear} matches each, {args.mode} {args.seconds:.0f} s{f", personality {args.style}" if args.style is not None else ""}. Team-margin plus-minus per match against the stock bot (0), ± one standard error. * = the class\'s own. Uses and hull dealt are per match.', '']
     lines.append('Time alive, per match: ' + ', '.join(f'{k.replace("_", " ")} {v:.0f} s' for k, v in doing.items()) + '.')
+    lines.append(f"Teammates' hull healed, per match: {sum(float(r.get('healed') or 0) for r in mine) / max(1, len(mine)):.0f}.")
     lines.append('')
     if args.tweaks:
         lines += [f'Tweaks: `{json.dumps(args.tweaks)}`', '']
