@@ -1473,6 +1473,7 @@ fn objective_probe() {
 /// raider's hands, off its stand or off the ground, until it falls or scores): the share that
 /// score, how much of the way home it got, how long it lasted, what the carrier was about, how
 /// many of its side were within ESCORT m of it and how many enemies saw it.
+/// PROBE_POLICY='<json>' overrides those policy weights for every bot.
 /// PROBE_MAP=<name> PROBE_SECS=<s> PROBE_SEEDS=<n> cargo test -p sim --release --lib ctf_probe -- --ignored --nocapture
 #[test]
 #[ignore = "probe"]
@@ -1488,17 +1489,34 @@ fn ctf_probe() {
         let (mut carries, mut scored, mut takes) = (0u32, 0u32, 0u32);
         let (mut progress, mut ticks, mut escorts, mut seen_by) = (0.0f32, 0u64, 0u64, 0u64);
         let mut doing: BTreeMap<&str, u64> = BTreeMap::new();
+        // Each carrier's fall: its killer near its own stand (a defender) or not, enemies within
+        // 35 m and its own side within ESCORT m then, and how fast it had been getting home.
+        let (mut falls, mut by_defender, mut foes_near, mut mates_near, mut pace) = (0u32, 0u32, 0u32, 0u32, 0.0f32);
+        let (mut escort_ticks, mut escort_dead, mut escort_near, mut escort_far) = (0u64, 0u64, 0u64, 0.0f32);
+        let mut escort_doing: BTreeMap<&str, u64> = BTreeMap::new();
         for seed in 0..seeds {
             let mut game = Game::new(Tuning::default(), index);
             game.mode = Mode::CaptureTheFlag;
             (game.score_limit, game.match_seconds, game.tick) = (u16::MAX, 1e7, seed as u32 * 7919);
             let human = game.join().unwrap();
             game.dock(human);
+            let over: Option<serde_json::Map<String, serde_json::Value>> = std::env::var("PROBE_POLICY").ok().map(|o| serde_json::from_str(&o).expect("PROBE_POLICY: a JSON object"));
+            // Bots fill in as the match goes: each gets the override once.
+            let mut patched: Vec<u8> = Vec::new();
             // Per flag, its carry so far: how far from home it started and is now.
-            let mut carry: [Option<(f32, f32)>; 2] = [None; 2];
+            let mut carry: [Option<(f32, f32, u8, u32)>; 2] = [None; 2];
             for _ in 0..secs(run) {
                 let caps = game.ctf.as_ref().map_or([0; 2], |c| c.captures);
                 game.step();
+                if let Some(over) = &over {
+                    for p in game.players.iter_mut() {
+                        let Some(bot) = p.bot.as_mut().filter(|_| !patched.contains(&p.id)) else { continue };
+                        let mut v = serde_json::to_value(&bot.policy).unwrap();
+                        v.as_object_mut().unwrap().extend(over.clone());
+                        bot.policy = serde_json::from_value(v).expect("PROBE_POLICY: policy weights");
+                        patched.push(p.id);
+                    }
+                }
                 takes += game.events.iter().filter(|e| matches!(e, Event::Flag { what: Happened::Taken, .. })).count() as u32;
                 let Some(c) = game.ctf.as_ref() else { continue };
                 for f in 0..2 {
@@ -1507,16 +1525,47 @@ fn ctf_probe() {
                         _ => None,
                     };
                     let Some(p) = carrier else {
-                        if let Some((from, now)) = carry[f].take() {
+                        if let Some((from, now, by, since)) = carry[f].take() {
                             carries += 1;
-                            scored += u32::from(c.captures[1 - f] > caps[1 - f]);
-                            progress += if c.captures[1 - f] > caps[1 - f] { 1.0 } else { (1.0 - now / from.max(1.0)).max(0.0) };
+                            let capped = c.captures[1 - f] > caps[1 - f];
+                            scored += u32::from(capped);
+                            progress += if capped { 1.0 } else { (1.0 - now / from.max(1.0)).max(0.0) };
+                            let killer = game.events.iter().find_map(|e| match e {
+                                Event::Kill { killer, victim, .. } if *victim == by => Some(*killer),
+                                _ => None,
+                            });
+                            if let (Some(k), Some(v)) = (killer.and_then(|k| game.players.iter().find(|q| q.id == k)), game.players.iter().find(|q| q.id == by)) {
+                                falls += 1;
+                                by_defender += u32::from(flat(c.stands[usize::from(k.team)].at - k.mech.pos).length() <= 25.0);
+                                foes_near += game.players.iter().filter(|q| q.team != v.team && q.mech.health > 0.0 && q.mech.pos.distance(v.mech.pos) <= 35.0).count() as u32;
+                                mates_near += game.players.iter().filter(|q| q.team == v.team && q.id != v.id && q.mech.health > 0.0 && flat(q.mech.pos - v.mech.pos).length() <= ESCORT).count() as u32;
+                                pace += (from - now) / ((game.tick - since) as f32 * DT).max(0.1);
+                            }
                         }
                         continue;
                     };
                     let d = flat(c.stands[usize::from(p.team)].at - p.mech.pos).length();
-                    carry[f].get_or_insert((d, d)).1 = d;
+                    carry[f].get_or_insert((d, d, p.id, game.tick)).1 = d;
                     ticks += 1;
+                    // Its escorts: its side's bots ordered to its feet (within a tick's walk).
+                    for q in game.players.iter().filter(|q| q.team == p.team && q.id != p.id) {
+                        if q.bot.as_ref().and_then(|b| b.order).is_some_and(|o| flat(o - p.mech.pos).length() < 1.0) {
+                            let alive = q.mech.health > 0.0 && q.respawn_at.is_none();
+                            escort_ticks += 1;
+                            escort_dead += u64::from(!alive);
+                            if alive {
+                                escort_far += flat(q.mech.pos - p.mech.pos).length();
+                                escort_near += u64::from(flat(q.mech.pos - p.mech.pos).length() <= ESCORT);
+                                *escort_doing.entry(match q.bot.as_ref().unwrap().doing() {
+                                    bot::Doing::Fight => "fight",
+                                    bot::Doing::FallBack => "fall back",
+                                    bot::Doing::Mend => "mend",
+                                    bot::Doing::Move => "move",
+                                    bot::Doing::Trade => "trade",
+                                }).or_insert(0) += 1;
+                            }
+                        }
+                    }
                     escorts += game.players.iter().filter(|q| q.team == p.team && q.id != p.id && q.mech.health > 0.0 && flat(q.mech.pos - p.mech.pos).length() <= ESCORT).count() as u64;
                     seen_by += game.players.iter().filter(|q| q.team != p.team && q.mech.health > 0.0 && bot::sees(&game.arena, game.arsenal.of(&q.mech), &q.mech, &p.mech)).count() as u64;
                     let kind = p.bot.as_ref().map_or("human", |b| match b.doing() {
@@ -1540,6 +1589,24 @@ fn ctf_probe() {
             by.join(", "),
             per(escorts),
             per(seen_by),
+        );
+        let alive = (escort_ticks - escort_dead).max(1) as f32;
+        let doing: Vec<String> = escort_doing.iter().map(|(k, &n)| format!("{k} {:.0}%", 100.0 * n as f32 / alive)).collect();
+        println!(
+            "     escorts: {:.1} a carry-tick, {:.0}% of them dead; alive, {:.0} m off on average, {:.0}% within {ESCORT:.0} m; {}",
+            escort_ticks as f32 / ticks.max(1) as f32,
+            100.0 * escort_dead as f32 / escort_ticks.max(1) as f32,
+            escort_far / alive,
+            100.0 * escort_near as f32 / alive,
+            doing.join(", ")
+        );
+        let fell = falls.max(1) as f32;
+        println!(
+            "     {falls} carriers fell: {:.0}% to a defender near its stand, {:.1} enemies within 35 m, {:.1} of their side within {ESCORT:.0} m, home at {:.1} m/s",
+            100.0 * by_defender as f32 / fell,
+            foes_near as f32 / fell,
+            mates_near as f32 / fell,
+            pace / fell,
         );
     }
 }
