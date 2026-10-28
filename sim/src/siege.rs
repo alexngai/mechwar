@@ -1,10 +1,10 @@
 //! Siege's rules. Teams draw energy (EU) from a station (one, mid-map, so they fight over it),
 //! carry it home to their base's bank,
-//! and at LAUNCH_EU their battleship lifts off and flies at the enemy base, gunning down mechs on
-//! the way (as an MG turret does: it's a `deploy::Kind::Ship`), and bombards the base once over
-//! it. Mechs shoot ships down, as does the anti-air gun for whichever team holds its zone; two
-//! ships in range stop and fight it out. The last base standing wins. `Game` keeps the ships among
-//! its deployables, counts who stands where, and applies what comes out (events, credit, the end).
+//! and at LAUNCH_EU their battleship lifts off and flies at the enemy base (holding its fire on
+//! mechs; it's a `deploy::Kind::Ship`), and bombards the base once over it. Mechs shoot ships
+//! down, as does the anti-air gun for whichever team holds its zone; two ships in range stop and
+//! fight it out. The last base standing wins. `Game` keeps the ships among its deployables, counts
+//! who stands where, and applies what comes out (events, credit, the end).
 
 use serde::{Deserialize, Serialize};
 
