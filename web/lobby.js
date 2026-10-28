@@ -161,11 +161,13 @@ async function api(path, body) {
 
 const clock = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 let mapNames = null, modeNames = {}; // key -> name, once the server has listed its maps and modes ([key, name] pairs)
+let mapModes = {}; // map key -> the mode keys it plays
 async function refresh() {
   let lobbyState;
   try { lobbyState = await api('/api/rooms'); } catch { return; }
   if (!mapNames) {
     mapNames = Object.fromEntries(lobbyState.maps);
+    mapModes = Object.fromEntries(lobbyState.maps.map(([key, , modes]) => [key, modes]));
     const options = lobbyState.maps.map(([key, name]) => `<option value="${esc(key)}">${esc(name)}</option>`).join('');
     for (const id of ['new-map', 'practice-map']) $(id).insertAdjacentHTML('beforeend', options);
     modeNames = Object.fromEntries(lobbyState.modes ?? []);
@@ -179,6 +181,12 @@ async function refresh() {
         <td><button data-code="${esc(r.code)}">JOIN</button></td></tr>`).join('')
     : '<tr><td>No listed games right now: quick play opens one.</td></tr>';
 }
+// A picked mode greys out the maps that don't play it, dropping back to the rotation if the map picked was one.
+$('new-mode').addEventListener('change', () => {
+  const mode = $('new-mode').value, map = $('new-map');
+  for (const o of map.options) o.disabled = Boolean(mode && o.value && !mapModes[o.value]?.includes(mode));
+  if (map.selectedOptions[0]?.disabled) map.value = '';
+});
 $('games').addEventListener('click', (e) => { const code = e.target.closest('button')?.dataset.code; if (code) go(code); });
 refresh();
 setInterval(refresh, 3000);

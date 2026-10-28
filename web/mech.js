@@ -837,8 +837,9 @@ export class Mech {
    * heat (0-1), overheated, ability (on), damage (0 full health to 1), repair (0 none, wind-up
    * fraction, 1 healing), cloak (how faint camouflage shows it, 0 for not hidden), hidden (an
    * enemy's camouflage: a veil, not a ghost), wind and burn (a pile driver's wind-up, and its
-   * booster burning through a punch, 0-1) }. Also emits thruster, footstep, smoke, spark and death
-   * effects, and sets `jet` to where a punch's booster burns (null while it doesn't).
+   * booster burning through a punch, 0-1), docked (sent to the hangar, not destroyed: no death
+   * effects) }. Also emits thruster, footstep, smoke, spark and death effects, and sets `jet` to
+   * where a punch's booster burns (null while it doesn't).
    */
   update(dt, s) {
     this.t += dt;
@@ -857,7 +858,7 @@ export class Mech {
       this.held = Math.abs(off) > 0.02;
     } else this.facing = s.yaw;
     root.rotation.y = this.facing;
-    if (this.alive && !alive) {
+    if (this.alive && !alive && !s.docked) {
       this.fx.explosion(world.copy(s.pos).addScaledVector(UP, 0.6 * spec.height * s.scale));
       Mech.audio?.death(this.own ? null : world);
     }

@@ -138,10 +138,11 @@ const SHIP_POINTS: f32 = 0.05;
 /// The team modes' base guns: they fire on enemies within SENTRY_RANGE of them, and in Siege on
 /// the enemy ship within SENTRY_SHIP_RANGE; bursts of SENTRY_BURST rounds SENTRY_RATE a second
 /// apart, SENTRY_PAUSE s between bursts, each round dealing SENTRY_ROUND, opening up on a fresh
-/// contact SENTRY_ACQUIRE after it shows. Each has a SENTRY_SHIELD, regaining SENTRY_REGEN a
-/// second; shot through, the gun's offline for SENTRY_OFFLINE, then comes back full and can't be
-/// hurt for SENTRY_IMMUNE.
-const SENTRY_RANGE: f32 = 50.0;
+/// contact SENTRY_ACQUIRE after it shows. The range covers the spawns (every map's are within 30 m
+/// of a gun) and little past, so the guns stop spawn camping without holding the base for its team.
+/// Each has a SENTRY_SHIELD that doesn't regenerate; shot through, the gun's offline for
+/// SENTRY_OFFLINE, then comes back full and can't be hurt for SENTRY_IMMUNE.
+const SENTRY_RANGE: f32 = 35.0;
 const SENTRY_SHIP_RANGE: f32 = 90.0;
 const SENTRY_BURST: u8 = 8;
 const SENTRY_RATE: f32 = 10.0;
@@ -149,7 +150,6 @@ const SENTRY_PAUSE: f32 = 0.7;
 const SENTRY_ROUND: f32 = 4.0;
 const SENTRY_ACQUIRE: f32 = 0.6;
 pub const SENTRY_SHIELD: f32 = 400.0;
-const SENTRY_REGEN: f32 = 25.0;
 const SENTRY_OFFLINE: f32 = 25.0;
 const SENTRY_IMMUNE: f32 = 15.0;
 /// Deathmatch is only played on maps up to this wide (m): on bigger ones eight pilots spend the
@@ -1544,14 +1544,11 @@ impl Game {
     /// rounds (`turret_round`), the other a rocket led by its flight time.
     /// Each base's guns, in the team modes, where the map has them: built when missing (a new
     /// match clears them with the rest), facing the map's middle. One shot offline (no hull left)
-    /// comes back when its `ready` comes round, `placed` then (0 till it first does); one online
-    /// regains its shield.
+    /// comes back when its `ready` comes round, `placed` then (0 till it first does).
     fn tend_sentries(&mut self) {
         let tick = self.tick;
         for d in self.deployables.iter_mut().filter(|d| d.kind == Kind::Sentry) {
-            if d.hull > 0.0 {
-                d.hull = (d.hull + SENTRY_REGEN * DT).min(SENTRY_SHIELD);
-            } else if tick >= d.ready {
+            if d.hull <= 0.0 && tick >= d.ready {
                 (d.hull, d.placed, d.ready, d.burst) = (SENTRY_SHIELD, tick, tick + secs(SENTRY_ACQUIRE), 0);
             }
         }
@@ -4058,8 +4055,10 @@ mod tests {
         game.step();
         let k = game.deployables.iter().position(|d| d.kind == Kind::Sentry && d.team == 0).unwrap();
         game.wear(k, SENTRY_SHIELD - 1.0, raider);
-        game.step();
-        assert!(game.deployables[k].hull < 0.5 * SENTRY_SHIELD, "it shrugged it off");
+        for _ in 0..secs(5.0) {
+            game.step();
+        }
+        assert_eq!(game.deployables[k].hull, 1.0, "it healed");
         game.wear(k, SENTRY_SHIELD, raider);
         let shot_at = game.tick;
         game.step();
