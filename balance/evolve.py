@@ -30,8 +30,9 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 # The arena binary: the release build, or another (BALANCE_ARENA) to compare builds.
 ARENA = Path(os.environ.get('BALANCE_ARENA', ROOT / 'target' / 'release' / 'arena'))
-# The server's rotation, as sim/src/map.rs lists it.
-MAPS = re.findall(r'"(\w+)"', re.search(r'ROTATION: \[&str; \d+\] = \[(.*?)\]', (ROOT / 'sim' / 'src' / 'map.rs').read_text()).group(1))
+# The server's rotation, as sim/src/map.rs lists it, less the co-op maps (the versus modes leave them out).
+MAPS = [m for m in re.findall(r'"(\w+)"', re.search(r'ROTATION: \[&str; \d+\] = \[(.*?)\]', (ROOT / 'sim' / 'src' / 'map.rs').read_text()).group(1))
+        if not json.loads((ROOT / 'maps' / f'{m}.json').read_text()).get('objectives', {}).get('coop')]
 WEAPONS = json.loads((ROOT / 'weapons.json').read_text())
 CLASSES = json.loads((ROOT / 'classes.json').read_text())
 LISTS = {'primary': 'primaries', 'secondary': 'secondaries', 'offensive': 'offensive', 'support': 'support', 'ability': 'abilities'}
