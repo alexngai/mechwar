@@ -188,13 +188,14 @@ fn prediction_matches_server_through_repair() {
     let mut last = h.clients[0].1.mech.pos;
     let mut walked = 0.0;
     for tick in 0..300u32 {
-        // B fires at A for a second; A waits it out, then holds repair with everything else
-        // pressed (all ignored) for 4.5 s, then walks off.
+        // B fires at A for a second and a half (enough that A is still mending when the repair
+        // ends); A waits it out, then holds repair with everything else pressed (all ignored) for
+        // 4.5 s, then walks off.
         let now = h.now();
         let b = &h.clients[1].1;
         let b_input = b.remotes(now).first().map_or_else(Input::default, |a| {
             let d = a.view.pos + Vector::Y * (t.mech_height * 0.5) - (b.mech.pos + Vector::Y * t.eye_height);
-            Input { yaw: (-d.x).atan2(-d.z), pitch: d.y.atan2(d.x.hypot(d.z)), fire: tick < 30, ..Input::default() }
+            Input { yaw: (-d.x).atan2(-d.z), pitch: d.y.atan2(d.x.hypot(d.z)), fire: tick < 45, ..Input::default() }
         });
         let a_input = match tick {
             0..45 => Input::default(),

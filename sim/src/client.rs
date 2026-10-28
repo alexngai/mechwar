@@ -324,6 +324,16 @@ impl NetClient {
         self.snapshots.back().and_then(|s| s.convoy.as_ref())
     }
 
+    /// The player's aim from the eye, as predicted.
+    pub fn aim(&self) -> rapier3d::prelude::Ray {
+        crate::aim_ray(self.arsenal.of(&self.mech), &self.mech)
+    }
+
+    /// A co-op run as of the latest snapshot.
+    pub fn defense(&self) -> Option<&crate::defense::DefenseNet> {
+        self.snapshots.back().and_then(|s| s.defense.as_ref())
+    }
+
     /// Deployables as of the latest snapshot.
     pub fn deployables(&self) -> &[Deployable] {
         self.snapshots.back().map_or(&[], |s| &s.deployables)
@@ -374,10 +384,13 @@ impl NetClient {
     }
 
     fn apply(&mut self, s: Snapshot, now_ms: f64) {
-        // A new match may be on a new map. Barriers are walls of it, which the replay below
-        // predicts against as the server will.
+        // A new match may be on a new map. Barriers are walls of it, and staging pens hold us in,
+        // which the replay below predicts against as the server will.
+        // ponytail: the pens open here a round trip after they did on the server, so pushing on
+        // one as it drops costs a small correction; send the opening's tick if that shows.
         self.load_map(s.state.map);
         self.arena.set_barriers(self.arsenal.get(MechClass::B, Loadout::default()), &s.deployables);
+        self.arena.penned = s.state.staging;
         // Smooth arrival jitter; snap when far off (first snapshot, or after a stalled tab).
         let sample = f64::from(s.tick) * f64::from(DT) * 1000.0 - now_ms;
         self.clock_offset = Some(match self.clock_offset {
@@ -440,7 +453,7 @@ impl NetClient {
                         }
                     }
                 }
-                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } | Event::TurretShot { .. } | Event::TurretHit { .. } | Event::Strike { .. } | Event::Captured { .. } | Event::Missile { .. } | Event::Ship { .. } | Event::Flag { .. } | Event::Convoy(_) => self.events.push(*e),
+                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } | Event::TurretShot { .. } | Event::TurretHit { .. } | Event::Strike { .. } | Event::Captured { .. } | Event::Missile { .. } | Event::Ship { .. } | Event::Flag { .. } | Event::Convoy(_) | Event::Defense(_) | Event::Zap { .. } | Event::Stun { .. } | Event::Shell { .. } => self.events.push(*e),
             }
         }
         self.snapshots.push_back(s);

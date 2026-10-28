@@ -152,6 +152,13 @@ impl Nav {
         order.iter().copied().find(|&i| clear(i)).unwrap_or(order[0])
     }
 
+    /// The waypoints of the shortest walk from the one nearest `from` to the one nearest `to`
+    /// (just that last one if it can't be reached).
+    pub fn route(&self, arena: &Arena, from: Vector, to: Vector) -> Vec<Vector> {
+        let goal = self.nearest(arena, to);
+        self.path(self.nearest(arena, from), |_| goal).into_iter().map(|i| self.nodes[i]).collect()
+    }
+
     /// Which waypoints can be reached from `from`.
     pub fn reachable(&self, from: usize) -> Vec<bool> {
         self.reachable_over(from, |_| true)
@@ -967,6 +974,14 @@ impl Bot {
             self.grenade_at = tick + secs(4.0 + 4.0 * self.rand());
         }
         Input { yaw: new_yaw, pitch: new_pitch, grenade: on, ..Input::default() }
+    }
+
+    /// Waiting out a match's staging (`game.rs`): standing, weapons quiet, turning level toward
+    /// `toward`.
+    pub fn stand_by(&self, t: &Tuning, me: &Mech, toward: Vector) -> Input {
+        let (yaw, _) = look_at(me.pos, toward);
+        let max_turn = self.max_turn(t);
+        Input { yaw: me.yaw + wrap(yaw - me.yaw).clamp(-max_turn, max_turn), pitch: me.pitch - me.pitch.clamp(-max_turn, max_turn), ..Input::default() }
     }
 
     /// A bot of a skill spread around `around` (each one rolls its own), and a personality

@@ -6,7 +6,7 @@ use rapier3d::prelude::{ColliderBuilder, Rotation, Vector};
 use serde::Deserialize;
 
 /// Compiled-in maps. The index is what goes over the wire.
-pub const MAPS: [(&str, &str); 12] = [
+pub const MAPS: [(&str, &str); 13] = [
     ("isotope", include_str!("../../maps/isotope.json")),
     ("blockout", include_str!("../../maps/blockout.json")),
     ("foundry", include_str!("../../maps/foundry.json")),
@@ -19,11 +19,13 @@ pub const MAPS: [(&str, &str); 12] = [
     ("ziggurat", include_str!("../../maps/ziggurat.json")),
     ("span", include_str!("../../maps/span.json")),
     ("walled", include_str!("../../maps/walled.json")),
+    ("hivewall", include_str!("../../maps/hivewall.json")),
 ];
 /// Foundry.
 pub const DEFAULT: usize = 2;
-/// Maps the server rotates through between matches (blockout is a test map).
-pub const ROTATION: [&str; 11] = ["foundry", "isotope", "verdigris", "riftline", "sump", "sinkhole", "canopy", "crashsite", "ziggurat", "span", "walled"];
+/// Maps the server rotates through between matches (blockout is a test map; the modes a map plays
+/// pick from these, so a co-op map only comes round in co-op).
+pub const ROTATION: [&str; 12] = ["foundry", "isotope", "verdigris", "riftline", "sump", "sinkhole", "canopy", "crashsite", "ziggurat", "span", "walled", "hivewall"];
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct Solid {
@@ -87,6 +89,33 @@ pub struct Route {
     pub start: usize,
 }
 
+/// Co-op Defense: the reactor the team holds (its middle, and how near across an enemy has to come
+/// to hit it), the gates enemies come through, and the lanes they walk: a network of paths toward
+/// the reactor (points, and edges from, to and weight, so a fork splits the walkers by weight), or
+/// none, for each gate's lane to be the bots' route from it.
+#[derive(Deserialize, Clone, Debug)]
+pub struct DefenseSpots {
+    pub reactor: [f32; 3],
+    pub radius: f32,
+    pub gates: Vec<[f32; 3]>,
+    #[serde(default)]
+    pub lanes: Lanes,
+}
+
+/// Co-op Defense's lanes: points on walkable ground, and edges between them (from, to, weight);
+/// `narrow`, the edges (by index) too tight for big foes (brutes and bosses), who take another
+/// branch where there is one.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct Lanes {
+    pub points: Vec<[f32; 3]>,
+    pub edges: Vec<(usize, usize, f32)>,
+    #[serde(default)]
+    pub narrow: Vec<usize>,
+    /// Edges the Bloom can seal (by index), each with its name for callouts.
+    #[serde(default)]
+    pub seals: Vec<(usize, String)>,
+}
+
 /// Where a map's objective modes play.
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct Objectives {
@@ -113,6 +142,12 @@ pub struct Objectives {
     /// Convoy: the hauler's route.
     #[serde(default)]
     pub convoy: Option<Route>,
+    /// Co-op Defense: the reactor, gates and lanes.
+    #[serde(default)]
+    pub defense: Option<DefenseSpots>,
+    /// A map made for co-op alone: the versus modes leave it out.
+    #[serde(default)]
+    pub coop: bool,
 }
 
 #[derive(Deserialize, Clone, Debug)]

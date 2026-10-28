@@ -301,6 +301,14 @@ export class Hud {
         g.strokeStyle = f.windup >= 1 ? '#ffffff' : AMBER;
         arc(g, x, y, Math.max(19 * u, r + 14 * u), -Math.PI / 2, -Math.PI / 2 + TAU * f.windup);
       }
+      // A lock-on press that found nothing: two arcs spin round it a moment, outside a windup's ring.
+      if (f.seeking) {
+        const a = f.now / 120, rs = Math.max(25 * u, r + 20 * u);
+        g.lineWidth = 2 * u;
+        g.strokeStyle = AMBER;
+        arc(g, x, y, rs, a, a + 1);
+        arc(g, x, y, rs, a + Math.PI, a + Math.PI + 1);
+      }
       g.fillStyle = AMBER;
       g.beginPath();
       g.arc(x, y, 2.2 * u, 0, TAU);

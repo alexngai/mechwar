@@ -92,6 +92,8 @@
     .card.mode .grab { max-width: none; margin: -12px -14px 12px; }
     .card.mode .grab .shot { margin: 0; border: 0; }
     .card.mode .grab figcaption { padding: 0 14px; }
+    .card.mode table { width: 100%; margin: 4px 0 10px; }
+    .card.mode td:nth-child(-n+2) { white-space: nowrap; }
     .pager { display: flex; justify-content: space-between; margin-top: 32px; letter-spacing: 1px; }
     .plan text { font-family: ui-monospace, Menlo, monospace; font-weight: bold; text-anchor: middle; dominant-baseline: central; paint-order: stroke; stroke: #000c; }
     .key { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--dim); font-size: 11px; }
@@ -131,7 +133,7 @@
 <body>
   <header><a class="logo" href="/" title="Home">MECHWAR</a><a class="section" href="/guide/">GUIDE</a><a class="play" href="/">PLAY</a></header>
   <div class="wrap">
-    <nav id="nav" aria-label="Guide sections"></nav>
+    <nav id="nav" aria-label="Guide sections"><a href="/guide/">OVERVIEW</a><a href="/guide/mechs">MECHS</a><a href="/guide/weapons">WEAPONS</a><a href="/guide/items">ITEMS</a><a href="/guide/modes">MODES</a><a href="/guide/maps">MAPS</a><a href="/guide/mechanics">MECHANICS</a></nav>
     <main id="page"></main>
   </div>
   <script type="module" src="/web/guide.js"></script>

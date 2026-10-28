@@ -1,7 +1,7 @@
 //! Serves the built client, a small lobby API and the game WebSocket on one port. Every room is
 //! its own match on its own 30 Hz loop (a tokio task); each connection gets a reader and a writer
 //! task and joins one room. Env: `PORT` (9001), `STATIC_DIR` (`dist`), `LAG_MS` (one-way delay
-//! for testing), and quick play's room settings: `MODE` (`tdm`, `dm`, `ma`, `siege`, `ctf` or `convoy`; else every mode in turn),
+//! for testing), and quick play's room settings: `MODE` (`tdm`, `dm`, `ma`, `siege`, `ctf`, `convoy` or `defense`; else every versus mode in turn),
 //! `MAP` (one map; else the rotation), `SCORE_LIMIT`, `MATCH_SECONDS`, `BOT_SKILL` (`easy`,
 //! `normal`, `hard`, or 0 to 1). And
 //! `PROGRESS_KEY`, the secret that signs progression records (a dev key stands in without it).
@@ -38,7 +38,7 @@ use futures_util::{SinkExt, StreamExt};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use sim::game::{Game, MAX_PLAYERS, Mode};
+use sim::game::{Game, MAX_PLAYERS, Mode, STAGING_SECONDS};
 use sim::map::{MAPS, ROTATION};
 use sim::client::INTERP_TICKS;
 use sim::net::{self, ClientMsg, Event, ServerMsg};
@@ -77,6 +77,12 @@ const TRICKLE: u32 = 10;
 /// How fast a player's least lag creeps up, in ticks an input (about half a tick a second), so a
 /// route that got slower soon stops counting as behind.
 const BASE_DRIFT: f32 = 1.0 / 60.0;
+/// Each connection is pinged this often, and one that sends nothing (not even the browser's
+/// automatic pong) for SILENT has gone and leaves its room: a pilot who left without the socket
+/// closing (Fly's proxy can keep it open, or the network just dropped) would otherwise hold their
+/// slot for good, bots never taking it.
+const PING_EVERY: Duration = Duration::from_secs(5);
+const SILENT: Duration = Duration::from_secs(20);
 
 /// Outgoing bytes, stamped when queued so `LAG_MS` delays every message by the same amount.
 type Outbox = mpsc::UnboundedSender<(Instant, Vec<u8>)>;
@@ -196,9 +202,9 @@ async fn main() {
         eprintln!("bot spots preloaded for {} of {} maps", sim::tactics::Spots::preload(&bakes), MAPS.len());
     }
 
-    let mut quick = Settings { name: "Quick play".into(), public: true, mode: None, map: None, score_limit: 25, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
+    let mut quick = Settings { name: "Quick play".into(), public: true, mode: None, map: None, score_limit: 20, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
     if let Ok(key) = env::var("MODE") {
-        quick.mode = Some(Mode::from_key(&key).expect("MODE must be tdm, dm, ma, siege, ctf or convoy"));
+        quick.mode = Some(Mode::from_key(&key).expect("MODE must be tdm, dm, ma, siege, ctf, convoy or defense"));
     }
     if let Ok(name) = env::var("MAP") {
         quick.map = Some(Map::index(&name).expect("MAP must name a map in maps/"));
@@ -218,7 +224,8 @@ async fn main() {
         DEV_KEY.to_vec()
     }));
     let app = App { rooms: Rooms::default(), lag, quick: Arc::new(quick), seed: Arc::new(AtomicU64::new(seed)), signer };
-    let client = ServeDir::new(&static_dir).fallback(ServeFile::new(format!("{static_dir}/index.html")));
+    // Any other path gets the game page too, but as a 404, so search engines don't index it as one more copy.
+    let client = ServeDir::new(&static_dir).not_found_service(ServeFile::new(format!("{static_dir}/index.html")));
     // The guide is one page for all its sections and pages (/guide/ itself is ServeDir's guide/index.html).
     let guide = ServeFile::new(format!("{static_dir}/guide/index.html"));
     let router = Router::new()
@@ -434,7 +441,8 @@ fn deck(settings: &Settings) -> Vec<(Mode, usize)> {
         Some(map) => vec![map],
         None => ROTATION.iter().map(|name| Map::index(name).expect("rotation names a map")).collect(),
     };
-    let modes = settings.mode.map_or(Mode::ALL.to_vec(), |m| vec![m]);
+    // Co-op only when a room asks for it.
+    let modes = settings.mode.map_or(Mode::ALL.into_iter().filter(|m| m.versus()).collect(), |m| vec![m]);
     modes.iter().flat_map(|&mode| maps.iter().filter(move |&&map| PLAYS[map].contains(&mode)).map(move |&map| (mode, map))).collect()
 }
 
@@ -445,6 +453,8 @@ fn new_game(settings: &Settings, seed: u64) -> Game {
     game.mode = mode;
     game.rotate(deck, seed);
     (game.score_limit, game.match_seconds, game.bots, game.bot_skill) = (settings.score_limit, settings.match_seconds, settings.bots, settings.bot_skill);
+    game.staging_seconds = STAGING_SECONDS;
+    game.start_match();
     game
 }
 
@@ -522,6 +532,8 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
                     game.pick(id, class, loadout);
                 }
                 Cmd::Msg(id, ClientMsg::Name(name)) => game.set_name(id, &name),
+                Cmd::Msg(id, ClientMsg::Build(order)) => game.build(id, order),
+                Cmd::Msg(id, ClientMsg::Draft(choice)) => game.draft(id, choice),
                 // Once a visit: taking another record mid-match would count the match twice.
                 Cmd::Msg(id, ClientMsg::Progress(token)) if !pilots.contains_key(&id) => {
                     let base = signer.verify(&token).unwrap_or_else(|| {
@@ -635,9 +647,17 @@ async fn connection(socket: WebSocket, cmds: mpsc::UnboundedSender<Cmd>, lag: Du
 
     let (out, mut outbox) = mpsc::unbounded_channel::<(Instant, Vec<u8>)>();
     let writer = tokio::spawn(async move {
-        while let Some((queued, bytes)) = outbox.recv().await {
-            time::sleep_until(queued + lag).await;
-            if sink.send(Message::Binary(bytes.into())).await.is_err() {
+        let mut ping = time::interval_at(Instant::now() + PING_EVERY, PING_EVERY);
+        loop {
+            let msg = tokio::select! {
+                next = outbox.recv() => {
+                    let Some((queued, bytes)) = next else { break };
+                    time::sleep_until(queued + lag).await;
+                    Message::Binary(bytes.into())
+                }
+                _ = ping.tick() => Message::Ping(Default::default()),
+            };
+            if sink.send(msg).await.is_err() {
                 break;
             }
         }
@@ -666,7 +686,7 @@ async fn connection(socket: WebSocket, cmds: mpsc::UnboundedSender<Cmd>, lag: Du
         }
     });
 
-    while let Some(Ok(msg)) = source.next().await {
+    while let Ok(Some(Ok(msg))) = time::timeout(SILENT, source.next()).await {
         if let Message::Binary(bytes) = msg
             && let Some(msg) = net::decode::<ClientMsg>(&bytes)
         {
@@ -718,9 +738,13 @@ mod tests {
 
     #[test]
     fn rooms_deal_the_modes_and_maps_their_settings_allow() {
-        let settings = |mode, map: Option<&str>| Settings { name: String::new(), public: true, mode, map: map.map(|m| Map::index(m).unwrap()), score_limit: 25, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
+        let settings = |mode, map: Option<&str>| Settings { name: String::new(), public: true, mode, map: map.map(|m| Map::index(m).unwrap()), score_limit: 20, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
+        // Every map but the co-op one, which comes round only in co-op rooms.
         let every = deck(&settings(None, None));
-        assert_eq!(every.iter().filter(|(m, _)| *m == Mode::TeamDeathmatch).count(), ROTATION.len());
+        assert_eq!(every.iter().filter(|(m, _)| *m == Mode::TeamDeathmatch).count(), ROTATION.len() - 1);
+        assert!(every.iter().all(|&(_, map)| MAPS[map].0 != "hivewall"));
+        let coop: Vec<&str> = deck(&settings(Some(Mode::Defense), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
+        assert_eq!(coop, ["hivewall"]);
         // Deathmatch only on the smaller maps.
         let dm: Vec<&str> = deck(&settings(Some(Mode::Deathmatch), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
         assert_eq!(dm, ["isotope", "verdigris", "sump", "sinkhole", "ziggurat"]);
@@ -774,7 +798,7 @@ mod tests {
     /// bringing `record`: the room's task, the way to send it the player's messages (with their
     /// id), and what it sends them.
     async fn join_room(key: &[u8], match_seconds: f32, record: &str) -> (tokio::task::JoinHandle<()>, impl Fn(ClientMsg) + use<>, mpsc::UnboundedReceiver<(Instant, Vec<u8>)>) {
-        let settings = Settings { name: "Test".into(), public: false, mode: Some(Mode::TeamDeathmatch), map: None, score_limit: 25, match_seconds, bots: false, bot_skill: 0.5 };
+        let settings = Settings { name: "Test".into(), public: false, mode: Some(Mode::TeamDeathmatch), map: None, score_limit: 20, match_seconds, bots: false, bot_skill: 0.5 };
         let game = new_game(&settings, 1);
         let info = Arc::new(Mutex::new(describe("TEST", &settings, &game)));
         let (cmds, cmd_rx) = mpsc::unbounded_channel();
@@ -886,6 +910,35 @@ mod tests {
         send(ClientMsg::Pick(heavy, wanted));
         assert_eq!(loadout_after(&mut inbox).await, Loadout { support: orb, ..own }, "carried an item it couldn't afford");
         room.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_connection_gone_silent_leaves_its_room() {
+        use tokio::io::AsyncWriteExt;
+        let (cmds, mut room) = mpsc::unbounded_channel();
+        let router = Router::new().route(
+            "/ws",
+            get(move |ws: WebSocketUpgrade| {
+                let cmds = cmds.clone();
+                async move { ws.on_upgrade(move |socket| connection(socket, cmds, Duration::ZERO)) }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(axum::serve(listener, router).into_future());
+        // A client by hand that never reads (so never answers a ping) and never closes.
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        client.write_all(b"GET /ws HTTP/1.1\r\nHost: test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n").await.unwrap();
+        let Some(Cmd::Join(_outbox, reply)) = room.recv().await else { panic!("never joined") };
+        reply.send(Some(3)).unwrap();
+        // Sending something (an empty frame) every 10 s keeps it in; then it goes quiet.
+        for _ in 0..4 {
+            time::sleep(Duration::from_secs(10)).await;
+            client.write_all(&[0x82, 0x80, 0, 0, 0, 0]).await.unwrap();
+        }
+        let quiet = Instant::now();
+        let left = time::timeout(2 * SILENT, room.recv()).await;
+        assert!(matches!(left, Ok(Some(Cmd::Leave(3)))) && quiet.elapsed() >= SILENT, "left after {:?} quiet", quiet.elapsed());
     }
 
     #[tokio::test(start_paused = true)]

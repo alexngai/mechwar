@@ -13,6 +13,7 @@ pub mod client;
 pub mod collide;
 pub mod convoy;
 pub mod ctf;
+pub mod defense;
 pub mod deploy;
 pub mod game;
 pub mod item;
@@ -267,6 +268,8 @@ pub struct Tuning {
     /// Support: a repair orb dropped at the feet, healing the mech's side (see game.rs `ORB_*`).
     pub orb_charges: f32,
     pub orb_recharge: f32,
+    /// What a wreck's or a Salve's orb holds.
+    pub orb_health: f32,
     /// Support: a half-sphere shield at the feet that the other side's shots stop at
     /// (`deploy.rs`), for `dome_seconds` or until they've worn off its `dome_hull`.
     pub dome_charges: f32,
@@ -529,7 +532,15 @@ pub struct Arena {
     pub half: [f32; 2],
     /// Barriers standing (`deploy.rs`), and their walls.
     barriers: Vec<(deploy::Deployable, ColliderHandle)>,
+    /// Each team's staging pen: a circle (center, radius) round its spawns, PEN_MARGIN past the
+    /// farthest. While `penned` (a team match's opening, `game.rs`) no mech leaves the one it's
+    /// in, however high it flies.
+    pub pens: [(Vector, f32); 2],
+    pub penned: bool,
 }
+
+/// How far a staging pen's wall stands past its farthest spawn (m).
+pub const PEN_MARGIN: f32 = 8.0;
 
 /// A jump pad fires for feet this close to its center (and within half a meter of its height).
 pub const PAD_RADIUS: f32 = 2.5;
@@ -550,7 +561,12 @@ impl Arena {
         }
         // Builds the broad phase so scene queries see the static colliders. No physics step runs.
         world.detect_collisions(&(), &());
-        Self { world, pads: map.pads.clone(), half: map.size.map(|s| s / 2.0), barriers: Vec::new() }
+        let pens = map.spawns.each_ref().map(|team| {
+            let at: Vec<Vector> = team.iter().map(|p| Vector::from_array(*p)).collect();
+            let center = at.iter().sum::<Vector>() / at.len().max(1) as f32;
+            (center, at.iter().map(|p| (*p - center).with_y(0.0).length()).fold(0.0, f32::max) + PEN_MARGIN)
+        });
+        Self { world, pads: map.pads.clone(), half: map.size.map(|s| s / 2.0), barriers: Vec::new(), pens, penned: false }
     }
 }
 
@@ -935,6 +951,17 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     if m.pos.z.abs() > hz {
         m.pos.z = m.pos.z.clamp(-hz, hz);
         m.vel.z = 0.0;
+    }
+    // Staging: the pen it's in (the nearer) holds it the same way.
+    if arena.penned {
+        let off = |(c, _): &(Vector, f32)| (m.pos - *c).with_y(0.0);
+        let pen = arena.pens.iter().min_by(|a, b| off(a).length().total_cmp(&off(b).length())).expect("two pens");
+        let (out, room) = (off(pen), pen.1 - radius);
+        if out.length() > room {
+            let n = out / out.length();
+            m.pos = pen.0.with_y(m.pos.y) + n * room;
+            m.vel -= n * m.vel.dot(n).max(0.0);
+        }
     }
     if m.grounded {
         m.pad_arc = false;
