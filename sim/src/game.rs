@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ability::{self, Ability};
 use crate::arsenal;
-use crate::bot::{self, Bot, Nav};
+use crate::bot::{self, Bot, Nav, Policy};
 use crate::collide;
 use crate::convoy::{self, Convoy, News};
 use crate::ctf::{self, Ctf, Happened};
@@ -599,18 +599,27 @@ impl Game {
         let mut radio: Vec<Vec<(u8, u8, Vector)>> = vec![Vec::new(); MAX_PLAYERS]; // (from, enemy, where)
         // Objectives to take or hold, in Missile Assault, Siege, Capture the Flag and Convoy.
         let hauler = self.deployables.iter().find(|d| d.kind == Kind::Hauler).map(|d| d.pos);
+        // Each team's bots take their jobs as its first bot's policy says.
+        let plans = [0, 1].map(|team| self.players.iter().filter(|p| p.team == team).find_map(|p| p.bot.as_ref()).map(|b| &b.policy));
         let orders = match (&self.assault, &self.siege, &self.ctf, self.convoy.as_ref().zip(hauler)) {
             (Some(a), ..) => {
-                // Each team's bots go after as many silos at once as its first bot's policy says.
-                let spread = [0, 1].map(|team| self.players.iter().filter(|p| p.team == team).find_map(|p| p.bot.as_ref()).map_or(usize::MAX, |b| b.policy.assault_spread.round().max(1.0) as usize));
+                // As many silos at once as its policy says.
+                let spread = plans.map(|p| p.map_or(usize::MAX, |p| p.assault_spread.round().max(1.0) as usize));
                 Some(a.orders_spread(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.mech.health > 0.0)).collect::<Vec<_>>(), spread))
             }
             (_, Some(s), ..) => {
                 let ships = [0, 1].map(|t| self.deployables.iter().any(|d| d.kind == Kind::Ship && d.team == t));
-                Some(s.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.eu)).collect::<Vec<_>>(), ships))
+                let crews = plans.map(|p| p.map_or_else(siege::Crew::default, Policy::siege_crew));
+                Some(s.orders_by(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.eu)).collect::<Vec<_>>(), ships, crews))
             }
-            (_, _, Some(c), _) => Some(c.orders(&self.players.iter().map(|p| (p.id, p.team, p.mech.pos, p.bot.is_some() && p.mech.health > 0.0)).collect::<Vec<_>>())),
-            (.., Some((c, at))) => Some(c.orders(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.mech.health > 0.0)).collect::<Vec<_>>(), at)),
+            (_, _, Some(c), _) => {
+                let squads = plans.map(|p| p.map_or_else(ctf::Squads::default, Policy::ctf_squads));
+                Some(c.orders_by(&self.players.iter().map(|p| (p.id, p.team, p.mech.pos, p.bot.is_some() && p.mech.health > 0.0)).collect::<Vec<_>>(), squads))
+            }
+            (.., Some((c, at))) => {
+                let escorts = plans.map(|p| p.map_or_else(convoy::Escort::default, Policy::convoy_escort));
+                Some(c.orders_by(&self.players.iter().map(|p| (p.team, p.mech.pos, p.bot.is_some(), p.mech.health > 0.0)).collect::<Vec<_>>(), at, escorts))
+            }
             _ => None,
         };
         let mut matchups = std::mem::take(&mut self.matchups);
@@ -1721,6 +1730,11 @@ impl Game {
         if won {
             self.end_match();
         }
+    }
+
+    /// What happened this tick.
+    pub fn events(&self) -> &[Event] {
+        &self.events
     }
 
     /// The match's map, score and clock, as players see them.

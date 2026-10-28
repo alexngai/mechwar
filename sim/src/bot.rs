@@ -568,6 +568,10 @@ pub struct Policy {
     /// Chance it dodges on a hit with the dodge ready.
     pub dodge_chance: f32,
     /// Its role each life: Hunt below the first cut, then Perch, Flank, and Sneak past the last.
+    /// Hunting more, and dodging half the time (from 40% hunting and 0.3): at 80% hunting, +0.72 ±
+    /// 0.16 kills a match at skill 0.5 and +0.75 ± 0.17 at skill 1 in Team Deathmatch, about even
+    /// elsewhere; 60%, with more flankers, gives up 0.09 ± 0.17 of that and keeps bots in Foundry's
+    /// side lanes.
     pub role_cuts: [f32; 3],
     /// Target scoring, in metres closer: an enemy that hit it lately, one wounded (per missing
     /// share of hull), and one a teammate is fighting (focus fire). By distance, with
@@ -596,6 +600,28 @@ pub struct Policy {
     /// Missile Assault: how many of the silos its team doesn't hold securely the team goes after
     /// at once (its first bot's says, for all), the nearest first.
     pub assault_spread: f32,
+    /// Capture the Flag (its team's first bot's says, for all): how many raid the enemy's stand,
+    /// escort its own carrier, chase the enemy's and guard its own stand (`ctf::Squads`); and
+    /// how hurt (hull share) a carrier has to be to fall back, to mend or cool, rather than press
+    /// on home (1: as any bot does; 0, never: +0.21 ± 0.06 a match at skill 0.5 and +0.16 ± 0.05 at
+    /// skill 1, in captures and a tenth a flag taken, against carriers falling back as any bot).
+    pub ctf_raid: f32,
+    pub ctf_escort: f32,
+    pub ctf_chase: f32,
+    pub ctf_guard: f32,
+    pub carry_retreat: f32,
+    /// Siege (its team's first bot's says, for all; `siege::Crew`): the share of a full load of
+    /// energy a bot carries home to bank, and how many go to the anti-air gun, with the enemy ship
+    /// down and up (one, not two, with it up: +20 ± 15 base hull a match).
+    pub siege_bank: f32,
+    pub siege_aa: f32,
+    pub siege_aa_ship: f32,
+    /// Convoy (the same; `convoy::Escort`): how far behind the hauler its escort stands (15 m, not
+    /// 8: +6.9 ± 3.1 percent pushed a match), how many more at it than the enemy free one to
+    /// scout, and how far ahead that one goes.
+    pub convoy_cover: f32,
+    pub convoy_spare: f32,
+    pub convoy_scout: f32,
     /// With nothing to do it holds within this of its lead.
     pub follow: f32,
     /// Farthest it lobs a grenade (short of its flat-ground reach).
@@ -625,8 +651,8 @@ impl Default for Policy {
             hold_for: 12.0,
             band_near: 0.6,
             band_far: 1.4,
-            dodge_chance: 0.3,
-            role_cuts: [0.4, 0.7, 0.9],
+            dodge_chance: 0.5,
+            role_cuts: [0.6, 0.75, 0.95],
             threat_m: 25.0,
             wounded_m: 30.0,
             focus_m: 10.0,
@@ -639,6 +665,17 @@ impl Default for Policy {
             post_cross: 0.3,
             trade_reach: 23.0,
             assault_spread: 3.0,
+            ctf_raid: 2.0,
+            ctf_escort: 1.0,
+            ctf_chase: 2.0,
+            ctf_guard: 1.0,
+            carry_retreat: 0.0,
+            siege_bank: 0.8,
+            siege_aa: 1.0,
+            siege_aa_ship: 1.0,
+            convoy_cover: 15.0,
+            convoy_spare: 2.0,
+            convoy_scout: 35.0,
             follow: 10.0,
             grenade_range: 28.0,
             heat_fed: 0.1,
@@ -653,6 +690,23 @@ impl Default for Policy {
 }
 
 impl Policy {
+    /// Its Capture the Flag squads, as whole bots.
+    pub fn ctf_squads(&self) -> crate::ctf::Squads {
+        let n = |x: f32| x.round().max(0.0) as usize;
+        crate::ctf::Squads { raid: n(self.ctf_raid), escort: n(self.ctf_escort), chase: n(self.ctf_chase), guard: n(self.ctf_guard) }
+    }
+
+    /// Its Siege crew.
+    pub fn siege_crew(&self) -> crate::siege::Crew {
+        let n = |x: f32| x.round().max(0.0) as usize;
+        crate::siege::Crew { bank: self.siege_bank, aa: n(self.siege_aa), aa_ship: n(self.siege_aa_ship) }
+    }
+
+    /// Its Convoy escort.
+    pub fn convoy_escort(&self) -> crate::convoy::Escort {
+        crate::convoy::Escort { cover: self.convoy_cover, spare: self.convoy_spare.round().max(0.0) as usize, scout: self.convoy_scout }
+    }
+
     /// The play styles a live bot is rolled with (`Bot::with_skill`): today's tuned policy, and
     /// three leanings off it. A team of one of each holds its own against four of today's (Team
     /// Deathmatch +0.08 ± 0.16 kills a match at skill 0.5, +0.31 ± 0.17 at skill 1; Missile
@@ -1201,7 +1255,9 @@ impl Bot {
                 at.flag(Feature::TargetInSight, sees_at(arena, t, me, self.chest(t, self.focus, m.pos))).set(Feature::TargetDist, m.pos.distance(me.pos));
             }
             at.set(Feature::EnemiesInView, self.contacts.iter().filter(|c| c.seen).count() as f32).set(Feature::MatesNear, f32::from(self.mates_near));
-            if self.brain.wants(Action::StopFallingBack, &at) || tick >= r.until {
+            // A carrier presses on home unless worse hurt than its policy's carry_retreat.
+            let pressing = me.laden && me.health > self.policy.carry_retreat * t.health_max;
+            if pressing || self.brain.wants(Action::StopFallingBack, &at) || tick >= r.until {
                 self.retreat = None;
             } else {
                 // There, but in the target's view after all (it moved, say): other cover from it
@@ -1394,7 +1450,9 @@ impl Bot {
             at.flag(Feature::Cooling, self.cooling).flag(Feature::VentReady, Ability::of(me.loadout) == Ability::Vent && me.ability_cooldown <= 0.0);
             let post = self.post_point(arena, nav, t, me, target, tick);
             at.flag(Feature::PostCovered, post.is_some_and(|p| p.covered) || haven.is_some());
-            let why = if self.brain.wants(Action::FallBackToMend, &at) {
+            let why = if me.laden && me.health > self.policy.carry_retreat * t.health_max {
+                None
+            } else if self.brain.wants(Action::FallBackToMend, &at) {
                 Some(Why::Mend)
             } else if self.brain.wants(Action::FallBackToCool, &at) {
                 Some(Why::Cool)

@@ -36,6 +36,20 @@ const LANES: [f32; 4] = [0.0, 3.0, -3.0, 1.5];
 const SPARE: usize = 2;
 const SCOUT: f32 = 35.0;
 
+/// A team's escort, by its policy: COVER, SPARE and SCOUT.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Escort {
+    pub cover: f32,
+    pub spare: usize,
+    pub scout: f32,
+}
+
+impl Default for Escort {
+    fn default() -> Self {
+        Escort { cover: COVER, spare: SPARE, scout: SCOUT }
+    }
+}
+
 /// What players see of the convoy: where the hauler is along its route and where it started
 /// (0 at team 0's base, 1 at team 1's), who's pushing it and by how many more mechs, whether both
 /// teams are at it in even numbers (so it's stopped), and the seconds its stall has left.
@@ -160,6 +174,11 @@ impl Convoy {
     /// middle lane; but while its side has SPARE more mechs at the hauler than the other, the one
     /// furthest from it scouts ahead. Humans get None.
     pub fn orders(&self, mechs: &[(u8, Vector, bool, bool)], hauler: Vector) -> Vec<Option<Vector>> {
+        self.orders_by(mechs, hauler, [Escort::default(); 2])
+    }
+
+    /// `orders`, with each team's own `escorts`.
+    pub fn orders_by(&self, mechs: &[(u8, Vector, bool, bool)], hauler: Vector, escorts: [Escort; 2]) -> Vec<Option<Vector>> {
         let near = |m: &&(u8, Vector, bool, bool)| m.3 && (m.1 - hauler).with_y(0.0).length() <= ESCORT_RANGE && (m.1.y - hauler.y).abs() <= ESCORT_BAND;
         let count = [0, 1].map(|t| mechs.iter().filter(|m| m.0 == t).filter(near).count());
         // Across the route here, for the lanes.
@@ -169,16 +188,16 @@ impl Convoy {
         let mut out = vec![None; mechs.len()];
         for team in 0..2u8 {
             // Our base is back down the route (team 0's at its start), theirs on up it.
-            let home = if team == 0 { -1.0 } else { 1.0 };
+            let (home, e) = (if team == 0 { -1.0 } else { 1.0 }, escorts[usize::from(team)]);
             let mut bots: Vec<usize> = (0..mechs.len()).filter(|&i| mechs[i].0 == team && mechs[i].2 && mechs[i].3).collect();
             bots.sort_by(|&x, &y| mechs[x].1.distance(hauler).total_cmp(&mechs[y].1.distance(hauler)));
-            if count[usize::from(team)] >= count[usize::from(1 - team)] + SPARE && bots.len() > 1 {
+            if count[usize::from(team)] >= count[usize::from(1 - team)] + e.spare && bots.len() > 1 {
                 let scout = bots.pop().expect("more than one");
-                out[scout] = Some(self.at(self.along - home * SCOUT).0);
+                out[scout] = Some(self.at(self.along - home * e.scout).0);
             }
             // On a steep stretch (a ramp, a breach) the spot comes in closer, so it stays level
             // enough with the hauler to count as escorting it.
-            let behind = [COVER, 0.5 * COVER, 0.25 * COVER]
+            let behind = [e.cover, 0.5 * e.cover, 0.25 * e.cover]
                 .map(|d| self.at(self.along + home * d).0)
                 .into_iter()
                 .find(|p| (p.y - hauler.y).abs() <= 0.5 * ESCORT_BAND)

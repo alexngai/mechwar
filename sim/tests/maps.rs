@@ -537,10 +537,10 @@ fn skybridge_drops_to_the_courtyard() {
 #[test]
 fn bots_spread_over_foundry() {
     // Bot samples in the channel, on the ground, decks and gantries; in the west and east lanes.
-    // Three six-minute matches at once, pooled: any one match swings too much as bots group up
-    // (in one, twelve minutes went by without a bot in the east lane).
+    // Eight six-minute matches at once, pooled: any one match swings too much as bots group up
+    // (a lane goes empty for a whole match about one time in four).
     let matches: Vec<([usize; 4], [usize; 2], usize)> = std::thread::scope(|s| {
-        let runs: Vec<_> = (0..3u32)
+        let runs: Vec<_> = (0..8u32)
             .map(|seed| {
                 s.spawn(move || {
                     let mut game = Game::new(Tuning::default(), Map::index("foundry").unwrap());

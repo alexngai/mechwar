@@ -11,19 +11,19 @@
     {
       "id": "triplet", "name": "Burst", "unlock": 1, "desc": "Three hard, accurate rounds a pull, then a beat", "sound": "burst", "recoil": "low", "use": [["LMB", "Each pull fires a three-round burst; pull again after the beat"], ["", "Accurate to mid range, fading past 40 m"]],
       "stats": {
-        "fire_rate": 1.65, "burst": 3, "burst_gap": 0.07, "shot_damage": 6.375, "heat_per_shot": 3.5,
+        "fire_rate": 1.65, "burst": 3, "burst_gap": 0.07, "shot_damage": 6.0, "heat_per_shot": 3.5,
         "spread_deg": 0.25, "bloom_per_shot": 0.25, "bloom_max": 1.5, "bloom_recovery": 4,
         "falloff_start": 40, "falloff_end": 90, "falloff_floor": 0.5
       }
     },
     {
       "id": "pike", "name": "Rifle", "unlock": 1, "desc": "Accurate, with mild bloom and long reach", "sound": "rifle", "recoil": "medium", "use": [["LMB", "Hold to fire 8 rounds a second"], ["", "Full damage out to 60 m, and still 60% at 120 m"]],
-      "stats": { "shot_damage": 4.8 }
+      "stats": { "shot_damage": 4.5 }
     },
     {
       "id": "gyre", "name": "Gatling", "unlock": 2, "desc": "A rotary cannon that spins up to a torrent, and runs hot", "sound": "rotary", "recoil": "high", "use": [["LMB", "Hold: it opens fire after 0.2 s and reaches full rate after 1.2 s"], ["", "Let go and it spins down over 0.8 s: fire long bursts, and watch your heat"]],
       "stats": {
-        "fire_rate": 18, "spin_up": 1.2, "spin_down": 0.8, "spin_start": 0.2, "spin_delay": 0.2, "shot_damage": 3.73, "heat_per_shot": 2.5,
+        "fire_rate": 18, "spin_up": 1.2, "spin_down": 0.8, "spin_start": 0.2, "spin_delay": 0.2, "shot_damage": 3.5, "heat_per_shot": 2.5,
         "spread_deg": 1, "bloom_per_shot": 0.12, "bloom_max": 2.5, "bloom_recovery": 3,
         "falloff_start": 35, "falloff_end": 80, "falloff_floor": 0.5
       }
