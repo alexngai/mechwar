@@ -459,14 +459,27 @@ fn piston_probe() {
 
 /// Pile drivers in bot-only matches on every map: every other bot on one side (sides alternate by
 /// seed) carries it, the rest of both sides other secondaries, all on guns a pile-driver bot picks.
-/// Counts releases, how many go with no enemy in view, hits and their damage, and the side's kills.
+/// Counts releases, how many go with no enemy in view, hits and their damage, and the side's kills;
+/// the carriers' time going in (and how much of it the lunge would land), their kills and deaths
+/// beside the other bots', and how each death came. PROBE_POLICY='<json>' overrides the carriers'
+/// policy weights.
 /// PROBE_SEEDS=<n> PROBE_SECS=<s> cargo test -p sim --release --lib piston_match_probe -- --ignored --nocapture
 #[test]
 #[ignore = "probe"]
 fn piston_match_probe() {
     let run: f32 = std::env::var("PROBE_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(180.0);
     let seeds: u64 = std::env::var("PROBE_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(2);
+    let overrides: serde_json::Map<String, serde_json::Value> = std::env::var("PROBE_POLICY").ok().map(|s| serde_json::from_str(&s).expect("PROBE_POLICY: a JSON object")).unwrap_or_default();
     let (mut alive, mut releases, mut blind, mut hits, mut dealt, mut deaths) = (0u64, 0u32, 0u32, 0u32, 0.0f32, 0u32);
+    // Ticks going in on an enemy, and of those: with it in view, in the lunge's reach too, wound
+    // too, and the lunge sure to land too (`bot::lunge_lands`).
+    let (mut going, mut funnel) = (0u64, [0u64; 4]);
+    // The other bots, for reference: their time alive, and kills and deaths; the carriers' kills.
+    let (mut others_alive, mut others_kills, mut others_deaths, mut kills) = (0u64, 0u32, 0u32, 0u32);
+    // Each death, carriers' then the other bots': how many, going in, with two or more enemies
+    // within 30 m, the killer's distance (sum), within 3 s of a release, falling back; and strike kills.
+    let mut died = [(0u32, 0u32, 0u32, 0.0f32, 0u32, 0u32); 2];
+    let mut strike_kills = 0u32;
     let mut scores = [0u32; 2];
     for (index, _) in crate::map::MAPS.iter().enumerate() {
         for seed in 0..seeds {
@@ -477,9 +490,28 @@ fn piston_match_probe() {
             game.step();
             let side = (seed % 2) as u8;
             let drivers: Vec<u8> = game.players.iter().filter(|p| p.team == side && p.bot.is_some()).map(|p| p.id).step_by(2).collect();
+            for p in game.players.iter_mut().filter(|p| drivers.contains(&p.id)) {
+                let bot = p.bot.as_mut().unwrap();
+                let serde_json::Value::Object(mut policy) = serde_json::to_value(&bot.policy).unwrap() else { unreachable!() };
+                policy.extend(overrides.clone());
+                bot.policy = serde_json::from_value(serde_json::Value::Object(policy)).unwrap();
+            }
             let mut roller = Bot::new(seed + 1);
+            let mut released_at: BTreeMap<u8, u32> = BTreeMap::new();
             for _ in 0..secs(run) {
                 game.step();
+                for e in &game.events {
+                    let Event::Kill { killer, victim, .. } = *e else { continue };
+                    let (Some(v), Some(k)) = (game.players.iter().find(|q| q.id == victim && q.bot.is_some()), game.players.iter().find(|q| q.id == killer)) else { continue };
+                    let d = &mut died[usize::from(!drivers.contains(&victim))];
+                    let near = game.players.iter().filter(|q| q.team != v.team && q.mech.health > 0.0 && flat(q.mech.pos - v.mech.pos).length() < 30.0).count();
+                    d.0 += 1;
+                    d.1 += u32::from(v.bot.as_ref().unwrap().going_in().is_some());
+                    d.2 += u32::from(near >= 2);
+                    d.3 += flat(k.mech.pos - v.mech.pos).length();
+                    d.4 += u32::from(released_at.get(&victim).is_some_and(|&at| game.tick < at + secs(3.0)));
+                    d.5 += u32::from(v.bot.as_ref().unwrap().doing() == bot::Doing::FallBack);
+                }
                 for i in 0..game.players.len() {
                     let p = &game.players[i];
                     let want = drivers.contains(&p.id);
@@ -498,10 +530,23 @@ fn piston_match_probe() {
                     (p.loadout, p.next_loadout) = (loadout, loadout);
                     p.mech = Mech { shield: p.mech.shield, ..spawn(&game.arsenal, class, loadout, p.mech.pos) };
                 }
+                others_alive += game.players.iter().filter(|p| p.bot.is_some() && !drivers.contains(&p.id) && p.mech.health > 0.0 && p.respawn_at.is_none()).count() as u64;
                 for p in game.players.iter().filter(|p| drivers.contains(&p.id) && p.mech.health > 0.0 && p.respawn_at.is_none()) {
                     let (t, bot) = (game.arsenal.of(&p.mech), p.bot.as_ref().unwrap());
                     alive += 1;
+                    if let Some(q) = bot.going_in().and_then(|f| game.players.iter().find(|q| q.id == f)) {
+                        going += 1;
+                        let gap = flat(q.mech.pos - p.mech.pos).length() - 2.0 * t.mech_radius;
+                        let seen = bot::sees(&game.arena, t, &p.mech, &q.mech);
+                        let reach = seen && gap <= t.alt_lunge;
+                        let wound = reach && p.mech.alt_charge >= 1.0;
+                        let lands = wound && bot::lunge_lands(&game.arena, t, &p.mech, &q.mech, 1.0, bot.policy.punch_slip);
+                        for (n, on) in funnel.iter_mut().zip([seen, reach, wound, lands]) {
+                            *n += u64::from(on);
+                        }
+                    }
                     if p.mech.launched {
+                        released_at.insert(p.id, game.tick);
                         releases += 1;
                         let seen = bot.focus().and_then(|f| game.players.iter().find(|q| q.id == f)).is_some_and(|q| bot::sees(&game.arena, t, &p.mech, &q.mech));
                         blind += u32::from(!seen);
@@ -519,21 +564,42 @@ fn piston_match_probe() {
             }
             scores[0] += u32::from(game.scores[usize::from(side)]);
             scores[1] += u32::from(game.scores[usize::from(1 - side)]);
-            deaths += game.players.iter().filter(|p| drivers.contains(&p.id)).map(|p| p.tally.stats.deaths).sum::<u32>();
+            for p in game.players.iter().filter(|p| p.bot.is_some()) {
+                let s = &p.tally.stats;
+                if drivers.contains(&p.id) {
+                    (deaths, kills) = (deaths + s.deaths, kills + s.kills + s.bot_kills);
+                    strike_kills += s.weapon_kills.get("piston").copied().unwrap_or(0);
+                } else {
+                    (others_deaths, others_kills) = (others_deaths + s.deaths, others_kills + s.kills + s.bot_kills);
+                }
+            }
         }
     }
     let min = alive as f32 / TICK_HZ / 60.0;
     println!(
-        "== pile drivers: {min:.0} bot-min | releases {:.2}/min ({:.0}% with no enemy in view), hits {:.0}%, strike damage {:.0}/min, deaths {:.2}/min | kills: their side {} other {} ({:.1}%)",
+        "== pile drivers: {min:.0} bot-min | going in {:.0}% (of that: in view {:.0}%, in reach {:.0}%, wound {:.0}%, would land {:.0}%) | releases {:.2}/min ({:.0}% with no enemy in view), hits {:.0}%, strike damage {:.0}/min, kills {:.2}/min, deaths {:.2}/min (other bots {:.2}, {:.2}) | kills: their side {} other {} ({:.1}%)",
+        100.0 * going as f32 / alive.max(1) as f32,
+        100.0 * funnel[0] as f32 / going.max(1) as f32,
+        100.0 * funnel[1] as f32 / going.max(1) as f32,
+        100.0 * funnel[2] as f32 / going.max(1) as f32,
+        100.0 * funnel[3] as f32 / going.max(1) as f32,
         releases as f32 / min,
         100.0 * blind as f32 / releases.max(1) as f32,
         100.0 * hits as f32 / releases.max(1) as f32,
         dealt / min,
+        kills as f32 / min,
         deaths as f32 / min,
+        others_kills as f32 / (others_alive as f32 / TICK_HZ / 60.0),
+        others_deaths as f32 / (others_alive as f32 / TICK_HZ / 60.0),
         scores[0],
         scores[1],
         100.0 * scores[0] as f32 / (scores[0] + scores[1]).max(1) as f32,
     );
+    let line = |(n, going, crowd, dist, after, back): (u32, u32, u32, f32, u32, u32)| {
+        let n1 = n.max(1) as f32;
+        format!("{n}: going in {:.0}%, falling back {:.0}%, 2+ enemies near {:.0}%, killer {:.1} m off, within 3 s of a release {:.0}%", 100.0 * going as f32 / n1, 100.0 * back as f32 / n1, 100.0 * crowd as f32 / n1, dist / n1, 100.0 * after as f32 / n1)
+    };
+    println!("== deaths: carriers {} | other bots {} | strike kills {:.0}% of the carriers'", line(died[0]), line(died[1]), 100.0 * strike_kills as f32 / kills.max(1) as f32);
 }
 
 /// Threat probe: a Medium bot holding still at a set range from a Medium human strafing in the
