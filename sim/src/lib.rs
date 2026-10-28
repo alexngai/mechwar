@@ -860,11 +860,16 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     } else {
         t.ground_decel
     };
-    if !m.grounded {
+    // A rocket punch's booster, while it burns, flies the mech straight along its lunge: no
+    // gravity, and only the dash's drag slowing it, up and down too (`melee::lunge`).
+    let burning = melee::burn(m) > 0.0;
+    if !m.grounded && !burning {
         accel *= t.air_control;
     }
-    // On a pad's arc the horizontal speed is left alone, so the mech lands where the pad aims.
-    if !m.pad_arc {
+    if burning {
+        m.vel += (target - m.vel).clamp_length_max(accel * DT);
+    } else if !m.pad_arc {
+        // On a pad's arc the horizontal speed is left alone, so the mech lands where the pad aims.
         let h = Vector::new(m.vel.x, 0.0, m.vel.z);
         let dv = target - h;
         let h = h + dv.clamp_length_max(accel * DT);
@@ -873,7 +878,9 @@ pub fn step_mech(arena: &Arena, t: &Tuning, m: &mut Mech, input: &Input) {
     }
 
     // Vertical: authored hover curve while hovering, gravity otherwise.
-    if m.hovering {
+    if burning {
+        // Along the lunge, as above.
+    } else if m.hovering {
         let target_vy = hover_curve(t, m.hover_time);
         m.vel.y += (target_vy - m.vel.y) * (t.hover_response * DT).min(1.0);
         m.hover_time += DT;
@@ -1238,27 +1245,36 @@ mod tests {
     #[test]
     fn a_wound_rocket_punch_carries_the_mech_along_its_aim() {
         // How far (level, and up at most) a punch let go after `hold` s looking `pitch` up carries
-        // the mech down the clear run, with nothing to lunge at.
+        // the mech down the clear run, with nothing to lunge at; and how far it strays off the line
+        // of its aim while the booster burns.
         let punch = |hold: f32, pitch: f32| {
             let mut sim = weapon_sim(|t| (t.alt_melee, t.alt_charge_time, t.alt_release) = (3.0, 0.8, 1.0));
-            let (start, mut top) = (sim.mech.pos, 0.0f32);
+            let (start, mut top, mut off) = (sim.mech.pos, 0.0f32, 0.0f32);
+            let aim = Rotation::from_rotation_x(pitch) * Vector::NEG_Z;
             for _ in 0..(hold * TICK_HZ).round() as usize {
                 sim.step(&Input { alt_fire: true, pitch, ..Input::default() });
             }
             for _ in 0..(2.0 * TICK_HZ) as usize {
                 sim.step(&Input { pitch, ..Input::default() });
                 top = top.max(sim.mech.pos.y - start.y);
+                if melee::burn(&sim.mech) > 0.0 {
+                    let d = sim.mech.pos - start;
+                    off = off.max((d - aim * d.dot(aim)).length());
+                }
             }
-            (Vector::new(sim.mech.pos.x - start.x, 0.0, sim.mech.pos.z - start.z).length(), top)
+            (Vector::new(sim.mech.pos.x - start.x, 0.0, sim.mech.pos.z - start.z).length(), top, off)
         };
         let t = weapon_sim(|_| {}).tuning;
-        let ((full, _), (half, _), (jab, _)) = (punch(1.0, 0.0), punch(0.4, 0.0), punch(1.0 / TICK_HZ, 0.0));
+        let ((full, _, _), (half, _, _), (jab, _, _)) = (punch(1.0, 0.0), punch(0.4, 0.0), punch(1.0 / TICK_HZ, 0.0));
         assert!((full - t.alt_lunge).abs() < 1.0, "a full wind-up went {full} m");
         assert!((half - 0.5 * t.alt_lunge).abs() < 1.0, "half went {half} m");
         assert!(jab < 1.0, "a tap went {jab} m");
-        // Looking up, it climbs that far along the aim.
-        let (level, rise) = punch(1.0, 0.6);
-        assert!((rise - t.alt_lunge * 0.6f32.sin()).abs() < 1.0 && (level - t.alt_lunge * 0.6f32.cos()).abs() < 1.5, "went {level} m and rose {rise} m");
+        // Looking up, it flies that far straight along the aim (gravity held off), then drops.
+        for pitch in [0.6f32, 1.2] {
+            let (level, rise, off) = punch(1.0, pitch);
+            assert!((rise - t.alt_lunge * pitch.sin()).abs() < 1.0 && (level - t.alt_lunge * pitch.cos()).abs() < 1.5, "at {pitch} went {level} m and rose {rise} m");
+            assert!(off < 0.3, "at {pitch} strayed {off} m off its aim");
+        }
     }
 
     #[test]
