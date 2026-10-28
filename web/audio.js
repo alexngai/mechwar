@@ -739,38 +739,29 @@ export class Sound {
   }
 
   /**
-   * A mech destroyed: a big blast and a metal crunch, then its frame groaning as it gives way and
-   * its power winding down, ammunition cooking off inside it, debris clattering down, and the
-   * wreck slumping to the ground.
+   * A mech destroyed: a big blast with a sharp crack and a deep thump, its fireball roaring out,
+   * its ammunition going up in quick secondary blasts, each smaller, and shrapnel crackling down.
    */
   death(pos) {
     this.blast(8, pos);
-    const out = this.voice(pos, 2.6, undefined, 0.25);
+    const out = this.voice(pos, 1.8, undefined, 0.35);
     if (!out) return;
     const r = (lo, hi) => lo + Math.random() * (hi - lo);
-    this.noise(out, 'white', 'bandpass', 1400, 400, 0.01, 0.4, 0.4, 2);
-    // Two low, rough groans bending down, a shade off a fifth so they grind; the generator's whine sinking away.
-    this.growl(out, 'sawtooth', 95, 38, 450, 0.25, 1.6, 0.5, 0.12);
-    this.growl(out, 'sawtooth', 142, 51, 600, 0.3, 1.3, 0.3, 0.2);
-    this.growl(out, 'sawtooth', 520, 45, 1200, 0.02, 1.3, 0.1, 0.05);
-    for (const d of [r(0.3, 0.45), r(0.7, 0.9), r(1.2, 1.5)]) {
-      this.noise(out, 'brown', 'lowpass', 800, 90, 0.004, 0.45, 0.8, 1, d);
-      this.tone(out, 'sine', 60, 24, 0.004, 0.5, 0.7, d);
-      this.noise(out, 'white', 'lowpass', 2400, 600, 0.002, 0.08, 0.35, 1, d);
-    }
-    for (let k = 0; k < 5; k++) {
-      const f = r(400, 900), d = r(0.5, 2);
-      this.tone(out, 'triangle', f, f * 0.95, 0.001, 0.15, 0.12, d);
-      this.tone(out, 'square', f * 2.7, f * 2.6, 0.001, 0.05, 0.03, d);
-    }
-    this.tone(out, 'sine', 75, 28, 0.004, 0.45, 0.9, 1.0);
-    this.noise(out, 'brown', 'lowpass', 600, 70, 0.006, 0.6, 0.8, 1, 1.0);
+    this.noise(out, 'white', 'highpass', 1500, 500, 0.001, 0.12, 0.8);
+    this.tone(out, 'sine', 110, 26, 0.002, 0.7, 1);
+    this.noise(out, 'brown', 'lowpass', 2000, 80, 0.015, 0.9, 1);
+    this.noise(out, 'white', 'bandpass', 900, 200, 0.01, 0.6, 0.35, 0.7);
+    [r(0.12, 0.22), r(0.35, 0.55), r(0.7, 1)].forEach((d, k) => {
+      this.noise(out, 'white', 'lowpass', 3500, 300, 0.001, 0.22, 0.6 - 0.15 * k, 1, d);
+      this.tone(out, 'sine', 80, 24, 0.002, 0.3, 0.7 - 0.15 * k, d);
+    });
+    for (let k = 0; k < 16; k++) this.noise(out, 'white', 'bandpass', r(1500, 4500), r(700, 1500), 0.001, r(0.02, 0.06), r(0.08, 0.2), 3, r(0.05, 1.5));
   }
 
   /**
    * Our mech coming online at launch, over about three seconds: the breaker clacking in, mains hum
-   * surging and the capacitors whining up; the engine cranking, coughing and catching, revving up
-   * and settling to idle; servos and hydraulics cycling as the frame is checked, the clamps
+   * surging and the capacitors whining up; the engine cranking, coughing and catching, and revving
+   * up; servos and hydraulics cycling as the frame is checked, the clamps
    * letting go; and on the glass, processing chatter, a confirm per system, and an all-clear.
    */
   boot() {
@@ -787,15 +778,15 @@ export class Sound {
     });
     this.tone(out, 'sine', 80, 30, 0.004, 0.4, 0.9, 1.02);
     this.noise(out, 'brown', 'lowpass', 900, 150, 0.005, 0.35, 0.7, 1, 1.02);
-    // Running: a rough roar and a turbine whine on one rev curve ([s, Hz]), fading out at idle.
-    const rev = [[0.95, 22], [1.15, 30], [1.6, 70], [1.9, 92], [2.5, 46], [3.6, 42]];
+    // Running: a rough roar and a turbine whine on one rising rev curve ([s, Hz]), fading out at the top.
+    const rev = [[0.95, 22], [1.15, 30], [1.6, 50], [2.2, 70], [2.9, 90], [3.6, 105]];
     const follow = (param, k) => {
       param.setValueAtTime(rev[0][1] * k, t);
       for (const [d, f] of rev) param.linearRampToValueAtTime(f * k, t + d);
     };
     const engine = ctx.createGain(), body = ctx.createBiquadFilter();
     engine.gain.setValueAtTime(0, t + 0.95);
-    for (const [d, v] of [[1.15, 0.3], [1.9, 0.45], [2.5, 0.25], [3.6, 0]]) engine.gain.linearRampToValueAtTime(v, t + d);
+    for (const [d, v] of [[1.15, 0.3], [2.2, 0.4], [3.1, 0.5], [3.6, 0]]) engine.gain.linearRampToValueAtTime(v, t + d);
     body.type = 'lowpass';
     follow(body.frequency, 9);
     body.connect(engine).connect(out);
