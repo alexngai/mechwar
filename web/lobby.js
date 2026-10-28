@@ -55,7 +55,7 @@ lobby.innerHTML = `
       <input id="new-name" maxlength="24" placeholder="Name" autocomplete="off">
       <select id="new-mode"><option value="">Every mode</option></select>
       <select id="new-map"><option value="">Map rotation</option></select>
-      <select id="new-score"><option value="10">First to 10</option><option value="25" selected>First to 25</option><option value="50">First to 50</option></select>
+      <select id="new-score"><option value="10">First to 10</option><option value="20" selected>First to 20</option><option value="50">First to 50</option></select>
       <select id="new-skill"><option value="easy">Easy bots</option><option value="normal" selected>Normal bots</option><option value="hard">Hard bots</option><option value="">No bots</option></select>
       <label><input type="checkbox" id="new-public"> LISTED</label>
       <button id="create">OPEN</button>

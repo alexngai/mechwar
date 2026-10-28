@@ -152,6 +152,13 @@ impl Nav {
         order.iter().copied().find(|&i| clear(i)).unwrap_or(order[0])
     }
 
+    /// The waypoints of the shortest walk from the one nearest `from` to the one nearest `to`
+    /// (just that last one if it can't be reached).
+    pub fn route(&self, arena: &Arena, from: Vector, to: Vector) -> Vec<Vector> {
+        let goal = self.nearest(arena, to);
+        self.path(self.nearest(arena, from), |_| goal).into_iter().map(|i| self.nodes[i]).collect()
+    }
+
     /// Which waypoints can be reached from `from`.
     pub fn reachable(&self, from: usize) -> Vec<bool> {
         self.reachable_over(from, |_| true)

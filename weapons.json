@@ -77,7 +77,7 @@
     },
     {
       "id": "mender", "name": "Repair torch", "unlock": 2, "desc": "A beam that mends teammates and burns enemies", "sound": "mender", "recoil": "none", "use": [["RMB", "Hold on a teammate to mend 10 hp/s, out to 28 m"], ["RMB", "Hold on an enemy to burn 6 hp/s"], ["", "It runs warm while held"]],
-      "stats": { "alt_beam": 28, "alt_beam_heal": 10, "alt_damage": 6, "alt_heat": 32, "alt_cooldown": 0 }
+      "stats": { "alt_beam": 28, "alt_beam_heal": 15, "alt_damage": 6, "alt_heat": 32, "alt_cooldown": 0 }
     },
     {
       "id": "rocket", "name": "Rocket", "unlock": 1, "desc": "Straight-flying rocket with an 8 m blast", "sound": "rocket", "recoil": "none", "projectile": "rocket", "use": [["RMB", "Fire a rocket: 40 damage, 8 m blast"], ["RMB", "Press again to burst it in the air"], ["", "Aim at the ground or a wall beside a target: the blast still catches it"]],
