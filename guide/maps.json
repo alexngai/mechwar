@@ -621,115 +621,116 @@
     ]
   },
   "hivewall": {
-    "blurb": "A mining colony carved into a cliff over a canyon and taken by the Bloom, a glowing orange fungus. Three mine mouths on the canyon floor feed three climbs, 96 m up to the reactor on the Crest. Galleries and docks cut 8 m over the lanes give towers high ground.",
+    "blurb": "A mining colony carved into a cliff and taken by the Bloom, a glowing orange fungus, built for Co-op Defense. Two mine mouths and a burrow on the floor feed two climbs that cross: the Stair up the open cliff face and over the Bridge, and a spiral round the inside of the Shaft, the hive's hollow heart. They meet on the Crown at 48 m, one ramp below the reactor on the Crest, 60 m up.",
     "hero": {
       "eye": [
-        45,
+        -60,
         130,
-        -150
+        -100
       ],
       "look": [
-        -15,
-        42,
-        25
+        6,
+        10,
+        -12
       ],
       "fog": 2.2
     },
     "spots": [
       {
-        "id": "the-workings",
-        "name": "The Workings",
-        "text": "The flooded mine galleries on the canyon floor lie 12 m below Low Town, the Bloom's light deep in them. The three mine mouths in the far wall are Co-op Defense's gates, one under the foot of each climb, and a 14 m ramp runs up from each to Low Town.",
-        "eye": [
-          -24,
-          -3,
-          -80
-        ],
-        "look": [
-          -36,
-          -6,
-          -106
-        ],
-        "fog": 1.2
-      },
-      {
         "id": "the-stair",
         "name": "The Stair",
-        "text": "The main lane: four 14 m wide flights switch back up the middle of the face, 23 degrees each, with a terrace at 24, 48 and 72 m between them and the last flight onto the Crest. Towers go on the terraces, beside the landings and on the galleries cut beside the first three flights, and a chain of jump pads takes pilots from Low Town up the face to the Crest.",
+        "text": "The outer lane, up the open cliff face. From gate A's mine mouth in the yard a flight climbs north to a landing at 12 m, where the Tunnel at 12 cuts through into the Shaft, and a second flight climbs east to 24 m and straight onto the Bridge. Beside both flights is the Bastion, a terrace at 20 m for towers, 8 m and more over the first flight and with long sightlines down both; you walk onto it from the second flight two thirds of the way up. Pads in the yard and on the Bastion throw you up to the Crest.",
         "eye": [
-          38,
-          28,
-          -22
+          -64,
+          40,
+          8
         ],
         "look": [
-          -30,
-          50,
-          -8
+          -54,
+          6,
+          -38
         ],
         "fog": 1.5
       },
       {
-        "id": "the-galleries",
-        "name": "The Galleries",
-        "text": "Galleries cut into the terraces' edges run beside the Stair's first three flights, with more over the turn at 72 and round the Shaft, and loading docks on Low Town's quay. All stand 8 m over the lane beside them, out of reach of crawlers' blasts and brutes' smashes. The trade-off is sight: a tower has to stand near the edge to see down onto the lane. This is the third flight's, looking down it to the terrace at 48 and the Shaft.",
+        "id": "the-bridge",
+        "name": "The Bridge and the Pod",
+        "text": "The Stair crosses the Shaft at 24 m on the Bridge, over the spiral's first side, 12 to 24 m below it, and under its last corner at 48 m, so the two lanes pass over and under each other. Off its middle a catwalk leads to the Pod, a platform hung on the hive's stalk in the middle of the Shaft. Towers there are 15 m or more from every side of the spiral, out of reach, and see most of it.",
         "eye": [
-          6,
-          73.6,
-          26.3
+          -24,
+          32,
+          -4
         ],
         "look": [
-          -26,
-          52,
-          9
+          34,
+          24,
+          -2
         ],
-        "fog": 1.8
+        "fog": 1.5
       },
       {
         "id": "the-shaft",
         "name": "The Shaft",
-        "text": "On the west flank an old ore lift stands with a 28 m square core, and a 14 m ramp spirals up round it, a storey a side over seven sides. It is wide enough for brutes and bosses, so they come this way as well as by the Stair, and a one-way link at 48 m crosses over to the Stair. Two galleries cut into its walls stand 8 m over the ramp: the lower runs along the north wall from 32 to 44 m and round onto the east wall, the upper climbs from 80 m to the Crest. Here the upper is at the top, the lower below it, the core on the right.",
+        "text": "The hive's heart: a hollow 52 m across inside the wall and open to the sky, with a 12 m ramp spiralling up round its walls a storey a side, from the floor in the north-east corner round to 48 m and out onto the Crown. Every turn of the spiral is in sight of the others, so towers on the Pod and on the rim, the wide top of the south wall 12 to 24 m over the spiral's south side, hit the same walkers again and again. The Door at 36 in the south-east corner lets walkers out onto the Stair's far landing.",
         "eye": [
-          -70,
-          108,
-          10
+          -26,
+          72,
+          12
         ],
         "look": [
-          -116,
-          54,
-          32
+          14,
+          16,
+          -32
         ],
-        "fog": 2.4
+        "fog": 2
       },
       {
-        "id": "the-warren",
-        "name": "The Warren",
-        "text": "The east climb runs through the insides of a tenement: seven 10 m halls switch back between landing rooms lit by cold tubes, in by a tunnel off Low Town and out onto the Crest. Its lane is too narrow for brutes and bosses, which keep to the Stair and the Shaft where they can.",
+        "id": "the-floor",
+        "name": "The Floor and the Burrow",
+        "text": "Gate B's mine mouth is at the end of a drift east of the Shaft, and its walkers come out on the Shaft's floor at the foot of the spiral. The third gate is a burrow in the floor itself, glowing under the spiral, and it opens last in every run, from wave 6. The floor is open under the ramps, and a pad beside the stalk throws you up to the Crest.",
         "eye": [
-          70,
-          4.5,
-          -62
+          -8,
+          11,
+          -40
         ],
         "look": [
-          66,
-          6,
-          -30
+          26,
+          3,
+          0
         ],
-        "fog": 1.2
+        "fog": 1.8
+      },
+      {
+        "id": "the-far-side",
+        "name": "The Far Side",
+        "text": "Off the Bridge's east end, in a hall under the Crown, a flight climbs south to a landing at 36 m and another climbs back north to the Crown. The Door at 36 brings walkers out of the spiral onto that landing. Towers stand on the ledge at 44 m over the landing and in the gallery 8 m over the second flight, which climbs on to the Crest, and a pad on the landing throws you up there.",
+        "eye": [
+          62,
+          58,
+          -58
+        ],
+        "look": [
+          42,
+          36,
+          -14
+        ],
+        "fog": 1.5
       },
       {
         "id": "the-crest",
-        "name": "The Crest and Reactor",
-        "text": "At the top of the cliff, 84 m over Low Town, the atmosphere plant's plaza holds the reactor, and the pilots' spawns are behind it. All three climbs come out on the Crest and end at the reactor, with open ground round it to fight on and no tower nearer than 12 m.",
+        "name": "The Crown and the Crest",
+        "text": "Both lanes meet on the Crown at 48 m and go on as one up the last ramp to the reactor at its head, on the Crest 60 m up, with the atmosphere plant behind it and the pilots' spawns between. The Crest's edge looks down on the Crown from 12 m, and no tower can stand within 12 m of the reactor. The Bloom can seal the Tunnel at 12 or the Stair past it, and the Door at 36 or the spiral's last turn, switching walkers into or out of the Shaft.",
         "eye": [
-          -4,
-          92,
-          40
+          50,
+          58,
+          -40
         ],
         "look": [
-          -12,
-          91,
-          72
-        ]
+          51,
+          58,
+          25
+        ],
+        "fog": 1.5
       }
     ]
   },
