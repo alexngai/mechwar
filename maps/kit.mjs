@@ -234,10 +234,10 @@ const ROUTE_GAP = 8;
  * the `gates` enemies come through, and their `lanes` (`{ points, edges, narrow }`, each edge from,
  * to and weight; `narrow`, the indices of edges too tight for brutes and bosses, who take another
  * branch where there is one); without lanes, each gate's lane is the bots' route from it to the
- * reactor.
+ * reactor; `late`, the indices of gates that open last in every run (a burrow inside).
  */
-export function defense(reactor, gates, lanes) {
-  objectives.defense = { reactor: reactor.at, radius: reactor.radius, gates, ...(lanes && { lanes }) };
+export function defense(reactor, gates, lanes, late) {
+  objectives.defense = { reactor: reactor.at, radius: reactor.radius, gates, ...(lanes && { lanes }), ...(late?.length && { late }) };
 }
 
 /** Marks the map as made for co-op alone: the versus modes leave it out. */

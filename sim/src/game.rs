@@ -96,6 +96,8 @@ const BOT_PLAN: f32 = 1.0;
 const BOT_BUILD_REACH: f32 = 12.0;
 const BOT_SPOTS: [f32; 3] = [7.0, 10.0, 13.0];
 const BOT_MIX: [f32; 4] = [1.0, 1.0, 0.8, 0.5];
+/// Bots mend the team's worst tower first, if it's under this share of its hull.
+const BOT_MEND: f32 = 0.5;
 /// Co-op's bosses (see `bosses_act`).
 const EXCAVATOR_REACH: f32 = 10.0;
 const EXCAVATOR_DRILL: f32 = 60.0;
@@ -411,8 +413,10 @@ pub struct Game {
     orbs: Vec<Orb>,
     clouds: Vec<Cloud>,
     deployables: Vec<Deployable>,
-    /// This tick's events; cleared at the start of each step.
+    /// This tick's events, and how many the last step left (gone at the start of the next, while
+    /// any pushed since, by a build order between ticks say, go out with it).
     events: Vec<Event>,
+    stepped: usize,
     scores: [u16; 2],
     phase: Phase,
     /// Bumped whenever a player joins, leaves or renames; the server sends a Roster on change.
@@ -462,6 +466,7 @@ impl Game {
             clouds: Vec::new(),
             deployables: Vec::new(),
             events: Vec::new(),
+            stepped: 0,
             scores: [0; 2],
             phase: Phase::Playing { started_at: 0 },
             roster_version: 0,
@@ -643,7 +648,7 @@ impl Game {
 
     pub fn step(&mut self) {
         self.tick += 1;
-        self.events.clear();
+        self.events.drain(..self.stepped.min(self.events.len()));
 
         // Bots top up both teams while any human is here; an empty server keeps no one and
         // holds the match at its start, so the clock runs from the first human's arrival.
@@ -1163,6 +1168,7 @@ impl Game {
                 p.history.pop_front();
             }
         }
+        self.stepped = self.events.len();
     }
 
     /// Fresh scores and objectives, and everyone back at their team spawn with full health. A new
@@ -2382,6 +2388,18 @@ impl Game {
     /// its price in their scrap, the tower raised a tier for its upgrade, or (theirs) sold back.
     /// A refusal is news, for them.
     pub fn build(&mut self, id: u8, order: defense::Build) {
+        // Calling the wave: no aim needed, nor even a mech standing; it comes once every human has.
+        if order == defense::Build::Call {
+            let humans: Vec<u8> = self.players.iter().filter(|p| p.team == 0 && p.bot.is_none()).map(|p| p.id).collect();
+            let pilots: Vec<u8> = self.players.iter().filter(|p| p.team == 0).map(|p| p.id).collect();
+            let tick = self.tick;
+            if humans.contains(&id)
+                && let Some(news) = self.defense.as_mut().and_then(|d| d.call(id, &humans, &pilots, tick))
+            {
+                self.events.push(Event::Defense(news));
+            }
+            return;
+        }
         let Some(i) = self.players.iter().position(|p| p.id == id && p.team == 0 && p.mech.health > 0.0) else { return };
         let aim = aim_ray(self.arsenal.of(&self.players[i].mech), &self.players[i].mech);
         if let Some(why) = self.build_along(id, order, &aim) {
@@ -2403,7 +2421,7 @@ impl Game {
                     (_, None) => Some(defense::Refusal::Towers),
                     _ if d.scrap[usize::from(id)] < d.price_for(id, kind) => Some(defense::Refusal::Scrap),
                     (Ok(pos), Some(owner)) => {
-                        let (tick, hull, cost) = (self.tick, defense::tower_hull(1) * (1.0 + 0.25 * d.perk(id, defense::Perk::Plating)), d.price_for(id, kind));
+                        let (tick, hull, cost) = (self.tick, defense::hull_whole(1, d.perk(id, defense::Perk::Plating)), d.price_for(id, kind));
                         let ready = tick + secs(items(&self.arsenal).turret_warmup);
                         self.deployables.push(Deployable { kind, team: 0, owner, pos, yaw: m.yaw, pitch: 0.0, hull, placed: tick, expires: u32::MAX, ready, burst: 0 });
                         let d = self.defense.as_mut().unwrap();
@@ -2413,10 +2431,42 @@ impl Game {
                     }
                 }
             }
-            defense::Build::Upgrade | defense::Build::Sell => {
-                // The nearest of the team's towers along the aim, within reach.
+            defense::Build::Call => None,
+            defense::Build::Repair => {
+                // The nearest of the team's towers along the aim, within reach, mended as far as
+                // the pilot's scrap goes.
                 let k = deploy::first_turret(&self.deployables, items(&self.arsenal), 1, &aim, defense::REACH).map(|(k, _)| k).filter(|&k| d.tower(self.deployables[k].owner).is_some());
+                let Some(k) = k else { return Some(defense::Refusal::Tower) };
+                let (owner, hull) = (self.deployables[k].owner, self.deployables[k].hull);
+                let max = d.hull_max(owner);
+                let Some(tower) = d.tower(owner) else { return Some(defense::Refusal::Tower) };
+                let cost = defense::Defense::repair_cost(tower, hull, max);
+                let have = d.scrap[usize::from(id)];
+                if hull >= max - 0.5 {
+                    return Some(defense::Refusal::Whole);
+                }
+                if have < 1.0 {
+                    return Some(defense::Refusal::Scrap);
+                }
+                let pay = cost.min(have);
+                self.deployables[k].hull += (max - hull) * if cost > 0.0 { pay / cost } else { 1.0 };
+                self.defense.as_mut().unwrap().scrap[usize::from(id)] -= pay;
+                None
+            }
+            defense::Build::Upgrade | defense::Build::Sell => {
+                // The nearest of the team's towers along the aim, within reach; else, raising, the
+                // reactor's grid, aimed at.
+                let k = deploy::first_turret(&self.deployables, items(&self.arsenal), 1, &aim, defense::REACH).map(|(k, _)| k).filter(|&k| d.tower(self.deployables[k].owner).is_some());
+                let core = d.reactor + Vector::Y * REACTOR_MIDDLE;
+                let at_reactor = (aim.origin + aim.dir * (core - aim.origin).dot(aim.dir).clamp(0.0, defense::REACH) - core).length() < REACTOR_BODY;
                 match k {
+                    None if order == defense::Build::Upgrade && at_reactor => match self.defense.as_mut().unwrap().raise_grid(id) {
+                        Ok(news) => {
+                            self.events.push(Event::Defense(news));
+                            None
+                        }
+                        Err(why) => Some(why),
+                    },
                     None => Some(defense::Refusal::Tower),
                     Some(k) => {
                         let e = self.deployables[k];
@@ -2482,7 +2532,9 @@ impl Game {
         }
     }
 
-    /// What bot `id` would build with its scrap: the tower it can afford the team has fewest of
+    /// What bot `id` would build with its scrap: the team's worst tower mended, if under BOT_MEND
+    /// of its hull and no one's on it; else, the grid full, the grid raised (at the reactor), if
+    /// it can afford that and no one's on it; else the tower it can afford the team has fewest of
     /// (for BOT_MIX), on the free spot BOT_SPOTS off a lane's line covered by fewest towers (nearer
     /// the reactor first); else the team's lowest tower raised a tier, if it can afford that.
     /// Where it'd stand, and the order.
@@ -2490,8 +2542,24 @@ impl Game {
         let d = self.defense.as_ref()?;
         let scrap = d.scrap[usize::from(id)];
         let towers: Vec<Deployable> = self.deployables.iter().filter(|e| d.tower(e.owner).is_some()).copied().collect();
+        let mending = |t: &Deployable| d.plans.iter().any(|q| q.2 == defense::Build::Repair && q.1.distance(t.pos) < 0.5);
+        let worst = towers.iter().filter(|t| !mending(t)).map(|t| (t, t.hull / d.hull_max(t.owner))).min_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((t, share)) = worst
+            && share < BOT_MEND
+            && scrap >= 1.0
+        {
+            return Some((t.pos, defense::Build::Repair));
+        }
+        let full = d.free_tower().is_none();
+        let raising = d.plans.iter().any(|q| q.2 == defense::Build::Upgrade && q.1 == d.reactor);
+        if full
+            && !raising
+            && d.grid_cost().is_some_and(|c| scrap >= c)
+        {
+            return Some((d.reactor, defense::Build::Upgrade));
+        }
         let count = |kind| towers.iter().filter(|t| t.kind == kind).count() as f32;
-        let kind = (0..defense::TOWERS.len()).filter(|&k| d.price_for(id, defense::TOWERS[k]) <= scrap).min_by(|&a, &b| (count(defense::TOWERS[a]) / BOT_MIX[a]).total_cmp(&(count(defense::TOWERS[b]) / BOT_MIX[b])));
+        let kind = (0..defense::TOWERS.len()).filter(|&k| !full && d.price_for(id, defense::TOWERS[k]) <= scrap).min_by(|&a, &b| (count(defense::TOWERS[a]) / BOT_MIX[a]).total_cmp(&(count(defense::TOWERS[b]) / BOT_MIX[b])));
         if let Some(k) = kind {
             // Towers and spots already planned crowd a spot alike.
             let taken: Vec<Vector> = towers.iter().map(|t| t.pos).chain(d.plans.iter().filter(|q| matches!(q.2, defense::Build::Place(_))).map(|q| q.1)).collect();
@@ -3518,6 +3586,66 @@ mod tests {
     }
 
     #[test]
+    fn pilots_mend_towers_for_scrap_as_far_as_it_goes() {
+        let (mut game, id) = co_op(false);
+        let reactor = game.defense.as_ref().unwrap().reactor;
+        aim_to_build(&mut game, id, reactor, 14.0);
+        game.build(id, defense::Build::Place(0));
+        let owner = towers(&game)[0].owner;
+        game.events.clear();
+        game.build(id, defense::Build::Repair);
+        assert_eq!(refused(&game), Some(defense::Refusal::Whole));
+        // Half its hull gone: mending it all takes REPAIR of half what went into it.
+        let (max, spent) = (game.defense.as_ref().unwrap().hull_max(owner), game.defense.as_ref().unwrap().tower(owner).unwrap().spent);
+        let hurt = |game: &mut Game, hull: f32, scrap: f32| {
+            game.deployables.iter_mut().find(|e| e.owner == owner).unwrap().hull = hull;
+            game.defense.as_mut().unwrap().scrap[usize::from(id)] = scrap;
+        };
+        hurt(&mut game, max / 2.0, 1000.0);
+        game.build(id, defense::Build::Repair);
+        assert!((towers(&game)[0].hull - max).abs() < 1e-3 && (scrap(&game, id) - (1000.0 - defense::REPAIR * spent / 2.0)).abs() < 1e-3);
+        // Short of that, it mends as far as the scrap goes; with none, not at all.
+        hurt(&mut game, max / 2.0, defense::REPAIR * spent / 4.0);
+        game.build(id, defense::Build::Repair);
+        assert!((towers(&game)[0].hull - 0.75 * max).abs() < 1e-3 && scrap(&game, id).abs() < 1e-3);
+        game.events.clear();
+        game.build(id, defense::Build::Repair);
+        assert_eq!(refused(&game), Some(defense::Refusal::Scrap));
+    }
+
+    #[test]
+    fn news_between_ticks_goes_out_with_the_next() {
+        let (mut game, id) = co_op(false);
+        let gate = Vector::from_array(game.spots.defense.as_ref().unwrap().gates[0]);
+        let i = game.players.iter().position(|p| p.id == id).unwrap();
+        let m = &mut game.players[i].mech;
+        (m.pos, m.yaw, m.pitch) = (gate, 0.0, -1.2);
+        game.step();
+        game.build(id, defense::Build::Place(0));
+        game.step();
+        assert_eq!(refused(&game), Some(defense::Refusal::Lane), "kept for this tick's snapshot");
+        game.step();
+        assert_eq!(refused(&game), None, "and gone the tick after");
+    }
+
+    #[test]
+    fn a_human_calls_the_wave_and_bots_needn_t() {
+        let (mut game, id) = co_op(true);
+        for _ in 0..secs(1.0) {
+            game.step();
+        }
+        let bot = game.players.iter().find(|p| p.team == 0 && p.bot.is_some()).unwrap().id;
+        let before = scrap(&game, bot);
+        game.build(bot, defense::Build::Call);
+        assert!(game.defense.as_ref().unwrap().ready.is_empty(), "a bot's call counts for nothing");
+        game.build(id, defense::Build::Call);
+        assert!(game.events.iter().any(|e| matches!(e, Event::Defense(defense::News::Called { .. }))));
+        game.step();
+        assert!(matches!(game.defense.as_ref().unwrap().stage, defense::Stage::Wave { .. }));
+        assert!(scrap(&game, bot) > before + 100.0, "every pilot's paid for the time");
+    }
+
+    #[test]
     fn anyone_upgrades_a_tower_and_its_builder_sells_it() {
         let (mut game, id) = co_op(false);
         let other = game.join().unwrap();
@@ -3885,6 +4013,50 @@ mod tests {
     }
 
     #[test]
+    fn a_pilot_raises_the_grid_at_the_reactor_and_bots_do_once_it_s_full() {
+        let (mut game, id) = co_op(false);
+        let reactor = game.defense.as_ref().unwrap().reactor;
+        let i = game.players.iter().position(|p| p.id == id).unwrap();
+        let m = &mut game.players[i].mech;
+        (m.pos, m.yaw, m.pitch) = (reactor + Vector::new(0.0, 0.0, 15.0), 0.0, 0.1);
+        game.defense.as_mut().unwrap().scrap[usize::from(id)] = 1000.0;
+        game.build(id, defense::Build::Upgrade);
+        let d = game.defense.as_ref().unwrap();
+        assert_eq!((d.grid, d.capacity()), (1, defense::GRID[1]));
+        assert!(game.events.iter().any(|e| matches!(e, Event::Defense(defense::News::Grid { level: 1 }))));
+        // A bot, the grid full, goes to raise it.
+        let (mut game, _) = co_op(true);
+        let bot = game.players.iter().find(|p| p.bot.is_some() && p.team == 0).unwrap().id;
+        let d = game.defense.as_mut().unwrap();
+        d.towers = (64..64 + defense::GRID[0] as u8).map(|owner| defense::Tower { owner, by: bot, tier: 1, spent: 100.0, own: 100.0 }).collect();
+        d.scrap[usize::from(bot)] = 1000.0;
+        assert_eq!(game.plan_build(bot), Some((reactor, defense::Build::Upgrade)));
+    }
+
+    #[test]
+    fn bots_mend_the_worst_tower_first() {
+        let (mut game, id) = co_op(true);
+        game.dock(id);
+        for _ in 0..secs(55.0) {
+            game.step();
+        }
+        // A longer break, scrap to spend, and one tower badly hurt: a bot mends it.
+        let k = game.deployables.iter().position(|e| game.defense.as_ref().unwrap().tower(e.owner).is_some()).unwrap();
+        let owner = game.deployables[k].owner;
+        game.deployables[k].hull = 10.0;
+        let tick = game.tick;
+        let d = game.defense.as_mut().unwrap();
+        d.stage = defense::Stage::Break { until: tick + secs(30.0) };
+        d.scrap = [500.0; MAX_PLAYERS];
+        for _ in 0..secs(25.0) {
+            game.step();
+        }
+        let max = game.defense.as_ref().unwrap().hull_max(owner);
+        let hull = game.deployables.iter().find(|e| e.owner == owner).map_or(0.0, |e| e.hull);
+        assert!(hull > 0.5 * max, "mended to {hull} of {max}");
+    }
+
+    #[test]
     fn bots_build_towers_by_the_lanes_in_the_break() {
         let (mut game, id) = co_op(true);
         game.dock(id);
@@ -4060,6 +4232,87 @@ mod tests {
         for line in out {
             println!("{line}");
         }
+    }
+
+    /// Co-op's pace on Hivewall, bots at normal skill: per wave its length, how soon the first
+    /// hit lands, the share of it with an enemy near a pilot or a tower (or neither), how many walk at
+    /// once, how fast pilots move, and the towers and how far out they stand; per enemy kind its
+    /// median life and where it fell. COOP_SEEDS runs (4).
+    /// `cargo test --release -p sim --lib coop_pace_probe -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn coop_pace_probe() {
+        let seeds: u32 = std::env::var("COOP_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(4);
+        let out: Vec<String> = std::thread::scope(|scope| {
+            let hs: Vec<_> = (1..=seeds).map(|seed| scope.spawn(move || {
+                let mut game = Game::new(Tuning::default(), Map::index("hivewall").unwrap());
+                (game.mode, game.bots, game.bot_skill) = (Mode::Defense, true, 0.5);
+                game.tick = seed * 977;
+                let id = game.join().unwrap();
+                game.dock(id);
+                let mut lines = Vec::new();
+                let (mut stage_start, mut was_wave, mut wave) = (game.tick, false, 0u8);
+                let (mut contact, mut tower_busy, mut idle, mut first_hit, mut moved, mut pilot_ticks) = (0u32, 0u32, 0u32, None::<u32>, 0f32, 0u32);
+                let mut born: std::collections::HashMap<u8, (u32, f32)> = Default::default();
+                let mut deaths: Vec<(Kind, f32, f32)> = Vec::new(); // kind, life s, dist to reactor at death
+                let mut last_pos: std::collections::HashMap<u8, Vector> = Default::default();
+                let mut alive_sum = 0u64;
+                for _ in 0..secs(2600.0) {
+                    let before: Vec<(u8, Kind, Vector, f32)> = game.deployables.iter().filter(|w| w.kind.lane_enemy()).map(|w| (w.owner, w.kind, w.pos, w.hull)).collect();
+                    game.step();
+                    let Some(d) = game.defense.as_ref() else { continue };
+                    let reactor = d.reactor;
+                    let in_wave = matches!(d.stage, defense::Stage::Wave { .. });
+                    let now: Vec<(u8, Kind, Vector, f32)> = game.deployables.iter().filter(|w| w.kind.lane_enemy() && w.hull > 0.0).map(|w| (w.owner, w.kind, w.pos, w.hull)).collect();
+                    for &(o, _, _, h) in &now { born.entry(o).or_insert((game.tick, h)); }
+                    for &(o, k, pos, _) in &before {
+                        if !now.iter().any(|n| n.0 == o && n.1 == k) {
+                            if let Some((t, _)) = born.remove(&o) { deaths.push((k, (game.tick - t) as f32 / TICK_HZ, (pos - reactor).with_y(0.0).length())); }
+                        }
+                    }
+                    if in_wave {
+                        alive_sum += now.len() as u64;
+                        if first_hit.is_none() && now.iter().any(|n| born.get(&n.0).is_some_and(|b| n.3 < b.1 - 0.01)) { first_hit = Some(game.tick - stage_start); }
+                        let pilots: Vec<Vector> = game.players.iter().filter(|p| p.team == 0 && p.bot.is_some() && p.mech.health > 0.0).map(|p| p.mech.pos).collect();
+                        let near = |r: f32, at: &[Vector]| now.iter().any(|n| at.iter().any(|q| (n.2 - *q).length() < r));
+                        let towers: Vec<Vector> = game.deployables.iter().filter(|t| t.team == 0 && defense::TOWERS.contains(&t.kind)).map(|t| t.pos).collect();
+                        if near(40.0, &pilots) { contact += 1; }
+                        if near(40.0, &towers) { tower_busy += 1; }
+                        if !near(40.0, &pilots) && !near(40.0, &towers) { idle += 1; }
+                        for p in game.players.iter().filter(|p| p.team == 0 && p.bot.is_some() && p.mech.health > 0.0) {
+                            if let Some(l) = last_pos.get(&p.id) { moved += (p.mech.pos - *l).length().min(2.0); }
+                            pilot_ticks += 1;
+                        }
+                    }
+                    for p in &game.players { last_pos.insert(p.id, p.mech.pos); }
+                    if in_wave != was_wave || d.wave != wave {
+                        let len = (game.tick - stage_start) as f32 / TICK_HZ;
+                        if was_wave {
+                            let t = (game.tick - stage_start).max(1) as f32;
+                            let tw: Vec<Vector> = game.deployables.iter().filter(|t| t.team == 0 && defense::TOWERS.contains(&t.kind)).map(|t| t.pos).collect();
+                            let mean_r = tw.iter().map(|p| (*p - reactor).with_y(0.0).length()).sum::<f32>() / tw.len().max(1) as f32;
+                            lines.push(format!("W{wave} wave {len:.0}s first_hit {:.0}s contact {:.0}% towers_busy {:.0}% idle {:.0}% avg_alive {:.1} pilot_speed {:.1}m/s towers {} mean_r {mean_r:.0}m", first_hit.unwrap_or(0) as f32 / TICK_HZ, 100.0 * contact as f32 / t, 100.0 * tower_busy as f32 / t, 100.0 * idle as f32 / t, alive_sum as f32 / t, moved / (pilot_ticks.max(1) as f32 * DT), tw.len()));
+                        } else if stage_start != seed * 977 { lines.push(format!("B{} break {len:.0}s", d.wave)); }
+                        (stage_start, contact, tower_busy, idle, first_hit, moved, pilot_ticks, alive_sum) = (game.tick, 0, 0, 0, None, 0.0, 0, 0);
+                        (was_wave, wave) = (in_wave, d.wave);
+                    }
+                    if game.match_state().ended { break; }
+                }
+                let mins = (game.tick - seed * 977) as f32 / TICK_HZ / 60.0;
+                let mut kinds: Vec<Kind> = deaths.iter().map(|d| d.0).collect(); kinds.sort_by_key(|k| format!("{k:?}")); kinds.dedup();
+                for k in kinds {
+                    let mut l: Vec<&(Kind, f32, f32)> = deaths.iter().filter(|d| d.0 == k).collect();
+                    l.sort_by(|a, b| a.1.total_cmp(&b.1));
+                    let med = l[l.len() / 2];
+                    let far = l.iter().filter(|d| d.2 > 120.0).count();
+                    let near = l.iter().filter(|d| d.2 < 40.0).count();
+                    lines.push(format!("  {k:?}: n {} median life {:.0}s, died >120m out {}%, <40m from reactor {}%", l.len(), med.1, 100 * far / l.len(), 100 * near / l.len()));
+                }
+                format!("SEED {seed} won={} minutes {mins:.1}\n{}", game.match_state().winner == Some(0), lines.join("\n"))
+            })).collect();
+            hs.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        for o in out { println!("{o}"); }
     }
 
     #[test]
