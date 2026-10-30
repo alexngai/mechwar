@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::f32::consts::{PI, TAU};
 use std::sync::OnceLock;
 
-use libm::{asinf, atan2f, cosf, hypotf};
+use libm::{asinf, atan2f, cosf, expf, hypotf};
 use rapier3d::prelude::{Ray, Rotation};
 use serde::{Deserialize, Serialize};
 
@@ -404,6 +404,16 @@ const STICKY_M: f32 = 5.0;
 /// A bot this far or more from its order's spot (across, or this far up or down: on another deck
 /// or level) is on its way there: it fights on the move, and farther than CATCH_UP it boosts.
 const ERRAND: f32 = 6.0;
+/// How near the enemy a flanker looks for its spot (m).
+const FLANK: f32 = 30.0;
+/// How far off a hunch puts an enemy (m).
+const HUNCH_FUZZ: f32 = 5.0;
+/// How often a flanker looks again for its spot (s).
+const WATCH_EVERY: f32 = 1.0;
+/// How long a spot a bot was hit at counts against it (s).
+const BURNED: f32 = 8.0;
+/// Below this share of its hull, with no enemy in view, a bot repairs.
+const MEND_AT: f32 = 0.3;
 const ERRAND_RISE: f32 = 3.0;
 const CATCH_UP: f32 = 20.0;
 /// A contact only told of, or only heard from farther than this, is vague: a bot far from its
@@ -669,6 +679,42 @@ pub struct Policy {
     pub pursue_secs: f32,
     pub pursue_reach: f32,
     pub pursue_self: f32,
+    /// Habits a player would exploit. With no enemy in view and hurt enough to repair, it goes to
+    /// cover from the last enemy it knew of first (`mend_cover` 1; 0, repairs where it stands).
+    /// A target gone behind smoke within `smoke_fire` seconds it keeps firing at, at its last
+    /// spot (0: holds fire). In smoke with nothing in view, it keeps moving about inside it (as
+    /// still, it's a mark for a grenade) rather than stand (`smoke_exit` 1; walking out of the
+    /// smoke instead lost 0.41 ± 0.18 kills a match: the smoke hides it too).
+    pub mend_cover: f32,
+    /// Hit at its post (or its peek), it weighs posts again with that one worth this much less
+    /// for BURNED seconds (`tactics::Weighing::burn`; 0: it comes back to the same angle).
+    pub post_burn: f32,
+    /// Holding its order's zone with no enemy in view, it keeps stepping side to side, facing the
+    /// freshest enemy it knows of, rather than stand still on it (`zone_watch` 1). Standing where
+    /// in the zone it saw most of where enemies were lost Missile Assault 103 ± 26 base hull a
+    /// match: seen from there, it's seen.
+    pub zone_watch: f32,
+    /// A hunch: an enemy within `hunch_reach` it can't see or hear, it now and then (`hunch_rate`
+    /// a second) knows of anyway, roughly (within HUNCH_FUZZ): what the rest of the game tells it
+    /// but it acts on only sometimes (0: never).
+    pub hunch_rate: f32,
+    pub hunch_reach: f32,
+    /// Team posture (`Bot::edge`, the server's count of how many mechs' worth of hull its side has
+    /// over the other's): this far ahead, it pushes, fighting closer, riskier at its posts and
+    /// after enemies before it follows its lead; this far behind, it falls back, fighting from
+    /// farther, careful at its posts, and regrouping on its lead before chasing anything (0: off).
+    /// `team_lean` is how hard: the band moves by a quarter of it, the posts' take by half.
+    pub team_edge: f32,
+    pub team_lean: f32,
+    /// Backing up a teammate's fight, it goes to the spot near the enemy that sees it from the
+    /// side of the teammate's line of fire (`trade_flank` 1), not straight at it.
+    pub trade_flank: f32,
+    /// The chance, each life, that it keeps a pilot teammate's fight in mind (the enemy the pilot
+    /// hit last): focusing on it, backing it up and flanking it as a bot's, and, with a repair
+    /// torch, mending the pilot first. Otherwise a pilot is to it as any teammate it can't read.
+    pub pilot_mind: f32,
+    pub smoke_fire: f32,
+    pub smoke_exit: f32,
     /// And only one with no other enemy known within this of its last spot (0: whatever's there).
     /// At 0.6 hull and 30 m: +0.44 ± 0.14 and +0.42 ± 0.15 kills a match in Team Deathmatch at
     /// skill 0.5 on two sets of seeds, +0.10 ± 0.15 at skill 1, even in the objective modes.
@@ -761,6 +807,17 @@ impl Default for Policy {
             pursue_reach: 40.0,
             pursue_self: 0.4,
             pursue_alone: 30.0,
+            mend_cover: 1.0,
+            post_burn: 0.6,
+            zone_watch: 0.0,
+            hunch_rate: 0.1,
+            hunch_reach: 40.0,
+            team_edge: 1.0,
+            team_lean: 0.5,
+            trade_flank: 1.0,
+            pilot_mind: 0.6,
+            smoke_fire: 2.0,
+            smoke_exit: 1.0,
             assault_spread: 3.0,
             ctf_raid: 2.0,
             ctf_escort: 2.0,
@@ -830,6 +887,11 @@ impl Policy {
 pub struct Bot {
     pub seq: u32,
     rng: u64,
+    /// Draws apart from `rng` (the aim's settle, whether it minds a pilot this life), so they
+    /// leave the rest of what it rolls as it was.
+    aside_rng: u64,
+    /// Whether it keeps a pilot teammate's fight in mind this life (`Policy::pilot_mind`).
+    pub minds_pilot: bool,
     role: Role,
     /// Remaining waypoints, next first, toward `vantage` or else the target's waypoint `path_goal`;
     /// and the one it last reached (so it knows when the next is a hover up from it).
@@ -849,6 +911,14 @@ pub struct Bot {
     strafe_until: u32,
     /// Slowly wandering aim error (yaw, pitch) in radians.
     wobble: (f32, f32),
+    /// Its aim's swing past a target newly in its sights (yaw, pitch), settling (`Tuning::bot_flick`),
+    /// and the target it was for.
+    flick: (f32, f32),
+    flick_on: Option<u8>,
+    /// Where it flanks a teammate's fight from (`Policy::trade_flank`), and when it looks again.
+    flank: (Option<Vector>, u32),
+    /// Spots it was hit at lately (`Policy::post_burn`), till when.
+    burned: Vec<(usize, u32)>,
     /// The target's velocity as the bot reads it off what it saw, and the last seen spot that
     /// came from; and how far off, wandering as shares, it judges speed (leading) and range
     /// (lobbing).
@@ -913,6 +983,13 @@ pub struct Bot {
     /// Teamwork, set by the server each tick: the teammate to group on (none for the lead
     /// itself), and the enemies teammates are fighting.
     pub lead: Option<Vector>,
+    /// How many mechs' worth of hull its side has over the other (set by the server).
+    pub edge: f32,
+    /// Its side's skill adjustment against the pilots it faces (`Tuning::bot_adapt_step`, set
+    /// by the server), and how much of it its skill has taken on: it takes on the rest as it
+    /// respawns, never in a fight.
+    pub adapt: f32,
+    adapted: f32,
     pub engaged: Vec<u8>,
     /// Where its team wants it, set by the server each tick: a waypoint in an objective to take
     /// or hold.
@@ -934,6 +1011,8 @@ impl Bot {
         let mut bot = Self {
             seq: 0,
             rng: seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1,
+            aside_rng: seed.wrapping_mul(0xD1B5_4A32_D192_ED03) | 1,
+            minds_pilot: false,
             role: Role::Hunt,
             path: Vec::new(),
             reached: None,
@@ -948,6 +1027,10 @@ impl Bot {
             strafe: 1.0,
             strafe_until: 0,
             wobble: (0.0, 0.0),
+            flick: (0.0, 0.0),
+            flick_on: None,
+            burned: Vec::new(),
+            flank: (None, 0),
             seen_vel: Vector::ZERO,
             seen_last: None,
             misjudge: (0.0, 0.0),
@@ -981,6 +1064,9 @@ impl Bot {
             team: 0,
             shields: Vec::new(),
             lead: None,
+            edge: 0.0,
+            adapt: 0.0,
+            adapted: 0.0,
             engaged: Vec::new(),
             order: None,
             skill: 0.5,
@@ -996,6 +1082,11 @@ impl Bot {
 
     /// A fresh life: a new role, and a route planned from wherever it starts.
     pub fn respawned(&mut self) {
+        // Back in with its side's skill adjustment as it stands now.
+        self.skill = (self.skill + self.adapt - self.adapted).clamp(0.0, 1.0);
+        self.adapted = self.adapt;
+        // Whether it plays round a pilot teammate this life: not every bot, nor every time.
+        self.minds_pilot = self.aside() < self.policy.pilot_mind;
         let r = self.rand();
         let side = if self.rand() < 0.5 { -1.0 } else { 1.0 };
         let cuts = self.policy.role_cuts;
@@ -1104,6 +1195,7 @@ impl Bot {
         bot.skill = (around + (bot.rand() - 0.5) * SKILL_SPREAD).clamp(0.0, 1.0);
         let styles = Policy::personalities();
         bot.policy = styles[(bot.rand() * styles.len() as f32) as usize % styles.len()].clone();
+        bot.minds_pilot = bot.aside() < bot.policy.pilot_mind;
         bot
     }
 
@@ -1204,17 +1296,26 @@ impl Bot {
             if let Some(k) = known {
                 (self.contacts[k].seen, self.contacts[k].walled) = (seen, walled);
             }
-            if !(seen || heard) {
+            let (rate, reach) = (self.policy.hunch_rate, self.policy.hunch_reach);
+            let hunch = !(seen || heard) && rate > 0.0 && m.pos.distance(me.pos) < reach && self.rand() < rate * DT;
+            if !(seen || heard || hunch) {
                 continue;
             }
+            // Where a hunch puts it: near where it is, not on it.
+            let pos = if hunch {
+                let (a, r) = (self.rand() * std::f32::consts::TAU, self.rand() * HUNCH_FUZZ);
+                m.pos + Vector::new(r * cosf(a), 0.0, r * libm::sinf(a))
+            } else {
+                m.pos
+            };
             let c = match known {
                 Some(k) => &mut self.contacts[k],
                 None => {
-                    self.contacts.push(Contact { id, pos: m.pos, at: tick, seen, seen_at: None, hull, hit_at: None, told: false, walled });
+                    self.contacts.push(Contact { id, pos, at: tick, seen, seen_at: None, hull, hit_at: None, told: false, walled });
                     self.contacts.last_mut().expect("just pushed")
                 }
             };
-            (c.pos, c.at, c.hull, c.told) = (m.pos, tick, hull, false);
+            (c.pos, c.at, c.hull, c.told) = (pos, tick, hull, false);
             if seen {
                 c.seen_at = Some(tick);
             }
@@ -1282,7 +1383,12 @@ impl Bot {
         at.set(Feature::Hull, me.health / t.health_max).set(Feature::MatesNear, f32::from(self.mates_near));
         // The first of these it wants is where it goes.
         let wants = |a: Action| self.brain.wants(a, &at);
-        let trading = (Action::Trade, trade.map(|(pos, _)| pos), Goal::Trade(trade.map_or(0, |(_, id)| id)));
+        // A flanker goes for the enemy's side rather than its face.
+        if let Some((pos, id)) = trade.filter(|_| self.policy.trade_flank >= 0.5 && tick >= self.flank.1) {
+            self.flank = (self.flank_spot(arena, nav, t, me, pos, id), tick + secs(WATCH_EVERY));
+        }
+        let flank = self.flank.0.filter(|_| trade.is_some() && self.policy.trade_flank >= 0.5);
+        let trading = (Action::Trade, flank.or(trade.map(|(pos, _)| pos)), Goal::Trade(trade.map_or(0, |(_, id)| id)));
         // In the zone it's to hold with an enemy known to be in it too (contesting it out of
         // sight, round its middle say): after them, in the zone.
         // A wounded enemy just gone out of sight nearby comes first.
@@ -1291,9 +1397,15 @@ impl Bot {
         }
         let zone = self.order_zone.filter(|z| z.holds(me.pos, 0.0));
         let contest = zone.and_then(|z| self.contacts.iter().filter(|c| z.holds(c.pos, 0.0)).max_by_key(|c| c.at)).map(|c| c.pos);
-        let choice = [(Action::GoToOrder, contest, Goal::Contact), (Action::GoToOrder, self.order, Goal::Order), trading, (Action::ChaseUrgent, urgent, Goal::Contact), (Action::Regroup, self.lead, Goal::Lead), (Action::ChaseContact, fresh, Goal::Contact), (Action::Follow, self.lead, Goal::Lead)]
-            .into_iter()
-            .find_map(|(a, spot, goal)| spot.filter(|_| wants(a)).map(|spot| (spot, goal)));
+        let mut choice = vec![(Action::GoToOrder, contest, Goal::Contact), (Action::GoToOrder, self.order, Goal::Order), trading, (Action::ChaseUrgent, urgent, Goal::Contact), (Action::Regroup, self.lead, Goal::Lead), (Action::ChaseContact, fresh, Goal::Contact), (Action::Follow, self.lead, Goal::Lead)];
+        // Falling back, it regroups on its lead before chasing anyone (or backing anyone up);
+        // pushing, it goes after the freshest enemy known before following its lead.
+        match self.posture() {
+            p if p < 0.0 => choice.insert(2, (Action::Follow, self.lead, Goal::Lead)),
+            p if p > 0.0 => choice.insert(4, (Action::ChaseContact, fresh, Goal::Contact)),
+            _ => {}
+        }
+        let choice = choice.into_iter().find_map(|(a, spot, goal)| spot.filter(|_| wants(a)).map(|spot| (spot, goal)));
         if let Some(choice) = choice {
             return choice;
         }
@@ -1309,6 +1421,14 @@ impl Bot {
     }
 
     /// xorshift64, uniform in [0, 1).
+    /// A draw from `aside_rng`, 0 to 1.
+    fn aside(&mut self) -> f32 {
+        self.aside_rng ^= self.aside_rng << 13;
+        self.aside_rng ^= self.aside_rng >> 7;
+        self.aside_rng ^= self.aside_rng << 17;
+        (self.aside_rng >> 40) as f32 / (1u64 << 24) as f32
+    }
+
     fn rand(&mut self) -> f32 {
         self.rng ^= self.rng << 13;
         self.rng ^= self.rng >> 7;
@@ -1420,6 +1540,13 @@ impl Bot {
             // when it's near, or patrol.
             (self.seen_vel, self.seen_last, self.seen_step) = (Vector::ZERO, None, Vector::ZERO);
             self.seen.clear();
+            if let Some(input) = self.through_smoke(t, me, max_turn, tick) {
+                return input;
+            }
+            if let Some(r) = self.mend_in_cover(arena, nav, t, me, tick) {
+                self.retreat = Some(r);
+                return self.hold(arena, nav, t, me, r, None, took_damage, tick);
+            }
             let pursuing = self.pursuit(t, me, tick).is_some();
             if !pursuing && let Some(input) = self.keep_post(nav, t, me, tick) {
                 return input;
@@ -1458,7 +1585,20 @@ impl Bot {
                     .filter(|c| flat(c.pos - me.pos).length() < WATCH && sees_at(arena, t, me, self.chest(t, Some(c.id), c.pos)))
                     .map(|c| flat(c.pos - me.pos))
                     .min_by(|a, b| a.length().total_cmp(&b.length()));
-                let yaw = near.map_or(me.yaw + 0.5 * DT, |d| me.yaw + wrap(atan2f(-d.x, -d.z) - me.yaw).clamp(-max_turn, max_turn));
+                // None in view: holding a zone, it watches the freshest one known, stepping side to
+                // side (`Policy::zone_watch`).
+                let roam = self.policy.zone_watch >= 0.5 && self.order_zone.is_some();
+                let watched = || self.contacts.iter().filter(|_| roam).max_by_key(|c| c.at).map(|c| flat(c.pos - me.pos));
+                let yaw = near.or_else(watched).map_or(me.yaw + 0.5 * DT, |d| me.yaw + wrap(atan2f(-d.x, -d.z) - me.yaw).clamp(-max_turn, max_turn));
+                if roam {
+                    if tick >= self.strafe_until {
+                        self.strafe = -self.strafe;
+                        self.strafe_until = tick + secs(0.8 + 1.2 * self.rand());
+                    }
+                    let side = Rotation::from_rotation_y(yaw) * Vector::new(self.strafe, 0.0, 0.0);
+                    let step = if ledge_free(arena, me.pos, side) { self.strafe } else { 0.0 };
+                    return Input { yaw, pitch: me.pitch * 0.9, move_x: step, ..idle };
+                }
                 return Input { yaw, pitch: me.pitch * 0.9, ..idle };
             }
             let watch = matches!(goal, Goal::Contact | Goal::Trade(_)) && pos.distance(me.pos) < WATCH;
@@ -1484,9 +1624,14 @@ impl Bot {
         let range = flat(target.pos - me.pos).length();
         self.going_in = (alt_use(t) == AltUse::Melee).then(|| self.focus.filter(|&id| self.opening(t, target, id, range))).flatten();
         let (near, far) = band(t, &self.policy, self.going_in.is_some());
+        let (near, far) = (near * self.lean(0.25), far * self.lean(0.25));
 
         if sees_past_barriers(arena, t, me, chest) {
-            let err = self.aim_error(t);
+            // Its aim wanders, and wider on a target crossing its view fast (`Tuning::bot_track_s`).
+            let to = chest - (me.pos + Vector::Y * t.eye_height);
+            let los = to.normalize_or_zero();
+            let crossing = (self.seen_vel - los * self.seen_vel.dot(los)).length() / to.length().max(1.0);
+            let err = self.aim_error(t) + crossing * t.bot_track_s;
             self.wobble.0 = (self.wobble.0 + (self.rand() - 0.5) * err * 0.3).clamp(-err, err);
             self.wobble.1 = (self.wobble.1 + (self.rand() - 0.5) * err * 0.3).clamp(-err, err);
             let (speed_err, range_err) = self.misjudgement(t);
@@ -1560,7 +1705,17 @@ impl Bot {
             // than they fly before their fuse runs out, or than they carry at all (v² / g).
             let span = flat(chest + target.vel * lead - eye).length();
             let reaches = t.shot_fuse <= 0.0 || (span <= t.shot_speed * cosf(pitch) * t.shot_fuse && t.shot_gravity * span <= t.shot_speed * t.shot_speed);
-            let (want_yaw, want_pitch) = (yaw + self.wobble.0, pitch + self.wobble.1);
+            // A target newly in its sights (another, or back in view) swings the aim on past it,
+            // and that settles off.
+            if self.seen.len() == 1 || self.flick_on != self.focus {
+                let (a, b) = (self.aside() - 0.5, self.aside() - 0.5);
+                let scatter = 2.0 * t.bot_flick_deg.to_radians();
+                self.flick = (wrap(yaw - me.yaw) * t.bot_flick + a * scatter, (pitch - me.pitch) * t.bot_flick + b * scatter);
+                self.flick_on = self.focus;
+            }
+            let settle = if t.bot_settle_s > 0.0 { expf(-DT / t.bot_settle_s) } else { 0.0 };
+            self.flick = (self.flick.0 * settle, self.flick.1 * settle);
+            let (want_yaw, want_pitch) = (yaw + self.wobble.0 + self.flick.0, pitch + self.wobble.1 + self.flick.1);
             let new_yaw = me.yaw + wrap(want_yaw - me.yaw).clamp(-max_turn, max_turn);
             let new_pitch = me.pitch + (want_pitch - me.pitch).clamp(-max_turn, max_turn);
             let on_target = wrap(want_yaw - new_yaw).abs() < AIM_TOLERANCE && (want_pitch - new_pitch).abs() < AIM_TOLERANCE;
@@ -1582,7 +1737,7 @@ impl Bot {
             // Badly hurt, or too hot with no vent to hand: fall back, to an orb or out of sight
             // (unless its post, or its own side's dome or barrier, has cover to cool in).
             at.flag(Feature::Cooling, self.cooling).flag(Feature::VentReady, Ability::of(me.loadout) == Ability::Vent && me.ability_cooldown <= 0.0);
-            let post = self.post_point(arena, nav, t, me, target, tick);
+            let post = self.post_point(arena, nav, t, me, target, took_damage, tick);
             at.flag(Feature::PostCovered, post.is_some_and(|p| p.covered) || haven.is_some());
             let why = if self.pressing(t, me) {
                 None
@@ -1753,13 +1908,24 @@ impl Bot {
     /// to stand on it now: in its cover while it cools, stepped out to fire otherwise. None where
     /// there are no spots to weigh, or no kit known for the target; and for a rocket punch's
     /// carrier going in.
-    fn post_point(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: &Mech, tick: u32) -> Option<Stand> {
+    #[allow(clippy::too_many_arguments)]
+    fn post_point(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: &Mech, hit: bool, tick: u32) -> Option<Stand> {
         if self.going_in.is_some() {
             self.post = None;
             return None;
         }
         let spots = nav.spots()?;
         let id = self.focus?;
+        // Hit at its post or its peek: the target has that angle; weighed again, worth less.
+        self.burned.retain(|&(_, until)| tick < until);
+        if let Some((post, _)) = self.post.filter(|_| hit && self.policy.post_burn > 0.0) {
+            let at = |i: usize| flat(spots.spots[i].pos - me.pos).length() < 2.0 * POST_NEAR;
+            let fresh: Vec<usize> = std::iter::once(post.spot).chain(post.peek).filter(|&i| at(i) && !self.burned.iter().any(|b| b.0 == i)).collect();
+            for i in fresh {
+                self.burned.push((i, tick + secs(BURNED)));
+                self.post_at = tick;
+            }
+        }
         if tick >= self.post_at || self.post.is_none_or(|(_, of)| of != id) {
             let current = self.post.filter(|&(_, of)| of == id).map(|(p, _)| p.spot);
             self.post = self.weigh(arena, spots, t, me, id, target.pos, current).map(|p| (p, id));
@@ -1798,12 +1964,13 @@ impl Bot {
             .collect();
         let target = seen.iter().position(|(_, k)| k.id == id)?;
         let allies: Vec<Vector> = self.mates.iter().filter(|(_, f)| *f == Some(id)).map(|(at, _)| *at).collect();
-        let w = Weighing { take: p.post_take, horizon: p.post_horizon, moving: p.post_moving, stay: p.post_stay, reach: p.post_reach, cross: p.post_cross };
+        let w = Weighing { take: p.post_take * self.lean(0.5), horizon: p.post_horizon, moving: p.post_moving, stay: p.post_stay, reach: p.post_reach, cross: p.post_cross, burn: p.post_burn };
+        let burned: Vec<usize> = self.burned.iter().map(|&(spot, _)| spot).collect();
         let duty = crate::threat::dps(t, t, flat(pos - me.pos).length()).duty;
         // At an order it holds its ground there: within the zone it's to hold, or ERRAND of the
         // spot (behind a hauler, by a flag).
         let hold = self.order.map(|at| self.order_zone.unwrap_or(Hold { at, radius: ERRAND, band: ERRAND_RISE }));
-        crate::tactics::choose(spots, arena, t, me.pos, &foes, target, duty, current, &allies, hold, &w)
+        crate::tactics::choose(spots, arena, t, me.pos, &foes, target, duty, current, &allies, hold, &burned, &w)
     }
 
     /// Backing up a teammate fighting enemy `id` at `pos`, out of its own sight: to a post it
@@ -1877,6 +2044,77 @@ impl Bot {
         let alone = |c: &Contact| p.pursue_alone <= 0.0 || !self.contacts.iter().any(|o| o.id != c.id && o.pos.distance(c.pos) <= p.pursue_alone);
         let fresh = |c: &&Contact| !c.seen && c.seen_at.is_some_and(|at| tick.saturating_sub(at) < secs(p.pursue_secs)) && c.hull <= p.pursue_hull && flat(c.pos - me.pos).length() <= p.pursue_reach && alone(c);
         self.contacts.iter().filter(fresh).min_by(|a, b| a.hull.total_cmp(&b.hull)).map(|c| c.pos)
+    }
+
+    /// Its side's posture: 1 pushing, -1 falling back, 0 neither (`Policy::team_edge`).
+    fn posture(&self) -> f32 {
+        let e = self.policy.team_edge;
+        if e <= 0.0 {
+            0.0
+        } else if self.edge >= e {
+            1.0
+        } else if self.edge <= -e {
+            -1.0
+        } else {
+            0.0
+        }
+    }
+
+    /// The factor its posture puts on a band or a take: less pushing, more falling back.
+    fn lean(&self, by: f32) -> f32 {
+        1.0 - by * self.policy.team_lean * self.posture()
+    }
+
+    /// With no enemy in view and no job underway: firing on where one went behind smoke
+    /// (`Policy::smoke_fire`), or moving about in the smoke it stands in (`Policy::smoke_exit`;
+    /// in the way of a flag carrier's run home, that lost 0.40 ± 0.09 a match).
+    fn through_smoke(&mut self, t: &Tuning, me: &Mech, max_turn: f32, tick: u32) -> Option<Input> {
+        // Not with a job underway: a flag to carry, a carrier to escort, an order to get to.
+        if me.laden || self.ward.is_some() || self.errand(me).is_some() {
+            return None;
+        }
+        let (p, eye) = (&self.policy, me.pos + Vector::Y * t.eye_height);
+        let gone = self.contacts.iter().filter(|c| !c.seen && c.seen_at.is_some_and(|at| tick.saturating_sub(at) < secs(p.smoke_fire)));
+        if let Some(spot) = gone.map(|c| self.chest(t, Some(c.id), c.pos)).find(|&chest| item::hidden(&self.smoke, eye, chest)) {
+            let cooling = self.cool(t, me);
+            let (yaw, pitch) = look_at(eye, spot);
+            let (new_yaw, new_pitch) = (me.yaw + wrap(yaw - me.yaw).clamp(-max_turn, max_turn), me.pitch + (pitch - me.pitch).clamp(-max_turn, max_turn));
+            let on = wrap(yaw - new_yaw).abs() < AIM_TOLERANCE;
+            return Some(Input { yaw: new_yaw, pitch: new_pitch, fire: on && !cooling && !me.overheated, ..Input::default() });
+        }
+        // A bot with an order to hold keeps to it, smoke or none (a guard circling off its flag
+        // stand let the enemy take it).
+        let cloud = self.smoke.iter().filter(|_| p.smoke_exit >= 0.5 && self.order.is_none()).find(|c| c.pos.distance(eye) < c.radius)?;
+        // Round the cloud's middle at half its radius, the way it was strafing.
+        let off = flat(me.pos - cloud.pos);
+        let round = Vector::new(-off.z, 0.0, off.x).normalize_or(Vector::X) * self.strafe;
+        let way = (round + off.normalize_or_zero() * (0.5 - off.length() / cloud.radius)).normalize_or_zero();
+        let rot = Rotation::from_rotation_y(me.yaw);
+        Some(Input { yaw: me.yaw, pitch: me.pitch, move_x: way.dot(rot * Vector::X), move_z: way.dot(rot * Vector::NEG_Z), ..Input::default() })
+    }
+
+    /// Where to back up a teammate's fight with enemy `id` at `pos` from (`Policy::trade_flank`): a
+    /// spot within FLANK of it that sees it, as square across the teammate's line of fire as can
+    /// be, a little less for each metre off. None with no teammate on it, or no such spot.
+    fn flank_spot(&self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, pos: Vector, id: u8) -> Option<Vector> {
+        let spots = nav.spots()?;
+        let mate = self.mates.iter().find(|(_, f)| *f == Some(id)).map(|(at, _)| *at)?;
+        let (chest, along) = (pos + Vector::Y * (0.5 * t.mech_height), flat(mate - pos).normalize_or_zero());
+        let score = |at: Vector| {
+            let side = flat(at - pos).normalize_or_zero();
+            along.cross(side).length() - at.distance(me.pos) / 100.0
+        };
+        spots.near(pos, FLANK).map(|i| spots.spots[i].pos).filter(|&at| (at.y - me.pos.y).abs() < 6.0 && crate::tactics::sees_from(arena, t, at, chest)).max_by(|a, b| score(*a).total_cmp(&score(*b)))
+    }
+
+    /// Hurt enough to repair with no enemy in view: cover from the last one it knew of, to
+    /// repair there (`Policy::mend_cover`). Not a flag carrier or an escort: they keep going.
+    fn mend_in_cover(&self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, tick: u32) -> Option<Retreat> {
+        if self.policy.mend_cover < 0.5 || me.laden || self.ward.is_some() || me.repair_time > 0.0 || me.health >= MEND_AT * t.health_max || self.retreat.is_some() {
+            return None;
+        }
+        let threat = self.contacts.iter().max_by_key(|c| c.at)?;
+        self.shelter(arena, nav, t, me, threat.pos + Vector::Y * t.eye_height, Why::Mend, tick)
     }
 
     /// A flag carrier presses on home rather than fall back, unless worse hurt than its policy's
@@ -1965,8 +2203,9 @@ impl Bot {
             // Speed boost on long runs.
             ability: Ability::of(me.loadout) == Ability::Slipstream && range > far,
             hover: tick < self.hover_until,
-            // Hurt and out of sight: stop and repair until full or seen again.
-            repair: me.repair_time > 0.0 || me.health < 0.3 * t.health_max,
+            // Hurt and out of sight: stop and repair until full or seen again (not with a flag to
+            // carry home, or a carrier to escort).
+            repair: me.repair_time > 0.0 || (me.health < MEND_AT * t.health_max && !me.laden && self.ward.is_none()),
             ..Input::default()
         }
     }
@@ -2512,6 +2751,18 @@ mod tests {
         assert_eq!(pick(1.0, false), Some(2), "not the nearest");
         assert_eq!(pick(0.4, false), Some(1), "not the badly wounded one");
         assert_eq!(pick(1.0, true), Some(1), "not the one that just hit it");
+    }
+
+    #[test]
+    fn about_pilot_mind_of_bots_mind_a_pilot_each_life() {
+        let mut bot = Bot::with_skill(7, 0.5);
+        let lives = 400;
+        let minded = (0..lives).filter(|_| {
+            bot.respawned();
+            bot.minds_pilot
+        });
+        let share = minded.count() as f32 / lives as f32;
+        assert!((share - bot.policy.pilot_mind).abs() < 0.1, "minded a pilot {share:.2} of lives");
     }
 
     #[test]
@@ -3067,7 +3318,7 @@ mod tests {
         let (arena, nav) = (Arena::new(&Map::load(blockout)), Nav::for_map(blockout));
         let loadout = Loadout::named("kiln", "darts");
         // Perfect aim, so whatever misses is the lead's (and the drop's) fault.
-        let t = Tuning { bot_aim_error_deg: 0.0, bot_reaction_s: 0.0, bot_lead_error: 0.0, bot_range_error: 0.0, ..Arsenal::new(&Tuning::default()).get(MechClass::B, loadout).clone() };
+        let t = Tuning { bot_aim_error_deg: 0.0, bot_flick: 0.0, bot_flick_deg: 0.0, bot_track_s: 0.0, bot_reaction_s: 0.0, bot_lead_error: 0.0, bot_range_error: 0.0, ..Arsenal::new(&Tuning::default()).get(MechClass::B, loadout).clone() };
         assert!(t.charge_speed > 1.0 && t.shot_gravity > 0.0, "HEAT no longer speeds up when charged and drops");
         // A target 60 m off, strafing side to side in the open (short of the big box), turning every 2 s.
         let mut me = Mech { loadout, grenades: 0, ..spawn_mech(&t, Vector::new(0.0, 0.1, 40.0)) };
@@ -3189,7 +3440,7 @@ mod tests {
         let loadout = Loadout::named("hail", "darts");
         // Perfect aim, so a grenade that lands nowhere near the target fell short, and a 1 s fuse,
         // so the grenades burst about 45 m out.
-        let t = Tuning { bot_aim_error_deg: 0.0, bot_reaction_s: 0.0, shot_fuse: 1.0, ..Arsenal::new(&Tuning::default()).get(MechClass::B, loadout).clone() };
+        let t = Tuning { bot_aim_error_deg: 0.0, bot_flick: 0.0, bot_flick_deg: 0.0, bot_track_s: 0.0, bot_reaction_s: 0.0, shot_fuse: 1.0, ..Arsenal::new(&Tuning::default()).get(MechClass::B, loadout).clone() };
         // A target standing in the open 70 m off, past that; the bot closes in.
         let mut me = Mech { loadout, grenades: 0, ..spawn_mech(&t, Vector::new(-36.0, 0.1, 42.0)) };
         let target = spawn_mech(&t, Vector::new(-36.0, 0.1, -28.0));

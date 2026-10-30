@@ -342,6 +342,9 @@ pub struct Weighing {
     /// How much more it lands from a spot across from a teammate fighting the same target (by
     /// the sine of the angle between them at the target): a target can't face or hide from both.
     pub cross: f32,
+    /// What a spot it was just hit at (or one peeking from one) is worth less: the target has its
+    /// angle.
+    pub burn: f32,
 }
 
 /// A zone a bot is holding: its middle, radius and band (as `objective::Zone::holds`).
@@ -375,7 +378,8 @@ const WALKS: usize = 6;
 /// Teammates fighting the same target stand at `allies`: a spot across from one is worth more.
 /// Holding a zone (`hold`), it weighs only spots in it, stepping out to fire only within it too.
 #[allow(clippy::too_many_arguments)]
-pub fn choose(spots: &Spots, arena: &Arena, t: &Tuning, me: Vector, foes: &[Foe], target: usize, duty: f32, current: Option<usize>, allies: &[Vector], hold: Option<Hold>, w: &Weighing) -> Option<Post> {
+#[allow(clippy::too_many_arguments)]
+pub fn choose(spots: &Spots, arena: &Arena, t: &Tuning, me: Vector, foes: &[Foe], target: usize, duty: f32, current: Option<usize>, allies: &[Vector], hold: Option<Hold>, burned: &[usize], w: &Weighing) -> Option<Post> {
     let inside = |i: usize| hold.is_none_or(|h| h.holds(spots.spots[i].pos, HOLD_MARGIN));
     let foe = foes.get(target)?;
     let taken_at = |at: Vector| -> f32 { foes.iter().filter(|f| exposed(arena, t, at, f.eye)).map(|f| f.on_me.at(f.pos.distance(at)) / (1.0 + f.split)).sum::<f32>() / t.health_max };
@@ -409,7 +413,8 @@ pub fn choose(spots: &Spots, arena: &Arena, t: &Tuning, me: Vector, foes: &[Foe]
             };
             let walk = at.distance(me) / t.walk_speed;
             let stay = if current == Some(i) { w.stay } else { 0.0 };
-            let score = (dealt - w.take * taken) * (w.horizon - walk).max(0.0) + walk * (w.moving * here_dealt - w.take * here_taken) + stay;
+            let burn = if burned.contains(&i) || peek.is_some_and(|p| burned.contains(&p)) { w.burn } else { 0.0 };
+            let score = (dealt - w.take * taken) * (w.horizon - walk).max(0.0) + walk * (w.moving * here_dealt - w.take * here_taken) + stay - burn;
             Post { spot: i, peek, fires, score }
         })
         .collect();
@@ -462,14 +467,14 @@ mod tests {
         let curve = Curve::of(&kit, &kit);
         let foe_at = Vector::new(-5.0, 0.1, -48.0);
         let foes = [Foe { pos: foe_at, eye: foe_at + Vector::Y * kit.eye_height, chest: foe_at + Vector::Y * (kit.mech_height * 0.5), on_me: &curve, mine: &curve, hull: kit.health_max, split: 0.0 }];
-        let w = Weighing { take: 1.0, horizon: 6.0, moving: 0.5, stay: 0.05, reach: 24.0, cross: 0.0 };
+        let w = Weighing { take: 1.0, horizon: 6.0, moving: 0.5, stay: 0.05, reach: 24.0, cross: 0.0, burn: 0.0 };
         let me = Vector::new(-5.0, 0.1, -12.0);
         let zone = Hold { at: Vector::new(-5.0, 0.0, -12.0), radius: 8.0, band: 3.0 };
-        let held = choose(spots, &arena, &kit, me, &foes, 0, 0.5, None, &[], Some(zone), &w).expect("no post in the zone");
+        let held = choose(spots, &arena, &kit, me, &foes, 0, 0.5, None, &[], Some(zone), &[], &w).expect("no post in the zone");
         assert!(zone.holds(spots.spots[held.spot].pos, 0.0), "post out of the zone");
         assert!(held.peek.is_none_or(|p| zone.holds(spots.spots[p].pos, 0.0)), "peek out of the zone");
         // Free to roam, it goes to the block, out of the zone.
-        let free = choose(spots, &arena, &kit, me, &foes, 0, 0.5, None, &[], None, &w).expect("no post");
+        let free = choose(spots, &arena, &kit, me, &foes, 0, 0.5, None, &[], None, &[], &w).expect("no post");
         assert!(!zone.holds(spots.spots[free.spot].pos, 0.0), "free post stayed in the zone");
     }
 

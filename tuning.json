@@ -207,6 +207,13 @@
   "bot_reaction_s":    { "value": 0.25,   "min": 0,     "max": 1,     "step": 0.01,   "unit": "s",       "group": "bot",    "source": "own tuning" },
   "bot_lead_error":    { "value": 0.25,   "min": 0,     "max": 1,     "step": 0.01,   "unit": "x speed", "group": "bot",    "source": "own tuning, to fit to human play" },
   "bot_range_error":   { "value": 0.1,    "min": 0,     "max": 0.5,   "step": 0.01,   "unit": "x range", "group": "bot",    "source": "own tuning, to fit to human play" },
+  "bot_flick":         { "value": 0.15,  "min": 0,     "max": 1,     "step": 0.01,   "unit": "x swing",  "group": "bot",    "source": "own tuning: past the target on a new sight, as a share of the swing" },
+  "bot_flick_deg":     { "value": 1.5,   "min": 0,     "max": 10,    "step": 0.1,    "unit": "deg",      "group": "bot",    "source": "own tuning: scatter on a new sight" },
+  "bot_settle_s":      { "value": 0.2,   "min": 0,     "max": 2,     "step": 0.01,   "unit": "s",        "group": "bot",    "source": "own tuning: how fast a new sight settles" },
+  "bot_track_s":       { "value": 0.08,  "min": 0,     "max": 0.5,   "step": 0.005,  "unit": "s",        "group": "bot",    "source": "own tuning: aim wander per radian a second a target crosses" },
+  "bot_adapt_step":    { "value": 0.03,  "min": 0,     "max": 0.2,   "step": 0.005,  "unit": "skill",    "group": "bot",    "source": "own tuning: per pilot kill or death, unseen till a respawn" },
+  "bot_adapt_range":   { "value": 0.2,   "min": 0,     "max": 0.5,   "step": 0.01,   "unit": "skill",    "group": "bot",    "source": "own tuning" },
+  "bot_adapt_s":       { "value": 180,   "min": 10,    "max": 900,   "step": 10,     "unit": "s",        "group": "bot",    "source": "own tuning: how fast it fades back" },
 
   "mouse_sensitivity": { "value": 0.0022, "min": 0.0002,"max": 0.01,  "step": 0.0001, "unit": "rad/px",  "group": "camera", "source": "own tuning" },
   "fov":               { "value": 80,     "min": 40,    "max": 120,   "step": 1,      "unit": "deg",     "group": "camera", "source": "own tuning" },

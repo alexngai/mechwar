@@ -3,7 +3,7 @@
 use crate::client::{Drawn, NetClient};
 use crate::deploy::Deployable;
 use crate::game::Mode;
-use crate::net::{Cloud, Event};
+use crate::net::{Call, Cloud, Event, Mark};
 use crate::arsenal::{classes_json, weapons_json};
 use crate::{Arena, Arsenal, DT, Input, Loadout, Mech, MechClass, Sim, Slot, Tuning, Vector, map};
 use rapier3d::prelude::Ray;
@@ -245,6 +245,11 @@ impl WasmNetClient {
     /// 2 = offensive items, 3 = support items, 4 = abilities, for class 0 = A, 1 = B, 2 = C.
     pub fn unlock(&self, class: u8, slot: u8, index: u8) -> Vec<u8> {
         self.0.unlock_msg(MechClass::from_index(class).unwrap_or_default(), Slot::from_index(slot).unwrap_or(Slot::Primary), index)
+    }
+
+    /// Bytes pinging what we aim at for our team; `sighted`, as an enemy seen there.
+    pub fn ping(&self, sighted: bool) -> Vec<u8> {
+        self.0.ping_msg(sighted)
     }
 
     /// Bytes handing the server our signed progression record ("" for none yet).
@@ -527,6 +532,11 @@ impl WasmNetClient {
     /// reactor's grid raised to level b). Arc pylon lightning (kind 15), two records a jump: a = 0 xyz = from, then a = 1
     /// xyz = to. Pulse pylon EMP (kind 16): a = radius, xyz = where. Mortar shell fired (kind 17),
     /// two records: a = 0 xyz = from, then a = 1 xyz = where it lands; b = its flight (s).
+    /// A teammate's ping (kind 18): a = who, b = the enemy it marks, or -1 for a spot to go to,
+    /// -2 for one an enemy was seen at, xyz = where. A bot's
+    /// callout (kind 19): a = the bot, b = what (0 contact, 1 help, 2 our flag carrier down, 3
+    /// theirs, 4 on its way to a ping), xyz = where. A bot's mark on an enemy it sees (kind 20; a
+    /// contact's comes before it): a = the enemy, b = the bot, xyz = where.
     pub fn take_events(&mut self) -> Vec<f32> {
         let mut out = Vec::new();
         for e in std::mem::take(&mut self.0.events) {
@@ -577,6 +587,27 @@ impl WasmNetClient {
                 Event::Shell { from, to, flight } => {
                     out.extend([17.0, 0.0, flight, from.x, from.y, from.z]);
                     out.extend([17.0, 1.0, flight, to.x, to.y, to.z]);
+                }
+                Event::Ping { from, mark, at } => {
+                    let what = match mark {
+                        Mark::Enemy(e) => f32::from(e),
+                        Mark::Spot => -1.0,
+                        Mark::Sighted => -2.0,
+                    };
+                    out.extend([18.0, f32::from(from), what, at.x, at.y, at.z]);
+                }
+                Event::Callout { from, call, at } => {
+                    if let Call::Spotted(enemy) | Call::Contact(enemy) = call {
+                        out.extend([20.0, f32::from(enemy), f32::from(from), at.x, at.y, at.z]);
+                    }
+                    let what = match call {
+                        Call::Spotted(_) => continue,
+                        Call::Contact(_) => 0.0,
+                        Call::Help => 1.0,
+                        Call::CarrierDown { ours } => if ours { 2.0 } else { 3.0 },
+                        Call::OnMyWay => 4.0,
+                    };
+                    out.extend([19.0, f32::from(from), what, at.x, at.y, at.z]);
                 }
                 // The client turns these into the blasts and hits below.
                 Event::Launch(_) | Event::Blast { .. } => {}

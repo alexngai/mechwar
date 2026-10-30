@@ -6,7 +6,7 @@ use std::ops::Range;
 
 use sim::client::NetClient;
 use sim::game::Game;
-use sim::net::{self, ClientMsg, Event, InputMsg, PlayerNet, ServerMsg};
+use sim::net::{self, ClientMsg, Event, InputMsg, Mark, PlayerNet, ServerMsg};
 use sim::{DT, Input, Loadout, Map, MechClass, Slot, TICK_HZ, Tuning, Vector};
 
 /// The original blockout arena: the duels below rely on its open line between the slot-0 spawns.
@@ -1186,4 +1186,25 @@ fn roster_reaches_clients() {
     assert_ne!(game.roster_version(), seen);
     deliver(&game, &mut clients);
     assert!(!clients[1].names.contains_key(&a));
+}
+
+#[test]
+fn pings_reach_the_pinger_s_team_only() {
+    let (mut game, pinger, enemy) = duel_game();
+    let mut seq = 0;
+    let aim = aim_at(&game, pinger, enemy, false);
+    send(&mut game, pinger, &mut seq, 1, aim);
+    game.step();
+    let Some(ClientMsg::Ping { sighted: false }) = net::decode(&NetClient::default().ping_msg(false)) else { panic!("a ping didn't decode as one") };
+    game.ping(pinger, false);
+    game.step();
+    game.step();
+    let heard = |id: u8| {
+        let mut c = NetClient::default();
+        c.receive(&net::encode(&ServerMsg::Welcome { id, map: blockout() as u8 }), 0.0);
+        c.receive(&net::encode(&ServerMsg::Snapshot(game.snapshot(id))), 0.0);
+        c.events.iter().any(|e| matches!(e, Event::Ping { from, mark: Mark::Enemy(e), .. } if *from == pinger && *e == enemy))
+    };
+    assert!(heard(pinger), "the pinger's client never got its ping on the enemy");
+    assert!(!heard(enemy), "the enemy's client got the ping");
 }

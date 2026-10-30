@@ -320,6 +320,23 @@ pub struct Tuning {
     /// when lobbing, as shares; each wanders within that.
     pub bot_lead_error: f32,
     pub bot_range_error: f32,
+    /// A bot's aim on a target newly in its sights (a new one, or one back in view): carried past
+    /// it by `bot_flick` of the swing, plus up to `bot_flick_deg` either way, and settling back with
+    /// time constant `bot_settle_s`. Tracking one crossing its view, its aim wanders wider by
+    /// `bot_track_s` radians for each radian a second the target crosses. None of these scales
+    /// with skill, so they weigh most on the sharpest bots, as they do on a sharp player. At 0.15,
+    /// 1.5°, 0.2 s and 0.08 s, the hitscan guns' lead over the rest at skill 1 halves (the Burst
+    /// rifle +0.73 to +0.38 kills a match over the median), and strafing pays at every skill.
+    pub bot_flick: f32,
+    pub bot_flick_deg: f32,
+    pub bot_settle_s: f32,
+    pub bot_track_s: f32,
+    /// Adaptive difficulty: a pilot's kill of a bot raises the bots' side's skill by
+    /// `bot_adapt_step`, a bot's kill of a pilot lowers its side's, within `bot_adapt_range`
+    /// either way, fading back to none with time constant `bot_adapt_s`.
+    pub bot_adapt_step: f32,
+    pub bot_adapt_range: f32,
+    pub bot_adapt_s: f32,
 }
 
 impl Tuning {

@@ -703,6 +703,23 @@ export class Sound {
     this.tone(out, 'sine', 523, 523, 0.01, 0.4, 0.16, 0.34);
   }
 
+  /** A ping, ours or a teammate's: two quick rising pips, higher on an enemy. */
+  ping(enemy) {
+    const out = this.voice(null, 0.35, this.ui);
+    if (!out) return;
+    const f = enemy ? 1175 : 880;
+    this.tone(out, 'sine', f, f, 0.003, 0.09, 0.14);
+    this.tone(out, 'sine', f * 1.5, f * 1.5, 0.003, 0.14, 0.12, 0.08);
+  }
+
+  /** A bot's callout on the team radio: a short squelch. */
+  radio() {
+    const out = this.voice(null, 0.2, this.ui);
+    if (!out) return;
+    this.noise(out, 'white', 'bandpass', 1800, 1200, 0.004, 0.08, 0.06, 3);
+    this.tone(out, 'square', 1400, 1400, 0.002, 0.04, 0.03);
+  }
+
   /** Our flag taken: a two-tone klaxon, twice. */
   flagAlarm() {
     const out = this.voice(null, 1.1, this.ui);
