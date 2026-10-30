@@ -738,6 +738,13 @@ impl Game {
                 d.orders(&self.players.iter().map(|p| (p.id, p.team, p.bot.is_some() && p.mech.health > 0.0)).collect::<Vec<_>>(), &walkers)
             }),
         };
+        // Each side's flag carrier's feet (Capture the Flag): a bot ordered there escorts it.
+        let mut carriers = [None; MAX_PLAYERS];
+        if let Some(c) = &self.ctf {
+            for p in self.players.iter().filter(|p| c.carried_by(p.id).is_some()) {
+                carriers[usize::from(p.team)] = Some(p.mech.pos);
+            }
+        }
         let mut matchups = std::mem::take(&mut self.matchups);
         // Which enemies have a clear line to which players (eye to middle, within their weapons'
         // reach): for bots weighing how an enemy's fire is split.
@@ -861,6 +868,7 @@ impl Game {
             }
             bot.lead = lead;
             bot.order = orders.as_ref().and_then(|o| o[i]);
+            bot.ward = carriers[team].filter(|&at| bot.order == Some(at));
             // The zone that order is in, if it's one to hold.
             let zones = self.assault.iter().flat_map(|a| a.silos.iter()).chain(self.siege.iter().flat_map(|s| std::iter::once(&s.aa).chain(s.stations.iter().map(|(z, _)| z))));
             bot.order_zone = bot.order.and_then(|o| zones.clone().find(|z| z.holds(o))).map(|z| crate::tactics::Hold { at: z.at, radius: z.radius, band: z.band });

@@ -35,6 +35,11 @@ SPACE = {
     'post_split': (0.0, 1.5),
     'post_cross': (0.0, 1.5),
     'trade_reach': (0.0, 90.0),
+    'pursue_hull': (0.0, 1.0),
+    'pursue_secs': (1.0, 10.0),
+    'pursue_reach': (10.0, 80.0),
+    'pursue_self': (0.0, 1.0),
+    'pursue_alone': (0.0, 60.0),
 }
 # Each mode's own weights, tuned with --space: Capture the Flag's squads and when a carrier falls
 # back; Missile Assault's spread; Siege's crew; Convoy's escort. And when a rocket punch goes in.
@@ -44,6 +49,7 @@ MODE_SPACE = {
     'ctf_chase': (0.0, 4.0),
     'ctf_guard': (0.0, 3.0),
     'carry_retreat': (0.0, 1.0),
+    'escort_posts': (0.0, 1.0),
     'assault_spread': (1.0, 5.0),
     'siege_bank': (0.2, 1.0),
     'siege_aa': (0.0, 3.0),

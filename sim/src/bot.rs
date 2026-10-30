@@ -607,6 +607,20 @@ pub struct Policy {
     pub post_split: f32,
     pub post_cross: f32,
     pub trade_reach: f32,
+    /// Follow-up: an enemy it saw within `pursue_secs`, now out of sight, with no more than
+    /// `pursue_hull` of its hull left and its last spot within `pursue_reach`, it goes straight
+    /// after (rather than holding its post, or going back to its order), while it has at least
+    /// `pursue_self` of its own (0 hull: never). Any such enemy chased gained +0.48 ± 0.16 kills
+    /// a match in Team Deathmatch on one set of seeds, −0.04 ± 0.15 on another, and fell behind
+    /// at skill 1 and in Missile Assault: it ran into the enemy's teammates.
+    pub pursue_hull: f32,
+    pub pursue_secs: f32,
+    pub pursue_reach: f32,
+    pub pursue_self: f32,
+    /// And only one with no other enemy known within this of its last spot (0: whatever's there).
+    /// At 0.6 hull and 30 m: +0.44 ± 0.14 and +0.42 ± 0.15 kills a match in Team Deathmatch at
+    /// skill 0.5 on two sets of seeds, +0.10 ± 0.15 at skill 1, even in the objective modes.
+    pub pursue_alone: f32,
     /// Missile Assault: how many of the silos its team doesn't hold securely the team goes after
     /// at once (its first bot's says, for all), the nearest first.
     pub assault_spread: f32,
@@ -620,6 +634,9 @@ pub struct Policy {
     pub ctf_chase: f32,
     pub ctf_guard: f32,
     pub carry_retreat: f32,
+    /// Whether an escort (`Bot::ward`) takes posts (1) or fights about the carrier as it goes (0:
+    /// with two escorts, +0.21 ± 0.08 a match against one taking posts; posts lose most of it).
+    pub escort_posts: f32,
     /// Siege (its team's first bot's says, for all; `siege::Crew`): the share of a full load of
     /// energy a bot carries home to bank, and how many go to the anti-air gun, with the enemy ship
     /// down and up (one, not two, with it up: +20 ± 15 base hull a match).
@@ -687,12 +704,18 @@ impl Default for Policy {
             post_split: 1.2,
             post_cross: 0.3,
             trade_reach: 23.0,
+            pursue_hull: 0.6,
+            pursue_secs: 5.0,
+            pursue_reach: 40.0,
+            pursue_self: 0.4,
+            pursue_alone: 30.0,
             assault_spread: 3.0,
             ctf_raid: 2.0,
-            ctf_escort: 1.0,
+            ctf_escort: 2.0,
             ctf_chase: 2.0,
             ctf_guard: 1.0,
             carry_retreat: 0.0,
+            escort_posts: 0.0,
             siege_bank: 0.8,
             siege_aa: 1.0,
             siege_aa_ship: 1.0,
@@ -807,6 +830,8 @@ pub struct Bot {
     /// Falling back to cover or an orb, and the health orbs about (they glow: always known).
     retreat: Option<Retreat>,
     pub orbs: Vec<Vector>,
+    /// Where its side's flag carrier is, when its order is to escort it (Capture the Flag).
+    pub ward: Option<Vector>,
     /// Set by the server each tick: an enemy stands in the blast of its limpet (if one's down),
     /// and how many teammates are alive within `MATES_NEAR`.
     pub limpet_hits: bool,
@@ -890,6 +915,7 @@ impl Bot {
             patrol_until: 0,
             retreat: None,
             orbs: Vec::new(),
+            ward: None,
             limpet_hits: false,
             mates_near: 0,
             order_zone: None,
@@ -1207,6 +1233,10 @@ impl Bot {
         let trading = (Action::Trade, trade.map(|(pos, _)| pos), Goal::Trade(trade.map_or(0, |(_, id)| id)));
         // In the zone it's to hold with an enemy known to be in it too (contesting it out of
         // sight, round its middle say): after them, in the zone.
+        // A wounded enemy just gone out of sight nearby comes first.
+        if let Some(spot) = self.pursuit(t, me, tick) {
+            return (spot, Goal::Contact);
+        }
         let zone = self.order_zone.filter(|z| z.holds(me.pos, 0.0));
         let contest = zone.and_then(|z| self.contacts.iter().filter(|c| z.holds(c.pos, 0.0)).max_by_key(|c| c.at)).map(|c| c.pos);
         let choice = [(Action::GoToOrder, contest, Goal::Contact), (Action::GoToOrder, self.order, Goal::Order), trading, (Action::ChaseUrgent, urgent, Goal::Contact), (Action::Regroup, self.lead, Goal::Lead), (Action::ChaseContact, fresh, Goal::Contact), (Action::Follow, self.lead, Goal::Lead)]
@@ -1304,8 +1334,7 @@ impl Bot {
             }
             at.set(Feature::EnemiesInView, self.contacts.iter().filter(|c| c.seen).count() as f32).set(Feature::MatesNear, f32::from(self.mates_near));
             // A carrier presses on home unless worse hurt than its policy's carry_retreat.
-            let pressing = me.laden && me.health > self.policy.carry_retreat * t.health_max;
-            if pressing || self.brain.wants(Action::StopFallingBack, &at) || tick >= r.until {
+            if self.pressing(t, me) || self.brain.wants(Action::StopFallingBack, &at) || tick >= r.until {
                 self.retreat = None;
             } else {
                 // There, but in the target's view after all (it moved, say): other cover from it
@@ -1335,8 +1364,12 @@ impl Bot {
             // when it's near, or patrol.
             (self.seen_vel, self.seen_last, self.seen_step) = (Vector::ZERO, None, Vector::ZERO);
             self.seen.clear();
-            if let Some(input) = self.keep_post(nav, t, me, tick) {
+            let pursuing = self.pursuit(t, me, tick).is_some();
+            if !pursuing && let Some(input) = self.keep_post(nav, t, me, tick) {
                 return input;
+            }
+            if pursuing {
+                self.post = None;
             }
             let ducked = self.contacts.iter().find(|c| !c.seen && c.seen_at.is_some_and(|at| tick.saturating_sub(at) < secs(FLUSH_AFTER))).map(|c| c.pos);
             if let Some(spot) = ducked.filter(|s| (t.grenade_radius + 2.0..self.policy.grenade_range).contains(&s.distance(me.pos)))
@@ -1495,7 +1528,7 @@ impl Bot {
             at.flag(Feature::Cooling, self.cooling).flag(Feature::VentReady, Ability::of(me.loadout) == Ability::Vent && me.ability_cooldown <= 0.0);
             let post = self.post_point(arena, nav, t, me, target, tick);
             at.flag(Feature::PostCovered, post.is_some_and(|p| p.covered) || haven.is_some());
-            let why = if me.laden && me.health > self.policy.carry_retreat * t.health_max {
+            let why = if self.pressing(t, me) {
                 None
             } else if self.brain.wants(Action::FallBackToMend, &at) {
                 Some(Why::Mend)
@@ -1548,7 +1581,7 @@ impl Bot {
                 // About a dome or barrier (not off a ledge).
                 let (dir, rot) = (way.normalize_or_zero(), Rotation::from_rotation_y(new_yaw));
                 (dir.dot(rot * Vector::X), dir.dot(rot * Vector::NEG_Z))
-            } else if let Some(stand) = post.filter(|_| !perch && errand.is_none() && range <= far) {
+            } else if let Some(stand) = post.filter(|_| !perch && errand.is_none() && range <= far && (self.ward.is_none() || self.policy.escort_posts >= 0.5)) {
                 // In range, at its post (beyond it, it walks on: a flanker keeps to its lane): there,
                 // in its cover or stepped out of it; on an open one, strafing
                 // about it.
@@ -1775,6 +1808,24 @@ impl Bot {
             (0.0, 0.0)
         };
         Some(Input { move_x, move_z, yaw: new_yaw, pitch: new_pitch, ..Input::default() })
+    }
+
+    /// The last spot of the weakest enemy worth following up (`Policy::pursue_hull`): none for a
+    /// flag carrier or an escort, which keep to their jobs.
+    fn pursuit(&self, t: &Tuning, me: &Mech, tick: u32) -> Option<Vector> {
+        let p = &self.policy;
+        if p.pursue_hull <= 0.0 || me.laden || self.ward.is_some() || me.health < p.pursue_self * t.health_max {
+            return None;
+        }
+        let alone = |c: &Contact| p.pursue_alone <= 0.0 || !self.contacts.iter().any(|o| o.id != c.id && o.pos.distance(c.pos) <= p.pursue_alone);
+        let fresh = |c: &&Contact| !c.seen && c.seen_at.is_some_and(|at| tick.saturating_sub(at) < secs(p.pursue_secs)) && c.hull <= p.pursue_hull && flat(c.pos - me.pos).length() <= p.pursue_reach && alone(c);
+        self.contacts.iter().filter(fresh).min_by(|a, b| a.hull.total_cmp(&b.hull)).map(|c| c.pos)
+    }
+
+    /// A flag carrier presses on home rather than fall back, unless worse hurt than its policy's
+    /// carry_retreat.
+    fn pressing(&self, t: &Tuning, me: &Mech) -> bool {
+        me.laden && me.health > self.policy.carry_retreat * t.health_max
     }
 
     /// Its order's spot while it's still on its way there: off across or on another level, or out
@@ -2377,6 +2428,24 @@ mod tests {
         assert_eq!(pick(Policy::default()), Some(1), "not the flak gun");
         // By distance, as before: the nearer one.
         assert_eq!(pick(Policy { target_kit: 0.0, ..Policy::default() }), Some(2));
+    }
+
+    #[test]
+    fn bots_follow_up_a_wounded_enemy_gone_out_of_sight_alone() {
+        let t = Tuning::default();
+        let me = spawn_mech(&t, Vector::new(0.0, 0.1, 40.0));
+        let tick = secs(10.0);
+        let lost = |id: u8, pos: Vector, hull: f32| Contact { id, pos, at: tick, seen: false, seen_at: Some(tick - secs(1.0)), hull, hit_at: None, told: false, walled: false };
+        let spot = Vector::new(0.0, 0.1, 20.0);
+        let mut bot = Bot::new(1);
+        bot.contacts = vec![lost(1, spot, 0.3)];
+        assert_eq!(bot.pursuit(&t, &me, tick), Some(spot), "a wounded one, just gone");
+        bot.contacts = vec![lost(1, spot, 0.9)];
+        assert_eq!(bot.pursuit(&t, &me, tick), None, "not one barely scratched");
+        bot.contacts = vec![lost(1, spot, 0.3), lost(2, spot + Vector::new(10.0, 0.0, 0.0), 1.0)];
+        assert_eq!(bot.pursuit(&t, &me, tick), None, "not into its teammate");
+        bot.contacts = vec![lost(1, spot, 0.3)];
+        assert_eq!(bot.pursuit(&t, &me, tick + secs(10.0)), None, "not long gone");
     }
 
     #[test]
