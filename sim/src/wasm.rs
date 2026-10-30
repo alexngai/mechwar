@@ -326,9 +326,17 @@ impl WasmNetClient {
 
     /// A co-op run as of the latest snapshot: the wave (on, or next), the waves in all, the seconds
     /// left of the break before it (-1 while it's on), the reactor's hull, and the walkers still
-    /// to come or standing. Empty outside Co-op Defense.
+    /// to come or standing, the run's score, how many human pilots have called the next wave, the
+    /// towers the grid takes, and what raising it costs (0 at the top). Empty outside Co-op Defense.
     pub fn defense(&self) -> Vec<f32> {
-        self.0.defense().map_or_else(Vec::new, |d| vec![f32::from(d.wave), f32::from(d.waves), d.break_left.unwrap_or(-1.0), d.hull, f32::from(d.left)])
+        self.0.defense().map_or_else(Vec::new, |d| {
+            vec![f32::from(d.wave), f32::from(d.waves), d.break_left.unwrap_or(-1.0), d.hull, f32::from(d.left), d.score as f32, d.ready.len() as f32, f32::from(d.capacity), d.grid_cost]
+        })
+    }
+
+    /// Co-op: whether this player has called the next wave this break.
+    pub fn called(&self) -> bool {
+        self.0.defense().zip(self.0.id).is_some_and(|(d, me)| d.ready.contains(&me))
     }
 
     /// Co-op: each player's scrap, by id.
@@ -336,8 +344,9 @@ impl WasmNetClient {
         self.0.defense().map_or_else(Vec::new, |d| d.scrap.iter().map(|&s| f32::from(s)).collect())
     }
 
-    /// Co-op's towers: five floats each: owner (its deployable's), builder's id, tier, what
-    /// raising it a tier costs (0 at the top), what selling it refunds.
+    /// Co-op's towers: eight floats each: owner (its deployable's), builder's id, tier, what
+    /// raising it a tier costs (0 at the top), what selling it refunds, its hull, its hull whole,
+    /// and what mending it costs.
     pub fn towers(&self) -> Vec<f32> {
         let Some(d) = self.0.defense() else { return Vec::new() };
         let kind = |owner| self.0.deployables().iter().find(|e| e.owner == owner).map(|e| e.kind);
@@ -345,7 +354,10 @@ impl WasmNetClient {
             .iter()
             .flat_map(|t| {
                 let up = if t.tier < crate::defense::TIERS { kind(t.owner).map_or(0.0, |k| t.upgrade(k)) } else { 0.0 };
-                [f32::from(t.owner), f32::from(t.by), f32::from(t.tier), up, t.refund()]
+                let hull = self.0.deployables().iter().find(|e| e.owner == t.owner).map_or(0.0, |e| e.hull);
+                let plating = d.perks.iter().find(|&&(id, p, _)| id == t.by && p == crate::defense::Perk::Plating).map_or(0.0, |p| f32::from(p.2));
+                let whole = crate::defense::hull_whole(t.tier, plating);
+                [f32::from(t.owner), f32::from(t.by), f32::from(t.tier), up, t.refund(), hull, whole, crate::defense::Defense::repair_cost(t, hull, whole)]
             })
             .collect()
     }
@@ -425,6 +437,8 @@ impl WasmNetClient {
         let order = match order {
             4 => Build::Upgrade,
             5 => Build::Sell,
+            6 => Build::Repair,
+            7 => Build::Call,
             k => Build::Place(k.min(3)),
         };
         crate::net::encode(&crate::net::ClientMsg::Build(order))
@@ -509,7 +523,8 @@ impl WasmNetClient {
     /// walker reached the reactor; 3 player b's build order refused, x = why: `defense::Refusal`'s
     /// index; 4 a boss came, b = its kind; 5 player b picked up salvage, x = 1 a boss's; 6 the
     /// Bloom sealed route b (x = 1) or burst it open (x = 0), b indexing the map's seals; 7
-    /// player b picked up a supply cache). Arc pylon lightning (kind 15), two records a jump: a = 0 xyz = from, then a = 1
+    /// player b picked up a supply cache; 8 the break called short, b seconds early; 10 the
+    /// reactor's grid raised to level b). Arc pylon lightning (kind 15), two records a jump: a = 0 xyz = from, then a = 1
     /// xyz = to. Pulse pylon EMP (kind 16): a = radius, xyz = where. Mortar shell fired (kind 17),
     /// two records: a = 0 xyz = from, then a = 1 xyz = where it lands; b = its flight (s).
     pub fn take_events(&mut self) -> Vec<f32> {
@@ -550,6 +565,8 @@ impl WasmNetClient {
                         News::Salvage { id, rare } => [14.0, 5.0, f32::from(id), if rare { 1.0 } else { 0.0 }, 0.0, 0.0],
                         News::Bloom { seal, sealed } => [14.0, 6.0, f32::from(seal), if sealed { 1.0 } else { 0.0 }, 0.0, 0.0],
                         News::Cache { id } => [14.0, 7.0, f32::from(id), 0.0, 0.0, 0.0],
+                        News::Called { seconds } => [14.0, 8.0, f32::from(seconds), 0.0, 0.0, 0.0],
+                        News::Grid { level } => [14.0, 10.0, f32::from(level), 0.0, 0.0, 0.0],
                     });
                 }
                 Event::Zap { from, to } => {
