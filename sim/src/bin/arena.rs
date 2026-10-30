@@ -3,6 +3,7 @@
 //!
 //!   cargo run --release -p sim --bin arena -- job.json > rows.csv
 //!   cargo run --release -p sim --bin arena -- --policy     (today's policy, as JSON)
+//!   cargo run --release -p sim --bin arena -- --personalities  (live bots' playstyles, as JSON)
 //!   cargo run --release -p sim --bin arena -- --brain      (genome 0's brain, as JSON)
 //!
 //! A job: `{"mode": "tdm", "seconds": 120, "skill": 0.5, "ideal": false,
@@ -24,7 +25,9 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use sim::bot::{Bot, Policy};
 use sim::brain::Brain;
+use sim::ctf::Happened;
 use sim::game::{Game, Mode};
+use sim::net::Event;
 use sim::{Arsenal, Loadout, MechClass, Slot, TICK_HZ, Tuning, arsenal, map};
 
 #[derive(Deserialize)]
@@ -97,6 +100,10 @@ fn main() {
         println!("{}", serde_json::to_string(&Policy::default()).expect("policy serializes"));
         return;
     }
+    if arg == "--personalities" {
+        println!("{}", serde_json::to_string(&Policy::personalities()).expect("policies serialize"));
+        return;
+    }
     if arg == "--brain" {
         println!("{}", serde_json::to_string(&Brain::default()).expect("brain serializes"));
         return;
@@ -130,7 +137,7 @@ fn main() {
     let tuning: Tuning = serde_json::from_value(values).unwrap_or_else(|e| fail(&format!("tuning: {e}")));
     let arsenal = Arsenal::tweaked(&tuning, &job.classes, &job.weapons);
 
-    println!("match,map,seed,team,genome,class,primary,secondary,offensive,support,ability,kills,deaths,assists,dealt,taken,result,score,opp_score,seconds,uses_primary,uses_secondary,uses_offensive,uses_support,uses_ability,dealt_primary,dealt_secondary,dealt_offensive,dealt_support,dealt_ability,s_fight,s_fall_back,s_mend,s_move,s_trade");
+    println!("match,map,seed,team,genome,class,primary,secondary,offensive,support,ability,kills,deaths,assists,dealt,taken,result,score,opp_score,seconds,uses_primary,uses_secondary,uses_offensive,uses_support,uses_ability,dealt_primary,dealt_secondary,dealt_offensive,dealt_support,dealt_ability,s_fight,s_fall_back,s_mend,s_move,s_trade,takes,opp_takes,healed");
     let next = AtomicUsize::new(0);
     let (tx, rx) = mpsc::channel();
     let workers = std::thread::available_parallelism().map_or(4, |n| n.get());
@@ -189,8 +196,15 @@ fn play(job: &Job, mode: Mode, arsenal: &Arsenal, i: usize, m: &Match) -> String
         game.place(id, sim::Vector::from_array(*spot), side(1 - team), m.hull.get(k).copied().unwrap_or(1.0));
     }
     let limit = (job.seconds * TICK_HZ) as u32 + 1;
+    // Flags each side took off the other's stand (Capture the Flag): a finer score than captures.
+    let mut takes = [0u32; 2];
     while !game.match_state().ended && game.tick < limit {
         game.step();
+        for e in game.events() {
+            if let &Event::Flag { team, what: Happened::Taken, .. } = e {
+                takes[1 - usize::from(team)] += 1;
+            }
+        }
     }
     let state = game.match_state();
     let mut rows = String::new();
@@ -204,7 +218,7 @@ fn play(job: &Job, mode: Mode, arsenal: &Arsenal, i: usize, m: &Match) -> String
         };
         let b = build.map_or_else(|| ["random"; 5].join(","), |b| [b.primary, b.secondary, b.offensive, b.support, b.ability].join(","));
         rows += &format!(
-            "{i},{},{},{team},{genome},{class:?},{b},{},{},{},{:.1},{:.1},{result},{},{},{:.1},{},{},{}\n",
+            "{i},{},{},{team},{genome},{class:?},{b},{},{},{},{:.1},{:.1},{result},{},{},{:.1},{},{},{},{},{},{:.1}\n",
             m.map,
             m.seed,
             s.kills + s.bot_kills,
@@ -218,6 +232,9 @@ fn play(job: &Job, mode: Mode, arsenal: &Arsenal, i: usize, m: &Match) -> String
             tally.uses.map(|n| n.to_string()).join(","),
             tally.dealt_by.map(|d| format!("{d:.1}")).join(","),
             tally.doing.map(|n| n as f32 / TICK_HZ).iter().map(|s| format!("{s:.1}")).collect::<Vec<_>>().join(","),
+            takes[team],
+            takes[1 - team],
+            tally.healed,
         );
     }
     rows

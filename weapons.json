@@ -11,19 +11,19 @@
     {
       "id": "triplet", "name": "Burst", "unlock": 1, "desc": "Three hard, accurate rounds a pull, then a beat", "sound": "burst", "recoil": "low", "use": [["LMB", "Each pull fires a three-round burst; pull again after the beat"], ["", "Accurate to mid range, fading past 40 m"]],
       "stats": {
-        "fire_rate": 1.65, "burst": 3, "burst_gap": 0.07, "shot_damage": 6.375, "heat_per_shot": 3.5,
+        "fire_rate": 1.65, "burst": 3, "burst_gap": 0.07, "shot_damage": 6.0, "heat_per_shot": 3.5,
         "spread_deg": 0.25, "bloom_per_shot": 0.25, "bloom_max": 1.5, "bloom_recovery": 4,
         "falloff_start": 40, "falloff_end": 90, "falloff_floor": 0.5
       }
     },
     {
       "id": "pike", "name": "Rifle", "unlock": 1, "desc": "Accurate, with mild bloom and long reach", "sound": "rifle", "recoil": "medium", "use": [["LMB", "Hold to fire 8 rounds a second"], ["", "Full damage out to 60 m, and still 60% at 120 m"]],
-      "stats": { "shot_damage": 4.8 }
+      "stats": { "shot_damage": 4.5 }
     },
     {
       "id": "gyre", "name": "Gatling", "unlock": 2, "desc": "A rotary cannon that spins up to a torrent, and runs hot", "sound": "rotary", "recoil": "high", "use": [["LMB", "Hold: it opens fire after 0.2 s and reaches full rate after 1.2 s"], ["", "Let go and it spins down over 0.8 s: fire long bursts, and watch your heat"]],
       "stats": {
-        "fire_rate": 18, "spin_up": 1.2, "spin_down": 0.8, "spin_start": 0.2, "spin_delay": 0.2, "shot_damage": 3.73, "heat_per_shot": 2.5,
+        "fire_rate": 18, "spin_up": 1.2, "spin_down": 0.8, "spin_start": 0.2, "spin_delay": 0.2, "shot_damage": 3.5, "heat_per_shot": 2.5,
         "spread_deg": 1, "bloom_per_shot": 0.12, "bloom_max": 2.5, "bloom_recovery": 3,
         "falloff_start": 35, "falloff_end": 80, "falloff_floor": 0.5
       }
@@ -77,7 +77,7 @@
     },
     {
       "id": "mender", "name": "Repair torch", "unlock": 2, "desc": "A beam that mends teammates and burns enemies", "sound": "mender", "recoil": "none", "use": [["RMB", "Hold on a teammate to mend 10 hp/s, out to 28 m"], ["RMB", "Hold on an enemy to burn 6 hp/s"], ["", "A teammate it's on deals 25% more damage with its guns"], ["", "It runs warm while held"]],
-      "stats": { "alt_beam": 28, "alt_beam_heal": 10, "alt_damage": 6, "alt_heat": 32, "alt_cooldown": 0 }
+      "stats": { "alt_beam": 28, "alt_beam_heal": 15, "alt_damage": 6, "alt_heat": 32, "alt_cooldown": 0 }
     },
     {
       "id": "rocket", "name": "Rocket", "unlock": 1, "desc": "Straight-flying rocket with an 8 m blast", "sound": "rocket", "recoil": "none", "projectile": "rocket", "use": [["RMB", "Fire a rocket: 40 damage, 8 m blast"], ["RMB", "Press again to burst it in the air"], ["", "Aim at the ground or a wall beside a target: the blast still catches it"]],
@@ -119,7 +119,7 @@
       }
     },
     {
-      "id": "piston", "name": "Rocket punch", "unlock": 2, "desc": "An outsized impact head on a ram, driven by boosters: it charges in and throws what it hits", "sound": "piston", "recoil": "high", "use": [["RMB", "Hold to spool up the boosters: 0.8 s to full"], ["RMB", "Let go to punch. The longer the wind-up, the harder it hits (20 to 55) and the farther the boosters carry you (up to 22 m)"], ["", "With an enemy ahead in range it homes in; otherwise it carries you along your aim, up too, as a dash"], ["", "A hit throws them along your aim, and a wall they slam into hurts. It works overheated, but locks your guns for 0.5 s"]],
+      "id": "piston", "name": "Rocket punch", "unlock": 2, "desc": "An outsized impact head on a ram, driven by boosters: it charges in and throws what it hits", "sound": "piston", "recoil": "high", "use": [["RMB", "Hold to spool up the boosters: 0.8 s to full"], ["RMB", "Let go to punch. The longer the wind-up, the harder it hits (20 to 55) and the farther the boosters carry you (up to 22 m)"], ["", "With an enemy ahead in range it homes in; otherwise it flies you straight along your aim, up too, as a dash"], ["", "A hit throws them along your aim, and a wall they slam into hurts. It works overheated, but locks your guns for 0.5 s"]],
       "stats": {
         "alt_melee": 3, "alt_charge_time": 0.8, "alt_lunge": 22, "alt_lunge_speed": 42, "alt_impulse": 255, "alt_charge_damage": 2.75,
         "alt_release": 1, "alt_damage": 20, "alt_cooldown": 2.5, "alt_heat": 12

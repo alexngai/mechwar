@@ -11,7 +11,7 @@ use crate::{Arena, Mech, Tuning, Vector, aim_ray, hit_shape};
 
 /// A held beam bends to a mech this far off the aim (the cosine of the cone's half-angle): wide
 /// enough to keep a teammate mending while the gun's on an enemy.
-pub(crate) const BEAM_SNAP_COS: f32 = 0.866_025; // 30 degrees
+pub const BEAM_SNAP_COS: f32 = 0.866_025; // 30 degrees
 
 /// Where a held beam (`alt_beam`) stops, and on which of `mechs` (id, tuning, mech), if any. It
 /// holds on the mech it's on (`m.beam_on`) while that's within `BEAM_SNAP_COS` of the aim, in

@@ -9,7 +9,9 @@ Weapons (default): class x primary x secondary, with the class's own items and a
 With --tweaks (the arena job's `tuning`, `classes` and `weapons` maps), the stats are changed first;
 with --against a control run's folder, the report also lists what moved past two standard errors;
 with --only slot=id, only the builds carrying that one weapon, item or ability play (cheap, for
-sensitivity runs).
+sensitivity runs). --mode plays an objective mode (at least 300 s a match; margins in its own
+units: base hull in Missile Assault and Siege, captures in Capture the Flag, percent pushed in
+Convoy); --style k plays the swept builds with live bots' personality k (0 is today's default).
 
   python3 balance/sweep.py --appear 60 [--ideal] [--items] --out balance/out/sweep
   python3 balance/sweep.py --tweaks '{"weapons": {"rocket": {"alt_damage": 38}}}' \\
@@ -20,11 +22,13 @@ import itertools
 import json
 import math
 import random
+import subprocess
 from pathlib import Path
 
 import numpy as np
 
 import evolve as ev
+import tune
 
 CLASS_NAMES = {'A': 'Light', 'B': 'Medium', 'C': 'Heavy', 'all': 'All'}
 SLOT_COLUMN = {'primary': 'primary', 'secondary': 'secondary', 'offensive': 'offensive', 'support': 'support', 'ability': 'ability'}
@@ -46,9 +50,16 @@ def main():
     ap.add_argument('--tweaks', type=json.loads, default={}, help='stat changes, as the arena job takes them')
     ap.add_argument('--against', type=Path, help="a control run's folder, to compare with")
     ap.add_argument('--seed', type=int, default=7)
+    ap.add_argument('--mode', default='tdm', choices=list(tune.MAPS))
+    ap.add_argument('--skip', default='walled', help='maps to leave out, comma-separated (Walled City, being reworked, costs about 15 times a match)')
+    ap.add_argument('--style', type=int, help="play the swept builds with this personality (bot.rs's Policy::personalities)")
     ap.add_argument('--out', type=Path, default=ev.ROOT / 'balance' / 'out' / 'sweep')
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
+    if args.mode != 'tdm':
+        args.seconds = max(args.seconds, 300.0)
+    args.maps = [m for m in (tune.MAPS[args.mode] if args.mode != 'tdm' else ev.MAPS) if m not in args.skip.split(',')]
+    style = json.loads(subprocess.run([ev.ARENA, '--personalities'], capture_output=True, text=True, check=True).stdout)[args.style] if args.style is not None else None
     slots = ('offensive', 'support', 'ability') if args.items else ('primary', 'secondary')
     only = args.only.split('=') if args.only else None
     pool = {}
@@ -58,6 +69,8 @@ def main():
                 continue
             g = ev.stock(cls, ev.CLASSES[cls]['weapons']['primary'])
             g['build'].update(zip(slots, picks))
+            if style:
+                g['policy'] = dict(style)
             pool['|'.join((cls, *picks))] = g
     if not pool:
         raise SystemExit(f'no build carries {args.only}')
@@ -87,14 +100,15 @@ def main():
             n = max(1, len(rs))
             use[f'{slot}/{w}'] = (sum(int(r[f'uses_{slot}']) for r in rs) / n, sum(float(r[f'dealt_{slot}']) for r in rs) / n)
     doing = {k: sum(float(r[f's_{k}']) for r in mine) / max(1, len(mine)) for k in ('fight', 'fall_back', 'mend', 'move', 'trade')}
-    (args.out / 'ratings.json').write_text(json.dumps({'tweaks': args.tweaks, 'ideal': args.ideal, 'skill': args.skill, 'items': args.items, 'only': args.only, 'table': table, 'use': use, 'doing': doing}, indent=1))
+    (args.out / 'ratings.json').write_text(json.dumps({'tweaks': args.tweaks, 'ideal': args.ideal, 'skill': args.skill, 'items': args.items, 'only': args.only, 'mode': args.mode, 'style': args.style, 'table': table, 'use': use, 'doing': doing}, indent=1))
 
     fmt = lambda m: f'{m[0]:+.2f} ± {m[1]:.2f}'
     names = {w['id']: w['name'] for lst in ev.WEAPONS.values() for w in lst}
     aim = 'ideal aim' if args.ideal else f'skill {args.skill}'
     family = 'items and abilities' if args.items else 'guns'
-    lines = [f'# Build sweep, {family}, {aim}', '', f'{len(ids)} builds, {args.appear} matches each, TDM {args.seconds:.0f} s. Team-margin plus-minus per match against the stock bot (0), ± one standard error. * = the class\'s own. Uses and hull dealt are per match.', '']
+    lines = [f'# Build sweep, {family}, {aim}', '', f'{len(ids)} builds, {args.appear} matches each, {args.mode} {args.seconds:.0f} s{f", personality {args.style}" if args.style is not None else ""}. Team-margin plus-minus per match against the stock bot (0), ± one standard error. * = the class\'s own. Uses and hull dealt are per match.', '']
     lines.append('Time alive, per match: ' + ', '.join(f'{k.replace("_", " ")} {v:.0f} s' for k, v in doing.items()) + '.')
+    lines.append(f"Teammates' hull healed, per match: {sum(float(r.get('healed') or 0) for r in mine) / max(1, len(mine)):.0f}.")
     lines.append('')
     if args.tweaks:
         lines += [f'Tweaks: `{json.dumps(args.tweaks)}`', '']

@@ -2,8 +2,8 @@
   "A": {
     "name": "Light", "role": "fast, fragile, quick dodge", "source": "own tuning",
     "overrides": {
-      "walk_speed": 14.5, "boost_speed": 28, "ground_accel": 75, "dodge_speed": 32, "dodge_cooldown": 0.9,
-      "health_max": 70, "mech_radius": 0.95, "mech_height": 3.5, "eye_height": 3.0,
+      "walk_speed": 14.0, "boost_speed": 27, "ground_accel": 75, "dodge_speed": 32, "dodge_cooldown": 0.9,
+      "health_max": 100, "mech_radius": 0.95, "mech_height": 3.5, "eye_height": 3.0,
       "mech_mass": 35
     },
     "weapons": { "primary": "stitcher", "secondary": "rocket", "offensive": "grenade", "support": "emp", "ability": "slipstream" },
@@ -18,8 +18,8 @@
   "C": {
     "name": "Heavy", "role": "slow, tough, heavy cannon", "source": "own tuning",
     "overrides": {
-      "walk_speed": 9.5, "boost_speed": 19, "ground_accel": 40, "dodge_speed": 29, "dodge_cooldown": 1.6,
-      "health_max": 150, "mech_radius": 1.8, "mech_height": 5.8, "eye_height": 4.9, "heat_max": 240,
+      "walk_speed": 10.5, "boost_speed": 21, "ground_accel": 40, "dodge_speed": 29, "dodge_cooldown": 1.6,
+      "health_max": 210, "mech_radius": 1.8, "mech_height": 5.8, "eye_height": 4.9, "heat_max": 240,
       "mech_mass": 80
     },
     "weapons": { "primary": "squall", "secondary": "mortar", "offensive": "grenade", "support": "emp", "ability": "brace" },

@@ -1,8 +1,8 @@
 //! Melee secondaries (`alt_melee` > 0, the reach in m): the rocket punch, a booster-driven ram.
 //! Held, its booster spools up over `alt_charge_time`; let go, it strikes instead of launching
 //! anything, hitting harder the more it wound (`alt_charge_damage` times at full), and the booster
-//! carries the mech up to `alt_lunge` as far: onto an enemy ahead in that range, else along its
-//! aim, so it's a charge too. A hit throws the victim along the striker's facing, up off its feet:
+//! carries the mech up to `alt_lunge` as far: onto an enemy ahead in that range, else straight
+//! along its aim, so it's a charge too, and a way up. A hit throws the victim along the striker's facing, up off its feet:
 //! an impulse (`alt_impulse`) over the victim's mass, so a Light flies more than twice as far as a
 //! Heavy, and the striker doesn't recoil. It rides that throw as it would a jump pad's arc, until
 //! it lands, hovers or dodges out, and slamming into a wall on the way hurts it.
@@ -49,9 +49,11 @@ fn sized_up(arena: &Arena, t: &Tuning, m: &Mech, tf: &Tuning, f: &Mech, slack: f
 
 /// After `m`'s tick: a strike just let go fires the booster, carrying the mech `alt_lunge` times
 /// its wind-up. It lunges at whichever of `foes` (not camouflaged) is nearest its facing within
-/// that and the lunge cone, in sight, or with none there goes that far along the aim, rising as
-/// far as it looks up. The dash (up to `alt_lunge_speed`) is one a dodge's drag eases off as it
-/// covers the distance, so a miss doesn't carry it on past; unwound, it strikes where it stands.
+/// that and the lunge cone, in sight, or with none there flies that far straight along the aim,
+/// up or down (not down into the ground it stands on). The dash (up to `alt_lunge_speed`) is one
+/// a dodge's drag eases off as it covers the distance, gravity held off while the booster burns
+/// (`step_mech`), so it goes in a straight line and a miss doesn't carry it on past; unwound, it
+/// strikes where it stands.
 pub fn lunge<'a>(arena: &Arena, t: &Tuning, m: &mut Mech, foes: impl IntoIterator<Item = (&'a Tuning, &'a Mech)>) {
     if !m.launched || t.alt_melee <= 0.0 {
         return;
@@ -61,22 +63,21 @@ pub fn lunge<'a>(arena: &Arena, t: &Tuning, m: &mut Mech, foes: impl IntoIterato
         let (gap, angle) = sized_up(arena, t, m, tf, f, t.alt_melee)?;
         (gap <= range && angle <= LUNGE_CONE.to_radians()).then_some((f.pos, gap, angle))
     });
-    let (dir, far, rise) = match near.min_by(|a, b| a.2.total_cmp(&b.2)) {
-        Some((at, gap, _)) => (Vector::new(at.x - m.pos.x, 0.0, at.z - m.pos.z).normalize_or(facing(m)), gap, 0.0),
+    let (dir, far) = match near.min_by(|a, b| a.2.total_cmp(&b.2)) {
+        Some((at, gap, _)) => (Vector::new(at.x - m.pos.x, 0.0, at.z - m.pos.z).normalize_or(facing(m)), gap),
         None => {
             let aim = Rotation::from_rotation_y(m.yaw) * Rotation::from_rotation_x(m.pitch) * Vector::NEG_Z;
-            (facing(m), range * Vector::new(aim.x, 0.0, aim.z).length(), range * aim.y)
+            let aim = if m.grounded { Vector::new(aim.x, aim.y.max(0.0), aim.z) } else { aim };
+            (aim.normalize_or(facing(m)), range * aim.length())
         }
     };
-    if far <= 0.0 && rise <= 0.0 {
+    if far <= 0.0 {
         return;
     }
-    // Rising, it'll be in the air, where a dodge's drag is weaker.
-    let drag = (t.dodge_drag * if m.grounded && rise <= 0.0 { 1.0 } else { t.air_control }).max(1.0);
-    let speed = (2.0 * drag * far.max(0.0)).sqrt().min(t.alt_lunge_speed);
-    (m.vel.x, m.vel.z) = (dir.x * speed, dir.z * speed);
-    if rise > 0.0 {
-        m.vel.y = m.vel.y.max((2.0 * t.gravity * rise).sqrt());
+    let drag = t.dodge_drag.max(1.0);
+    let speed = (2.0 * drag * far).sqrt().min(t.alt_lunge_speed);
+    m.vel = dir * speed;
+    if dir.y > 0.0 {
         m.grounded = false;
     }
     m.dodge_time = speed / drag;

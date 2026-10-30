@@ -4,7 +4,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import init, { WasmNetClient, WasmSim, map_name, mode_name, tick_dt } from '../sim/pkg/sim.js';
+import init, { WasmNetClient, WasmSim, map_name, mode_name, perk_info, tick_dt } from '../sim/pkg/sim.js';
 import tuning from '../tuning.json';
 import classes from '../classes.json';
 import weapons from '../weapons.json';
@@ -13,7 +13,7 @@ import classesText from '../classes.json?raw';
 import weaponsText from '../weapons.json?raw';
 import { buildArena, HIGH_ONLY, LOW_ONLY } from './arena.js';
 import { Effects, HOT, halo, hot } from './fx.js';
-import { HAULER, Objectives, SENTRY, SENTRY_HEIGHT, SENTRY_SHIELD, SHIP, SHIP_HULL } from './objectives.js';
+import { ARC, BOSSES, FOE_NAMES, FOES, HAULER, Objectives, foeHull, foeMiddle, PULSE, TOWER_NAMES, TOWER_PRICES, REACTOR_HULL, SENTRY, SENTRY_HEIGHT, SENTRY_SHIELD, SHIP, SHIP_HULL } from './objectives.js';
 import { Preview, weaponThumbs } from './hangar.js';
 import { GLYPHS, STATS, facts as cardFacts, shown } from './cards.js';
 import { controlsHtml } from './controls.js';
@@ -29,6 +29,7 @@ import crashsite from '../maps/crashsite.json';
 import ziggurat from '../maps/ziggurat.json';
 import span from '../maps/span.json';
 import walled from '../maps/walled.json';
+import hivewall from '../maps/hivewall.json';
 import { CROUCH, LISTS, Mech, TEAMS, armament, ownLoadout, showRound, stoke, windUp } from './mech.js';
 import { Debug } from './debug.js';
 import { Cockpit } from './cockpit.js';
@@ -64,7 +65,7 @@ const sameOrigin = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${locatio
 const server = params.get('server') ?? (import.meta.env.PROD && !params.has('offline') ? sameOrigin : null);
 const net = server ? new WasmNetClient() : null;
 // Maps by name; the sim's compiled-in list gives the index. Offline, ?map=<name> picks one.
-const MAPS = { isotope, blockout, foundry, verdigris, riftline, sump, sinkhole, canopy, crashsite, ziggurat, span, walled };
+const MAPS = { isotope, blockout, foundry, verdigris, riftline, sump, sinkhole, canopy, crashsite, ziggurat, span, walled, hivewall };
 const mapIndex = (name) => {
   for (let i = 0; map_name(i); i++) if (map_name(i) === name) return i;
   return 0;
@@ -112,7 +113,7 @@ if (net) {
 const S = { POS: 0, VEL: 3, FUEL: 6, HEAT: 7, OVERHEATED: 8, GROUNDED: 9, BOOSTING: 10, HOVERING: 11, DODGE_CD: 12, SHOT: 13, AIM: 14, HEALTH: 17, ABILITY_T: 18, ABILITY_CD: 19, ALT_WAIT: 20, LAUNCHED: 21, REPAIR_T: 22, STAND: 23, GRENADES: 24, GRENADE_WAIT: 25, EMPS: 26, EMP_WAIT: 27, JAMMED: 28, THREW: 29, PULSED: 30, SPIN: 31, CHARGE: 32, BLOOM: 33, FIRE_WAIT: 34, LOCK: 35, LOCK_T: 36, BEAM: 37, BEAM_END: 38, SHIELD: 41, LIMPET: 42, SEEK: 43, ALT_CHARGE: 44, BURN: 45, OFFSET: 46 };
 // The HUD marks our side in blue and the other side in red, whichever team we're on.
 const FRIEND = TEAMS[0], FOE = TEAMS[1];
-const DEATHMATCH = 1, MISSILE_ASSAULT = 2, SIEGE = 3, CAPTURE_THE_FLAG = 4, CONVOY = 5; // their indices in the sim's Mode::ALL
+const DEATHMATCH = 1, MISSILE_ASSAULT = 2, SIEGE = 3, CAPTURE_THE_FLAG = 4, CONVOY = 5, DEFENSE = 6; // their indices in the sim's Mode::ALL
 /** Base guns' owner ids start here, past the ships' (deploy::sentry_owner). */
 const SENTRY_OWNERS = 10;
 /** A solo kill's points in Deathmatch (Game's POINTS_PER_KILL with the killer's bonus); a Siege
@@ -331,6 +332,12 @@ addEventListener('mousemove', (e) => {
 });
 addEventListener('mousedown', (e) => {
   if (!locked()) return;
+  // Building in co-op, the left button puts the tower down and the right puts the menu away.
+  if (building >= 0 && (e.button === 0 || e.button === 2)) {
+    if (e.button === 0) sendBuild(building);
+    else building = -1;
+    return;
+  }
   if (e.button === 0) firing = true;
   if (e.button === 2) altFiring = true;
   if (e.button === 1) {
@@ -379,6 +386,14 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyF') ability = true;
   if (e.code === 'KeyQ') grenade = true;
   if (e.code === 'KeyE') emp = true;
+  // Co-op: B opens the build menu (1-4 pick the tower, the left button puts it down, B or the
+  // right button puts it away); U raises the tower aimed at a tier, X sells it.
+  if (coop() && e.code === 'KeyB') building = building < 0 ? lastTower : -1;
+  const tower = ['Digit1', 'Digit2', 'Digit3', 'Digit4'].indexOf(e.code);
+  if (building >= 0 && tower >= 0) building = lastTower = tower;
+  // Co-op: with a draft on offer (and not building), 1-3 pick from it.
+  else if (coop() && tower >= 0 && tower < 3 && $('picker').hidden && net.offer().length > tower && ws?.readyState === WebSocket.OPEN) ws.send(net.draft(tower));
+  if (coop() && (e.code === 'KeyU' || e.code === 'KeyX')) sendBuild(e.code === 'KeyU' ? 4 : 5);
   if (e.code === 'KeyK' && sim) { sim.reset(); prev = curr = sim.state(); }
   if (e.code === 'KeyI') $('stats').hidden = !$('stats').hidden;
   if (e.code === 'KeyM') setMuted(!sound.muted);
@@ -580,7 +595,21 @@ const esc = (text) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 // Recent kills for the feed: names and team colors when they happened.
 const feed = [];
 // Our latest kill, named over the aim frame for a moment.
-let eliminated = null, callout = null, capture = null, blipAt = 0;
+let eliminated = null, callout = null, capture = null, blipAt = 0, reactorHitAt = null;
+// Co-op building: the tower being placed (-1: not building), the last one picked, what the panel
+// says of it (or of the tower aimed at), and where the last arc pylon jump left from.
+let building = -1, lastTower = 0, buildHint = '', zapFrom = null, shellFrom = null;
+const coop = () => !!net && net.defense().length > 0;
+const sendBuild = (order) => ws?.readyState === WebSocket.OPEN && ws.send(net.build(order));
+/** How a co-op run ended: held through its last wave, or lost on the wave it fell. */
+const coopResult = (won) => {
+  const [wave, waves] = net.defense();
+  return won ? `REACTOR HELD · ALL ${waves} WAVES BEATEN` : `REACTOR LOST ON WAVE ${wave} OF ${waves}`;
+};
+/** A co-op wave's theme as the panel calls it (defense.rs `Theme`, in order; mixed says nothing). */
+const THEMES = ['', 'SWARM', 'ARMOR', 'SIEGE', 'SHIELDED', 'FLANKING'];
+/** Why a build order didn't go (defense.rs `Refusal`, in order). */
+const REFUSALS = ['NOTHING IN REACH', 'NO ROOM HERE', 'TOO CLOSE TO A LANE', 'TOO CLOSE TO A TOWER', 'TOO CLOSE TO THE REACTOR', 'NOT ENOUGH SCRAP', 'AIM AT A TOWER (YOUR OWN TO SELL)', 'AS HIGH AS IT GOES', 'THE TEAM HAS ALL THE TOWERS IT CAN'];
 /** Siege energy we carried as of the last frame; CARRY_MAX matches siege::CARRY_MAX. */
 let heldBefore = 0, bankBefore = 0;
 const ENERGY_COLOR = 0x5dff9a;
@@ -924,8 +953,11 @@ function frame(now) {
       // around it either); a teammate shows as a ghost.
       e.cloaked = !!abilityOn && e.mech.weapons.ability.id === 'cloak';
       e.hidden = e.cloaked && team !== myTeam;
-      e.mech.setTeam(paint(team));
+      // In co-op, the other side are the hive's infested mechs.
+      const infested = coop() && team === 1;
+      e.mech.setTeam(infested ? 'infested' : paint(team));
       e.mech.setUnit(id);
+      if (infested) e.mech.infest();
       e.mech.update(dt, {
         pos: e.pos, yaw: ryaw, pitch: rpitch, scale: classValue(cls, 'mech_height') / e.mech.height, vel: e.vel,
         grounded: !hovering && Math.abs(e.vel.y) < 1.5, boosting: !!boosting, hovering: !!hovering, health,
@@ -985,6 +1017,65 @@ function frame(now) {
       else objectives.shipDown(a);
     }
     if (kind === 9) objectives.launch(a, b, now, b === myTeam ? FRIEND.accent : FOE.accent);
+    if (kind === 14) {
+      // Co-op: wave b coming, x strong (a 0); b cleared (1); a walker into the reactor (2).
+      if (a === 0) {
+        callout = { text: `WAVE ${b} · ${x} WALKERS`, color: hex(FOE.accent), at: now };
+        sound.zone('lost');
+      } else if (a === 1) {
+        callout = { text: `WAVE ${b} CLEARED`, color: hex(FRIEND.accent), at: now };
+        sound.zone('took');
+      } else if (a === 4) {
+        // A boss (of kind b) has come.
+        callout = { text: `${(FOE_NAMES[b] ?? 'A boss').toUpperCase()} IS COMING`, color: hex(FOE.accent), at: now };
+        sound.flagAlarm();
+      } else if (a === 6) {
+        // The Bloom sealed route b (x 1) or burst it open (x 0).
+        const name = net.seal_name(b).toUpperCase();
+        callout = { text: x ? `THE BLOOM HAS SEALED ${name}` : `THE BLOOM BURST ${name} OPEN`, color: hex(FOE.accent), at: now };
+        sound.zone('lost');
+      } else if (a === 7) {
+        // A supply cache picked up (by b).
+        if (b === myId) {
+          callout = { text: 'SUPPLY CACHE · +60 SCRAP', color: hex(FRIEND.accent), at: now };
+          sound.zone('took');
+        }
+      } else if (a === 5) {
+        // Salvage picked up (by b; x 1 a boss's).
+        if (b === myId) {
+          callout = { text: x ? 'BLUEPRINT FOUND · PICK ONE' : 'SALVAGE · PICK AN UPGRADE', color: hex(FRIEND.accent), at: now };
+          sound.zone('took');
+        }
+      } else if (a === 3) {
+        // Our build order refused (b us, x why).
+        if (b === myId) {
+          callout = { text: REFUSALS[x] ?? 'CAN\'T BUILD THERE', color: hex(FOE.accent), at: now };
+          sound.full();
+        }
+      } else if (now - (reactorHitAt ?? -Infinity) > 1500) {
+        callout = { text: 'REACTOR HIT', color: hex(FOE.accent), at: now };
+        sound.flagAlarm();
+        reactorHitAt = now;
+      }
+    }
+    // Co-op pylons: an arc pylon's lightning, one jump in two records (from, then to); a pulse pylon's EMP.
+    if (kind === 15 && a === 0) zapFrom = new THREE.Vector3(x, y, z);
+    if (kind === 15 && a === 1 && zapFrom) {
+      fx.beam(zapFrom, new THREE.Vector3(x, y, z));
+      fx.impact(new THREE.Vector3(x, y, z));
+      zapFrom = null;
+    }
+    if (kind === 16) {
+      fx.pulse(new THREE.Vector3(x, y, z), a);
+      sound.emp(new THREE.Vector3(x, y, z));
+    }
+    // A mortar shell: from (a 0), then where it lands (a 1), b its flight.
+    if (kind === 17 && a === 0) shellFrom = [x, y, z];
+    if (kind === 17 && a === 1 && shellFrom) {
+      objectives.shell(shellFrom, [x, y, z], b, now);
+      sound.grenade(new THREE.Vector3(...shellFrom));
+      shellFrom = null;
+    }
     if (kind === 13) {
       // Convoy: a team (b) took the hauler over (a 0), it stalled (1), came back (2), or b delivered it (3).
       const ours = b === myTeam;
@@ -1132,6 +1223,10 @@ function frame(now) {
   objectives.drawSentries(game.deployables(), myTeam, FRIEND.accent, FOE.accent, dt, turretGuns);
   objectives.drawFlags(ctf, myTeam, FRIEND.accent, FOE.accent, top, now);
   objectives.drawHauler(game.deployables(), convoy, myTeam, FRIEND.accent, FOE.accent, dt, now);
+  objectives.drawWalkers(game.deployables(), dt, now, turretGuns, (net ? net.defense()[0] : 0) || 1);
+  objectives.drawDefense(net ? net.defense() : [], now, net ? [...net.open_gates()] : []);
+  objectives.drawShells(now);
+  drawBuild(now, alive, myId);
 
   // Look is applied at render rate for responsiveness; position is interpolated. In the cockpit
   // the view bobs with the gait and shakes when hit, but stays level (no roll).
@@ -1299,7 +1394,7 @@ function frame(now) {
     const html = topPanel(hudState, myId, zones, siege, clock);
     if (html !== scoreHtml) hud.score.innerHTML = scoreHtml = html;
     const next = `${mode_name(nextMode)} on ${MAPS[map_name(nextMap)]?.name ?? ''}`;
-    const result = winner < 0 ? 'DRAW' : winner === team ? 'VICTORY' : dm ? `${nameOf(winner)} WINS` : 'DEFEAT';
+    const result = winner < 0 ? 'DRAW' : hudState[20] === DEFENSE ? coopResult(winner === team) : winner === team ? 'VICTORY' : dm ? `${nameOf(winner)} WINS` : 'DEFEAT';
     hud.banner.textContent = ended ? `${result} · next: ${next} in ${secondsLeft}s` : hudState[24] && $('picker').hidden ? `GET READY · SHIELDS DROP IN ${secondsLeft}` : '';
     // Progression: keep each record the server sends; a match's end brings its XP.
     const got = net.take_progress();
@@ -1404,12 +1499,12 @@ function topPanel(hudState, myId, zones, siege, clock) {
   const [, , , , , , team, blue, red, secondsLeft, ended, winner] = hudState;
   const mode = hudState[20], limit = hudState[23], carried = hudState[22];
   const map = MAPS[map_name(net.map())]?.name ?? '';
-  const top = `<div class="top">${mode_name(mode).toUpperCase()} · ${map.toUpperCase()}<b>${ended ? `NEXT MATCH IN ${secondsLeft}s` : clock}</b></div>`;
+  const top = `<div class="top">${mode_name(mode).toUpperCase()} · ${map.toUpperCase()}<b>${ended ? `NEXT MATCH IN ${secondsLeft}s` : mode === DEFENSE ? '' : clock}</b></div>`; // (a co-op run has no clock: it lasts its waves)
   if (team < 0) return top;
   const [ours, theirs] = team === 0 ? [blue, red] : [red, blue];
   const color = (owner) => (owner < 0 ? 'dim' : owner === team ? 'us' : 'them');
   const bar = (hull) => `<span class="bar"><i style="width:${Math.max(0, Math.min(100, hull / 10))}%"></i></span>`;
-  let main = '', state = '';
+  let main = '', state = '', more = '';
   if (mode === DEATHMATCH) {
     // Our place (ties share one), and the best of the rest: the leader, or whoever's next.
     const rows = boardRows(), mine = rows.find((r) => r.id === myId), other = standings(rows.filter((r) => r.id !== myId))[0];
@@ -1431,6 +1526,30 @@ function topPanel(hudState, myId, zones, siege, clock) {
     const aa = `<span class="pip ${color(zones.length ? zones[0] : -1)}${zones[2] ? ' contested' : ''}">AA</span>`;
     main = `<span class="us"><small>OUR BASE</small>${bar(ours)}${ours} <small>${side(team)}</small></span>${aa}<span class="them"><small>${side(1 - team)}</small> ${theirs}${bar(theirs)}<small>ENEMY BASE</small></span>`;
     state = objectives.stage(team, siege, [blue, red], carried);
+  } else if (mode === DEFENSE) {
+    // The reactor's hull, and the walkers still to come or standing; between waves, the countdown.
+    const [wave, waves, breakLeft, hull, left] = net.defense().length ? net.defense() : [1, 10, -1, REACTOR_HULL, 0];
+    const scrap = Math.floor(net.scrap()[myId] ?? 0);
+    // A boss on the field gets its own bar.
+    const list = game.deployables();
+    let boss = '';
+    for (let i = 0; i < list.length; i += 10) {
+      if (!BOSSES.includes(list[i]) || list[i + 9] <= 0) continue;
+      const kind = list[i], hp = list[i + 9];
+      boss = `<span class="them"><small>${FOE_NAMES[kind].toUpperCase()}</small>${bar((1000 * hp) / foeHull(kind, wave))}${Math.ceil(hp)}</span>`;
+    }
+    main = `<span class="us"><small>WAVE</small> ${wave}/${waves}</span><span class="us"><small>REACTOR</small>${bar((1000 * hull) / REACTOR_HULL)}${Math.ceil(hull)}</span><span class="us"><small>SCRAP</small> ${scrap}</span>${boss}<span class="them">${left} <small>WALKERS</small></span>`;
+    // In a break, what's coming: the wave's theme and its foes, most first.
+    const next = net.next_wave();
+    if (next.length) {
+      const foes = [];
+      for (let i = 1; i < next.length; i += 2) foes.push([next[i], next[i + 1]]);
+      foes.sort((a, b) => b[1] - a[1]);
+      const named = foes.map(([k, n]) => `${n} ${k === 255 ? 'INFESTED MECH' : (FOE_NAMES[k] ?? '').replace(/^The /, '').toUpperCase()}${n > 1 ? 'S' : ''}`);
+      const gates = net.open_gates().length, all = objectives.gates.length;
+      more = `NEXT: ${THEMES[next[0]] ? THEMES[next[0]] + ' · ' : ''}${named.join(' · ')}${all > 1 ? ` · ${gates === all ? 'ALL' : `${gates} OF ${all}`} GATES` : ''}`;
+    }
+    state = [buildHint, breakLeft >= 0 ? `GET READY · WAVE ${wave} IN ${Math.ceil(breakLeft)}s` : ''].filter(Boolean).join(' · ');
   } else if (mode === CONVOY) {
     // The hauler on its track from our base (left) to theirs, the middle marked, in the color of
     // whoever walks it (blinking while both sides are at it); a word on a stall or a standoff.
@@ -1452,9 +1571,10 @@ function topPanel(hudState, myId, zones, siege, clock) {
   }
   if (ended) {
     const won = mode === DEATHMATCH ? winner === myId : winner === team;
-    state = winner < 0 ? 'DRAW' : `<span class="${won ? 'us' : 'them'}">${mode === DEATHMATCH ? (won ? 'YOU WIN' : `${esc(nameOf(winner))} WINS`) : won ? 'OUR TEAM WINS' : 'ENEMY TEAM WINS'}</span>`;
+    state = winner < 0 ? 'DRAW' : `<span class="${won ? 'us' : 'them'}">${mode === DEATHMATCH ? (won ? 'YOU WIN' : `${esc(nameOf(winner))} WINS`) : mode === DEFENSE ? coopResult(won) : won ? 'OUR TEAM WINS' : 'ENEMY TEAM WINS'}</span>`;
+    more = '';
   }
-  return `${top}<div class="main">${main}</div>${state ? `<div class="state">${state}</div>` : ''}`;
+  return `${top}<div class="main">${main}</div>${state ? `<div class="state">${state}</div>` : ''}${more ? `<div class="state">${more}</div>` : ''}`;
 }
 
 /** The scoreboard's rows from the server: id, team, class, bot, kills, deaths, points. */
@@ -1493,7 +1613,7 @@ function renderBoard(myId, hudState) {
   };
   $('board').innerHTML = hudState?.[20] === DEATHMATCH
     ? `<div class="head">DEATHMATCH · ${clock}</div><div class="teams">${table('PILOT', '', () => true)}</div>`
-    : `<div class="head">${hudState?.[20] === MISSILE_ASSAULT ? 'MISSILE ASSAULT · BASES ' : hudState?.[20] === SIEGE ? 'SIEGE · BASES ' : hudState?.[20] === CAPTURE_THE_FLAG ? 'CAPTURE THE FLAG · CAPTURES ' : hudState?.[20] === CONVOY ? 'CONVOY · PUSHED % ' : ''}BLUE ${blue} – ${red} RED · ${net ? clock : 'OFFLINE'}</div><div class="teams">${table('BLUE', 't0', (r) => r.team === 0)}${table('RED', 't1', (r) => r.team === 1)}</div>`;
+    : `<div class="head">${hudState?.[20] === MISSILE_ASSAULT ? 'MISSILE ASSAULT · BASES ' : hudState?.[20] === SIEGE ? 'SIEGE · BASES ' : hudState?.[20] === CAPTURE_THE_FLAG ? 'CAPTURE THE FLAG · CAPTURES ' : hudState?.[20] === CONVOY ? 'CONVOY · PUSHED % ' : hudState?.[20] === DEFENSE ? 'CO-OP DEFENSE · REACTOR, WAVE ' : ''}BLUE ${blue} – ${red} RED · ${net ? clock : 'OFFLINE'}</div><div class="teams">${table('BLUE', 't0', (r) => r.team === 0)}${table('RED', 't1', (r) => r.team === 1)}</div>`;
 }
 
 /**
@@ -1501,9 +1621,9 @@ function renderBoard(myId, hudState) {
  * contacts (enemies only while seen or just after firing), the reticle at the aim point.
  */
 // Health orbs (online only: nothing dies offline, and the Salve's orb is the server's). Radius and
-// full health match ORB_RADIUS and ORB_HEALTH in sim/src/game.rs. The other side's Salve orbs,
+// full health match ORB_RADIUS in sim/src/game.rs and orb_health in tuning.json. The other side's Salve orbs,
 // which won't heal us, glow red.
-const ORB_RADIUS = 6, ORB_HEALTH = 25, ORB_COLOR = 0x6dff9a, FOE_ORB_COLOR = 0xff5a4a;
+const ORB_RADIUS = 6, ORB_HEALTH = 37.5, ORB_COLOR = 0x6dff9a, FOE_ORB_COLOR = 0xff5a4a;
 const orbGeometry = new THREE.IcosahedronGeometry(0.7, 1);
 const orbMaterials = { [ORB_COLOR]: hot(new THREE.MeshBasicMaterial({ color: ORB_COLOR })), [FOE_ORB_COLOR]: hot(new THREE.MeshBasicMaterial({ color: FOE_ORB_COLOR })) };
 const orbMeshes = [];
@@ -1609,13 +1729,91 @@ function turretMesh(kind, material) {
   group.userData.head = head;
   return group;
 }
+/**
+ * Co-op's draft panel: the perks on offer to pick from (1-3), blueprints marked, and the perks
+ * held so far; hidden with none on offer.
+ */
+let draftShown = '';
+function drawDraft() {
+  const offer = net.offer(), perks = net.perks(), el = $('draft');
+  const info = (i) => perk_info(i).split('\n');
+  const mine = [...perks].map((n, i) => (n ? `${info(i)[0]}${n > 1 ? ' ×' + n : ''}` : '')).filter(Boolean).join(' · ');
+  const html = offer.length
+    ? `<div class="head">PICK ONE · 1-${offer.length}${net.drafts_waiting() ? ` · ${net.drafts_waiting()} MORE WAITING` : ''}</div><div class="cards">${[...offer]
+        .map((p, k) => {
+          const [name, text] = info(p);
+          return `<div class="card${name.startsWith('Blueprint') ? ' rare' : ''}"><b>${k + 1} ${esc(name.toUpperCase())}</b><span>${esc(text)}</span></div>`;
+        })
+        .join('')}</div>${mine ? `<div class="mine">YOURS: ${esc(mine)}</div>` : ''}`
+    : '';
+  if (html !== draftShown) el.innerHTML = draftShown = html;
+  el.hidden = !html || building >= 0;
+}
+
+/** Co-op towers' tiers, by owner, as of this frame. */
+const towerTiers = new Map();
+
+/**
+ * Co-op building, each frame: the lanes and (while building) the tower's ghost where it would go;
+ * the pylons; and the panel's word on the tower being placed (its price, or why it can't go
+ * there), else on the tower aimed at (its tier, what raising and selling it come to).
+ */
+function drawBuild(now, alive, myId) {
+  if (!coop()) {
+    building = -1;
+    buildHint = '';
+    $('draft').hidden = true;
+    return;
+  }
+  if (!alive) building = -1;
+  const towers = net.towers(), list = game.deployables(), info = new Map();
+  towerTiers.clear();
+  for (let i = 0; i < towers.length; i += 5) {
+    towerTiers.set(towers[i], towers[i + 2]);
+    info.set(towers[i], towers.subarray(i, i + 5));
+  }
+  objectives.drawPylons(list, towerTiers, FRIEND.accent, now);
+  objectives.drawCores(net.cores(), now);
+  objectives.drawSeals(net.seals(), now);
+  objectives.drawCaches(net.caches(), now);
+  drawDraft();
+  const spot = building >= 0 ? net.build_spot() : [];
+  objectives.drawBuild(net.lanes(), building, spot, now);
+  const scrap = net.scrap()[myId] ?? 0;
+  if (building >= 0) {
+    const [name, price] = [TOWER_NAMES[building].toUpperCase(), TOWER_PRICES[building]];
+    const why = spot.length === 4 && spot[3] >= 0 ? REFUSALS[spot[3]] : scrap < price ? 'NOT ENOUGH SCRAP' : '';
+    buildHint = `${building + 1} ${name} · ${price} SCRAP · ${why || 'CLICK TO BUILD'} · 1-4 TOWER · B DONE`;
+    return;
+  }
+  // The tower nearest the crosshair, within reach and in sight.
+  camera.getWorldDirection(heading);
+  let best = null, bestAngle = 0.08;
+  for (let i = 0; i < list.length; i += 10) {
+    const t = info.get(list[i + 2]);
+    if (!t) continue;
+    const at = new THREE.Vector3(list[i + 3], list[i + 4] + 1, list[i + 5]), to = at.clone().sub(camera.position), dist = to.length();
+    const angle = heading.angleTo(to);
+    if (dist > 30 || angle > bestAngle || game.cast_ray(camera.position.x, camera.position.y, camera.position.z, to.x / dist, to.y / dist, to.z / dist, dist) < dist - 1) continue;
+    [best, bestAngle] = [{ kind: list[i], t }, angle];
+  }
+  if (!best) {
+    buildHint = alive ? 'B BUILD' : '';
+    return;
+  }
+  const [, by, tier, up, refund] = best.t, name = TOWER_NAMES[[2, 3, ARC, PULSE].indexOf(best.kind)] ?? 'Tower';
+  const raise = up > 0 ? `U RAISE ${Math.round(up)}` : 'TOP TIER', sell = by === myId ? ` · X SELL ${Math.round(refund)}` : '';
+  buildHint = `${name.toUpperCase()} ${'I'.repeat(tier)} · ${raise}${sell}`;
+}
+
 function drawDeployables(now, myTeam) {
   const list = game.deployables(), used = { 0: 0, 1: 0, 2: 0, 3: 0 }, live = new Map();
   turretGuns.clear();
   for (let i = 0; i < list.length; i += 10) {
     const [kind, team, owner, x, y, z, yaw, pitch, left, hull] = list.subarray(i, i + 10);
-    if (kind === SHIP || kind === SENTRY || kind === HAULER) continue; // objectives.js draws ships, base guns and the hauler
-    const key = `${owner}:${kind}:${x},${z}`, was = deployed.get(key);
+    if (kind === SHIP || kind === SENTRY || kind === HAULER || FOES.includes(kind) || kind === ARC || kind === PULSE) continue; // objectives.js draws ships, base guns, the hauler and co-op's walkers and pylons
+    // (A co-op shield node's dome walks with it: known by its owner alone.)
+    const key = owner >= 16 ? `${owner}:${kind}` : `${owner}:${kind}:${x},${z}`, was = deployed.get(key);
     if (!was) sound.deploy({ x, y, z });
     let mesh = deployMeshes[kind][used[kind]++];
     if (!mesh) {
@@ -1640,6 +1838,7 @@ function drawDeployables(now, myTeam) {
     mesh.visible = true;
     mesh.position.set(x, y + (kind === 1 ? classValue(1, 'barrier_height') / 2 : 0), z);
     if (kind >= 2) {
+      mesh.scale.setScalar(1 + 0.15 * ((towerTiers.get(owner) ?? 1) - 1)); // a co-op tower grows with its tier
       const head = mesh.userData.head, gun = head.children[0];
       head.rotation.y = yaw;
       gun.rotation.x = pitch;
@@ -1815,8 +2014,8 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
     const [kind, team, owner, x, y, z, , , , hull] = turrets.subarray(i, i + 10);
     if (kind < 2 || kind === HAULER) continue; // the hauler has its own mark
     const enemy = myTeam >= 0 && team !== myTeam; // offline, all ours
-    const ship = kind === SHIP, sentry = kind === SENTRY;
-    chest.set(x, y + (ship ? 0 : sentry ? SENTRY_HEIGHT : classValue(1, 'turret_height') * 0.6), z);
+    const ship = kind === SHIP, sentry = kind === SENTRY, walker = FOES.includes(kind);
+    chest.set(x, y + (ship ? 0 : sentry ? SENTRY_HEIGHT : walker ? foeMiddle(kind) : classValue(1, 'turret_height') * 0.6), z);
     const dist = chest.distanceTo(eye);
     let visible = false;
     if (enemy && dist <= T('weapon_range')) {
@@ -1827,11 +2026,12 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
     if (!visible) continue;
     ndc.copy(chest).project(camera);
     if (ndc.z > 1 || Math.abs(ndc.x) > 1.1 || Math.abs(ndc.y) > 1.1) continue;
-    const hullMax = ship ? SHIP_HULL : sentry ? SENTRY_SHIELD : classValue(1, 'turret_hull');
-    const label = ship ? 'Battleship' : sentry ? 'Base gun' : kind === 2 ? 'MG turret' : 'Rocket turret';
+    const wave = (net ? net.defense()[0] : 0) || 1; // (co-op's walkers grow each wave)
+    const hullMax = ship ? SHIP_HULL : sentry ? SENTRY_SHIELD : walker ? foeHull(kind, wave) : classValue(1, 'turret_hull');
+    const label = ship ? 'Battleship' : sentry ? 'Base gun' : walker ? FOE_NAMES[kind] : kind === 2 ? 'MG turret' : 'Rocket turret';
     const tag = {
       // `unit` is its lock-on id (deploy::target_id), so the lock diamond finds it.
-      ...toScreen(ndc), dist, enemy, unit: 64 + 2 * owner + (kind === 3 ? 1 : 0), name: ship || sentry ? `Enemy ${label.toLowerCase()}` : `${nameOf(owner)}'s ${label}`, bot: false, status: sentry && hull <= 0 ? 'OFFLINE' : '', focus: false,
+      ...toScreen(ndc), dist, enemy, unit: 64 + 2 * owner + (kind === 3 ? 1 : 0), name: ship || sentry ? `Enemy ${label.toLowerCase()}` : walker ? label : `${nameOf(owner)}'s ${label}`, bot: false, status: sentry && hull <= 0 ? 'OFFLINE' : '', focus: false,
       health: Math.max(hull, 0) / hullMax, label,
     };
     const angle = look.angleTo(to.subVectors(chest, camera.position));
@@ -1842,7 +2042,7 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
   while (hits.length && now - hits[0].at > 1000) hits.shift();
   // Objectives: each silo's letter over it on the glass, and on the radar, in its holder's color.
   const marks = [];
-  for (const o of [...objectives.markers(net ? net.zones() : [], net ? net.siege() : []), ...objectives.flagMarks(ctf, top), ...objectives.haulerMarks(convoy)]) {
+  for (const o of [...objectives.markers(net ? net.zones() : [], net ? net.siege() : []), ...objectives.flagMarks(ctf, top), ...objectives.haulerMarks(convoy), ...objectives.defenseMarks(net ? net.defense() : [])]) {
     const color = hex(o.color ?? (o.owner < 0 ? 0xd8dde6 : o.owner === myTeam ? FRIEND.accent : FOE.accent));
     contacts.push({ x: o.at.x, z: o.at.z, objective: o.label, color });
     ndc.copy(o.at).y += 12;

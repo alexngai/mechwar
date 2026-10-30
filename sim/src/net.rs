@@ -23,6 +23,10 @@ pub enum ClientMsg {
     /// Spend unlock points on the weapon or item at `index` in `slot`'s list for `class`; the
     /// server answers with the record (`ServerMsg::Progress`) if it could.
     Unlock { class: MechClass, slot: Slot, index: u8 },
+    /// A build order in co-op, where the player aims.
+    Build(crate::defense::Build),
+    /// A pick (0-2) from the player's co-op draft on offer.
+    Draft(u8),
 }
 
 /// One per client tick. `view_tick` is the fractional server tick the client was rendering
@@ -69,6 +73,8 @@ pub struct Snapshot {
     pub ctf: Option<crate::ctf::CtfNet>,
     /// Convoy's hauler: where along its route, who's pushing, its stall.
     pub convoy: Option<crate::convoy::ConvoyNet>,
+    /// A co-op run: the wave, the break, the reactor.
+    pub defense: Option<crate::defense::DefenseNet>,
     /// In the hangar (destroyed, or not launched yet): seconds until it can launch (0: now).
     /// None while out in the arena.
     pub hangar: Option<f32>,
@@ -203,6 +209,14 @@ pub enum Event {
     Flag { team: u8, what: crate::ctf::Happened, by: Option<u8> },
     /// News of Convoy's hauler.
     Convoy(crate::convoy::News),
+    /// News of a co-op run.
+    Defense(crate::defense::News),
+    /// A co-op arc pylon's lightning jumping `from` `to`.
+    Zap { from: Vector, to: Vector },
+    /// A co-op mortar walker's shell fired `from`, landing at `to` in `flight` seconds.
+    Shell { from: Vector, to: Vector, flight: f32 },
+    /// A co-op pulse pylon's EMP going off at `at`, `radius` round.
+    Stun { at: Vector, radius: f32 },
 }
 
 pub fn encode<T: Serialize>(msg: &T) -> Vec<u8> {

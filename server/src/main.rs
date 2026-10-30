@@ -1,13 +1,14 @@
 //! Serves the built client, a small lobby API and the game WebSocket on one port. Every room is
 //! its own match on its own 30 Hz loop (a tokio task); each connection gets a reader and a writer
 //! task and joins one room. Env: `PORT` (9001), `STATIC_DIR` (`dist`), `LAG_MS` (one-way delay
-//! for testing), and quick play's room settings: `MODE` (`tdm`, `dm`, `ma`, `siege`, `ctf` or `convoy`; else every mode in turn),
+//! for testing), and quick play's room settings: `MODE` (`tdm`, `dm`, `ma`, `siege`, `ctf`, `convoy` or `defense`; else every versus mode in turn),
 //! `MAP` (one map; else the rotation), `SCORE_LIMIT`, `MATCH_SECONDS`, `BOT_SKILL` (`easy`,
 //! `normal`, `hard`, or 0 to 1). And
 //! `PROGRESS_KEY`, the secret that signs progression records (a dev key stands in without it).
 //!
 //! Lobby API: `GET /api/rooms` lists the public rooms, the modes and the maps; `POST /api/rooms` opens one
-//! from JSON settings; `POST /api/quick` picks a quick-play room (opening one if none fits);
+//! from JSON settings; `POST /api/quick` picks a quick-play room (opening one if none fits), or
+//! with `{"coop": true}` a co-op one, since co-op is matched on its own;
 //! `GET /api/rooms/{code}` looks one up. Each room answers with its info, including the `code`
 //! that `/ws?room={code}` joins (`/ws` alone joins quick play). `POST /api/progress` checks a
 //! progression record (the body) and answers what it holds, or 400.
@@ -202,9 +203,9 @@ async fn main() {
         eprintln!("bot spots preloaded for {} of {} maps", sim::tactics::Spots::preload(&bakes), MAPS.len());
     }
 
-    let mut quick = Settings { name: "Quick play".into(), public: true, mode: None, map: None, score_limit: 25, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
+    let mut quick = Settings { name: "Quick play".into(), public: true, mode: None, map: None, score_limit: 20, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
     if let Ok(key) = env::var("MODE") {
-        quick.mode = Some(Mode::from_key(&key).expect("MODE must be tdm, dm, ma, siege, ctf or convoy"));
+        quick.mode = Some(Mode::from_key(&key).expect("MODE must be tdm, dm, ma, siege, ctf, convoy or defense"));
     }
     if let Ok(name) = env::var("MAP") {
         quick.map = Some(Map::index(&name).expect("MAP must name a map in maps/"));
@@ -326,9 +327,17 @@ async fn create(State(app): State<App>, Json(new): Json<NewRoom>) -> Result<Json
     Ok(Json(rooms[&code].info.lock().expect("info lock").clone()))
 }
 
-async fn quick_play(State(app): State<App>) -> Result<Json<RoomInfo>, (StatusCode, &'static str)> {
+/// What the lobby's play buttons ask for: quick play, or co-op.
+#[derive(Deserialize)]
+struct Quick {
+    #[serde(default)]
+    coop: bool,
+}
+
+async fn quick_play(State(app): State<App>, Json(quick): Json<Quick>) -> Result<Json<RoomInfo>, (StatusCode, &'static str)> {
+    let settings = if quick.coop { Settings { name: "Co-op".into(), mode: Some(Mode::Defense), map: None, ..(*app.quick).clone() } } else { (*app.quick).clone() };
     let mut rooms = app.rooms.lock().expect("rooms lock");
-    let code = quick_room(&app, &mut rooms).ok_or((StatusCode::SERVICE_UNAVAILABLE, "too many rooms open"))?;
+    let code = quick_room(&app, &mut rooms, settings).ok_or((StatusCode::SERVICE_UNAVAILABLE, "too many rooms open"))?;
     Ok(Json(rooms[&code].info.lock().expect("info lock").clone()))
 }
 
@@ -347,7 +356,7 @@ async fn upgrade(ws: WebSocketUpgrade, Query(join): Query<Join>, State(app): Sta
         let mut rooms = app.rooms.lock().expect("rooms lock");
         let code = match join.room {
             Some(code) => Some(code.to_uppercase()).filter(|c| rooms.contains_key(c)),
-            None => quick_room(&app, &mut rooms),
+            None => quick_room(&app, &mut rooms, (*app.quick).clone()),
         };
         match code {
             Some(code) => rooms[&code].cmds.clone(),
@@ -377,20 +386,23 @@ fn infos(rooms: &Rooms) -> Vec<RoomInfo> {
     rooms.lock().expect("rooms lock").values().map(|r| r.info.lock().expect("info lock").clone()).collect()
 }
 
-/// The code of the room quick play joins: the public one with the most humans that has space
-/// for one more and enough of its match left (or is between matches), else a new one.
-fn quick_room(app: &App, rooms: &mut HashMap<String, Room>) -> Option<String> {
+/// The code of the room quick play (or co-op, by `settings`) joins: the public one of its kind with
+/// the most humans that has space for one more and enough of its match left (or is between
+/// matches), else a new one with `settings`.
+fn quick_room(app: &App, rooms: &mut HashMap<String, Room>, settings: Settings) -> Option<String> {
     let open_rooms: Vec<RoomInfo> = rooms.values().map(|r| r.info.lock().expect("info lock").clone()).collect();
-    match pick_quick(&open_rooms) {
+    match pick_quick(&open_rooms, settings.mode == Some(Mode::Defense)) {
         Some(code) => Some(code.to_string()),
-        None => open(app, rooms, (*app.quick).clone()),
+        None => open(app, rooms, settings),
     }
 }
 
-fn pick_quick(rooms: &[RoomInfo]) -> Option<&str> {
+/// Co-op rooms only for co-op, and versus ones only for quick play. A co-op run has no clock.
+fn pick_quick(rooms: &[RoomInfo], coop: bool) -> Option<&str> {
     rooms
         .iter()
-        .filter(|r| r.public && r.humans < r.capacity && (r.ended || r.seconds_left >= QUICK_MIN_LEFT))
+        .filter(|r| (r.mode == Mode::Defense.key()) == coop)
+        .filter(|r| r.public && r.humans < r.capacity && (r.ended || coop || r.seconds_left >= QUICK_MIN_LEFT))
         .max_by(|a, b| a.humans.cmp(&b.humans).then_with(|| b.code.cmp(&a.code)))
         .map(|r| r.code.as_str())
 }
@@ -449,7 +461,8 @@ fn deck(settings: &Settings) -> Vec<(Mode, usize)> {
         Some(map) => vec![map],
         None => ROTATION.iter().map(|name| Map::index(name).expect("rotation names a map")).collect(),
     };
-    let modes = settings.mode.map_or(Mode::ALL.to_vec(), |m| vec![m]);
+    // Co-op only when a room asks for it.
+    let modes = settings.mode.map_or(Mode::ALL.into_iter().filter(|m| m.versus()).collect(), |m| vec![m]);
     modes.iter().flat_map(|&mode| maps.iter().filter(move |&&map| PLAYS[map].contains(&mode)).map(move |&map| (mode, map))).collect()
 }
 
@@ -476,7 +489,8 @@ fn describe(code: &str, settings: &Settings, game: &Game) -> RoomInfo {
         humans,
         bots,
         capacity: MAX_PLAYERS,
-        seconds_left: state.seconds_left,
+        // While the spawns are penned, the clock is the wait: the match's own is still to come.
+        seconds_left: if state.staging { state.seconds_left.saturating_add(game.match_seconds as u16) } else { state.seconds_left },
         ended: state.ended,
         scores: state.scores,
     }
@@ -539,6 +553,8 @@ async fn room_loop(mut game: Game, mut cmds: mpsc::UnboundedReceiver<Cmd>, info:
                     game.pick(id, class, loadout);
                 }
                 Cmd::Msg(id, ClientMsg::Name(name)) => game.set_name(id, &name),
+                Cmd::Msg(id, ClientMsg::Build(order)) => game.build(id, order),
+                Cmd::Msg(id, ClientMsg::Draft(choice)) => game.draft(id, choice),
                 // Once a visit: taking another record mid-match would count the match twice.
                 Cmd::Msg(id, ClientMsg::Progress(token)) if !pilots.contains_key(&id) => {
                     let base = signer.verify(&token).unwrap_or_else(|| {
@@ -723,9 +739,20 @@ mod tests {
             room("EEEE", true, 7, 60, false),   // about to end
             room("FFFF", true, 6, 0, true),     // between matches: fine
         ];
-        assert_eq!(pick_quick(&rooms), Some("FFFF"));
-        assert_eq!(pick_quick(&rooms[..2]), Some("BBBB"));
-        assert_eq!(pick_quick(&rooms[2..5]), None);
+        assert_eq!(pick_quick(&rooms, false), Some("FFFF"));
+        assert_eq!(pick_quick(&rooms[..2], false), Some("BBBB"));
+        assert_eq!(pick_quick(&rooms[2..5], false), None);
+        // Co-op is matched apart: quick play never lands in a co-op run, and co-op only in one.
+        let coop = |code, humans| RoomInfo { mode: Mode::Defense.key(), ..room(code, true, humans, 0, false) };
+        let rooms = [room("AAAA", true, 2, 400, false), coop("BBBB", 5), coop("CCCC", 3)];
+        assert_eq!(pick_quick(&rooms, false), Some("AAAA"));
+        assert_eq!(pick_quick(&rooms, true), Some("BBBB"));
+        assert_eq!(pick_quick(&rooms[..1], true), None);
+        // A room just opened, its spawns still penned, has its whole match to come.
+        let settings = Settings { name: "Test".into(), public: true, mode: Some(Mode::TeamDeathmatch), map: None, score_limit: 20, match_seconds: 600.0, bots: false, bot_skill: 0.5 };
+        let game = new_game(&settings, 1);
+        assert!(game.match_state().staging);
+        assert_eq!(pick_quick(&[describe("NEW", &settings, &game)], false), Some("NEW"));
     }
 
     #[test]
@@ -743,9 +770,13 @@ mod tests {
 
     #[test]
     fn rooms_deal_the_modes_and_maps_their_settings_allow() {
-        let settings = |mode, map: Option<&str>| Settings { name: String::new(), public: true, mode, map: map.map(|m| Map::index(m).unwrap()), score_limit: 25, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
+        let settings = |mode, map: Option<&str>| Settings { name: String::new(), public: true, mode, map: map.map(|m| Map::index(m).unwrap()), score_limit: 20, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
+        // Every map but the co-op one, which comes round only in co-op rooms.
         let every = deck(&settings(None, None));
-        assert_eq!(every.iter().filter(|(m, _)| *m == Mode::TeamDeathmatch).count(), ROTATION.len());
+        assert_eq!(every.iter().filter(|(m, _)| *m == Mode::TeamDeathmatch).count(), ROTATION.len() - 1);
+        assert!(every.iter().all(|&(_, map)| MAPS[map].0 != "hivewall"));
+        let coop: Vec<&str> = deck(&settings(Some(Mode::Defense), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
+        assert_eq!(coop, ["hivewall"]);
         // Deathmatch only on the smaller maps.
         let dm: Vec<&str> = deck(&settings(Some(Mode::Deathmatch), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
         assert_eq!(dm, ["isotope", "verdigris", "sump", "sinkhole", "ziggurat"]);
@@ -801,7 +832,7 @@ mod tests {
     /// bringing `record`: the room's task, the way to send it the player's messages (with their
     /// id), and what it sends them.
     async fn join_room(key: &[u8], match_seconds: f32, record: &str) -> (tokio::task::JoinHandle<()>, impl Fn(ClientMsg) + use<>, mpsc::UnboundedReceiver<(Instant, Vec<u8>)>) {
-        let settings = Settings { name: "Test".into(), public: false, mode: Some(Mode::TeamDeathmatch), map: None, score_limit: 25, match_seconds, bots: false, bot_skill: 0.5 };
+        let settings = Settings { name: "Test".into(), public: false, mode: Some(Mode::TeamDeathmatch), map: None, score_limit: 20, match_seconds, bots: false, bot_skill: 0.5 };
         let game = new_game(&settings, 1);
         let info = Arc::new(Mutex::new(describe("TEST", &settings, &game)));
         let (cmds, cmd_rx) = mpsc::unbounded_channel();

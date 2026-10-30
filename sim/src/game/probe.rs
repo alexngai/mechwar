@@ -223,8 +223,12 @@ fn flat(v: Vector) -> Vector {
 /// repair torch and every other bot another secondary (all on guns a torch bot would pick): each
 /// side's kills, and per bot-minute alive the torches' and the rest's healing, burning, kill
 /// credit and deaths, and their time fighting (an enemy in view), mending (no enemy in view, a
-/// hurt teammate in sight within twice the beam's reach), following (by its lead) or otherwise.
-/// PROBE_MAP=<name> PROBE_SECS=<s> PROBE_SEEDS=<n> cargo test -p sim --release --lib torch_probe -- --ignored --nocapture
+/// hurt teammate in sight within twice the beam's reach), following (by its lead) or otherwise;
+/// items thrown; in fights within the beam's reach, the gun's shots a second and the share of
+/// time the bot runs hot (3/4 heat); and of its time mending, the share with the beam on, the
+/// nearest teammate out of reach, cooling (40% heat or more), or none of those. PROBE_ANYGUN=1 puts both sides on any gun (as sweeps do), not just the
+/// ones a torch bot picks; PROBE_OWN=1 gives every bot its class's own items and ability.
+/// PROBE_MAP=<name> PROBE_SECS=<s> PROBE_SEEDS=<n> PROBE_ANYGUN=1 cargo test -p sim --release --lib torch_probe -- --ignored --nocapture
 #[test]
 #[ignore = "probe"]
 fn torch_probe() {
@@ -238,105 +242,168 @@ fn torch_probe() {
         beam_none: u64,
         fight: u64,
         fight_in_reach: u64,
+        fight_gun: u64,
+        fight_hot: u64,
         mend: u64,
+        // Ticks mending (`Doing::Mend`): beam on, the mate out of reach, too hot, or otherwise.
+        mending: [u64; 4],
         follow: u64,
+        threw: u64,
         credit: f32,
         deaths: u32,
+    }
+    impl Arm {
+        fn add(&mut self, o: &Arm) {
+            (self.alive, self.healed, self.burned) = (self.alive + o.alive, self.healed + o.healed, self.burned + o.burned);
+            (self.beam_mate, self.beam_foe, self.beam_none) = (self.beam_mate + o.beam_mate, self.beam_foe + o.beam_foe, self.beam_none + o.beam_none);
+            (self.fight, self.fight_in_reach, self.fight_gun, self.fight_hot) = (self.fight + o.fight, self.fight_in_reach + o.fight_in_reach, self.fight_gun + o.fight_gun, self.fight_hot + o.fight_hot);
+            (self.mend, self.follow, self.credit, self.deaths) = (self.mend + o.mend, self.follow + o.follow, self.credit + o.credit, self.deaths + o.deaths);
+            self.mending = std::array::from_fn(|k| self.mending[k] + o.mending[k]);
+            self.threw += o.threw;
+        }
     }
     let only = std::env::var("PROBE_MAP").ok();
     let run: f32 = std::env::var("PROBE_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(180.0);
     let seeds: u64 = std::env::var("PROBE_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(2);
-    let mut arms = [Arm::default(), Arm::default()]; // [torches, the rest]
-    let mut scores = [0u32; 2]; // [the torches' side, the other]
-    for (index, (name, _)) in crate::map::MAPS.iter().enumerate() {
-        if only.as_deref().is_some_and(|m| m != *name) {
-            continue;
-        }
-        for seed in 0..seeds {
-            let mut game = Game::new(Tuning::default(), index);
-            (game.score_limit, game.match_seconds, game.tick) = (u16::MAX, 1e7, seed as u32 * 7919);
-            let human = game.join().unwrap();
-            game.dock(human);
+    let any_gun = std::env::var("PROBE_ANYGUN").is_ok();
+    let own = std::env::var("PROBE_OWN").is_ok();
+    // Its matches into a thread's tallies: [torches, the rest], and [the torches' side, the other]'s kills.
+    let play = |index: usize, seed: u64, arms: &mut [Arm; 2], scores: &mut [u32; 2]| {
+        let mut game = Game::new(Tuning::default(), index);
+        (game.score_limit, game.match_seconds, game.tick) = (u16::MAX, 1e7, seed as u32 * 7919);
+        let human = game.join().unwrap();
+        game.dock(human);
+        game.step();
+        // Torches on each side in turn, as the docked human's place is on side 0.
+        let side = (seed % 2) as u8;
+        let torches: Vec<u8> = game.players.iter().filter(|p| p.team == side && p.bot.is_some()).map(|p| p.id).step_by(2).collect();
+        let mender = Loadout::named("hail", "mender").secondary;
+        let mut roller = Bot::new(seed + 1);
+        for _ in 0..secs(run) {
             game.step();
-            // Torches on each side in turn, as the docked human's place is on side 0.
-            let side = (seed % 2) as u8;
-            let torches: Vec<u8> = game.players.iter().filter(|p| p.team == side && p.bot.is_some()).map(|p| p.id).step_by(2).collect();
-            let mut roller = Bot::new(seed + 1);
-            for _ in 0..secs(run) {
-                game.step();
-                // Each life its side's build: a torch, or another secondary, on a gun a torch bot picks.
-                for i in 0..game.players.len() {
-                    let p = &game.players[i];
-                    let want = torches.contains(&p.id);
-                    if p.bot.is_none() || p.mech.health <= 0.0 || (game.arsenal.of(&p.mech).alt_beam > 0.0) == want {
-                        continue;
-                    }
-                    let class = p.class;
-                    let torch = |l: &Loadout| game.arsenal.get(class, *l).alt_beam > 0.0;
-                    let long: Vec<u8> = (0..100).map(|_| roller.pick_loadout(&game.arsenal, class)).filter(torch).map(|l| l.primary).collect();
-                    let loadout = loop {
-                        let l = roller.pick_loadout(&game.arsenal, class);
-                        if torch(&l) == want && long.contains(&l.primary) {
-                            break l;
-                        }
-                    };
-                    let p = &mut game.players[i];
-                    (p.loadout, p.next_loadout) = (loadout, loadout);
-                    p.mech = Mech { shield: p.mech.shield, ..spawn(&game.arsenal, class, loadout, p.mech.pos) };
+            // Each life its side's build: a torch, or another secondary, on a gun a torch bot
+            // picks (or any gun: another build's, the torch put in its secondary's place).
+            for i in 0..game.players.len() {
+                let p = &game.players[i];
+                let want = torches.contains(&p.id);
+                if p.bot.is_none() || p.mech.health <= 0.0 || (game.arsenal.of(&p.mech).alt_beam > 0.0) == want {
+                    continue;
                 }
-                let beams: Vec<(u8, Option<u8>)> = game.events.iter().filter_map(|e| if let Event::Beam { owner, hit, .. } = *e { Some((owner, hit)) } else { None }).collect();
-                for p in &game.players {
-                    let Some(bot) = &p.bot else { continue };
-                    if p.mech.health <= 0.0 || p.respawn_at.is_some() {
-                        continue;
+                let class = p.class;
+                let torch = |l: &Loadout| game.arsenal.get(class, *l).alt_beam > 0.0;
+                let long: Vec<u8> = (0..100).map(|_| roller.pick_loadout(&game.arsenal, class)).filter(torch).map(|l| l.primary).collect();
+                let loadout = loop {
+                    let l = roller.pick_loadout(&game.arsenal, class);
+                    if any_gun && !torch(&l) {
+                        break if want { Loadout { secondary: mender, ..l } } else { l };
                     }
-                    let t = game.arsenal.of(&p.mech);
-                    let arm = &mut arms[usize::from(!torches.contains(&p.id))];
-                    arm.alive += 1;
-                    if let Some(&(_, hit)) = beams.iter().find(|b| b.0 == p.id) {
-                        match hit.and_then(|h| game.players.iter().find(|q| q.id == h)) {
-                            Some(q) if q.team == p.team => arm.beam_mate += 1,
-                            Some(_) => (arm.beam_foe, arm.burned) = (arm.beam_foe + 1, arm.burned + t.alt_damage / TICK_HZ),
-                            None => arm.beam_none += 1,
-                        }
+                    if !any_gun && torch(&l) == want && long.contains(&l.primary) {
+                        break l;
                     }
-                    let foe = bot.focus().and_then(|f| game.players.iter().find(|q| q.id == f)).filter(|q| q.mech.health > 0.0 && bot::sees(&game.arena, t, &p.mech, &q.mech));
-                    let reach = 28.0; // the torch's, for both sides
-                    let hurt_mate = game.players.iter().any(|q| {
-                        q.team == p.team && q.id != p.id && q.mech.health > 0.0 && q.mech.health < 0.8 * game.arsenal.of(&q.mech).health_max && q.mech.pos.distance(p.mech.pos) < 2.0 * reach && bot::sees(&game.arena, t, &p.mech, &q.mech)
-                    });
-                    if let Some(q) = foe {
-                        arm.fight += 1;
-                        arm.fight_in_reach += u64::from(q.mech.pos.distance(p.mech.pos) < reach);
-                    } else if hurt_mate {
-                        arm.mend += 1;
-                    } else if bot.lead.is_some_and(|l| flat(l - p.mech.pos).length() < 12.0) {
-                        arm.follow += 1;
-                    }
-                }
+                };
+                let kit = Loadout::of(class);
+                let loadout = if own { Loadout { offensive: kit.offensive, support: kit.support, ability: kit.ability, ..loadout } } else { loadout };
+                let p = &mut game.players[i];
+                (p.loadout, p.next_loadout) = (loadout, loadout);
+                p.mech = Mech { shield: p.mech.shield, ..spawn(&game.arsenal, class, loadout, p.mech.pos) };
             }
-            scores[0] += u32::from(game.scores[usize::from(side)]);
-            scores[1] += u32::from(game.scores[usize::from(1 - side)]);
-            for p in game.players.iter().filter(|p| p.bot.is_some()) {
+            let beams: Vec<(u8, Option<u8>)> = game.events.iter().filter_map(|e| if let Event::Beam { owner, hit, .. } = *e { Some((owner, hit)) } else { None }).collect();
+            for p in &game.players {
+                let Some(bot) = &p.bot else { continue };
+                if p.mech.health <= 0.0 || p.respawn_at.is_some() {
+                    continue;
+                }
+                let t = game.arsenal.of(&p.mech);
                 let arm = &mut arms[usize::from(!torches.contains(&p.id))];
-                arm.healed += p.tally.healed;
-                arm.credit += p.tally.bot_kill_credit + p.tally.bot_assist_share + p.tally.kill_credit + p.tally.assist_share;
-                arm.deaths += p.tally.stats.deaths;
+                arm.alive += 1;
+                arm.threw += u64::from(p.mech.threw);
+                if let Some(&(_, hit)) = beams.iter().find(|b| b.0 == p.id) {
+                    match hit.and_then(|h| game.players.iter().find(|q| q.id == h)) {
+                        Some(q) if q.team == p.team => arm.beam_mate += 1,
+                        Some(_) => (arm.beam_foe, arm.burned) = (arm.beam_foe + 1, arm.burned + t.alt_damage / TICK_HZ),
+                        None => arm.beam_none += 1,
+                    }
+                }
+                let foe = bot.focus().and_then(|f| game.players.iter().find(|q| q.id == f)).filter(|q| q.mech.health > 0.0 && bot::sees(&game.arena, t, &p.mech, &q.mech));
+                let reach = 28.0; // the torch's, for both sides
+                let hurt_mate = game.players.iter().any(|q| {
+                    q.team == p.team && q.id != p.id && q.mech.health > 0.0 && q.mech.health < 0.8 * game.arsenal.of(&q.mech).health_max && q.mech.pos.distance(p.mech.pos) < 2.0 * reach && bot::sees(&game.arena, t, &p.mech, &q.mech)
+                });
+                if bot.doing() == bot::Doing::Mend {
+                    let mate = game.players.iter().filter(|q| q.team == p.team && q.id != p.id && q.mech.health > 0.0).map(|q| q.mech.pos.distance(p.mech.pos)).fold(f32::MAX, f32::min);
+                    let k = if p.mech.beaming {
+                        0
+                    } else if mate > t.alt_beam {
+                        1
+                    } else if p.mech.heat >= 0.4 * t.heat_max {
+                        2
+                    } else {
+                        3
+                    };
+                    arm.mending[k] += 1;
+                }
+                if let Some(q) = foe {
+                    arm.fight += 1;
+                    if q.mech.pos.distance(p.mech.pos) < reach {
+                        arm.fight_in_reach += 1;
+                        arm.fight_gun += u64::from(p.mech.shot);
+                        arm.fight_hot += u64::from(p.mech.heat >= 0.75 * t.heat_max);
+                    }
+                } else if hurt_mate {
+                    arm.mend += 1;
+                } else if bot.lead.is_some_and(|l| flat(l - p.mech.pos).length() < 12.0) {
+                    arm.follow += 1;
+                }
             }
         }
+        scores[0] += u32::from(game.scores[usize::from(side)]);
+        scores[1] += u32::from(game.scores[usize::from(1 - side)]);
+        for p in game.players.iter().filter(|p| p.bot.is_some()) {
+            let arm = &mut arms[usize::from(!torches.contains(&p.id))];
+            arm.healed += p.tally.healed;
+            arm.credit += p.tally.bot_kill_credit + p.tally.bot_assist_share + p.tally.kill_credit + p.tally.assist_share;
+            arm.deaths += p.tally.stats.deaths;
+        }
+    };
+    // Every map and seed, taken in turn by a thread a core.
+    let jobs: Vec<(usize, u64)> = crate::map::MAPS.iter().enumerate().filter(|(_, (name, _))| only.as_deref().is_none_or(|m| m == *name)).flat_map(|(i, _)| (0..seeds).map(move |s| (i, s))).collect();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let cores = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let runs: Vec<([Arm; 2], [u32; 2])> = std::thread::scope(|s| {
+        let threads: Vec<_> = (0..cores)
+            .map(|_| {
+                s.spawn(|| {
+                    let (mut arms, mut scores) = ([Arm::default(), Arm::default()], [0u32; 2]);
+                    while let Some(&(index, seed)) = jobs.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
+                        play(index, seed, &mut arms, &mut scores);
+                    }
+                    (arms, scores)
+                })
+            })
+            .collect();
+        threads.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let (mut arms, mut scores) = ([Arm::default(), Arm::default()], [0u32; 2]);
+    for (a, s) in &runs {
+        arms[0].add(&a[0]);
+        arms[1].add(&a[1]);
+        (scores[0], scores[1]) = (scores[0] + s[0], scores[1] + s[1]);
     }
     println!("== kills: torch side {} other side {} ({:.1}% to the torch side)", scores[0], scores[1], 100.0 * scores[0] as f32 / (scores[0] + scores[1]).max(1) as f32);
     for (label, a) in ["torch", "other"].iter().zip(&arms) {
         let min = a.alive as f32 / TICK_HZ / 60.0;
         let share = |n: u64| 100.0 * n as f32 / a.alive.max(1) as f32;
         println!(
-            "== {label}: {min:.0} bot-min | per min: healed {:.1} burned {:.1} credit {:.2} deaths {:.2} | time: fight {:.0}% (in beam reach {:.0}%) mend {:.0}% follow {:.0}% other {:.0}% | beam on mate {:.1}% foe {:.1}% nothing {:.1}%",
+            "== {label}: {min:.0} bot-min | per min: healed {:.1} burned {:.1} throws {:.2} credit {:.2} deaths {:.2} | time: fight {:.0}% (in beam reach {:.0}%; in it, shots {:.2}/s, hot {:.0}%) mend {:.0}% follow {:.0}% other {:.0}% | beam on mate {:.1}% foe {:.1}% nothing {:.1}%",
             a.healed / min,
             a.burned / min,
+            a.threw as f32 / min,
             a.credit / min,
             a.deaths as f32 / min,
             share(a.fight),
             share(a.fight_in_reach),
+            a.fight_gun as f32 * TICK_HZ / a.fight_in_reach.max(1) as f32,
+            100.0 * a.fight_hot as f32 / a.fight_in_reach.max(1) as f32,
             share(a.mend),
             share(a.follow),
             share(a.alive - a.fight - a.mend - a.follow),
@@ -344,6 +411,8 @@ fn torch_probe() {
             share(a.beam_foe),
             share(a.beam_none),
         );
+        let m = a.mending.iter().sum::<u64>().max(1) as f32;
+        println!("== {label}: mending {:.1}% of the time: beam on {:.0}%, nearest mate out of reach {:.0}%, hot {:.0}%, else {:.0}%", share(a.mending.iter().sum()), 100.0 * a.mending[0] as f32 / m, 100.0 * a.mending[1] as f32 / m, 100.0 * a.mending[2] as f32 / m, 100.0 * a.mending[3] as f32 / m);
     }
 }
 
@@ -459,14 +528,27 @@ fn piston_probe() {
 
 /// Pile drivers in bot-only matches on every map: every other bot on one side (sides alternate by
 /// seed) carries it, the rest of both sides other secondaries, all on guns a pile-driver bot picks.
-/// Counts releases, how many go with no enemy in view, hits and their damage, and the side's kills.
+/// Counts releases, how many go with no enemy in view, hits and their damage, and the side's kills;
+/// the carriers' time going in (and how much of it the lunge would land), their kills and deaths
+/// beside the other bots', and how each death came. PROBE_POLICY='<json>' overrides the carriers'
+/// policy weights.
 /// PROBE_SEEDS=<n> PROBE_SECS=<s> cargo test -p sim --release --lib piston_match_probe -- --ignored --nocapture
 #[test]
 #[ignore = "probe"]
 fn piston_match_probe() {
     let run: f32 = std::env::var("PROBE_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(180.0);
     let seeds: u64 = std::env::var("PROBE_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(2);
+    let overrides: serde_json::Map<String, serde_json::Value> = std::env::var("PROBE_POLICY").ok().map(|s| serde_json::from_str(&s).expect("PROBE_POLICY: a JSON object")).unwrap_or_default();
     let (mut alive, mut releases, mut blind, mut hits, mut dealt, mut deaths) = (0u64, 0u32, 0u32, 0u32, 0.0f32, 0u32);
+    // Ticks going in on an enemy, and of those: with it in view, in the lunge's reach too, wound
+    // too, and the lunge sure to land too (`bot::lunge_lands`).
+    let (mut going, mut funnel) = (0u64, [0u64; 4]);
+    // The other bots, for reference: their time alive, and kills and deaths; the carriers' kills.
+    let (mut others_alive, mut others_kills, mut others_deaths, mut kills) = (0u64, 0u32, 0u32, 0u32);
+    // Each death, carriers' then the other bots': how many, going in, with two or more enemies
+    // within 30 m, the killer's distance (sum), within 3 s of a release, falling back; and strike kills.
+    let mut died = [(0u32, 0u32, 0u32, 0.0f32, 0u32, 0u32); 2];
+    let mut strike_kills = 0u32;
     let mut scores = [0u32; 2];
     for (index, _) in crate::map::MAPS.iter().enumerate() {
         for seed in 0..seeds {
@@ -477,9 +559,28 @@ fn piston_match_probe() {
             game.step();
             let side = (seed % 2) as u8;
             let drivers: Vec<u8> = game.players.iter().filter(|p| p.team == side && p.bot.is_some()).map(|p| p.id).step_by(2).collect();
+            for p in game.players.iter_mut().filter(|p| drivers.contains(&p.id)) {
+                let bot = p.bot.as_mut().unwrap();
+                let serde_json::Value::Object(mut policy) = serde_json::to_value(&bot.policy).unwrap() else { unreachable!() };
+                policy.extend(overrides.clone());
+                bot.policy = serde_json::from_value(serde_json::Value::Object(policy)).unwrap();
+            }
             let mut roller = Bot::new(seed + 1);
+            let mut released_at: BTreeMap<u8, u32> = BTreeMap::new();
             for _ in 0..secs(run) {
                 game.step();
+                for e in &game.events {
+                    let Event::Kill { killer, victim, .. } = *e else { continue };
+                    let (Some(v), Some(k)) = (game.players.iter().find(|q| q.id == victim && q.bot.is_some()), game.players.iter().find(|q| q.id == killer)) else { continue };
+                    let d = &mut died[usize::from(!drivers.contains(&victim))];
+                    let near = game.players.iter().filter(|q| q.team != v.team && q.mech.health > 0.0 && flat(q.mech.pos - v.mech.pos).length() < 30.0).count();
+                    d.0 += 1;
+                    d.1 += u32::from(v.bot.as_ref().unwrap().going_in().is_some());
+                    d.2 += u32::from(near >= 2);
+                    d.3 += flat(k.mech.pos - v.mech.pos).length();
+                    d.4 += u32::from(released_at.get(&victim).is_some_and(|&at| game.tick < at + secs(3.0)));
+                    d.5 += u32::from(v.bot.as_ref().unwrap().doing() == bot::Doing::FallBack);
+                }
                 for i in 0..game.players.len() {
                     let p = &game.players[i];
                     let want = drivers.contains(&p.id);
@@ -498,10 +599,23 @@ fn piston_match_probe() {
                     (p.loadout, p.next_loadout) = (loadout, loadout);
                     p.mech = Mech { shield: p.mech.shield, ..spawn(&game.arsenal, class, loadout, p.mech.pos) };
                 }
+                others_alive += game.players.iter().filter(|p| p.bot.is_some() && !drivers.contains(&p.id) && p.mech.health > 0.0 && p.respawn_at.is_none()).count() as u64;
                 for p in game.players.iter().filter(|p| drivers.contains(&p.id) && p.mech.health > 0.0 && p.respawn_at.is_none()) {
                     let (t, bot) = (game.arsenal.of(&p.mech), p.bot.as_ref().unwrap());
                     alive += 1;
+                    if let Some(q) = bot.going_in().and_then(|f| game.players.iter().find(|q| q.id == f)) {
+                        going += 1;
+                        let gap = flat(q.mech.pos - p.mech.pos).length() - 2.0 * t.mech_radius;
+                        let seen = bot::sees(&game.arena, t, &p.mech, &q.mech);
+                        let reach = seen && gap <= t.alt_lunge;
+                        let wound = reach && p.mech.alt_charge >= 1.0;
+                        let lands = wound && bot::lunge_lands(&game.arena, t, &p.mech, &q.mech, 1.0, bot.policy.punch_slip);
+                        for (n, on) in funnel.iter_mut().zip([seen, reach, wound, lands]) {
+                            *n += u64::from(on);
+                        }
+                    }
                     if p.mech.launched {
+                        released_at.insert(p.id, game.tick);
                         releases += 1;
                         let seen = bot.focus().and_then(|f| game.players.iter().find(|q| q.id == f)).is_some_and(|q| bot::sees(&game.arena, t, &p.mech, &q.mech));
                         blind += u32::from(!seen);
@@ -519,21 +633,42 @@ fn piston_match_probe() {
             }
             scores[0] += u32::from(game.scores[usize::from(side)]);
             scores[1] += u32::from(game.scores[usize::from(1 - side)]);
-            deaths += game.players.iter().filter(|p| drivers.contains(&p.id)).map(|p| p.tally.stats.deaths).sum::<u32>();
+            for p in game.players.iter().filter(|p| p.bot.is_some()) {
+                let s = &p.tally.stats;
+                if drivers.contains(&p.id) {
+                    (deaths, kills) = (deaths + s.deaths, kills + s.kills + s.bot_kills);
+                    strike_kills += s.weapon_kills.get("piston").copied().unwrap_or(0);
+                } else {
+                    (others_deaths, others_kills) = (others_deaths + s.deaths, others_kills + s.kills + s.bot_kills);
+                }
+            }
         }
     }
     let min = alive as f32 / TICK_HZ / 60.0;
     println!(
-        "== pile drivers: {min:.0} bot-min | releases {:.2}/min ({:.0}% with no enemy in view), hits {:.0}%, strike damage {:.0}/min, deaths {:.2}/min | kills: their side {} other {} ({:.1}%)",
+        "== pile drivers: {min:.0} bot-min | going in {:.0}% (of that: in view {:.0}%, in reach {:.0}%, wound {:.0}%, would land {:.0}%) | releases {:.2}/min ({:.0}% with no enemy in view), hits {:.0}%, strike damage {:.0}/min, kills {:.2}/min, deaths {:.2}/min (other bots {:.2}, {:.2}) | kills: their side {} other {} ({:.1}%)",
+        100.0 * going as f32 / alive.max(1) as f32,
+        100.0 * funnel[0] as f32 / going.max(1) as f32,
+        100.0 * funnel[1] as f32 / going.max(1) as f32,
+        100.0 * funnel[2] as f32 / going.max(1) as f32,
+        100.0 * funnel[3] as f32 / going.max(1) as f32,
         releases as f32 / min,
         100.0 * blind as f32 / releases.max(1) as f32,
         100.0 * hits as f32 / releases.max(1) as f32,
         dealt / min,
+        kills as f32 / min,
         deaths as f32 / min,
+        others_kills as f32 / (others_alive as f32 / TICK_HZ / 60.0),
+        others_deaths as f32 / (others_alive as f32 / TICK_HZ / 60.0),
         scores[0],
         scores[1],
         100.0 * scores[0] as f32 / (scores[0] + scores[1]).max(1) as f32,
     );
+    let line = |(n, going, crowd, dist, after, back): (u32, u32, u32, f32, u32, u32)| {
+        let n1 = n.max(1) as f32;
+        format!("{n}: going in {:.0}%, falling back {:.0}%, 2+ enemies near {:.0}%, killer {:.1} m off, within 3 s of a release {:.0}%", 100.0 * going as f32 / n1, 100.0 * back as f32 / n1, 100.0 * crowd as f32 / n1, dist / n1, 100.0 * after as f32 / n1)
+    };
+    println!("== deaths: carriers {} | other bots {} | strike kills {:.0}% of the carriers'", line(died[0]), line(died[1]), 100.0 * strike_kills as f32 / kills.max(1) as f32);
 }
 
 /// Threat probe: a Medium bot holding still at a set range from a Medium human strafing in the
@@ -1445,5 +1580,147 @@ fn map_probe() {
                 crossings.values().sum::<u32>() as f32 / bot_min,
             );
         }
+    }
+}
+
+/// CTF probe: bot-only Capture the Flag on every map that plays it. Each carry (a flag in a
+/// raider's hands, off its stand or off the ground, until it falls or scores): the share that
+/// score, how much of the way home it got, how long it lasted, what the carrier was about, how
+/// many of its side were within ESCORT m of it and how many enemies saw it.
+/// PROBE_POLICY='<json>' overrides those policy weights for every bot.
+/// PROBE_MAP=<name> PROBE_SECS=<s> PROBE_SEEDS=<n> cargo test -p sim --release --lib ctf_probe -- --ignored --nocapture
+#[test]
+#[ignore = "probe"]
+fn ctf_probe() {
+    const ESCORT: f32 = 20.0;
+    let only = std::env::var("PROBE_MAP").ok();
+    let run: f32 = std::env::var("PROBE_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(300.0);
+    let seeds: u64 = std::env::var("PROBE_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(4);
+    for (index, (name, _)) in crate::map::MAPS.iter().enumerate() {
+        if only.as_deref().is_some_and(|m| m != *name) || !Mode::CaptureTheFlag.fits(&Map::load(index)) {
+            continue;
+        }
+        let (mut carries, mut scored, mut takes) = (0u32, 0u32, 0u32);
+        let (mut progress, mut ticks, mut escorts, mut seen_by) = (0.0f32, 0u64, 0u64, 0u64);
+        let mut doing: BTreeMap<&str, u64> = BTreeMap::new();
+        // Each carrier's fall: its killer near its own stand (a defender) or not, enemies within
+        // 35 m and its own side within ESCORT m then, and how fast it had been getting home.
+        let (mut falls, mut by_defender, mut foes_near, mut mates_near, mut pace) = (0u32, 0u32, 0u32, 0u32, 0.0f32);
+        let (mut escort_ticks, mut escort_dead, mut escort_near, mut escort_far) = (0u64, 0u64, 0u64, 0.0f32);
+        let mut escort_doing: BTreeMap<&str, u64> = BTreeMap::new();
+        for seed in 0..seeds {
+            let mut game = Game::new(Tuning::default(), index);
+            game.mode = Mode::CaptureTheFlag;
+            (game.score_limit, game.match_seconds, game.tick) = (u16::MAX, 1e7, seed as u32 * 7919);
+            let human = game.join().unwrap();
+            game.dock(human);
+            let over: Option<serde_json::Map<String, serde_json::Value>> = std::env::var("PROBE_POLICY").ok().map(|o| serde_json::from_str(&o).expect("PROBE_POLICY: a JSON object"));
+            // Bots fill in as the match goes: each gets the override once.
+            let mut patched: Vec<u8> = Vec::new();
+            // Per flag, its carry so far: how far from home it started and is now.
+            let mut carry: [Option<(f32, f32, u8, u32)>; 2] = [None; 2];
+            for _ in 0..secs(run) {
+                let caps = game.ctf.as_ref().map_or([0; 2], |c| c.captures);
+                game.step();
+                if let Some(over) = &over {
+                    for p in game.players.iter_mut() {
+                        let Some(bot) = p.bot.as_mut().filter(|_| !patched.contains(&p.id)) else { continue };
+                        let mut v = serde_json::to_value(&bot.policy).unwrap();
+                        v.as_object_mut().unwrap().extend(over.clone());
+                        bot.policy = serde_json::from_value(v).expect("PROBE_POLICY: policy weights");
+                        patched.push(p.id);
+                    }
+                }
+                takes += game.events.iter().filter(|e| matches!(e, Event::Flag { what: Happened::Taken, .. })).count() as u32;
+                let Some(c) = game.ctf.as_ref() else { continue };
+                for f in 0..2 {
+                    let carrier = match c.flags[f] {
+                        ctf::Flag::Carried { by } => game.players.iter().find(|p| p.id == by),
+                        _ => None,
+                    };
+                    let Some(p) = carrier else {
+                        if let Some((from, now, by, since)) = carry[f].take() {
+                            carries += 1;
+                            let capped = c.captures[1 - f] > caps[1 - f];
+                            scored += u32::from(capped);
+                            progress += if capped { 1.0 } else { (1.0 - now / from.max(1.0)).max(0.0) };
+                            let killer = game.events.iter().find_map(|e| match e {
+                                Event::Kill { killer, victim, .. } if *victim == by => Some(*killer),
+                                _ => None,
+                            });
+                            if let (Some(k), Some(v)) = (killer.and_then(|k| game.players.iter().find(|q| q.id == k)), game.players.iter().find(|q| q.id == by)) {
+                                falls += 1;
+                                by_defender += u32::from(flat(c.stands[usize::from(k.team)].at - k.mech.pos).length() <= 25.0);
+                                foes_near += game.players.iter().filter(|q| q.team != v.team && q.mech.health > 0.0 && q.mech.pos.distance(v.mech.pos) <= 35.0).count() as u32;
+                                mates_near += game.players.iter().filter(|q| q.team == v.team && q.id != v.id && q.mech.health > 0.0 && flat(q.mech.pos - v.mech.pos).length() <= ESCORT).count() as u32;
+                                pace += (from - now) / ((game.tick - since) as f32 * DT).max(0.1);
+                            }
+                        }
+                        continue;
+                    };
+                    let d = flat(c.stands[usize::from(p.team)].at - p.mech.pos).length();
+                    carry[f].get_or_insert((d, d, p.id, game.tick)).1 = d;
+                    ticks += 1;
+                    // Its escorts: its side's bots ordered to its feet (within a tick's walk).
+                    for q in game.players.iter().filter(|q| q.team == p.team && q.id != p.id) {
+                        if q.bot.as_ref().and_then(|b| b.order).is_some_and(|o| flat(o - p.mech.pos).length() < 1.0) {
+                            let alive = q.mech.health > 0.0 && q.respawn_at.is_none();
+                            escort_ticks += 1;
+                            escort_dead += u64::from(!alive);
+                            if alive {
+                                escort_far += flat(q.mech.pos - p.mech.pos).length();
+                                escort_near += u64::from(flat(q.mech.pos - p.mech.pos).length() <= ESCORT);
+                                *escort_doing.entry(match q.bot.as_ref().unwrap().doing() {
+                                    bot::Doing::Fight => "fight",
+                                    bot::Doing::FallBack => "fall back",
+                                    bot::Doing::Mend => "mend",
+                                    bot::Doing::Move => "move",
+                                    bot::Doing::Trade => "trade",
+                                }).or_insert(0) += 1;
+                            }
+                        }
+                    }
+                    escorts += game.players.iter().filter(|q| q.team == p.team && q.id != p.id && q.mech.health > 0.0 && flat(q.mech.pos - p.mech.pos).length() <= ESCORT).count() as u64;
+                    seen_by += game.players.iter().filter(|q| q.team != p.team && q.mech.health > 0.0 && bot::sees(&game.arena, game.arsenal.of(&q.mech), &q.mech, &p.mech)).count() as u64;
+                    let kind = p.bot.as_ref().map_or("human", |b| match b.doing() {
+                        bot::Doing::Fight => "fight",
+                        bot::Doing::FallBack => "fall back",
+                        bot::Doing::Mend => "mend",
+                        bot::Doing::Move => "move",
+                        bot::Doing::Trade => "trade",
+                    });
+                    *doing.entry(kind).or_insert(0) += 1;
+                }
+            }
+        }
+        let per = |n: u64| n as f32 / ticks.max(1) as f32;
+        let by: Vec<String> = doing.iter().map(|(k, &n)| format!("{k} {:.0}%", 100.0 * per(n))).collect();
+        println!(
+            "== ctf {name}: {takes} takes, {carries} carries, {:.0}% scored, {:.0}% of the way home on average, {:.1} s a carry; carrier {}; {:.1} of its side within {ESCORT:.0} m, seen by {:.1}",
+            100.0 * scored as f32 / carries.max(1) as f32,
+            100.0 * progress / carries.max(1) as f32,
+            ticks as f32 * DT / carries.max(1) as f32,
+            by.join(", "),
+            per(escorts),
+            per(seen_by),
+        );
+        let alive = (escort_ticks - escort_dead).max(1) as f32;
+        let doing: Vec<String> = escort_doing.iter().map(|(k, &n)| format!("{k} {:.0}%", 100.0 * n as f32 / alive)).collect();
+        println!(
+            "     escorts: {:.1} a carry-tick, {:.0}% of them dead; alive, {:.0} m off on average, {:.0}% within {ESCORT:.0} m; {}",
+            escort_ticks as f32 / ticks.max(1) as f32,
+            100.0 * escort_dead as f32 / escort_ticks.max(1) as f32,
+            escort_far / alive,
+            100.0 * escort_near as f32 / alive,
+            doing.join(", ")
+        );
+        let fell = falls.max(1) as f32;
+        println!(
+            "     {falls} carriers fell: {:.0}% to a defender near its stand, {:.1} enemies within 35 m, {:.1} of their side within {ESCORT:.0} m, home at {:.1} m/s",
+            100.0 * by_defender as f32 / fell,
+            foes_near as f32 / fell,
+            mates_near as f32 / fell,
+            pace / fell,
+        );
     }
 }
