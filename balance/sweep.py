@@ -51,14 +51,14 @@ def main():
     ap.add_argument('--against', type=Path, help="a control run's folder, to compare with")
     ap.add_argument('--seed', type=int, default=7)
     ap.add_argument('--mode', default='tdm', choices=list(tune.MAPS))
-    ap.add_argument('--skip', default='walled', help='maps to leave out of an objective mode, comma-separated (Walled City costs about 15 times a match)')
+    ap.add_argument('--skip', default='walled', help='maps to leave out, comma-separated (Walled City, being reworked, costs about 15 times a match)')
     ap.add_argument('--style', type=int, help="play the swept builds with this personality (bot.rs's Policy::personalities)")
     ap.add_argument('--out', type=Path, default=ev.ROOT / 'balance' / 'out' / 'sweep')
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     if args.mode != 'tdm':
         args.seconds = max(args.seconds, 300.0)
-        args.maps = [m for m in tune.MAPS[args.mode] if m not in args.skip.split(',')]
+    args.maps = [m for m in (tune.MAPS[args.mode] if args.mode != 'tdm' else ev.MAPS) if m not in args.skip.split(',')]
     style = json.loads(subprocess.run([ev.ARENA, '--personalities'], capture_output=True, text=True, check=True).stdout)[args.style] if args.style is not None else None
     slots = ('offensive', 'support', 'ability') if args.items else ('primary', 'secondary')
     only = args.only.split('=') if args.only else None
