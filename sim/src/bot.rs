@@ -657,6 +657,10 @@ pub struct Policy {
     /// Backing up a teammate's fight, it goes to the spot near the enemy that sees it from the
     /// side of the teammate's line of fire (`trade_flank` 1), not straight at it.
     pub trade_flank: f32,
+    /// The chance, each life, that it keeps a pilot teammate's fight in mind (the enemy the pilot
+    /// hit last): focusing on it, backing it up and flanking it as a bot's, and, with a repair
+    /// torch, mending the pilot first. Otherwise a pilot is to it as any teammate it can't read.
+    pub pilot_mind: f32,
     pub smoke_fire: f32,
     pub smoke_exit: f32,
     /// And only one with no other enemy known within this of its last spot (0: whatever's there).
@@ -759,6 +763,7 @@ impl Default for Policy {
             team_edge: 1.0,
             team_lean: 0.5,
             trade_flank: 1.0,
+            pilot_mind: 0.6,
             smoke_fire: 2.0,
             smoke_exit: 1.0,
             assault_spread: 3.0,
@@ -830,9 +835,11 @@ impl Policy {
 pub struct Bot {
     pub seq: u32,
     rng: u64,
-    /// The aim's own draws (`flick`), apart from `rng` so the aim's settle leaves the rest of
-    /// what it rolls as it was.
-    aim_rng: u64,
+    /// Draws apart from `rng` (the aim's settle, whether it minds a pilot this life), so they
+    /// leave the rest of what it rolls as it was.
+    aside_rng: u64,
+    /// Whether it keeps a pilot teammate's fight in mind this life (`Policy::pilot_mind`).
+    pub minds_pilot: bool,
     role: Role,
     /// Remaining waypoints, next first, toward `vantage` or else the target's waypoint `path_goal`;
     /// and the one it last reached (so it knows when the next is a hover up from it).
@@ -952,7 +959,8 @@ impl Bot {
         let mut bot = Self {
             seq: 0,
             rng: seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1,
-            aim_rng: seed.wrapping_mul(0xD1B5_4A32_D192_ED03) | 1,
+            aside_rng: seed.wrapping_mul(0xD1B5_4A32_D192_ED03) | 1,
+            minds_pilot: false,
             role: Role::Hunt,
             path: Vec::new(),
             reached: None,
@@ -1025,6 +1033,8 @@ impl Bot {
         // Back in with its side's skill adjustment as it stands now.
         self.skill = (self.skill + self.adapt - self.adapted).clamp(0.0, 1.0);
         self.adapted = self.adapt;
+        // Whether it plays round a pilot teammate this life: not every bot, nor every time.
+        self.minds_pilot = self.aside() < self.policy.pilot_mind;
         let r = self.rand();
         let side = if self.rand() < 0.5 { -1.0 } else { 1.0 };
         let cuts = self.policy.role_cuts;
@@ -1133,6 +1143,7 @@ impl Bot {
         bot.skill = (around + (bot.rand() - 0.5) * SKILL_SPREAD).clamp(0.0, 1.0);
         let styles = Policy::personalities();
         bot.policy = styles[(bot.rand() * styles.len() as f32) as usize % styles.len()].clone();
+        bot.minds_pilot = bot.aside() < bot.policy.pilot_mind;
         bot
     }
 
@@ -1358,6 +1369,14 @@ impl Bot {
     }
 
     /// xorshift64, uniform in [0, 1).
+    /// A draw from `aside_rng`, 0 to 1.
+    fn aside(&mut self) -> f32 {
+        self.aside_rng ^= self.aside_rng << 13;
+        self.aside_rng ^= self.aside_rng >> 7;
+        self.aside_rng ^= self.aside_rng << 17;
+        (self.aside_rng >> 40) as f32 / (1u64 << 24) as f32
+    }
+
     fn rand(&mut self) -> f32 {
         self.rng ^= self.rng << 13;
         self.rng ^= self.rng >> 7;
@@ -1633,13 +1652,7 @@ impl Bot {
             // A target newly in its sights (another, or back in view) swings the aim on past it,
             // and that settles off.
             if self.seen.len() == 1 || self.flick_on != self.focus {
-                let mut roll = || {
-                    self.aim_rng ^= self.aim_rng << 13;
-                    self.aim_rng ^= self.aim_rng >> 7;
-                    self.aim_rng ^= self.aim_rng << 17;
-                    (self.aim_rng >> 40) as f32 / (1u64 << 24) as f32 - 0.5
-                };
-                let (a, b) = (roll(), roll());
+                let (a, b) = (self.aside() - 0.5, self.aside() - 0.5);
                 let scatter = 2.0 * t.bot_flick_deg.to_radians();
                 self.flick = (wrap(yaw - me.yaw) * t.bot_flick + a * scatter, (pitch - me.pitch) * t.bot_flick + b * scatter);
                 self.flick_on = self.focus;
@@ -2627,6 +2640,18 @@ mod tests {
         assert_eq!(pick(1.0, false), Some(2), "not the nearest");
         assert_eq!(pick(0.4, false), Some(1), "not the badly wounded one");
         assert_eq!(pick(1.0, true), Some(1), "not the one that just hit it");
+    }
+
+    #[test]
+    fn about_pilot_mind_of_bots_mind_a_pilot_each_life() {
+        let mut bot = Bot::with_skill(7, 0.5);
+        let lives = 400;
+        let minded = (0..lives).filter(|_| {
+            bot.respawned();
+            bot.minds_pilot
+        });
+        let share = minded.count() as f32 / lives as f32;
+        assert!((share - bot.policy.pilot_mind).abs() < 0.1, "minded a pilot {share:.2} of lives");
     }
 
     #[test]

@@ -48,6 +48,7 @@ SPACE = {
     'team_edge': (0.0, 3.0),
     'team_lean': (0.0, 1.0),
     'trade_flank': (0.0, 1.0),
+    'pilot_mind': (0.0, 1.0),
     'smoke_fire': (0.0, 5.0),
     'smoke_exit': (0.0, 1.0),
 }

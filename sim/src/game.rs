@@ -723,7 +723,10 @@ impl Game {
                 .map(|(id, _)| id),
         };
         let fights: Vec<Option<u8>> = self.players.iter().map(fighting).collect();
-        let engaged: Vec<Vec<u8>> = teams.map(|team| self.players.iter().zip(&fights).filter(|(p, _)| p.team == team).filter_map(|(_, f)| *f).collect()).collect();
+        // By team: what its players are fighting, and what only its bots are (for a bot not
+        // minding its pilots this life, `Policy::pilot_mind`).
+        let engaged: Vec<Vec<u8>> = teams.clone().map(|team| self.players.iter().zip(&fights).filter(|(p, _)| p.team == team).filter_map(|(_, f)| *f).collect()).collect();
+        let engaged_bots: Vec<Vec<u8>> = teams.map(|team| self.players.iter().zip(&fights).filter(|(p, _)| p.team == team && p.bot.is_some()).filter_map(|(_, f)| *f).collect()).collect();
         // First every bot looks and listens...
         let mut seen: Vec<(Option<u8>, Vec<(u8, Mech, f32)>)> = Vec::with_capacity(self.players.len());
         let mut radio: Vec<Vec<(u8, u8, Vector)>> = vec![Vec::new(); MAX_PLAYERS]; // (from, enemy, where)
@@ -835,13 +838,14 @@ impl Game {
                     bot::FoeKit { id: q.id, on_me: curve(&q.mech, &me.mech), mine: curve(&me.mech, &q.mech), hull: theirs.health_max, eye: theirs.eye_height, mid: theirs.mech_height * 0.5, watching }
                 })
                 .collect();
-            let mates: Vec<(Vector, Option<u8>)> = self.players.iter().zip(&fights).filter(|(q, _)| q.team == me.team && q.id != me.id && up(q)).map(|(q, f)| (q.mech.pos, *f)).collect();
+            let minds = me.bot.as_ref().is_some_and(|b| b.minds_pilot);
+            let mates: Vec<(Vector, Option<u8>)> = self.players.iter().zip(&fights).filter(|(q, _)| q.team == me.team && q.id != me.id && up(q)).map(|(q, f)| (q.mech.pos, f.filter(|_| minds || q.bot.is_some()))).collect();
             let (team, id) = (usize::from(me.team), me.id);
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
             bot.foes = foes;
             bot.mates = mates;
-            bot.engaged.clone_from(&engaged[team]);
+            bot.engaged.clone_from(if minds { &engaged[team] } else { &engaged_bots[team] });
             bot.smoke.clone_from(&self.clouds);
             bot.team = p.team;
             bot.shields.clear();
@@ -860,13 +864,15 @@ impl Game {
             let hurt = |q: &&Player| q.mech.health / self.arsenal.of(&q.mech).health_max;
             let mates = || self.players.iter().filter(|q| q.team == me.team && q.id != me.id && alive(q));
             let mid = |q: &Player| self.arsenal.of(&q.mech).mech_height * 0.5;
+            let minds = me.bot.as_ref().is_some_and(|b| b.minds_pilot);
+            let first = |q: &&Player| if minds && q.bot.is_none() { HUMAN_HEAL } else { 0.0 };
             let heal = (t.alt_beam > 0.0)
                 .then(|| {
                     mates()
                         .filter(|q| hurt(q) < 0.97)
                         .filter(|q| q.mech.pos.distance(me.mech.pos) < 2.0 * t.alt_beam && bot::sees_at(&self.arena, t, &me.mech, q.mech.pos + Vector::Y * mid(q)))
-                        // A pilot first, as if a little worse hurt than it is.
-                        .min_by(|a, b| (hurt(a) - if a.bot.is_none() { HUMAN_HEAL } else { 0.0 }).total_cmp(&(hurt(b) - if b.bot.is_none() { HUMAN_HEAL } else { 0.0 })))
+                        // A pilot first, as if a little worse hurt than it is (minding pilots this life).
+                        .min_by(|a, b| (hurt(a) - first(a)).total_cmp(&(hurt(b) - first(b))))
                         .map(|q| (q.mech, mid(q)))
                 })
                 .flatten();
@@ -5341,11 +5347,19 @@ mod tests {
         let mate = game.add_player(0, Some(Bot::new(4)), MechClass::B).unwrap();
         let enemy = game.add_player(1, Some(Bot::new(5)), MechClass::B).unwrap();
         unshield(&mut game);
+        let minding = |g: &mut Game, on: bool| g.players.iter_mut().find(|q| q.id == mate).unwrap().bot.as_mut().unwrap().minds_pilot = on;
+        minding(&mut game, true);
         let (p, e) = (game.players.iter().position(|q| q.id == pilot).unwrap(), game.players.iter().position(|q| q.id == enemy).unwrap());
         game.apply_damage(Some(p), e, 1.0);
         game.step();
         let fights = |g: &Game| g.players.iter().find(|q| q.id == mate).unwrap().bot.as_ref().unwrap().mates.iter().find_map(|m| m.1);
         assert_eq!(fights(&game), Some(enemy), "the pilot's fight isn't known");
+        // Not minding pilots this life: the pilot's fight is none of its business.
+        minding(&mut game, false);
+        game.step();
+        assert_eq!(fights(&game), None, "a bot not minding pilots still reads the pilot's fight");
+        minding(&mut game, true);
+        game.step();
         (0..secs(HUMAN_FOCUS + 0.5)).for_each(|_| game.step());
         assert_eq!(fights(&game), None, "an old hit still counts");
     }
