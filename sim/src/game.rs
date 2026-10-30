@@ -259,6 +259,12 @@ pub const ORB_RADIUS: f32 = 6.0;
 const ORB_RATE: f32 = 10.0;
 const ORB_SECONDS: f32 = 30.0;
 const ORB_HEIGHT: f32 = 1.5;
+/// A repair torch on a teammate (`beam`), at full health or not, multiplies the damage its guns
+/// deal by MEND_DAMAGE_MULT, until MEND_LINGER s after the torch was last on it.
+const MEND_DAMAGE_MULT: f32 = 1.25;
+const MEND_LINGER: f32 = 0.5;
+/// A torch bot's beam stays on its mate until another is this much more hurt (of full health).
+const MEND_STICK: f32 = 0.25;
 
 const BOT_NAMES: [&str; 8] = ["Kestrel", "Vane", "Cinder", "Ashlar", "Gantry", "Flint", "Sable", "Harrow"];
 
@@ -313,6 +319,8 @@ struct Player {
     ability_until: u32,
     /// The last throw by a melee strike it took.
     knock: Option<Knock>,
+    /// Tick its guns hit harder until, from a teammate's torch (MEND_DAMAGE_MULT).
+    mended_until: u32,
 }
 
 /// A throw by a melee strike (`melee.rs`): who threw, with which secondary (for kill credit),
@@ -556,6 +564,7 @@ impl Game {
             ledger: Vec::new(),
             ability_until: 0,
             knock: None,
+            mended_until: 0,
             bot,
         });
         self.roster_version += 1;
@@ -697,7 +706,8 @@ impl Game {
         // a teammate is already on. With nothing to go on it groups on its team's lead (a human
         // if there's one alive), and a repair torch follows the nearest teammate and gets the
         // most hurt one it can see within twice its beam's reach, to mend all but a scratch off
-        // (stopping at 80% left the torch idle between fights, its mates going in short).
+        // (stopping at 80% left the torch idle between fights, its mates going in short), or with
+        // none hurt one in a fight, to amp its guns.
         let alive = |p: &Player| p.mech.health > 0.0;
         let lead_of = |team: u8| {
             let mates = || self.players.iter().filter(move |p| p.team == team && alive(p));
@@ -833,13 +843,18 @@ impl Game {
             let hurt = |q: &&Player| q.mech.health / self.arsenal.of(&q.mech).health_max;
             let mates = || self.players.iter().filter(|q| q.team == me.team && q.id != me.id && alive(q));
             let mid = |q: &Player| self.arsenal.of(&q.mech).mech_height * 0.5;
+            // A torch's mate to hold its beam on: one hurt, or in a fight (the torch amps its
+            // guns); the most hurt, but it keeps on the one it's on unless another is MEND_STICK
+            // more hurt.
+            let fighting = |q: &&Player| lines.iter().any(|&(from, _)| from == q.id);
+            let need = |q: &&Player| hurt(q) - if me.mech.beam_on == Some(q.id) { MEND_STICK } else { 0.0 };
             let heal = (t.alt_beam > 0.0)
                 .then(|| {
                     mates()
-                        .filter(|q| hurt(q) < 0.97)
+                        .filter(|q| hurt(q) < 0.97 || fighting(q))
                         .filter(|q| q.mech.pos.distance(me.mech.pos) < 2.0 * t.alt_beam && bot::sees_at(&self.arena, t, &me.mech, q.mech.pos + Vector::Y * mid(q)))
-                        .min_by(|a, b| hurt(a).total_cmp(&hurt(b)))
-                        .map(|q| (q.mech, mid(q)))
+                        .min_by(|a, b| need(a).total_cmp(&need(b)))
+                        .map(|q| (q.id, q.mech, mid(q)))
                 })
                 .flatten();
             // A torch follows the nearest teammate without one (so two torches don't hold on each
@@ -881,7 +896,7 @@ impl Game {
                 // Penned in for the opening: it waits facing the other side, and sets off as the pens open.
                 bot.stand_by(t, &p.mech, self.arena.pens[1 - team].0)
             } else {
-                let input = bot.think_with(&self.arena, self.nav, t, &p.mech, target.as_ref(), heal.as_ref().map(|(m, mid)| (m, *mid)), self.tick);
+                let input = bot.think_with(&self.arena, self.nav, t, &p.mech, target.as_ref(), heal.as_ref().map(|(id, m, mid)| (*id, m, *mid)), self.tick);
                 if p.mech.health > 0.0 {
                     p.tally.doing[bot.doing() as usize] += 1;
                 }
@@ -1829,6 +1844,7 @@ impl Game {
         }
         let Some(j) = hit.and_then(|id| self.players.iter().position(|q| q.id == id)) else { return };
         if self.players[j].team == team {
+            self.players[j].mended_until = self.tick + secs(MEND_LINGER);
             let max = self.arsenal.of(&self.players[j].mech).health_max;
             let q = &mut self.players[j].mech;
             let healed = heal.min(max - q.health).max(0.0);
@@ -1846,10 +1862,11 @@ impl Game {
         self.apply_damage_by(attacker, j, amount, Cause::Unknown);
     }
 
-    /// Damages player `j` (less while braced) while the match is on, ending any repair. A kill
-    /// drops a health orb, and scores for `attacker`, if they're still here; it shares out kill
-    /// credit (points, and on tallies: the killer's by `cause`'s weapon, assists for the rest who
-    /// dealt the victim's recent damage), and goes as a death on the victim's tally.
+    /// Damages player `j` (less while braced, more from the guns of one a torch is on) while the
+    /// match is on, ending any repair. A kill drops a health orb, and scores for `attacker`, if
+    /// they're still here; it shares out kill credit (points, and on tallies: the killer's by
+    /// `cause`'s weapon, assists for the rest who dealt the victim's recent damage), and goes as a
+    /// death on the victim's tally.
     fn apply_damage_by(&mut self, attacker: Option<usize>, j: usize, amount: f32, cause: Cause) {
         let target = &self.players[j];
         if !matches!(self.phase, Phase::Playing { .. }) || target.mech.health <= 0.0 || target.mech.shield > 0.0 {
@@ -1857,7 +1874,10 @@ impl Game {
         }
         let tt = self.arsenal.of(&target.mech);
         let braced = ability::on(&target.mech, Ability::Brace);
-        let damage = amount * if braced { tt.brace_damage_mult } else { 1.0 };
+        // ponytail: amped as it lands, so a rocket fired under the torch lands plain once it's off.
+        let gun = matches!(cause, Cause::Weapon { slot: Slot::Primary | Slot::Secondary, .. });
+        let mended = gun && attacker.is_some_and(|a| a != j && self.tick < self.players[a].mended_until);
+        let damage = amount * if braced { tt.brace_damage_mult } else { 1.0 } * if mended { MEND_DAMAGE_MULT } else { 1.0 };
         // Co-op perks: a reinforced frame takes less, a hive hunter deals more; a quick return
         // relaunches sooner.
         let perk = |id: Option<u8>, p| self.defense.as_ref().zip(id).map_or(0.0, |(df, id)| df.perk(id, p));
@@ -5044,11 +5064,64 @@ mod tests {
             game.players.iter_mut().find(|p| p.id == id).unwrap().mech.pos = pos;
         }
         game.players.iter_mut().find(|p| p.id == mate).unwrap().mech.health = 0.85 * max;
+        let mut amped = false;
         for _ in 0..secs(6.0) {
             game.step();
+            amped |= game.players.iter().any(|p| p.id == mate && game.tick < p.mended_until);
         }
         let hull = mech(&game, mate).health / max;
         assert!(hull > 0.95, "mended to {:.0}%", 100.0 * hull);
+        assert!(amped, "the torch never amped its guns");
+    }
+
+    #[test]
+    fn torch_bots_amp_mates_in_a_fight_and_switch_to_the_hurt() {
+        let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
+        game.bots = false;
+        // A torch bot behind two teammates at full health, in a fight with an enemy that stands
+        // there (a human sending nothing, kept whole) past the beam's reach.
+        let enemy = game.join().unwrap();
+        let torch = (0..game.arsenal.counts().1 as u8).find(|&s| game.arsenal.get(MechClass::B, Loadout { secondary: s, ..Loadout::of(MechClass::B) }).alt_beam > 0.0).unwrap();
+        let [medic, a, b] = [1, 2, 3].map(|seed| game.add_player(0, Some(Bot::new(seed)), MechClass::B).unwrap());
+        game.players.iter_mut().find(|p| p.id == enemy).unwrap().team = 1;
+        game.pick(medic, MechClass::B, Loadout { secondary: torch, ..Loadout::of(MechClass::B) });
+        let foe = Vector::new(0.0, 0.1, 5.0);
+        for (id, pos) in [(enemy, foe), (medic, Vector::new(0.0, 0.1, 40.0)), (a, Vector::new(4.0, 0.1, 25.0)), (b, Vector::new(-4.0, 0.1, 32.0))] {
+            game.place(id, pos, if id == enemy { Vector::new(0.0, 0.1, 40.0) } else { foe }, 1.0);
+        }
+        let on = |game: &Game| game.players.iter().find(|p| p.id == medic).unwrap().mech.beam_on;
+        // Each tick (id, health) pinned, until `done`.
+        let run = |game: &mut Game, seconds: f32, pin: (u8, f32), done: &dyn Fn(&Game) -> bool| {
+            (0..secs(seconds)).any(|_| {
+                game.players.iter_mut().find(|p| p.id == pin.0).unwrap().mech.health = pin.1;
+                game.step();
+                done(game)
+            })
+        };
+        assert!(run(&mut game, 4.0, (enemy, 1e3), &|g| on(g).is_some_and(|m| m == a || m == b)), "never held its beam on a mate in the fight");
+        // The fight over, the other mate badly hurt: the beam goes over to it.
+        let other = if on(&game) == Some(a) { b } else { a };
+        game.dock(enemy);
+        assert!(run(&mut game, 3.0, (other, 40.0), &|g| on(g) == Some(other)), "never switched to the hurt mate");
+    }
+
+    #[test]
+    fn a_torch_on_a_mech_amps_its_guns_alone() {
+        let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
+        game.bots = false;
+        let (shooter, victim) = (game.join().unwrap(), game.join().unwrap());
+        let at = |game: &Game, id| game.players.iter().position(|p| p.id == id).unwrap();
+        unshield(&mut game);
+        let (s, v) = (at(&game, shooter), at(&game, victim));
+        let hit = |game: &mut Game, slot| {
+            game.players[v].mech.health = 100.0;
+            game.apply_damage_by(Some(s), v, 10.0, Cause::Weapon { slot, index: 0 });
+            100.0 - game.players[v].mech.health
+        };
+        assert_eq!(hit(&mut game, Slot::Primary), 10.0);
+        game.players[s].mended_until = game.tick + 1;
+        assert_eq!([hit(&mut game, Slot::Primary), hit(&mut game, Slot::Secondary)], [10.0 * MEND_DAMAGE_MULT; 2]);
+        assert_eq!(hit(&mut game, Slot::Offensive), 10.0, "amped a grenade or turret");
     }
 
     #[test]

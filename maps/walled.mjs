@@ -1,31 +1,36 @@
-// Walled City (grey-box): a 384 x 256 m city stacked 100 m deep on both sides of a chasm 64 m wide,
+// Walled City (grey-box): a 320 x 224 m city stacked 100 m deep on both sides of a chasm 64 m wide,
 // crossed in its middle by the Bridge, whose top is a plaza at the spawns' level. The west half is
 // the wealthy one and the east the tenements (that's for the dressing; the grey-box gives both the
 // same routes). Writes walled.json next to this file; rerun `node maps/walled.mjs` after editing.
 //
-// The city is planned as a grid of 16 m cells on nine levels 12 m apart (floors at 0-96), each cell
-// solid building, floor (walkable, 11 m of headroom under the floor above) or void (shafts, wells,
-// the chasm), and built in lots, each turned to its own street line (see `warp`). Each level is
-// carved into a few streets and a hall, joined into one network with no alley that stops (see
-// `streamline`); light wells and courtyards open them to the sky; switchback ramp slots climb the
-// full height; pad shafts throw you up two floors; anything open drops you down (no fall damage).
-// The chasm (the four middle columns) is crossed at five heights: along its floor by the canal; at
-// the centre by the Bridge, a mass of building with a hall through it at level 2 and a plaza on top
-// at level 4; near its ends by the monorail's enclosed bridges at level 5 and, at level 7, two open
-// high bridges. Balconies on its faces look out over it at every level. A last pass turns any floor
-// you couldn't get back out of into building.
+// The city is planned as a grid of 16 m cells on nine storeys 12 m apart, each cell solid building,
+// floor (walkable, 11 m of headroom under the storey above) or void (shafts, the courtyard, the
+// well, the chasm), and built in lots, each its own building (see `LOTS`).
+// Streets run on five floors, every other storey, 24 m apart, each its own shape (see `PLANS`): the
+// canal along the chasm's floor (0), the low road, a gallery behind the chasm's face (24), the spawn
+// hall, its square and the plaza (48), the monorail ring (72) and the roofs, open to the sky (96).
+// The storeys between are building.
 //
-// Only the west half (columns 0-11) is authored; its 180-degree twin is added at the end.
-// Game modes: Missile Assault (A in the west courtyard, B in the middle of the plaza, C the twin of
-// A); Capture the Flag (each team's flag stand where its spawn hall's ways out meet, a street on
-// from it to the plaza); Convoy (along the monorail ring's south side at level 5, over the chasm on
-// its bridge, base to base, jogging as it does).
-import { bases, box, convoy, cylinder, decor, flags, flagStand, nav, objectives, pad, pads, point, r3, ramp, sentries, silos, solids, turned, write } from './kit.mjs';
+// The chasm (the four middle columns) is where the floors meet, and every floor crosses it: the
+// canal along its floor; the Bridge in its middle, a mass of building with a hall through it on the
+// low road and the plaza on top; near its ends two bridges, the monorail's enclosed deck with an
+// open one on its roof. The ways between floors are at its faces, quick: in each half a switchback
+// stair climbs the south face from the canal to the roofs, landing on every floor (and, between,
+// over the plaza), and a ladder of pads throws you up the north face a floor at a time. Anything
+// open drops you down (no fall damage): the face, the courtyard, the well.
+//
+// Only the west half (columns 0-9) is authored; its 180-degree twin is added at the end.
+// Game modes: Missile Assault (A down the west well on the low road, B up on the plaza, C the twin
+// of A: two in the city, one on its open street); Capture the Flag (each team's flag stand in the
+// square in front of its spawn hall, by the gate onto the plaza); Convoy (along the monorail, from
+// the middle of its south bridge to each base).
+import { bases, beam, box, convoy, cylinder, decor, flags, flagStand, nav, objectives, pad, pads, point, r3, ramp, sentries, silos, slope, solids, turned, write } from './kit.mjs';
 
-const CELL = 16, STORY = 12, LEVELS = 9; // floors at 0, 12, ... 96
-const NI = 24, NJ = 16, W = NI * CELL, D = NJ * CELL; // 384 x 256 m
-const HALF = 12, GORGE = 10, FACE = 9; // columns authored; the chasm's west edge (it runs to the twin's); the face over it
+const CELL = 16, STORY = 12, LEVELS = 9; // storeys at 0, 12, ... 96
+const NI = 20, NJ = 14, W = NI * CELL, D = NJ * CELL; // 320 x 224 m
+const HALF = 10, GORGE = 8, FACE = 7; // columns authored; the chasm's west edge (it runs to the twin's); the face over it
 const SOLID = 0, FLOOR = 1, VOID = 2;
+const CANAL = 0, LOW = 2, SPAWN = 4, RAIL = 6, ROOF = 8; // the floors
 const X = (i) => -W / 2 + i * CELL, Z = (j) => -D / 2 + j * CELL; // a cell's min corner
 const cx = (i) => X(i) + CELL / 2, cz = (j) => Z(j) + CELL / 2;
 const Y = (L) => L * STORY;
@@ -46,254 +51,187 @@ function set(i, j, L, s) {
 }
 /** Seeded random in [lo, hi), one stream per use. */
 const rng = (seed) => (lo = 0, hi = 1) => lo + (hi - lo) * (((seed = (seed * 16807) % 2147483647) - 1) / 2147483646);
-const rand = rng(20261025);
-const pick = (lo, hi) => Math.floor(rand(lo, hi + 1));
 
-// --- The hill: rock under the city, rising away from the chasm -----------------------------------
-const ground = (i) => Math.max(0, Math.ceil((9 - i) / 3)); // lowest open level in column i (west half)
-const open = (i, j, L, s = FLOOR) => {
-  const ii = i >= HALF ? twin(i, j)[0] : i;
-  if (ii < GORGE && L < ground(ii)) return;
-  set(i, j, L, s);
+// --- The floors: '.' floor, '#' building, ' ' open (the chasm, the courtyard, the well, a shaft) -----
+// Each row from the north (j = 13) down to the south (j = 0), each column from the west wall (0) to
+// the chasm's middle (9). The Bridge fills rows 5-8 of the chasm under the plaza; the monorail's two
+// bridges near its ends (rows 2 and 11) are built on their own, sloping (see TRACK).
+const PLAN = {
+  [CANAL]: Array(NJ).fill('#######...'), // the docks along the face, the canal
+  [LOW]: [
+    '########  ',
+    '########  ',
+    '####....  ', // the well; the pads' landing on the face
+    '####....  ',
+    '#####.#   ',
+    '#####..###',
+    '######....', // the hall through the Bridge
+    '######....',
+    '######.###',
+    '######.   ', // the gallery behind the face, the stair beside it
+    '######.   ',
+    '######..  ',
+    '########  ',
+    '########  ',
+  ],
+  [SPAWN]: [
+    '########  ',
+    '########  ',
+    '####  ##  ', // the well
+    '####   #  ',
+    '####....  ', // round it to the pads
+    '...... #..', // the spawn hall, its doors, the square, a drop to the low road, the gate's shoulders, the plaza
+    '...#......',
+    '...#......',
+    '...... #..',
+    '#####.#   ',
+    '####..#   ', // the courtyard
+    '####....  ', // and on to the stair
+    '########  ',
+    '########  ',
+  ],
+  [RAIL]: [
+    '########  ',
+    '########  ',
+    '###   ##  ', // the monorail climbing beside the well (see TRACK)
+    '###   ..  ',
+    '....###   ', // the monorail, round the well
+    '. ######  ', // past the base; the spawn hall's pad lands here
+    '.#######  ',
+    '.#######  ',
+    '.#######  ',
+    '....###   ',
+    '###.  #   ', // round the courtyard
+    '###.  ..  ', // to the foot of the south bridge
+    '###....#  ',
+    '########  ',
+  ],
+  [ROOF]: [
+    '########  ',
+    '####  .#  ', // the monorail's cutting up through the roofs
+    '###.  ..  ', // the top of the north bridge
+    '###.   .  ',
+    '###.....  ', // round the well
+    '#####.##  ',
+    '#####.##  ',
+    '#####.##  ',
+    '#####.##  ',
+    '###....   ', // round the courtyard
+    '###.  .   ',
+    '###.  ..  ', // the stair's top
+    '########  ',
+    '########  ',
+  ],
 };
-
-// --- The chasm, the canal on its floor, the docks along it ----------------------------------------
-for (let j = 0; j < NJ; j++) {
-  for (let i = GORGE; i < HALF; i++) {
-    set(i, j, 0, FLOOR);
-    for (let L = 1; L < LEVELS; L++) set(i, j, L, VOID);
-  }
-  set(FACE, j, 0, FLOOR);
-}
-
-// --- Each level: short balconies over the chasm, alleys in from them, a hall ----------------------
-// Alleys are random walks that turn now and then (the lots bend them more), so a street reads as
-// one street; `streamline` below joins and closes them off. The roofs are carved the same way, out
-// of a roofscape of towers.
-const STEP = [[1, 0], [0, 1], [-1, 0], [0, -1]];
-function wander(i, j, L, steps, dir = pick(0, 3)) {
-  for (let s = 0; s < steps; s++) {
-    open(i, j, L);
-    if (rand() < 0.15) dir = (dir + (rand() < 0.5 ? 1 : 3)) % 4;
-    let [a, b] = [i + STEP[dir][0], j + STEP[dir][1]];
-    if (a < 0 || a > FACE || b < 0 || b >= NJ) {
-      dir = (dir + 2) % 4;
-      [a, b] = [i + STEP[dir][0], j + STEP[dir][1]];
+const PLAZA = SPAWN, SPAN = [5, 8], HALL = LOW, FLANKS = [2, NJ - 1 - 2]; // the plaza's rows; the end bridges' rows
+for (let L = 0; L < LEVELS; L++) {
+  for (let i = 0; i < HALF; i++) {
+    for (let j = 0; j < NJ; j++) {
+      if (PLAN[L]) grid[L][i][j] = { '#': SOLID, '.': FLOOR, ' ': VOID }[PLAN[L][NJ - 1 - j][i]];
+      // Between floors, building; open over the chasm but for the Bridge's mass.
+      else grid[L][i][j] = i < GORGE || (L < PLAZA && j >= SPAN[0] && j <= SPAN[1]) ? SOLID : VOID;
     }
-    [i, j] = [a, b];
   }
 }
-for (let L = 1; L < LEVELS; L++) {
-  for (let j = 0; j < NJ; j++) if ((j + 3 * L) % 6 < 2) open(FACE, j, L);
-  wander(FACE, pick(0, NJ - 1), L, pick(5, 9), 2); // in from the chasm
-  wander(pick(1, 8), pick(1, 14), L, pick(5, 9));
-  const i0 = pick(1, 7), j0 = pick(0, 13);
-  for (let i = i0; i < i0 + 2; i++) for (let j = j0; j < j0 + 2; j++) open(i, j, L);
-}
+// The square, the way on to the gate and the gate stand two storeys tall.
+for (let i = 4; i <= FACE; i++) for (let j = SPAN[0]; j <= SPAN[1]; j++) if (grid[SPAWN][i][j] === FLOOR) grid[SPAWN + 1][i][j] = VOID;
 
-// --- Spawn halls (level 4, roofed, deep in each half), their ways out ------------------------------
-// Its base (where missiles land, the convoy's end) is on the monorail ring over it; its flag stand
-// is out where its ways out meet, 60 m on toward the chasm, so defenders have to run to it, and a
-// street runs on from the stand's east doorway to the plaza.
-const SPAWN = 4, FLAG = [6, 7], RAIL = 5;
-for (let i = 0; i <= 3; i++) {
-  for (let j = 5; j <= 9; j++) {
-    open(i, j, SPAWN);
-    set(i, j, SPAWN + 1, SOLID);
-  }
-}
-for (const row of [6, 9]) wander(4, row, SPAWN, 10, 0); // ways out, winding toward the chasm
-const STAND = [FLAG, [FLAG[0], FLAG[1] - 1], [FLAG[0] + 1, FLAG[1]]]; // the flag stand's cell and the ones its doorways (south, east) open on
-for (const [i, j] of STAND) open(i, j, SPAWN);
-for (let i = FLAG[0] + 1; i <= FACE; i++) open(i, FLAG[1], SPAWN);
-
-// --- Light wells and courtyards: open to the sky from their floor, galleries round them ----------
-// on every other level from the floor up (the courtyards' pads land on the first of them).
+// --- The courtyard, the well, the drops by the gate: open from their floors to the sky (or `top`) ----
 const WELLS = [
-  { i: 3, j: 3, w: 2, d: 2, floor: 3 }, // Missile Assault's A
-  { i: 6, j: 11, w: 2, d: 2, floor: 5 },
-  { i: 7, j: 5, w: 1, d: 1, floor: 2 },
+  { i: 4, j: 2, w: 2, d: 2, floor: SPAWN }, // the courtyard, the ring round it
+  { i: 4, j: 10, w: 2, d: 2, floor: LOW }, // the well, down from the spawns' floor to the low road (Missile Assault's A)
+  { i: 6, j: SPAN[0], w: 1, d: 1, floor: LOW, top: SPAWN }, // either side of the gate, down to the hall's door
+  { i: 6, j: SPAN[1], w: 1, d: 1, floor: LOW, top: SPAWN },
 ];
-for (const { i, j, w, d, floor } of WELLS) {
-  for (let L = floor; L < LEVELS; L++) {
-    if ((L - floor) % 2 === 0) for (let a = i - 1; a <= i + w; a++) for (let b = j - 1; b <= j + d; b++) open(a, b, L); // galleries
-    for (let a = i; a < i + w; a++) for (let b = j; b < j + d; b++) set(a, b, L, L === floor ? FLOOR : VOID);
-  }
+for (const { i, j, w, d, floor, top = LEVELS - 1 } of WELLS) {
+  for (let L = floor; L <= top; L++) for (let a = i; a < i + w; a++) for (let b = j; b < j + d; b++) set(a, b, L, L === floor ? FLOOR : VOID);
 }
 
-// --- The Bridge: the main way across the middle, a plaza on a mass of building ---------------------
-// Rows 6-9 of the chasm, 64 m square: building from level 1 to 3 (the canal runs under it), the
-// plaza on top at the spawns' level, open to the sky, with Missile Assault's B in its middle. Each
-// face opens onto it through a gate 32 m wide, building either side (its shoulders), so no street
-// runs on straight from a spawn over the plaza to the other. Under the plaza, a hall 32 m wide runs
-// through the building at level 2, face to face: the way across out of the plaza's sight.
-const PLAZA = SPAWN, SPAN = [6, 9], HALL = 2; // the plaza's level and rows, the hall's level
-const shoulder = (i, j, L) => L === PLAZA && i === FACE && (j === SPAN[0] || j === SPAN[1]);
-for (let j = SPAN[0]; j <= SPAN[1]; j++) {
-  for (let i = GORGE; i < HALF; i++) {
-    for (let L = 1; L < PLAZA; L++) set(i, j, L, L === HALL && j > SPAN[0] && j < SPAN[1] ? FLOOR : SOLID);
-    set(i, j, PLAZA, FLOOR);
-  }
-  set(FACE, j, PLAZA, shoulder(FACE, j, PLAZA) ? SOLID : FLOOR);
-  if (j > SPAN[0] && j < SPAN[1]) open(FACE, j, HALL);
-}
-
-// --- High bridges: open spans at level 7 near the chasm's ends (rows 3 and 12), face to face ------
-const HIGH = 7, HIGH_ROWS = [3, NJ - 1 - 3];
-for (const row of HIGH_ROWS) {
-  for (let i = GORGE; i < HALF; i++) set(i, row, HIGH, FLOOR);
-  open(FACE, row, HIGH);
-}
-
-// --- The monorail: a ring at level 5 round the city, through its buildings ------------------------
-// It jogs out to the city's edge and back on every side, so no stretch of it runs straight for more
-// than six cells, and crosses the chasm at its ends on enclosed bridges (with the twin's, at rows 1
-// and 14).
-const RAIL_BRIDGE = 14;
-for (const row of [RAIL_BRIDGE, NJ - 1 - RAIL_BRIDGE]) for (let i = GORGE; i < HALF; i++) set(i, row, RAIL, FLOOR);
-const RING = [];
-const run = (i0, j0, i1, j1) => {
-  for (let i = Math.min(i0, i1); i <= Math.max(i0, i1); i++) for (let j = Math.min(j0, j1); j <= Math.max(j0, j1); j++) RING.push([i, j]);
-};
-run(9, 1, 8, 1), run(8, 0, 4, 0), run(4, 1, 1, 1); // south
-run(1, 1, 1, 5), run(0, 5, 0, 10), run(1, 10, 1, 14); // west, past the base
-run(1, 14, 6, 14), run(6, 15, 9, 15), run(9, 14, 9, 14); // north
-for (const [i, j] of RING) open(i, j, RAIL);
-
-// --- Switchback ramp slots: 4 cells long, the middle two open the full height ---------------------
-// Flights 32 m long climb a level each (21 degrees), in two 8 m lanes taking turns, landing on the
-// end cells: the south end at even steps, the north at odd.
-const SLOTS = [
-  { i: 8, j: 1, from: 1 },
-  { i: 3, j: 10, from: 2 }, // right outside the spawn hall
-  { i: 8, j: 11, from: 1 }, // (the hill's floor here)
-];
+// --- The stair: a switchback slot up the south face, 4 cells long, the middle two open its full height -
+// Flights 32 m long climb a storey each (21 degrees), in two 8 m lanes taking turns, landing on the
+// end cells: the south end on every floor (by the bridge's way on), the north end on the storeys
+// between, over the plaza's corner. Open to the chasm on its east side.
+const SLOTS = [{ i: FACE, j: FLANKS[0], from: CANAL }];
 for (const { i, j, from } of SLOTS) {
   for (let L = from; L < LEVELS; L++) {
     for (const b of [j + 1, j + 2]) set(i, b, L, L === from ? FLOOR : VOID);
-    open(i, (L - from) % 2 ? j + 3 : j, L);
-    open(i - 1, (L - from) % 2 ? j + 3 : j, L); // a way off each landing
+    set(i, (L - from) % 2 ? j + 3 : j, L, FLOOR);
   }
 }
 
-// --- Pad shafts: a pad on a floor throws you up two levels to the floor beside the shaft -----------
+// --- Pads: a pad on a floor throws you up a floor (two storeys), to the floor beside its shaft ------
 const SHAFTS = [
-  { i: 6, j: 2, L: 3, to: [0, -1] }, // up onto the monorail
-  { i: 9, j: 9, L: 1, to: [0, 1] },
-  { i: 4, j: 13, L: 4, to: [0, 1] },
-  { i: 7, j: 11, L: 2, to: [1, 0] },
-  { i: 6, j: 4, L: 5, to: [-1, 0] },
-  // A pad in each courtyard's floor, up onto its galleries: the way out of it.
-  { i: 3, j: 3, L: 3, to: [-1, 0] },
-  { i: 6, j: 11, L: 5, to: [-1, 0] },
-  { i: 7, j: 5, L: 2, to: [0, 1] },
+  // The ladder up the north face, from the canal to the roofs, a pad on each floor beside the last's landing.
+  { i: 7, j: 9, L: CANAL, to: [0, 1] },
+  { i: 6, j: 10, L: LOW, to: [0, -1] },
+  { i: 7, j: 9, L: SPAWN, to: [0, 1] },
+  { i: 6, j: 10, L: RAIL, to: [0, -1] },
+  { i: 1, j: 8, L: SPAWN, to: [-1, 0] }, // in the spawn hall's corner, up onto the ring by the base
+  { i: 4, j: 10, L: LOW, to: [0, -1] }, // the well's, up out of it
 ];
 for (const { i, j, L, to } of SHAFTS) {
-  open(i, j, L);
-  open(i - to[0], j - to[1], L); // a way in at the bottom
+  set(i, j, L, FLOOR);
   set(i, j, L + 1, VOID);
   set(i, j, L + 2, VOID);
-  open(i + to[0], j + to[1], L + 2);
+  set(i + to[0], j + to[1], L + 2, FLOOR);
 }
+
+// --- Spawn hall (roofed, deep in each half), the flag stand in the square in front of it ----------
+// Its base (where missiles land, the convoy's end) is on the monorail ring over it; its flag stand
+// is out in the square, by the gate onto the plaza, so defenders have to run to it.
+const FLAG = [5, 6];
+const STAND = [FLAG, [FLAG[0], FLAG[1] - 1], [FLAG[0] + 1, FLAG[1]]]; // the flag stand's cell and the ones its doorways (south, east) open on
+
+// --- The monorail: snaking round each half and over the chasm, climbing as it goes ------------------
+// Its south side runs through the buildings on the rail's floor (72), along the courtyard's open
+// sides, to the base over the spawn hall; its north side wraps the well and climbs, a storey up
+// beside it and another in a cutting through the roofs, out onto them (96). Each bridge over the
+// chasm slopes from one side's roofs down to the other's rail floor (the twin's north side is the
+// east's south), so the track loops through both bases, up and down; in Convoy the hauler rides it
+// from the middle of the south bridge. TRACK is its centre line in the west half, [x, z, y], from
+// the south bridge's foot round to the north bridge's top; CLIMBS, the cells at either end of each
+// slope, for the links.
+const TRACK = [
+  [X(GORGE), cz(2), Y(RAIL)], [cx(7), cz(2), Y(RAIL)], [cx(6), cz(2), Y(RAIL)], [cx(6), cz(1), Y(RAIL)], [cx(3), cz(1), Y(RAIL)],
+  [cx(3), cz(4), Y(RAIL)], [cx(0), cz(4), Y(RAIL)], [cx(0), cz(9), Y(RAIL)], [cx(3), cz(9), Y(RAIL)],
+  [cx(3), Z(10), Y(RAIL)], [cx(3), Z(12), Y(RAIL + 1)], [cx(3), cz(12), Y(RAIL + 1)], // up beside the well
+  [X(4), cz(12), Y(RAIL + 1)], [X(6), cz(12), Y(ROOF)], [cx(6), cz(12), Y(ROOF)], // up through the roofs
+  [cx(6), cz(11), Y(ROOF)], [cx(7), cz(11), Y(ROOF)], [X(GORGE), cz(11), Y(ROOF)],
+];
+const BRIDGE = [[X(GORGE), cz(FLANKS[0]), Y(RAIL)], [X(NI - GORGE), cz(FLANKS[0]), Y(ROOF)]]; // the south one, west to east
+const CLIMBS = [
+  [[3, 9, RAIL], [3, 12, RAIL + 1]],
+  [[3, 12, RAIL + 1], [6, 12, ROOF]],
+  [[FACE, FLANKS[0], RAIL], [...twin(FACE, FLANKS[1]), ROOF]], // the south bridge
+];
+const SLOPED = new Set(); // the slopes' cells, open over the track
+for (const [i, j, L] of [[3, 10, RAIL], [3, 10, RAIL + 1], [3, 11, RAIL], [3, 11, RAIL + 1], [4, 12, RAIL + 1], [5, 12, RAIL + 1], [4, 12, ROOF], [5, 12, ROOF]]) set(i, j, L, VOID), SLOPED.add((L * NI + i) * NJ + j);
+set(3, 12, RAIL + 1, FLOOR); // the corner between them
 
 // The canal's boats, [x0, z0, x1, z1, turn] (9 m tall, turned `turn` degrees), moored clear of the
-// Bridge, the dock stairs and the pads (the twin adds as many).
-const CANAL = [
-  [X(GORGE) + 12, Z(3) + 4, X(GORGE) + 24, Z(4) + 2, 10],
-  [X(GORGE) + 10, Z(11) + 2, X(GORGE) + 22, Z(12) - 2, -8],
-  [X(GORGE) + 4, Z(14) + 6, X(GORGE) + 16, Z(15) + 4, -12],
+// Bridge, the stair and the pads (the twin adds as many).
+const BOATS = [
+  [X(GORGE) + 12, Z(3) + 4, X(GORGE) + 24, Z(4) + 6, 10],
+  [X(GORGE) + 10, Z(10) + 2, X(GORGE) + 22, Z(11) + 4, -8],
 ];
-// Ways up out of the canal (the twin adds the east face's): dock stairs, ramps along the west face
-// from the canal at row `foot` up onto a landing at row `top` (level 1), climbing rows `from` to
-// `to`; and pads on the canal's floor at row `j` throwing you onto the face's floor at level `L`.
-const DOCK_STAIRS = [{ foot: 11, from: Z(12), to: Z(14), top: 14 }, { foot: 4, from: Z(4), to: Z(2), top: 1 }];
-for (const { top } of DOCK_STAIRS) set(GORGE, top, 1, FLOOR), open(FACE, top, 1);
-const CANAL_PADS = [{ j: 10, L: 2 }];
-for (const { j, L } of CANAL_PADS) open(FACE, j, L);
 
 const key = (i, j, L) => (L * NI + i) * NJ + j;
-// Cells something lands on, climbs from or runs through: `streamline` leaves them be, and nothing's
-// put up on them.
+// Cells something lands on, climbs from or runs through: nothing's put up on them.
 const special = new Set();
 const mark = (i, j, L) => special.add(key(i, j, L));
-for (const { i, j, L, to } of SHAFTS) for (const [a, b, c] of [[i, j, L], [i - to[0], j - to[1], L], [i + to[0], j + to[1], L + 2], [i, j, L + 1], [i, j, L + 2]]) mark(a, b, c);
+for (const { i, j, L, to } of SHAFTS) for (const [a, b, c] of [[i, j, L], [i + to[0], j + to[1], L + 2], [i, j, L + 1], [i, j, L + 2]]) mark(a, b, c);
 for (const { i, j } of SLOTS) for (let L = 0; L < LEVELS; L++) for (const [a, b] of [[i, j], [i, j + 1], [i, j + 2], [i, j + 3], [i - 1, j], [i - 1, j + 3]]) mark(a, b, L);
-for (let i = 0; i <= 4; i++) for (let j = 4; j <= 10; j++) mark(i, j, SPAWN);
+for (let i = 0; i <= 3; i++) for (let j = 4; j <= 9; j++) mark(i, j, SPAWN);
 for (const [i, j] of STAND) mark(i, j, SPAWN); // the flag stand's walls are its own
-for (const [i, j] of RING) mark(i, j, RAIL); // the ring: the convoy's way
+for (let k = 1; k < TRACK.length; k++) for (let t = 0; t <= 1; t += 1 / 16) { // the track: the convoy's way
+  const [x, z, y] = TRACK[k - 1].map((v, m) => v + (TRACK[k][m] - v) * t);
+  mark(Math.floor((x + W / 2) / CELL), Math.floor((z + D / 2) / CELL), Math.round(y / STORY));
+}
 for (const { i, j, w, d, floor } of WELLS) for (let a = i; a < i + w; a++) for (let b = j; b < j + d; b++) mark(a, b, floor); // (silo A's on one)
-for (const { top } of DOCK_STAIRS) mark(FACE, top, 1);
-for (const { j, L } of CANAL_PADS) mark(FACE, j, L);
 
-// --- Streamline: each level one network of streets, and no alley that stops ----------------------
-// The walks leave pockets reached only from another level, and spurs. Each level's pockets are
-// joined to the rest by the shortest cut through building, turning as little as it can; a spur is
-// carried straight on into the next floor if that's near, else filled back to where it branched.
-const carvable = (i, j, L) => i >= 0 && i <= FACE && j >= 0 && j < NJ && L >= ground(i) && grid[L][i][j] === SOLID && !shoulder(i, j, L);
-/** The west half's floor at level L in pockets (cells joined side to side). */
-function pockets(L) {
-  const seen = new Set(), out = [];
-  for (let i = 0; i < HALF; i++) for (let j = 0; j < NJ; j++) {
-    if (grid[L][i][j] !== FLOOR || seen.has(key(i, j, L))) continue;
-    const cells = [[i, j]];
-    seen.add(key(i, j, L));
-    for (let n = 0; n < cells.length; n++) for (const [di, dj] of STEP) {
-      const [a, b] = [cells[n][0] + di, cells[n][1] + dj];
-      if (a >= 0 && a < HALF && b >= 0 && b < NJ && grid[L][a][b] === FLOOR && !seen.has(key(a, b, L))) seen.add(key(a, b, L)), cells.push([a, b]);
-    }
-    out.push(cells);
-  }
-  return out;
-}
-/** The cells of the cheapest cut through building from pocket `p` to other floor at level L (a turn costs half a cell), or null past `most` cells. */
-function cut(p, L, most = 5) {
-  const mine = new Set(p.map(([i, j]) => key(i, j, L))), best = new Map();
-  const queue = p.flatMap(([i, j]) => [0, 1, 2, 3].map((d) => ({ c: 0, i, j, d, path: [] })));
-  while (queue.length) {
-    queue.sort((x, y) => x.c - y.c);
-    const { c, i, j, d, path } = queue.shift();
-    for (const e of path.length ? [d, (d + 1) % 4, (d + 3) % 4] : [d]) {
-      const [a, b] = [i + STEP[e][0], j + STEP[e][1]];
-      if (path.length && a < HALF && grid[L][a]?.[b] === FLOOR && !mine.has(key(a, b, L))) return path;
-      const cost = c + 1 + (e === d ? 0 : 0.5), k = key(a, b, L) * 4 + e;
-      if (!carvable(a, b, L) || path.length >= most || best.get(k) <= cost) continue;
-      best.set(k, cost);
-      queue.push({ c: cost, i: a, j: b, d: e, path: [...path, [a, b]] });
-    }
-  }
-  return null;
-}
-function streamline() {
-  for (let L = 1; L < LEVELS; L++) {
-    for (let ps = pockets(L), tried = new Set(); ps.length > 1; ps = pockets(L)) {
-      const p = ps.sort((a, b) => a.length - b.length).find((q) => !tried.has(key(...q[0], L)));
-      if (!p) break;
-      tried.add(key(...p[0], L));
-      for (const [a, b] of cut(p, L) ?? []) open(a, b, L);
-    }
-    for (let changed = true; changed;) {
-      changed = false;
-      for (let i = 0; i <= FACE; i++) for (let j = 0; j < NJ; j++) {
-        if (grid[L][i][j] !== FLOOR || special.has(key(i, j, L))) continue;
-        const ways = STEP.filter(([di, dj]) => get(i + di, j + dj, L) === FLOOR);
-        if (ways.length > 1 || STEP.some(([di, dj]) => get(i + di, j + dj, L) === VOID)) continue; // (a drop's a way on)
-        const [di, dj] = ways.length ? ways[0].map((v) => -v) : [0, 0], run = [];
-        let [a, b] = [i + di, j + dj];
-        while (ways.length && run.length < 3 && carvable(a, b, L)) run.push([a, b]), (a += di), (b += dj);
-        if (ways.length && run.length && get(a, b, L) === FLOOR) for (const [u, v] of run) open(u, v, L);
-        else grid[L][i][j] = SOLID;
-        changed = true;
-      }
-    }
-  }
-}
-
-// --- Settle: a void resting on building is floor; then keep only floors you can get back from ------
+// --- Links between cells, and a check that every floor's reachable from the spawn and back ---------
 function standable(i, j, L) {
   return get(i, j, L) === FLOOR;
-}
-function settle() {
-  for (let L = 1; L < LEVELS; L++) for (let i = 0; i < HALF; i++) for (let j = 0; j < NJ; j++) if (grid[L][i][j] === VOID && grid[L - 1][i][j] === SOLID) grid[L][i][j] = FLOOR;
 }
 function links() {
   const out = new Map(), add = (a, b) => {
@@ -331,10 +269,7 @@ function links() {
       }
     }
   }
-  for (const { foot, top } of DOCK_STAIRS) {
-    for (const [u, v] of [[[GORGE, foot, 0], [GORGE, top, 1]], [[...twin(GORGE, foot), 0], [...twin(GORGE, top), 1]]]) add(u, v), add(v, u);
-  }
-  for (const { j, L } of CANAL_PADS) add([GORGE, j, 0], [FACE, j, L]), add([...twin(GORGE, j), 0], [...twin(FACE, j), L]);
+  for (const [p, q] of CLIMBS) for (const [a, b] of [[p, q], [[...twin(p[0], p[1]), p[2]], [...twin(q[0], q[1]), q[2]]]]) add(a, b), add(b, a);
   return out;
 }
 function reachable(from, out, reverse) {
@@ -355,124 +290,46 @@ function reachable(from, out, reverse) {
   }
   return seen;
 }
-const HOME = [2, 7, SPAWN];
-for (let pass = 0; pass < 6; pass++) {
-  streamline();
-  settle();
-  const out = links(), there = reachable(HOME, out, false), back = reachable(HOME, out, true);
-  let cut = 0;
+const HOME = [1, 6, SPAWN];
+{
+  const out = links(), there = reachable(HOME, out, false), back = reachable(HOME, out, true), stuck = [];
   for (let L = 0; L < LEVELS; L++) for (let i = 0; i < HALF; i++) for (let j = 0; j < NJ; j++) {
-    const k = key(i, j, L);
-    if (grid[L][i][j] === FLOOR && !(there.has(k) && back.has(k))) grid[L][i][j] = SOLID, cut++;
+    if (grid[L][i][j] === FLOOR && !(there.has(key(i, j, L)) && back.has(key(i, j, L)))) stuck.push(`${i},${j} on ${L}`);
   }
-  if (!cut) break;
+  if (stuck.length) throw new Error(`floor you can't get to and back from: ${stuck.join('; ')}`);
 }
 
-// --- The lots: the city as it was built, block by block, each squared to its own street line ------
-// The grid above is the plan; what's built on it turns. Each lot (a run of whole cells) is turned a
-// few degrees about its middle and nudged, and blends into its neighbours across 24 m, so buildings
-// fan out round the seams and the streets between lots run as wedges. The turn fades out toward the
-// city's outer wall (its outermost cells stand square to it) and the chasm (where the twin's
-// city meets this one). Columns of lots over cells [i0, i1), each split into rows [j0, j1, degrees,
-// dx, dz].
+// --- The lots: the city as it was built, block by block ----------------------------------------------
+// Each lot (a run of whole cells) is one owner's building: its storeys merge into blocks of its own
+// colours, and its walls meet the next lot's flush. Columns of lots over cells [i0, i1), each split
+// into rows [j0, j1); the chasm's columns are one more.
 const LOTS = [
-  { i: [0, 4], rows: [[0, 5, 5, 1, 0], [5, 10, -4, 0, 1], [10, 16, 6, -1, 0]] },
-  { i: [4, 7], rows: [[0, 4, -6, 0, -1], [4, 9, 7, 1, 0], [9, 13, -5, 0, 1], [13, 16, 4, 0, 0]] },
-  { i: [7, 12], rows: [[0, 6, 6, 0, 1], [6, 11, -5, -1, 0], [11, 16, 7, 0, -1]] },
+  { i: [0, 3], rows: [[0, 5], [5, 9], [9, 14]] },
+  { i: [3, 6], rows: [[0, 4], [4, 9], [9, 14]] },
+  { i: [6, 8], rows: [[0, 5], [5, 9], [9, 14]] },
+  { i: [8, 10], rows: [[0, 14]] },
 ];
-const BLEND = 12; // half the width a lot blends into the next across
-const ease = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
-/** A lot's share at `v` along one axis, the lot spanning [a, b] of the whole [lo, hi]. */
-const share = (v, a, b, lo, hi) => (a > lo ? ease((v - a + BLEND) / (2 * BLEND)) : 1) * (b < hi ? 1 - ease((v - b + BLEND) / (2 * BLEND)) : 1);
-/** How much of the lots' turn the plan's point (x, z) in the west half takes: none by the outer wall or over the chasm. */
-const fadeAt = (x, z) => ease((Math.min(x + W / 2, z + D / 2, D / 2 - z) - CELL) / (2 * CELL)) * ease((X(GORGE) - x) / 24);
-/** Where the plan's point (x, z) in the west half stands, built. */
-function warp(x, z) {
-  const fade = fadeAt(x, z);
-  if (!fade) return [x, z];
-  let dx = 0, dz = 0;
-  for (const { i: [i0, i1], rows } of LOTS) {
-    const wx = share(x, X(i0), X(i1), -W / 2, 0);
-    if (wx) for (const [j0, j1, turn, tx, tz] of rows) {
-      const w = wx * share(z, Z(j0), Z(j1), -D / 2, D / 2), t = (turn * Math.PI) / 180;
-      const [px, pz] = [(X(i0) + X(i1)) / 2, (Z(j0) + Z(j1)) / 2], [u, v] = [x - px, z - pz];
-      dx += w * (px + u * Math.cos(t) - v * Math.sin(t) + tx - x);
-      dz += w * (pz + u * Math.sin(t) + v * Math.cos(t) + tz - z);
-    }
-  }
-  return [x + fade * dx, z + fade * dz];
-}
-/** The one rigid frame the plan's point (x, z) is built in: 'plan' (unturned), a lot's 'column.row', or null (between frames). */
-function frameAt(x, z) {
-  const fade = fadeAt(x, z);
-  if (!fade) return 'plan';
-  if (fade < 1) return null;
-  const hits = [];
-  LOTS.forEach(({ i: [i0, i1], rows }, c) => rows.forEach(([j0, j1], r) => {
-    const w = share(x, X(i0), X(i1), -W / 2, 0) * share(z, Z(j0), Z(j1), -D / 2, D / 2);
-    if (w) hits.push(w === 1 ? `${c}.${r}` : null);
-  }));
-  return hits.length === 1 ? hits[0] : null;
-}
-/** A cell's rigid frame, if all of it stands in one (its building can merge with its neighbours'), else null. */
-function frameOf(i, j) {
-  const f = [frameAt(X(i), Z(j)), frameAt(X(i + 1), Z(j)), frameAt(X(i), Z(j + 1)), frameAt(X(i + 1), Z(j + 1))];
-  return f.every((g) => g !== null && g === f[0]) ? f[0] : null;
-}
-const frames = Array.from({ length: HALF }, (_, i) => Array.from({ length: NJ }, (_, j) => frameOf(i, j)));
-/** Either half's plan point, built: the east half is the west's twin. */
-const built = (x, z) => (x <= 0 ? warp(x, z) : warp(-x, -z).map((v) => -v));
-const deg = (r) => (r * 180) / Math.PI;
-/** The plan's point [x, y, z], built. */
-const at = (x, y, z) => {
-  const [u, v] = built(x, z);
-  return [r3(u), y, r3(v)];
+const lotOf = (i, j) => {
+  const c = LOTS.findIndex(({ i: [i0, i1] }) => i >= i0 && i < i1);
+  return `${c}.${LOTS[c].rows.findIndex(([j0, j1]) => j >= j0 && j < j1)}`;
 };
-/** The yaw (degrees) of the plan's +Z at (x, z), built: how far a box squared to the plan there turns. */
-const yawAt = (x, z) => {
-  const [a, b] = [built(x, z - 1), built(x, z + 1)];
-  return deg(Math.atan2(b[0] - a[0], b[1] - a[1]));
+/** The plan's point [x, y, z], as a placed point. */
+const at = (x, y, z) => [r3(x), y, r3(z)];
+const flip = ([x, y, z]) => [r3(-x) || 0, y, r3(-z) || 0];
+/** A plan polyline [[x, z, y], ...] with a point every cell or so along it. */
+const along = (line) => {
+  const out = [at(line[0][0], line[0][2], line[0][1])];
+  for (let k = 1; k < line.length; k++) {
+    const [[x0, z0, y0], [x1, z1, y1]] = [line[k - 1], line[k]], n = Math.ceil(Math.hypot(x1 - x0, z1 - z0) / CELL);
+    for (let s = 1; s <= n; s++) out.push(at(x0 + ((x1 - x0) * s) / n, r3(y0 + ((y1 - y0) * s) / n), z0 + ((z1 - z0) * s) / n));
+  }
+  return out;
 };
-/**
- * A box over the plan's rectangle (x0, z0)-(x1, z1), y0 to y1, built, squared to its lot. A cell
- * built across a seam isn't quite square, so each side either stays inside it (`out[side]` false:
- * nothing pokes past it, into a ramp's top or a shaft) or reaches past it, `grow` m beyond its
- * furthest corner (true: over the crack to the neighbour); sides in order west, east, south, north.
- * With `out` null, the box takes the cell's mean size, grown `grow`, turned `turn` degrees more.
- */
-function quad(x0, z0, x1, z1, y0, y1, mat, { out = [false, false, false, false], grow = 0, turn = 0, color } = {}) {
-  const [a, b, c, d] = [built(x0, z0), built(x1, z0), built(x1, z1), built(x0, z1)];
-  const mid = (p, q) => [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2], len = (p, q) => Math.hypot(q[0] - p[0], q[1] - p[1]);
-  const [s, n, w, e] = [mid(a, b), mid(d, c), mid(a, d), mid(b, c)], o = mid(s, n);
-  const yaw = Math.atan2(n[0] - s[0], n[1] - s[1]) + (turn * Math.PI) / 180;
-  const [ux, uz] = [[Math.cos(yaw), -Math.sin(yaw)], [Math.sin(yaw), Math.cos(yaw)]];
-  let lx = [-len(w, e) / 2 - grow, len(w, e) / 2 + grow], lz = [-len(s, n) / 2 - grow, len(s, n) / 2 + grow];
-  if (out) {
-    const on = (p, u) => (p[0] - o[0]) * u[0] + (p[1] - o[1]) * u[1];
-    const side = (p, q, u, low, far) => (far ? (low ? Math.min : Math.max)(on(p, u), on(q, u)) + (low ? -grow : grow) : (low ? Math.max : Math.min)(on(p, u), on(q, u)));
-    lx = [side(a, d, ux, true, out[0]), side(b, c, ux, false, out[1])];
-    lz = [side(a, b, uz, true, out[2]), side(d, c, uz, false, out[3])];
-  }
-  const [mx, mz] = [(lx[0] + lx[1]) / 2, (lz[0] + lz[1]) / 2];
-  const at = [o[0] + ux[0] * mx + uz[0] * mz, o[1] + ux[1] * mx + uz[1] * mz];
-  turned([r3(at[0]), r3((y0 + y1) / 2), r3(at[1])], [r3((lx[1] - lx[0]) / 2), r3((y1 - y0) / 2), r3((lz[1] - lz[0]) / 2)], r3(deg(yaw)), mat);
-  if (color) solids[solids.length - 1].color = color;
-}
-/** A wall `t` thick along the plan's line (x0, z0)-(x1, z1), y0 to y1, built. */
-function wall(x0, z0, x1, z1, y0, y1, mat, t = 1) {
-  const [a, b] = [built(x0, z0), built(x1, z1)], len = Math.hypot(b[0] - a[0], b[1] - a[1]);
-  turned([r3((a[0] + b[0]) / 2), r3((y0 + y1) / 2), r3((a[1] + b[1]) / 2)], [t / 2, r3((y1 - y0) / 2), r3(len / 2 + 0.3)], r3(deg(Math.atan2(b[0] - a[0], b[1] - a[1]))), mat);
-}
-{
-  // How far the lots stretch the plan: each cell's sides, built, and its turn.
-  let lo = Infinity, hi = 0, most = 0;
-  for (let i = 0; i < HALF; i++) for (let j = 0; j < NJ; j++) {
-    const [a, b, d] = [built(X(i), Z(j)), built(X(i + 1), Z(j)), built(X(i), Z(j + 1))];
-    for (const l of [Math.hypot(b[0] - a[0], b[1] - a[1]), Math.hypot(d[0] - a[0], d[1] - a[1])]) lo = Math.min(lo, l), hi = Math.max(hi, l);
-    most = Math.max(most, Math.abs(yawAt(cx(i), cz(j))));
-  }
-  console.log(`lots: cells ${lo.toFixed(1)}-${hi.toFixed(1)} m a side, turned up to ${most.toFixed(1)} degrees`);
-}
+/** A box over the plan's rectangle (x0, z0)-(x1, z1), y0 to y1, coloured `color`. */
+const block = (x0, z0, x1, z1, y0, y1, mat, color) => {
+  box([x0, y0, z0], [x1, y1, z1], mat);
+  solids[solids.length - 1].color = color;
+};
 
 if (grid[SPAWN][FLAG[0]][FLAG[1]] !== FLOOR) throw new Error('the flag stand\'s cell was cut off');
 // Each building's own walls, by band of levels (0-2, 3-5, 6 up), so you can tell how deep you are:
@@ -501,28 +358,17 @@ const wallOf = (list, a, b, c) => list[Math.floor(hue(a, b, c) * list.length)];
 const westWall = (i, j, L) => wallOf(WALLS.west[band(L)], i, j, L);
 // The height of each tower's roof (where building reaches the top), for what's put up on them.
 const tops = Array.from({ length: HALF }, () => Array(NJ).fill(undefined));
-for (const { j, L } of CANAL_PADS) if (grid[L][FACE][j] !== FLOOR) throw new Error(`the canal pad at row ${j} has nowhere to land`);
 
 // --- Geometry: building masses, floor slabs where nothing's under them --------------------------
-// Building, the chasm's columns too (where the Bridge and the monorail's stand). Inside a lot's rigid
-// middle (or the unturned ring by the outer wall), solid cells merge into blocks as big as they'll go
-// within a band of levels (each band its own colours); across a seam each cell's stack is its own mass, inside its cell (so a crack between buildings), a
-// metre short of any floor on it. A floor slab under every walkable cell that isn't on a block, out
-// over the cracks to the floor or building beside it but not past its edge over a drop (a shaft, a
-// well, a ramp slot). The roofs' towers rise a level higher, or more: each built as far as its owner could.
+// Building, the chasm's columns too (where the Bridge stands): each lot's solid cells merge into
+// blocks as big as they'll go within a band of levels (each band its own colours). A floor slab under
+// every walkable cell that isn't on building, merged with its lot's neighbours'. A quarter of the
+// roofs' towers rise a storey higher.
 {
   const done = new Set();
   for (let L = 0; L < LEVELS; L++) for (let i = 0; i < HALF; i++) for (let j = 0; j < NJ; j++) {
-    const f = frames[i][j];
     if (grid[L][i][j] !== SOLID || done.has(key(i, j, L))) continue;
-    if (f === null) {
-      let L1 = L;
-      while (L1 + 1 < LEVELS && grid[L1 + 1][i][j] === SOLID && band(L1 + 1) === band(L)) L1++;
-      for (let c = L; c <= L1; c++) done.add(key(i, j, c));
-      quad(X(i), Z(j), X(i + 1), Z(j + 1), Y(L), Y(L1 + 1) - (grid[L1 + 1]?.[i][j] === FLOOR ? 1 : 0), 'plaster', { grow: 0.05, color: westWall(i, j, L) });
-      continue;
-    }
-    const free = (a, b, c) => a < HALF && b < NJ && c < LEVELS && band(c) === band(L) && frames[a][b] === f && grid[c][a][b] === SOLID && !done.has(key(a, b, c));
+    const f = lotOf(i, j), free = (a, b, c) => a < HALF && b < NJ && c < LEVELS && band(c) === band(L) && lotOf(a, b) === f && grid[c][a][b] === SOLID && !done.has(key(a, b, c));
     let i1 = i, j1 = j, L1 = L;
     while (free(i1 + 1, j, L)) i1++;
     const rowOk = (b) => { for (let a = i; a <= i1; a++) if (!free(a, b, L)) return false; return true; };
@@ -530,42 +376,49 @@ for (const { j, L } of CANAL_PADS) if (grid[L][FACE][j] !== FLOOR) throw new Err
     const layerOk = (c) => { for (let a = i; a <= i1; a++) for (let b = j; b <= j1; b++) if (!free(a, b, c)) return false; return true; };
     while (layerOk(L1 + 1)) L1++;
     for (let c = L; c <= L1; c++) for (let a = i; a <= i1; a++) for (let b = j; b <= j1; b++) done.add(key(a, b, c));
-    quad(X(i), Z(j), X(i1 + 1), Z(j1 + 1), Y(L), Y(L1 + 1), 'plaster', { grow: 0.05, color: westWall(i, j, L) });
+    block(X(i), Z(j), X(i1 + 1), Z(j1 + 1), Y(L), Y(L1 + 1), 'plaster', westWall(i, j, L));
   }
-  const storeys = rng(31);
+  const storeys = rng(31), slabbed = new Set();
+  const slab = (i, j, L) => grid[L][i][j] === FLOOR && !(L && grid[L - 1][i][j] === SOLID) && !slabbed.has(key(i, j, L));
   for (let i = 0; i < HALF; i++) for (let j = 0; j < NJ; j++) {
-    // A storey or three more, now and then a tower well over the rest.
-    const up = 4 * Math.floor(storeys(0, 4)) + (storeys() < 0.1 ? 8 + 4 * Math.floor(storeys(0, 3)) : 0);
     if (i < GORGE && grid[LEVELS - 1][i][j] === SOLID) {
+      const up = storeys() < 0.25 ? STORY : 0;
       tops[i][j] = Y(LEVELS) + up;
-      if (up) quad(X(i), Z(j), X(i + 1), Z(j + 1), Y(LEVELS), Y(LEVELS) + up, 'plaster', { grow: 0.05, color: westWall(i, j, LEVELS) });
+      if (up) block(X(i), Z(j), X(i + 1), Z(j + 1), Y(LEVELS), Y(LEVELS) + up, 'plaster', westWall(i, j, LEVELS));
     }
     for (let L = 0; L < LEVELS; L++) {
-      if (grid[L][i][j] !== FLOOR || (L && grid[L - 1][i][j] === SOLID && frames[i][j] !== null)) continue;
-      const out = [[-1, 0], [1, 0], [0, -1], [0, 1]].map(([di, dj]) => get(i + di, j + dj, L) !== VOID);
-      quad(X(i), Z(j), X(i + 1), Z(j + 1), Y(L) - 1, Y(L), 'terracotta', { out, grow: frames[i][j] === null ? 0.3 : 0, color: FLOORS.west[band(L)] });
+      if (!slab(i, j, L)) continue;
+      const f = lotOf(i, j), more = (a, b) => a < HALF && b < NJ && lotOf(a, b) === f && slab(a, b, L);
+      let i1 = i, j1 = j;
+      while (more(i1 + 1, j)) i1++;
+      const rowOk = (b) => { for (let a = i; a <= i1; a++) if (!more(a, b)) return false; return true; };
+      while (rowOk(j1 + 1)) j1++;
+      for (let a = i; a <= i1; a++) for (let b = j; b <= j1; b++) slabbed.add(key(a, b, L));
+      block(X(i), Z(j), X(i1 + 1), Z(j1 + 1), Y(L) - 1, Y(L), 'terracotta', FLOORS.west[band(L)]);
     }
   }
-  let rigid = 0;
-  for (const col of frames) for (const f of col) rigid += f !== null;
-  console.log(`lots: ${rigid} of ${HALF * NJ} cells rigid`);
 }
-// The edges: the hill's foot under the canal, walls round the map.
+// The edges: ground under the canal, walls round the map.
 box([-W / 2, -2, -D / 2], [0, -1, D / 2], 'ground'); // (where the haze lies)
 box([W / 2, -2, -D / 2], [W / 2 + 1, Y(LEVELS) + 12, D / 2], 'stone');
 box([-W / 2, -2, D / 2], [W / 2, Y(LEVELS) + 12, D / 2 + 1], 'stone');
 
-// The monorail's bridges are walled along the chasm, enclosed.
-for (const row of [RAIL_BRIDGE, NJ - 1 - RAIL_BRIDGE]) for (const z of [Z(row), Z(row + 1)]) wall(X(GORGE), z, X(HALF), z, Y(RAIL), Y(RAIL + 1) - 1, 'lacquer');
-
-// The canal: blocks set along it, staggered across it and askew, so no lane runs its length (the twin adds as many).
-for (const [x0, z0, x1, z1, turn] of CANAL) quad(x0, z0, x1, z1, 0, 9, 'hull', { out: null, turn });
-// The spawn halls' piers, at their inner corners (but round the flag stand): cover, and no view across.
-for (const i of [1, 2, 3, 4]) for (const j of [6, 7, 8, 9]) {
-  if (i <= 2 && j <= 7) continue; // (the hall's back corner stays open)
-  const [x, , z] = at(X(i), 0, Z(j));
-  turned([x, Y(SPAWN) + STORY / 2, z], [2, STORY / 2, 2], r3(yawAt(X(i), Z(j))), 'lacquer');
+// The monorail's slopes: wedges of floor up through the buildings, solid under them; the south bridge
+// (its twin the north), a deck with parapets along both edges, cover for the convoy's escort.
+for (let k = 1; k < TRACK.length; k++) {
+  const [[x0, z0, y0], [x1, z1, y1]] = [TRACK[k - 1], TRACK[k]];
+  if (y0 === y1) continue;
+  slope(at(x0, y0, z0), at(x1, y1, z1), CELL - 1, STORY / 2, 'terracotta');
+  solids[solids.length - 1].color = FLOORS.west[band(RAIL)];
 }
+{
+  const [[x0, z0, y0], [x1, , y1]] = BRIDGE;
+  slope([x0, y0, z0], [x1, y1, z0], CELL, 1, 'concrete');
+  for (const z of [Z(FLANKS[0]) + 0.3, Z(FLANKS[0] + 1) - 0.3]) beam([x0, y0 + 1.5, z], [x1, y1 + 1.5, z], 0.6, 3, 'lacquer');
+}
+
+// The canal: boats moored along it, staggered across it and askew, so no lane runs its length (the twin adds as many).
+for (const [x0, z0, x1, z1, turn] of BOATS) turned([r3((x0 + x1) / 2), 4.5, r3((z0 + z1) / 2)], [r3((x1 - x0) / 2), 4.5, r3((z1 - z0) / 2)], turn, 'hull');
 
 // --- The ramp slots' flights ----------------------------------------------------------------------
 for (const { i, j, from } of SLOTS) {
@@ -573,7 +426,6 @@ for (const { i, j, from } of SLOTS) {
     const north = (L - from) % 2 === 0, lane = north ? X(i) + 4 : X(i) + 12;
     const [z0, z1] = [Z(j + 1), Z(j + 3)], [lo, hi] = north ? [z0, z1] : [z1, z0];
     const [a, b] = [at(lane, Y(L), lo), at(lane, Y(L + 1), hi)];
-    if (deg(Math.atan2(STORY, Math.hypot(b[0] - a[0], b[2] - a[2]))) > 24) console.warn(`steep flight in the slot at ${i},${j}`);
     ramp(a, b, 7.5, 'metal', false);
     point([r3((a[0] + b[0]) / 2), Y(L) + STORY / 2, r3((a[2] + b[2]) / 2)]); // mid-flight (on it): the landings are too far apart to link
     point(at(lane, Y(L + 1), hi + (north ? 3 : -3))); // and off its top, straight on, clear of the next flight
@@ -581,19 +433,10 @@ for (const { i, j, from } of SLOTS) {
   for (const b of [j + 1, j + 2]) point(at(X(i) + 12, Y(from), cz(b))); // the slot's floor, in the lane the first flight leaves open
 }
 
-// --- Ways up out of the canal ----------------------------------------------------------------------
-// The dock stairs: a flight up the face from the canal to its landing, filled under its top half
-// (nothing to wedge under), with waypoints at its foot, on it and off its top; the canal pads.
-for (const { from, to } of DOCK_STAIRS) {
-  const lane = X(GORGE) + 4, dir = Math.sign(to - from), [a, b] = [at(lane, 0, from), at(lane, Y(1), to)];
-  ramp(a, b, 7.5, 'metal', true);
-  point(at(lane, 0, from - dir * 4), [r3((a[0] + b[0]) / 2), STORY / 2, r3((a[2] + b[2]) / 2)], at(lane, Y(1), to + dir * 3));
-}
-for (const { j, L } of CANAL_PADS) pad(at(X(GORGE) + 14, 0, cz(j)), at(cx(FACE), Y(L), cz(j)), Y(L) + 4); // (from mid-canal, so it's high by the face's edge)
-
-// --- The plaza: stalls in its corners and low walls either side of B, clear of its waypoints ------
+// --- The plaza: a shrine before each gate, stalls in its corners, clear of its waypoints and B's pad -
+// The shrine, 10 m wide and taller than a Heavy, breaks the line from gate to gate (the twin adds the other).
+turned([-14, Y(PLAZA) + 3.5, 0], [2, 3.5, 5], 0, 'lacquer');
 for (const z of [-16, 16]) turned([-16, Y(PLAZA) + 2.5, z], [3, 2.5, 3], z > 0 ? 8 : -8, 'pale');
-turned([-12, Y(PLAZA) + 1.5, 0], [0.6, 1.5, 4], 0, 'lacquer');
 
 // --- Pads in their shafts: launched off-centre, away from the landing, so the arc clears the walls --
 // and topping out low enough that a Heavy's head clears the floor over the landing.
@@ -608,7 +451,7 @@ for (const { i, j, L, to } of SHAFTS) pad(at(cx(i) - to[0] * 4, Y(L), cz(j) - to
     if (grid[L][i][j] !== FLOOR || special.has(key(i, j, L))) continue;
     let sky = true;
     for (let M = L + 1; M < LEVELS; M++) if (grid[M][i][j] !== VOID) sky = false;
-    if (!sky || grow() > 0.45) continue;
+    if (!sky || grow() > 0.3) continue;
     const [sx, sz] = [[1, 1], [1, -1], [-1, 1], [-1, -1]][Math.floor(grow() * 4)], [x, , z] = at(cx(i) + sx * 5, 0, cz(j) + sz * 5);
     if (grow() < 0.3) cylinder([x, Y(L), z], [x, r3(Y(L) + grow(4, 6)), z], r3(grow(1.6, 2)), 'tank');
     else {
@@ -623,47 +466,40 @@ for (let L = 0; L < LEVELS; L++) for (let i = 0; i < HALF; i++) for (let j = 0; 
   if (grid[L][i][j] !== FLOOR) continue;
   if (SHAFTS.some((s) => (s.i === i && s.j === j && s.L === L) || (s.i + s.to[0] === i && s.j + s.to[1] === j && s.L + 2 === L))) continue; // the pad's own waypoints stand there
   if (i === FLAG[0] && j === FLAG[1] && L === SPAWN) continue; // and the flag stand's
-  if (CANAL_PADS.some((p) => p.j === j && ((i === GORGE && L === 0) || (i === FACE && L === p.L)))) continue; // and a canal pad's
-  if (L === 0 && CANAL.some(([x0, z0, x1, z1]) => cx(i) > x0 - 5 && cx(i) < x1 + 5 && cz(j) > z0 - 5 && cz(j) < z1 + 5)) continue; // a canal block stands there
+  if (L === 0 && BOATS.some(([x0, z0, x1, z1]) => cx(i) > x0 - 5 && cx(i) < x1 + 5 && cz(j) > z0 - 5 && cz(j) < z1 + 5)) continue; // a canal block stands there
   if (SLOTS.some((s) => s.i === i && s.from === L && (j === s.j + 1 || j === s.j + 2))) continue; // a flight starts there
   point(at(cx(i), Y(L), cz(j)));
 }
+// And along the monorail's slopes and the south bridge (the twin adds the north's).
+for (let k = 1; k < TRACK.length; k++) if (TRACK[k - 1][2] !== TRACK[k][2]) point(...along([TRACK[k - 1], TRACK[k]]).slice(1, -1));
+point(...along(BRIDGE).slice(1, -1));
 
 // --- Objectives ----------------------------------------------------------------------------------
 bases(at(cx(0), Y(RAIL), 0));
-sentries([at(cx(3) + 4, Y(SPAWN), cz(6)), at(cx(3) + 4, Y(SPAWN), cz(9))]);
+sentries([at(cx(2) + 4, Y(SPAWN), cz(5)), at(cx(2) + 4, Y(SPAWN), cz(8))]);
 // The flag stand's doorways face south and east, toward the plaza, away from its guns in the hall.
-flags(flagStand(at(cx(FLAG[0]), Y(SPAWN), cz(FLAG[1])), r3(yawAt(cx(FLAG[0]), cz(FLAG[1])))));
-// The convoy: from the middle of the ring's south bridge to each base, round the ring's jogs (the
-// east's are the twins of the west's north side), 320 m either way in plan; a point every cell or
-// so, so the route bends with the lots.
-const route = (...plan) => {
-  const out = [at(plan[0][0], Y(RAIL), plan[0][1])];
-  for (let k = 1; k < plan.length; k++) {
-    const [[x0, z0], [x1, z1]] = [plan[k - 1], plan[k]], n = Math.ceil(Math.hypot(x1 - x0, z1 - z0) / CELL);
-    for (let s = 1; s <= n; s++) out.push(at(x0 + ((x1 - x0) * s) / n, Y(RAIL), z0 + ((z1 - z0) * s) / n));
-  }
-  return out;
-};
-const via = (...cells) => cells.map(([i, j]) => [cx(i), cz(j)]);
+flags(flagStand(at(cx(FLAG[0]), Y(SPAWN), cz(FLAG[1])), 0));
+// The convoy: from the middle of the south bridge along the track to each base, 256 m either way in
+// plan: down the bridge and round the south side to team 0's, up it and round the east's north side
+// (the twin of the west's, climbing down) to team 1's.
+const BASE = TRACK.findIndex(([x, z]) => x === cx(0) && z > 0); // the corner past the base, going round
 convoy(
-  route([0, cz(1)], ...via([8, 1], [8, 0], [4, 0], [4, 1], [1, 1], [1, 5], [0, 5]), [cx(0), 0]),
-  route([0, cz(1)], ...via([14, 1], [14, 0], [17, 0], [17, 1], [22, 1], [22, 5], [23, 5]), [cx(23), 0]),
+  along([[0, cz(FLANKS[0]), Y(RAIL + 1)], ...TRACK.slice(0, BASE), [cx(0), 0, Y(RAIL)]]),
+  along([[0, cz(FLANKS[1]), Y(RAIL + 1)], ...TRACK.slice(BASE).reverse(), [cx(0), 0, Y(RAIL)]]).map(flip),
 );
-const [A] = WELLS;
-silos({ at: at(X(A.i + 1), Y(A.floor), Z(A.j + 1)), radius: 12, band: 4 }, { at: [0, Y(PLAZA), 0], radius: 14, band: 4 });
+const A = WELLS[1]; // (open to the sky, for its launch pad)
+// A in the well's far half, clear of its pad (in the near half, under the gallery it throws you onto).
+silos({ at: at(X(A.i + 1), Y(A.floor), cz(A.j + 1)), radius: 10, band: 4 }, { at: [0, Y(PLAZA), 0], radius: 14, band: 4 });
 
 // --- Dressing: the two sides of the chasm ----------------------------------------------------------
 // The same building on both sides; only what it's made of and what hangs in it differ. The west, old
 // money: warm plaster with lamplit windows, tiled floors, red lacquer screens and pillars, paper
-// lanterns under the ceilings, gilt rails along the chasm, banners down its face, gardens and lamps
-// on the roofs. The east, the tenements: grimy concrete with fluorescent windows, rust, tubes in
-// nearly every room, pipes and boxes on the walls, cables and washing strung across, neon down the
-// chasm's face. Each side's props are placed on the west's plan and set down on their own side.
-const flip = ([x, y, z]) => [r3(-x) || 0, y, r3(-z) || 0];
+// lanterns under the ceilings, gilt rails along the chasm, gardens and lamps on the roofs, its neon
+// red and gold. The east, the tenements: grimy concrete with fluorescent windows, rust, tubes in
+// nearly every room, pipes and boxes on the walls, cables and washing strung across, its neon pink
+// and cyan. Each side's props are placed on the west's plan and set down on their own side.
 const EAST = { plaster: 'tenement', terracotta: 'grime', lacquer: 'rust', pale: 'rust', tank: 'rust' };
 const LANTERNS = ['#ff9a3a', '#ff6a32', '#ffc060'], TUBES = ['#dffff0', '#dffff0', '#c4f2ff', '#f0ffe0'];
-const BANNERS = ['#ffcc66', '#ff5a3a', '#ffb347'], NEON = ['#ff3fa0', '#3fe0ff', '#b0ff3a', '#ff7a2a', '#c86bff'];
 const WASHING = ['#c94f4f', '#e0d6c0', '#4f6fc9', '#d9b44a', '#6aa36a', '#b07ac9'];
 const SHEETS_WEST = ['#8c5a46', '#7d5040', '#9a6a4e', '#6f6a5e'], SHEETS_EAST = ['#7a4a32', '#6b6e6a', '#5d6a6e', '#8a8a7e', '#6e5a48'];
 const SIDES = [[0, -1], [1, 0], [0, 1], [-1, 0]]; // a cell's sides: south, east, north, west
@@ -675,7 +511,7 @@ for (const east of [false, true]) {
   /** A box prop (`sign` or `slab`) centred on the plan's point, `half` its half-size along the plan's x, y and z, squared to its lot. */
   const prop = (kind, [x, y, z], [hx, hy, hz], extra) => {
     const [u, , w] = here(x, 0, z);
-    decor.push({ kind, from: [r3(u - hx), r3(y - hy), r3(w - hz)], to: [r3(u + hx), r3(y + hy), r3(w + hz)], yaw: r3(yawAt(x, z) + (east ? 180 : 0)), ...extra });
+    decor.push({ kind, from: [r3(u - hx), r3(y - hy), r3(w - hz)], to: [r3(u + hx), r3(y + hy), r3(w + hz)], yaw: east ? 180 : 0, ...extra });
   };
   /** A glowing prop that lights the street from `from` (the plan's point): [radius, power]. */
   const light = (center, half, color, from, reach) => prop('sign', center, half, { color, at: here(...from), light: reach });
@@ -694,9 +530,9 @@ for (const east of [false, true]) {
   };
   for (let L = 0; L < LEVELS; L++) for (let i = 0; i <= FACE; i++) for (let j = 0; j < NJ; j++) {
     if (grid[L][i][j] !== FLOOR || (i === FLAG[0] && j === FLAG[1] && L === SPAWN)) continue;
-    const [x, z] = [cx(i), cz(j)], roofed = L + 1 < LEVELS && grid[L + 1][i][j] !== VOID, top = Y(L + 1) - 1;
-    let sky = true;
-    for (let M = L + 1; M < LEVELS; M++) if (grid[M][i][j] !== VOID) sky = false;
+    let M = L + 1; // what's over it: the storey of its ceiling, or the sky
+    while (M < LEVELS && grid[M][i][j] === VOID) M++;
+    const [x, z] = [cx(i), cz(j)], sky = M === LEVELS, roofed = !sky, top = Y(M) - 1;
     const [ox, oz] = [r(-4, 4), r(-4, 4)];
     if (roofed && !east && r() < 0.5) {
       // A paper lantern on a cord.
@@ -712,8 +548,8 @@ for (const east of [false, true]) {
     for (let s = 0; s < 4; s++) {
       const [di, dj] = SIDES[s];
       if (get(i + di, j + dj, L) !== SOLID) continue;
-      if (east && r() < 0.5) line('pipe', onSide(i, j, s, 0.04, 0.5, Y(L) + r(7, 9)), onSide(i, j, s, 0.96, 0.5, Y(L) + r(7, 9)), { r: r3(r(0.15, 0.3)) });
-      if (east && r() < 0.35) {
+      if (east && r() < 0.2) line('pipe', onSide(i, j, s, 0.04, 0.5, Y(L) + r(7, 9)), onSide(i, j, s, 0.96, 0.5, Y(L) + r(7, 9)), { r: r3(r(0.15, 0.3)) });
+      if (east && r() < 0.12) {
         // A box on the wall: an air conditioner, a meter, a junction.
         const [u, y, w] = onSide(i, j, s, r(0.2, 0.8), 0.5, Y(L) + r(3, 9));
         prop('slab', [u, y, w], di ? [0.4, 0.45, 0.7] : [0.7, 0.45, 0.4], { mat: 'metal' });
@@ -724,14 +560,12 @@ for (const east of [false, true]) {
         light([u, y, w], di ? [0.15, 0.5, 0.35] : [0.35, 0.5, 0.15], '#ffb060', onSide(i, j, s, 0.5, 2, Y(L) + 4), [8, 1]);
       }
     }
-    if (east && roofed && r() < 0.6) {
-      // Cables strung across, from wall to wall.
-      for (let k = 0, n = 1 + Math.floor(r() * 3); k < n; k++) {
-        const s = Math.floor(r() * 4), y = top - r(1, 3);
-        line('pipe', onSide(i, j, s, r(0.1, 0.9), 0.2, y), onSide(i, j, (s + 2) % 4, r(0.1, 0.9), 0.2, y - r(0, 1.5)), { r: 0.05 });
-      }
+    if (east && roofed && r() < 0.25) {
+      // A cable strung across, from wall to wall.
+      const s = Math.floor(r() * 4), y = top - r(1, 3);
+      line('pipe', onSide(i, j, s, r(0.1, 0.9), 0.2, y), onSide(i, j, (s + 2) % 4, r(0.1, 0.9), 0.2, y - r(0, 1.5)), { r: 0.05 });
     }
-    if (east && (sky || L === 0) && r() < 0.45) {
+    if (east && (sky || L === 0) && r() < 0.2) {
       // Washing on a line.
       const s = Math.floor(r() * 2), y = Y(L) + r(5.5, 7.5), a = onSide(i, j, s, r(0.2, 0.8), 0.3, y), b = onSide(i, j, s + 2, r(0.2, 0.8), 0.3, y);
       line('pipe', a, b, { r: 0.03 });
@@ -744,36 +578,98 @@ for (const east of [false, true]) {
       // An open roof: a rail along each edge with a drop past it, a pole in a corner now and then.
       for (let s = 0; s < 4; s++) {
         const [di, dj] = SIDES[s];
-        if (get(i + di, j + dj, L) === VOID && !(i === FACE && di === 1)) line('railing', onSide(i, j, s, 0.04, 0.4, Y(L)), onSide(i, j, s, 0.96, 0.4, Y(L)), { color: east ? '#5f6466' : '#9c7a3c' });
+        if (get(i + di, j + dj, L) === VOID && !(i === FACE && di === 1) && !SLOPED.has(key(i + di, j + dj, L))) line('railing', onSide(i, j, s, 0.04, 0.4, Y(L)), onSide(i, j, s, 0.96, 0.4, Y(L)), { color: east ? '#5f6466' : '#9c7a3c' });
       }
-      if (r() < 0.3) pole(x + Math.sign(ox || 1) * 6.5, Y(L), z + Math.sign(oz || 1) * 6.5, r(6, 9));
+      if (r() < 0.25) pole(x + Math.sign(ox || 1) * 6.5, Y(L), z + Math.sign(oz || 1) * 6.5, r(6, 9));
     }
     if (sky && L >= 5 && i < FACE && !special.has(key(i, j, L))) {
-      if (!east && r() < 0.5) prop('slab', [x - ox * 0.6, Y(L) + 0.4, z + 6.5 * Math.sign(oz || 1)], [2.2, 0.4, 0.6], { mat: 'moss' }); // a planter
+      if (!east && r() < 0.4) prop('slab', [x - ox * 0.6, Y(L) + 0.4, z + 6.5 * Math.sign(oz || 1)], [2.2, 0.4, 0.6], { mat: 'moss' }); // a planter
       if (!east && r() < 0.35) decor.push({ kind: 'lamp', at: here(x + ox, Y(L), z - oz) });
-      if (east && r() < 0.4) line('pipe', [x + ox, Y(L), z + oz], [x + ox, Y(L) + r(4, 9), z + oz], { r: 0.08 }); // an aerial
+      if (east && r() < 0.2) line('pipe', [x + ox, Y(L), z + oz], [x + ox, Y(L) + r(4, 9), z + oz], { r: 0.08 }); // an aerial
     }
   }
-  // The chasm's face: a balcony's edge gets a rail; a wall gets a banner (west) or neon and boxes (east).
+  // The chasm's face: a balcony's edge gets a rail.
   for (let L = 1; L < LEVELS; L++) for (let j = 0; j < NJ; j++) {
-    if (grid[L][GORGE][j] !== VOID) continue;
-    const face = grid[L][FACE][j];
-    if (face === FLOOR) line('railing', [X(GORGE) - 0.3, Y(L), Z(j) + 0.6], [X(GORGE) - 0.3, Y(L), Z(j + 1) - 0.6], east ? { color: '#6d7376' } : {});
-    if (face !== SOLID) continue;
-    const z = cz(j) + r(-3, 3), y = Y(L) + r(3, 7);
-    if (!east && r() < 0.35) light([X(GORGE) + 0.2, y, z], [0.15, 3.5, 1.1], pick(BANNERS), [X(GORGE) + 2.5, y, z], [16, 2.4]);
-    if (east && r() < 0.6) light([X(GORGE) + 0.2, y, z], [0.15, r(1, 2.5), r(1.2, 3)], pick(NEON), [X(GORGE) + 2.5, y, z], [18, 2.8]);
-    if (east) for (let k = 0, n = Math.floor(r() * 3); k < n; k++) prop('slab', [X(GORGE) + 0.5, Y(L) + r(1, 10), Z(j) + r(2, 14)], [0.5, 0.45, 0.7], { mat: 'metal' });
+    const foot = CLIMBS[2].some(([i, k, M]) => i === FACE && k === j && M === L) || (L === ROOF && j === FLANKS[1]); // where a bridge meets the face
+    if (grid[L][GORGE][j] === VOID && grid[L][FACE][j] === FLOOR && !foot) line('railing', [X(GORGE) - 0.3, Y(L), Z(j) + 0.6], [X(GORGE) - 0.3, Y(L), Z(j + 1) - 0.6], east ? { color: '#6d7376' } : {});
   }
-  // The towers' roofs: what's gone up on them since, at any angle. Sheds and lean-tos under pitched
-  // corrugated sheets on posts, stair huts, tanks on legs, poles with cables slung from one to the
-  // next, aerials and dishes, rails round the edges, boxes; strings of lanterns over the west's,
-  // neon billboards on the east's. None of it collides: only the towers do.
+  // Neon, Hong Kong style (see web/neon.js): boards of glyphs in no particular script, under tube
+  // outlines and bulbs or on lightboxes, long, tall, square, pill- and arch-shaped, emblems (discs,
+  // diamonds, octagons) and pawnshop signs (a tall board under an emblem), warm in the west and cold
+  // in the east. Down low they crowd out from the walls on brackets, the long ones spanning the
+  // street: off the docks' back wall, out over the canal and the plaza from both faces and the
+  // Bridge's sides, over the square and round the courtyard, the well and the low road. Higher up the
+  // faces they hang flat on the walls, fewer. One in six lights the walls round it; none collides,
+  // and none hangs lower than a Heavy's head.
+  /** A neon board [w, h, emblem] on the wall at open cell (i, j)'s side `s`, `t` along it, its middle `y` up: out from the wall on a bracket, or `flat` on it. */
+  const neon = (i, j, s, t, y, [w, h, emblem], flat = false) => {
+    const [di] = SIDES[s];
+    decor.push({ kind: 'neon', at: here(...onSide(i, j, s, t, flat ? 0.3 : 0.6 + w / 2, y)), size: [r3(w), r3(h)], yaw: (di !== 0) === flat ? 90 : 0, tone: east ? 'cool' : 'warm', ...(emblem && { emblem }), ...(r() < 0.16 && { light: [16, 2] }) });
+    if (!flat) line('pipe', onSide(i, j, s, t, 0, y + h / 2 + 0.3), onSide(i, j, s, t, w + 0.6, y + h / 2 + 0.3), { r: 0.06, color: '#2a2a2a' });
+  };
+  /** A sign's size [w, h, emblem], no taller than `most` nor longer than `long`: a long board across the street, a tall one, an emblem or a lightbox. */
+  const sign = (most = 16, long = 18) => {
+    const k = r();
+    if (k < 0.4) {
+      const w = r(long / 2, long);
+      return [w, Math.min(Math.max(w / r(3, 6), 2), 5, most)];
+    }
+    if (k < 0.68 && most >= 6) {
+      const w = r(2.5, 5);
+      return [w, Math.min(w * r(2.5, 4), most)];
+    }
+    if (k < 0.84) {
+      const d = r(3, Math.min(9, most));
+      return [d, d, true];
+    }
+    return [r(3, 7), r(2.5, Math.min(6, most))];
+  };
+  /** A sign, or now and then (when there's height for it) a pawnshop's: a tall board under an emblem, out on the same line, together centred `y` up. */
+  const signs = (i, j, s, t, y, most, long) => {
+    if (most < 12 || r() > 0.15) return neon(i, j, s, t, y, sign(most, long));
+    const w = r(3, 4.5), d = w * 1.3, h = Math.min(w * r(2.5, 3.5), most - d - 0.5), low = y - (d + 0.5) / 2;
+    neon(i, j, s, t, low, [w, h]);
+    neon(i, j, s, t, low + h / 2 + 0.5 + d / 2, [d, d, true]);
+  };
+  /** Every wall round open cells at level L that `open` picks, the wall at level `M`: each gets `n()` signs across it, centred `y()` up, sized by `fit` ([most, long] for `sign`). */
+  const walls = (L, open, M, n, y, fit) => {
+    for (let i = 0; i <= FACE; i++) for (let j = 0; j < NJ; j++) {
+      if (grid[L][i][j] !== FLOOR || !open(i, j)) continue;
+      for (let s = 0; s < 4; s++) {
+        const [di, dj] = SIDES[s];
+        if (get(i + di, j + dj, M) !== SOLID) continue;
+        for (let k = 0, m = n(); k < m; k++) signs(i, j, s, (k + 0.5) / m + r(-0.06, 0.06), y(), ...fit);
+      }
+    }
+  };
+  const stairs = (j) => j >= FLANKS[0] && j <= FLANKS[0] + 3, ladder = (j) => j === 9 || j === 10;
+  walls(CANAL, (i, j) => i === FACE && !stairs(j) && !ladder(j), CANAL, () => 2, () => r(8, 9.5), [3, 12]); // the docks, under the face
+  for (let L = 1; L < LEVELS; L++) for (let j = 0; j < NJ; j++) {
+    // The faces: crowded low, up to just over the plaza (clear of the bridges), flat and fewer higher up.
+    if (grid[L][GORGE][j] !== VOID || grid[L][FACE][j] !== SOLID) continue;
+    if (L < RAIL && !(L === RAIL - 1 && FLANKS.includes(j))) for (let k = 0, m = 3 + Math.floor(r() * 2); k < m; k++) signs(GORGE, j, 3, (k + 0.5) / m + r(-0.05, 0.05), Y(L) + r(3, 9), 16, 18);
+    else if (L >= RAIL && !FLANKS.includes(j) && r() < 0.5) {
+      const size = sign(8, 12);
+      neon(GORGE, j, 3, 0.5 + r(-1, 1) * Math.max(0, (CELL - size[0]) / (2 * CELL)), Y(L) + r(4, 8), size, true); // (inside its cell)
+    }
+  }
+  // The Bridge's sides, out over the canal under it (clear of the face's, which reach 19 m out).
+  for (let L = 1; L < PLAZA; L++) for (const [j, s] of [[SPAN[0] - 1, 2], [SPAN[1] + 1, 0]]) for (const [i, t] of [[GORGE + 1, 0.25], [GORGE + 1, 0.75]]) {
+    if (grid[L][i][j] === VOID) signs(i, j, s, t + r(-0.04, 0.04), Y(L) + r(3, 9), 14, 14);
+  }
+  const square = (i, j) => i >= 4 && j >= SPAN[0] && j <= SPAN[1] && grid[SPAWN + 1][i][j] === VOID;
+  walls(SPAWN, square, SPAWN, () => 2, () => Y(SPAWN) + r(8, 9.5), [3, 10]); // the square, under its first storey's top
+  walls(SPAWN, square, SPAWN + 1, () => 1 + Math.floor(r() * 2), () => Y(SPAWN + 1) + r(3, 5.5), [8, 14]); // and high over it
+  walls(SPAWN, (i, j) => grid[SPAWN + 1][i][j] === VOID && !square(i, j), SPAWN, () => 1 + Math.floor(r() * 2), () => Y(SPAWN) + r(9.5, 12), [5, 12]); // the courtyard
+  walls(LOW, () => r() < 0.5, LOW, () => 1, () => Y(LOW) + r(8.4, 9), [2.8, 9]); // the low road and the well
+  // The towers' roofs: one thing gone up on each, now and then: a shed under a pitched corrugated
+  // sheet on posts, a stair hut or a tank on legs; a neon billboard on a few of the east's. None of
+  // it collides: only the towers do.
   for (let i = 0; i <= FACE; i++) for (let j = 0; j < NJ; j++) {
     const top = tops[i][j];
     if (top === undefined) continue;
-    const [x, z] = [cx(i), cz(j)], spot = (m) => [x + r(-m, m), z + r(-m, m)];
-    for (let k = 0, n = r() < 0.55 ? 1 : 2; k < n; k++) {
+    const [x, z] = [cx(i), cz(j)], spot = (m) => [x + r(-m, m), z + r(-m, m)], roll = r();
+    if (roll < 0.3) {
       // A shed: a corrugated roof pitched (its -Z edge up) on four posts.
       const [u, w] = spot(3.5), [hw, hd] = r() < 0.5 ? [r(2, 3.8), r(1.5, 2.6)] : [r(1.5, 2.6), r(2, 3.8)];
       const h = top + r(2.6, 3.6), tilt = r(6, 14), rise = hd * Math.sin((tilt * Math.PI) / 180);
@@ -782,54 +678,29 @@ for (const east of [false, true]) {
         const [pu, pw] = [u + sx * (hw - 0.3), w + sz * (hd - 0.3)];
         line('pipe', [pu, top, pw], [pu, h - sz * rise, pw], { r: 0.08, color: '#3a3c3f' });
       }
-    }
-    if (r() < 0.6) {
+    } else if (roll < 0.5) {
       const [u, w] = spot(5);
       prop('slab', [u, top + 1.5, w], [r(1.4, 2.4), 1.5, r(1.4, 2.2)], { color: east ? '#74776f' : '#bba88a' }); // a stair hut
-    }
-    if (r() < (east ? 0.6 : 0.35)) {
+    } else if (roll < 0.65) {
       // A tank on legs.
       const [u, w] = spot(4.5), [rad, leg] = [r(1.2, 1.8), r(1.6, 2.6)];
       for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) line('pipe', [u + sx * rad * 0.6, top, w + sz * rad * 0.6], [u + sx * rad * 0.6, top + leg, w + sz * rad * 0.6], { r: 0.1, color: '#3a3c3f' });
       line('pipe', [u, top + leg, w], [u, top + leg + r(2.2, 3.6), w], { r: r3(rad), color: pick(east ? ['#6e5a48', '#7a7468', '#5f6a6a'] : ['#8a7a62', '#9a8a6a', '#7d6a55']) });
     }
-    if (r() < (east ? 0.7 : 0.45)) pole(x + pick([-1, 1]) * r(5, 7), top, z + pick([-1, 1]) * r(5, 7), r(6, 10));
-    for (let k = 0, n = east ? Math.floor(r(1, 4)) : r() < 0.4 ? 1 : 0; k < n; k++) {
-      // An aerial, crossed near its top.
-      const [u, w] = spot(6), ah = r(3, 8);
-      line('pipe', [u, top, w], [u, top + ah, w], { r: 0.05, color: '#4a4c4e' });
-      line('pipe', [u - 0.8, top + ah * 0.8, w], [u + 0.8, top + ah * 0.8, w], { r: 0.03, color: '#4a4c4e' });
-    }
-    if (east && r() < 0.35) {
-      // A dish on a post.
-      const [u, w] = spot(5), a = r(0, 2 * Math.PI);
-      line('pipe', [u, top, w], [u, top + 1.4, w], { r: 0.06, color: '#4a4c4e' });
-      line('pipe', [u, top + 1.7, w], [u + Math.cos(a) * 0.12, top + 1.82, w + Math.sin(a) * 0.12], { r: r3(r(0.7, 1.1)), color: '#c8c8c0' });
-    }
-    for (let k = 0, n = east ? Math.floor(r(1, 4)) : Math.floor(r(0, 2)); k < n; k++) {
-      const [u, w] = spot(6);
-      prop('slab', [u, top + 0.45, w], [0.5, 0.45, 0.7], { mat: 'metal' }); // a box: an air conditioner, a meter
-    }
-    for (let s = 0; s < 4; s++) {
-      // A rail along an edge with a drop past it (the next roof lower, or none).
-      const [di, dj] = SIDES[s];
-      if ((tops[i + di]?.[j + dj] ?? -1) < top - 1 && r() < 0.7) line('railing', onSide(i, j, s, 0.04, 0.4, top), onSide(i, j, s, 0.96, 0.4, top), { color: east ? '#5f6466' : '#9c7a3c' });
-    }
-    if (east && r() < 0.15) {
+    if (east && r() < 0.12) {
       // A neon billboard on two legs, facing out over an edge.
       const y = top + r(5, 8), s = Math.floor(r() * 4), [di, dj] = SIDES[s];
       for (const t of [0.25, 0.75]) {
         const a = onSide(i, j, s, t, 2, top);
         line('pipe', a, [a[0], y, a[2]], { r: 0.12, color: '#3a3430' });
       }
-      const [u, , w] = onSide(i, j, s, 0.5, 2, top);
-      light([u, y + 1.6, w], di ? [0.15, 1.6, 3.6] : [3.6, 1.6, 0.15], pick(NEON), [u + di * 3, y + 1, w + dj * 3], [18, 2.2]);
+      decor.push({ kind: 'neon', at: here(...onSide(i, j, s, 0.5, 2, y + 1.6)), size: [7.2, 3.2], yaw: di ? 90 : 0, tone: 'cool', light: [18, 2.2] });
     }
   }
-  // Cables slung from each pole to its nearest one or two, sagging; lanterns strung along some of the west's.
+  // A cable slung from each pole to its nearest, sagging; lanterns strung along some of the west's.
   poles.forEach((p, n) => {
     const away = (q) => Math.hypot(q[0] - p[0], q[2] - p[2]);
-    for (const q of poles.slice(n + 1).filter((q) => away(q) > 6 && away(q) < 36).sort((a, b) => away(a) - away(b)).slice(0, 2)) {
+    for (const q of poles.slice(n + 1).filter((q) => away(q) > 6 && away(q) < 36).sort((a, b) => away(a) - away(b)).slice(0, 1)) {
       const mid = [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2 - r(1.5, 4), (p[2] + q[2]) / 2];
       line('pipe', p, mid, { r: 0.04, color: '#2a2a2a' });
       line('pipe', mid, q, { r: 0.04, color: '#2a2a2a' });
@@ -841,8 +712,8 @@ for (const east of [false, true]) {
       }
     }
   });
-  // The Bridge's sign down the chasm, on its half of the Bridge: a gilt board (west), a neon one (east).
-  light([X(GORGE) + 16, Y(2) + 6, Z(SPAN[0]) - 0.4], [6, 3, 0.15], east ? '#ff3fa0' : '#ffb347', [X(GORGE) + 16, Y(2) + 5, Z(SPAN[0]) - 4], [22, 2.4]);
+  // The Bridge's sign down the chasm, on its half of the Bridge.
+  decor.push({ kind: 'neon', at: here(X(GORGE) + 16, Y(2) + 6, Z(SPAN[0]) - 0.4), size: [12, 6], yaw: 0, tone: east ? 'cool' : 'warm', light: [22, 2.4] });
   // The plaza: rails along its edges over the chasm, lamps by its stalls.
   for (const z of [Z(SPAN[0]) + 0.4, Z(SPAN[1] + 1) - 0.4]) line('railing', [X(GORGE) + 0.4, Y(PLAZA), z], [0, Y(PLAZA), z], east ? { color: '#6d7376' } : {});
   for (const z of [-21, 21]) decor.push({ kind: 'lamp', at: here(-21, Y(PLAZA), z) });
@@ -850,25 +721,23 @@ for (const east of [false, true]) {
   for (const x of [X(GORGE) + 8, X(GORGE) + 24]) {
     light([x, Y(HALL + 1) - (east ? 0.4 : 2.6), 0], east ? [1.3, 0.06, 0.1] : [0.55, 0.75, 0.55], east ? TUBES[0] : LANTERNS[0], [x, Y(HALL) + 6, 0], [16, 3]);
   }
-  // The high bridges: rails along both edges.
-  for (const row of HIGH_ROWS) for (const z of [Z(row) + 0.4, Z(row + 1) - 0.4]) line('railing', [X(GORGE) + 0.4, Y(HIGH), z], [0, Y(HIGH), z], east ? { color: '#6d7376' } : {});
-  // The docks: lamps along the west's, neon over the east's, steam off the water.
+  // The docks: lamps along the west's, steam off the water by the east's.
   for (let j = 0; j < NJ; j += 2) {
     const z = cz(j) + r(-4, 4);
     if (!east) decor.push({ kind: 'lamp', at: here(X(FACE) + 13, 0, z) });
-    else light([X(FACE) + 1, 7, z], [0.15, 1.2, 2.5], pick(NEON), [X(FACE) + 4, 5, z], [14, 1.8]);
     if (east && r() < 0.5) decor.push({ kind: 'steam', at: here(X(GORGE) + r(2, 30), 0.8, cz(j) + r(-6, 6)) });
   }
 }
-// Across the chasm: cables slung from face to face, and the monorail's track round the ring.
+// Across the chasm: cables slung from face to face, and the monorail's track round its whole loop.
 {
   const r = rng(616);
-  for (let k = 0; k < 14; k++) {
-    const [y, za, zb] = [r(14, 100), r(-120, 120), r(-120, 120)], [a, b] = [built(X(GORGE), za), built(X(NI - GORGE), zb)];
+  for (let k = 0; k < 6; k++) {
+    const [y, za, zb] = [r(14, 100), r(-100, 100), r(-100, 100)], [a, b] = [[X(GORGE), za], [X(NI - GORGE), zb]];
     const mid = [(a[0] + b[0]) / 2, y - r(2, 5), (a[1] + b[1]) / 2];
     decor.push({ kind: 'pipe', from: [r3(a[0]), r3(y), r3(a[1])], to: mid.map(r3), r: 0.07 }, { kind: 'pipe', from: mid.map(r3), to: [r3(b[0]), r3(y + r(-2, 2)), r3(b[1])], r: 0.07 });
   }
-  for (const p of [objectives.convoy.points]) {
+  const track = [along(TRACK), along(BRIDGE)];
+  for (const p of [...track, ...track.map((q) => q.map(flip))]) {
     for (let k = 1; k < p.length; k++) {
       const [a, b] = [p[k - 1], p[k]], d = Math.hypot(b[0] - a[0], b[2] - a[2]), [nx, nz] = [-(b[2] - a[2]) / d, (b[0] - a[0]) / d];
       for (const o of [-0.9, 0.9]) decor.push({ kind: 'pipe', from: [r3(a[0] + nx * o), a[1] + 0.12, r3(a[2] + nz * o)], to: [r3(b[0] + nx * o), b[1] + 0.12, r3(b[2] + nz * o)], r: 0.1 });
@@ -878,7 +747,7 @@ for (const east of [false, true]) {
 
 // --- Spawns, twin, write ---------------------------------------------------------------------------
 const north = [];
-for (const i of [2, 3]) for (const j of [6, 7, 8, 9]) north.push(at(cx(i), Y(SPAWN) + 0.1, cz(j)));
+for (const [i, j] of [[1, 5], [1, 6], [1, 7], [2, 5], [2, 6], [2, 7], [2, 8]]) north.push(at(cx(i), Y(SPAWN) + 0.1, cz(j))); // (the pad's in the hall's last corner)
 // Blue hour: the last of the dusk, a twilight sky warm at the horizon and the city's lights coming
 // on: warm lamps in the west, cold tubes and neon in the east. Black water stands on the canal.
 const palette = {
