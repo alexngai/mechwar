@@ -1065,9 +1065,6 @@ function frame(now) {
         calledEarly = { at: now, scrap: Math.floor(CALL_SCRAP * b) };
         callout = { text: `WAVE CALLED · +${calledEarly.scrap} SCRAP`, color: hex(FRIEND.accent), at: now };
         sound.zone('took');
-      } else if (a === 9) {
-        callout = { text: 'THE STRAGGLERS HURRY ON', color: hex(FOE.accent), at: now };
-        sound.zone('lost');
       } else if (a === 10) {
         // The reactor's grid raised to level b.
         callout = { text: `GRID RAISED · ${GRID[b]} TOWERS`, color: hex(FRIEND.accent), at: now };

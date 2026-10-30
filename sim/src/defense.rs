@@ -35,8 +35,7 @@ const WAVE_SCORE: f32 = 200.0;
 /// The wave director: each wave's threat budget for a full team (SOLO_SHARE of it for one pilot
 /// and evenly between), spent on `CARDS`, a theme leaning it one way from wave 3 (`Theme`). Foes
 /// come through the gates in packs of PACK, PACK_GAP apart (a pack of crawlers CRAWLER_GAP),
-/// PACK_PAUSE between packs. HURRY_AFTER s after its last foe came, a wave's stragglers walk
-/// HURRY times their pace (bosses keep theirs).
+/// PACK_PAUSE between packs.
 const BUDGETS: [f32; WAVES as usize] = [6.0, 10.0, 14.0, 21.0, 30.0, 48.0, 60.0, 72.0, 82.0, 80.0];
 
 /// What the director buys: a foe (crawlers by the pack), what it costs of the budget, the wave
@@ -112,8 +111,6 @@ const PACK: u8 = 6;
 const PACK_GAP: f32 = 0.4;
 const PACK_PAUSE: f32 = 5.0;
 const CRAWLER_GAP: f32 = 0.35;
-const HURRY_AFTER: f32 = 30.0;
-const HURRY: f32 = 1.25;
 /// An infested mech that reaches the reactor takes this off it (and is gone).
 pub const ELITE_LEAK: f32 = 200.0;
 /// A plated foe's hits each lose its `armor`, but at least ARMOR_FLOOR of each gets through.
@@ -145,8 +142,8 @@ pub fn species(kind: Kind) -> Species {
         Kind::Mortar => Species { hull: 140.0, hull_step: 22.0, speed: 3.5, spread: 1.5, leak: LEAK, armor: 0.0 },
         Kind::Node => Species { hull: 150.0, hull_step: 18.0, speed: 4.0, spread: 1.0, leak: 50.0, armor: 0.0 },
         // Bosses: their hull for a full team (a lone pilot meets SOLO_SHARE of it).
-        Kind::Excavator => Species { hull: 2600.0, hull_step: 0.0, speed: 2.0, spread: 0.0, leak: 600.0, armor: 6.0 },
-        Kind::Hive => Species { hull: 4500.0, hull_step: 0.0, speed: 2.2, spread: 0.0, leak: 1000.0, armor: 4.0 },
+        Kind::Excavator => Species { hull: 1800.0, hull_step: 0.0, speed: 2.0, spread: 0.0, leak: 600.0, armor: 6.0 },
+        Kind::Hive => Species { hull: 3200.0, hull_step: 0.0, speed: 2.2, spread: 0.0, leak: 1000.0, armor: 4.0 },
         _ => Species { hull: 100.0, hull_step: 20.0, speed: 4.5, spread: 2.0, leak: LEAK, armor: 0.0 },
     }
 }
@@ -418,8 +415,6 @@ pub enum News {
     Refused { id: u8, why: Refusal },
     /// The break was called short, with `seconds` left.
     Called { seconds: u16 },
-    /// The wave's stragglers hurry on.
-    Hurry,
     /// The reactor's grid raised to `level` (0 the first), taking more towers.
     Grid { level: u8 },
 }
@@ -495,9 +490,8 @@ pub struct Defense {
     now: u32,
     /// Picks walkers' branches and places, run to run the same (xorshift).
     rng: u32,
-    /// The foes come so far in the pack coming, and the tick the wave's last came (0: still to).
+    /// The foes come so far in the pack coming.
     pack: u8,
-    last_came: u32,
     /// The run's score; the human pilots who've called the next wave this break.
     pub score: f32,
     pub ready: Vec<u8>,
@@ -571,7 +565,6 @@ impl Defense {
             now: tick,
             rng: (0x9e37_79b9 ^ tick.wrapping_mul(0x85eb_ca6b)) | 1,
             pack: 0,
-            last_came: 0,
             score: 0.0,
             ready: Vec::new(),
             grid: 0,
@@ -977,7 +970,7 @@ impl Defense {
         match self.stage {
             Stage::Break { until } if tick >= until => {
                 self.stage = Stage::Wave { next_at: tick };
-                (self.pack, self.last_came) = (0, 0);
+                self.pack = 0;
                 self.ready.clear();
                 out.news.push(News::Wave { n: self.wave, count: self.queue.len() as u16 });
             }
@@ -1022,9 +1015,6 @@ impl Defense {
                         PACK_GAP
                     };
                     self.stage = Stage::Wave { next_at: tick + (gap * TICK_HZ) as u32 };
-                    if self.queue.is_empty() {
-                        self.last_came = tick;
-                    }
                 }
             }
             Stage::Wave { .. } if self.queue.is_empty() && self.walkers.is_empty() && elites == 0 => {
@@ -1051,9 +1041,6 @@ impl Defense {
                 }
             }
             _ => {}
-        }
-        if self.last_came > 0 && tick == self.last_came + (HURRY_AFTER * TICK_HZ) as u32 && self.walkers.iter().any(|w| !w.kind.boss()) {
-            out.news.push(News::Hurry);
         }
         // Each walker on along its lanes, at its place across them.
         let mut gone = Vec::new();
@@ -1117,11 +1104,9 @@ impl Defense {
         self.place(w).1 * self.pace(w)
     }
 
-    /// How fast walker `w` walks (m/s): its kind's pace, RUSH times it burrowing, HURRY times it
-    /// straggling (not a boss).
+    /// How fast walker `w` walks (m/s): its kind's pace, RUSH times it burrowing.
     fn pace(&self, w: &Walker) -> f32 {
-        let hurry = self.last_came > 0 && self.now >= self.last_came + (HURRY_AFTER * TICK_HZ) as u32 && !w.kind.boss();
-        species(w.kind).speed * if self.now < w.rush { RUSH } else if hurry { HURRY } else { 1.0 }
+        species(w.kind).speed * if self.now < w.rush { RUSH } else { 1.0 }
     }
 
     /// Human pilot `id` calls the next wave (in a break): once every one of `humans` has, it
@@ -1247,26 +1232,17 @@ mod tests {
     }
 
     #[test]
-    fn foes_come_in_packs_and_stragglers_hurry_but_not_bosses() {
-        // A gate 200 m out, so the brutes are still walking when they'd hurry.
-        let spots = DefenseSpots { reactor: [0.0; 3], radius: 6.0, gates: vec![[0.0, 0.0, -200.0]], lanes: Lanes::default(), late: vec![] };
-        let mut d = Defense::new(&spots, 0, |_, _| Vec::new()).unwrap();
+    fn foes_come_in_packs() {
+        let mut d = run();
         steps(&mut d, 0, 0.1);
         // Seven brutes and the Hive through gate 0 (the queue comes from its end).
         d.queue = std::iter::once((Foe::Lane(Kind::Hive), 0)).chain(std::iter::repeat_n((Foe::Lane(Kind::Brute), 0), 7)).collect();
         d.stage = Stage::Break { until: 10 };
-        // (Long enough to hurry, not for the first to reach the reactor.)
-        let out = steps(&mut d, 10, HURRY_AFTER + 9.0);
+        let out = steps(&mut d, 10, 10.0);
         let came: Vec<u32> = out.iter().enumerate().filter(|(_, o)| !o.spawn.is_empty()).map(|(t, _)| t as u32).collect();
         let gaps: Vec<u32> = came.windows(2).map(|w| w[1] - w[0]).collect();
         let (gap, pause) = ((PACK_GAP * TICK_HZ) as u32, (PACK_PAUSE * TICK_HZ) as u32);
         assert_eq!(gaps, [gap, gap, gap, gap, gap, pause, gap]);
-        // HURRY_AFTER on from the last, the stragglers hurry, called out, but the Hive keeps its pace.
-        let hurry = (came[7] as f32 + HURRY_AFTER * TICK_HZ) as usize;
-        assert_eq!(out.iter().position(|o| o.news.contains(&News::Hurry)), Some(hurry));
-        let pace = |d: &Defense, k: Kind| d.walkers.iter().find(|w| w.kind == k).map(|w| d.velocity(w.owner).length()).unwrap();
-        assert!((pace(&d, Kind::Brute) - species(Kind::Brute).speed * HURRY).abs() < 1e-3);
-        assert!((pace(&d, Kind::Hive) - species(Kind::Hive).speed).abs() < 1e-3);
     }
 
     #[test]

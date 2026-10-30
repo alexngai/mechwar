@@ -523,7 +523,8 @@ impl WasmNetClient {
     /// walker reached the reactor; 3 player b's build order refused, x = why: `defense::Refusal`'s
     /// index; 4 a boss came, b = its kind; 5 player b picked up salvage, x = 1 a boss's; 6 the
     /// Bloom sealed route b (x = 1) or burst it open (x = 0), b indexing the map's seals; 7
-    /// player b picked up a supply cache). Arc pylon lightning (kind 15), two records a jump: a = 0 xyz = from, then a = 1
+    /// player b picked up a supply cache; 8 the break called short, b seconds early; 10 the
+    /// reactor's grid raised to level b). Arc pylon lightning (kind 15), two records a jump: a = 0 xyz = from, then a = 1
     /// xyz = to. Pulse pylon EMP (kind 16): a = radius, xyz = where. Mortar shell fired (kind 17),
     /// two records: a = 0 xyz = from, then a = 1 xyz = where it lands; b = its flight (s).
     pub fn take_events(&mut self) -> Vec<f32> {
@@ -565,7 +566,6 @@ impl WasmNetClient {
                         News::Bloom { seal, sealed } => [14.0, 6.0, f32::from(seal), if sealed { 1.0 } else { 0.0 }, 0.0, 0.0],
                         News::Cache { id } => [14.0, 7.0, f32::from(id), 0.0, 0.0, 0.0],
                         News::Called { seconds } => [14.0, 8.0, f32::from(seconds), 0.0, 0.0, 0.0],
-                        News::Hurry => [14.0, 9.0, 0.0, 0.0, 0.0, 0.0],
                         News::Grid { level } => [14.0, 10.0, f32::from(level), 0.0, 0.0, 0.0],
                     });
                 }
