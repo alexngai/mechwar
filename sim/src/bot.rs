@@ -44,6 +44,19 @@ pub struct Nav {
     edges: Vec<(usize, usize)>,
     /// The edges climbed by hovering, also in `edges`.
     hover: Vec<(usize, usize)>,
+    /// The way across its lanes, which flankers go out along: X, square to the line between the
+    /// teams' spawns where they face each other along Z (most maps), or Z where they face along X.
+    across: Vector,
+    /// Under this is low ground, which sneaks take: below ground level, or a storey's half under
+    /// the spawns' floor where that's higher (a city whose streets stand on others).
+    low: f32,
+}
+
+impl Default for Nav {
+    /// No waypoints; lanes across X and low ground under ground level, as on most maps.
+    fn default() -> Nav {
+        Nav { index: None, nodes: Vec::new(), edges: Vec::new(), hover: Vec::new(), across: Vector::X, low: -1.0 }
+    }
 }
 
 /// Each map's edges as `bake_nav` (in the tests below) walked them, with a hash of the map they
@@ -70,10 +83,21 @@ impl Nav {
     /// Baked for each compiled-in map (walked here if the map has changed since), and cached.
     pub fn for_map(index: usize) -> &'static Nav {
         static CACHE: [OnceLock<Nav>; MAPS.len()] = [const { OnceLock::new() }; MAPS.len()];
-        CACHE[index].get_or_init(|| match Nav::baked(BAKED, index) {
-            Some((edges, hover)) => Nav { index: Some(index), nodes: Map::load(index).nav.iter().map(|p| Vector::from_array(*p)).collect(), edges, hover },
-            None => Nav { index: Some(index), ..Nav::walk_map(index) },
+        CACHE[index].get_or_init(|| {
+            let map = Map::load(index);
+            let nav = match Nav::baked(BAKED, index) {
+                Some((edges, hover)) => Nav { nodes: map.nav.iter().map(|p| Vector::from_array(*p)).collect(), edges, hover, ..Nav::default() },
+                None => Nav::walk_map(index),
+            };
+            Nav { index: Some(index), ..nav.laid_out(&map) }
         })
+    }
+
+    /// Its lanes and low ground, from where `map`'s teams spawn.
+    fn laid_out(self, map: &Map) -> Nav {
+        let [a, b] = map.spawns.each_ref().map(|team| team.iter().map(|p| Vector::from_array(*p)).sum::<Vector>() / team.len().max(1) as f32);
+        let d = b - a;
+        Nav { across: if d.x.abs() > 2.0 * d.z.abs() { Vector::Z } else { Vector::X }, low: ((a.y + b.y) / 2.0 - 6.0).max(-1.0), ..self }
     }
 
     /// Map `index`'s edges from `bakes` (maps/nav.json's form), if baked from the map as it is.
@@ -109,7 +133,7 @@ impl Nav {
                 }
             }
         }
-        Nav { index: None, nodes, edges, hover }
+        Nav { nodes, edges, hover, ..Nav::default() }
     }
 
     /// Whether the edge from waypoint `a` to `b` is climbed by hovering.
@@ -227,9 +251,19 @@ impl Nav {
         self.nodes[i].distance(chest) < VANTAGE_RANGE && sees_at(arena, t, &Mech { pos: self.nodes[i], ..Mech::default() }, chest)
     }
 
-    /// Side lanes run this far out along x: the maps put their bases at ±z.
-    fn lane_x(&self) -> f32 {
-        0.6 * self.nodes.iter().fold(0.0, |m, n| n.x.abs().max(m))
+    /// Side lanes run this far out across the map (along `across`).
+    fn lane(&self) -> f32 {
+        0.6 * self.nodes.iter().fold(0.0, |m, &n| self.out(n).abs().max(m))
+    }
+
+    /// How far out across the map `p` is.
+    fn out(&self, p: Vector) -> f32 {
+        p.dot(self.across)
+    }
+
+    /// How far along the map `p` is (square to `out`).
+    fn along(&self, p: Vector) -> f32 {
+        p.dot(Vector::Y.cross(self.across))
     }
 }
 
@@ -281,6 +315,8 @@ fn hover_up(rise: f32, left: f32, hovering: bool) -> bool {
 
 /// Waypoint counts as reached within this horizontal distance.
 const ARRIVE: f32 = 2.5;
+/// Fallen below its route: the waypoint it last reached and its next both this far overhead.
+const FELL: f32 = 4.0;
 /// How near its own side's dome or barrier a bot in a fight goes to cool under or behind it (m).
 const HAVEN: f32 = 20.0;
 /// Bots boost toward a waypoint at least this far away.
@@ -1771,8 +1807,14 @@ impl Bot {
         // An order is a spot to stand on, not one to overlook from a perch or come at side-on: no
         // vantage on the way to it (nor one kept from before it came).
         let ordered = self.order.is_some();
-        if self.path_goal.is_none() || moved || blind || (ordered && self.vantage.is_some()) {
-            let (role, lane, far) = (self.role, nav.lane_x(), me.pos.distance(target.pos) > DETOUR_MIN);
+        // Fallen below its route (off a ledge, down a hole beside it): plan again from where it landed.
+        let above = |i: usize| nav.node(i).y - me.pos.y > FELL;
+        let fell = me.grounded && self.reached.is_some_and(above) && self.path.first().is_some_and(|&n| above(n));
+        if fell {
+            self.reached = None;
+        }
+        if self.path_goal.is_none() || moved || blind || fell || (ordered && self.vantage.is_some()) {
+            let (role, lane, far) = (self.role, nav.lane(), me.pos.distance(target.pos) > DETOUR_MIN);
             let (at, from_target) = (|i| nav.node(i), |i| nav.node(i).distance(target.pos));
             let mut vantage = None;
             self.path = nav.path(nav.nearest(arena, me.pos), |cost| {
@@ -1780,10 +1822,10 @@ impl Bot {
                     _ if blind || ordered => None,
                     // A perch in view of the target, near both, each metre up worth 4 of walking;
                     // the spot out in the side lane level with it, to come at it side-on; the
-                    // channel spot nearest it.
+                    // low spot nearest it.
                     Role::Perch => nav.vantage(cost, |i, c| (at(i).y > 2.0 && nav.overlooks(arena, t, i, chest)).then(|| c + from_target(i) - 4.0 * at(i).y)),
-                    Role::Flank(side) if far => nav.vantage(cost, |i, _| (at(i).x * side > lane).then(|| (at(i).z - target.pos.z).abs())),
-                    Role::Sneak if far => nav.vantage(cost, |i, _| (at(i).y < -1.0).then(|| from_target(i))),
+                    Role::Flank(side) if far => nav.vantage(cost, |i, _| (nav.out(at(i)) * side > lane).then(|| (nav.along(at(i)) - nav.along(target.pos)).abs())),
+                    Role::Sneak if far => nav.vantage(cost, |i, _| (at(i).y < nav.low).then(|| from_target(i))),
                     _ => None,
                 };
                 vantage.unwrap_or(goal)
@@ -2083,6 +2125,52 @@ mod tests {
             });
             assert!(out, "{map}: still at {} after 15 s", me.pos);
         }
+    }
+
+    #[test]
+    fn flankers_and_sneaks_find_walled_citys_lanes_and_low_ground() {
+        // Walled City's teams face each other along X, on streets 48 m up: its side lanes run along
+        // X, out either side in Z (its monorail's bridges), and its low road and canal run under the
+        // streets. A flanker from the west spawn hall after a mech in the east's goes out to its side
+        // lane, not off into a base (as when every map's lanes ran along Z); a sneak goes low.
+        let walled = Map::index("walled").unwrap();
+        let (arena, nav, t) = (Arena::new(&Map::load(walled)), Nav::for_map(walled), Tuning::default());
+        let (me, target) = (spawn_mech(&t, Vector::new(-136.0, 48.1, -8.0)), spawn_mech(&t, Vector::new(136.0, 48.1, 8.0)));
+        let vantage = |role| {
+            let mut bot = Bot { role, ..Bot::new(1) };
+            (0..secs(1.0)).find_map(|tick| {
+                bot.think(&arena, nav, &t, &me, Some(&target), tick);
+                bot.vantage.map(|v| nav.node(v))
+            })
+        };
+        for side in [-1.0, 1.0] {
+            let v = vantage(Role::Flank(side)).expect("a flanker's vantage");
+            assert!(v.z * side > nav.lane(), "flanking to {side}: vantage at {v}, not out past {} m", nav.lane());
+        }
+        let v = vantage(Role::Sneak).expect("a sneak's vantage");
+        assert!(v.y < nav.low, "sneaking: vantage at {v}");
+    }
+
+    #[test]
+    fn a_bot_that_falls_below_its_route_plans_again() {
+        // Down onto Walled City's low road under its west gate, on the way from the plaza through
+        // the gate to a perch past it: a bot swung to and fro there under the gate's waypoint, 24 m
+        // overhead, for half a minute, each swing just past ARRIVE, so it never counted as stuck.
+        // Landed, it plans again from where it is at once, not after being stuck.
+        let walled = Map::index("walled").unwrap();
+        let (arena, nav, t) = (Arena::new(&Map::load(walled)), Nav::for_map(walled), Tuning::default());
+        let from = Vector::new(-42.5, 24.05, -9.2);
+        let (mut me, target) = (Mech { vel: Vector::new(10.8, 0.0, 5.3), ..spawn_mech(&t, from) }, spawn_mech(&t, Vector::new(40.0, 48.1, 8.0)));
+        let node = |p| nav.nearest(&arena, p);
+        let (plaza, gate, perch) = (node(Vector::new(-24.0, 48.1, -8.0)), node(Vector::new(-40.0, 48.1, -8.0)), node(Vector::new(-56.0, 48.1, 8.0)));
+        let mut bot = Bot { role: Role::Perch, ..Bot::new(1) };
+        (bot.reached, bot.path, bot.vantage, bot.path_goal) = (Some(plaza), vec![gate, perch], Some(perch), Some(node(target.pos)));
+        for tick in 0..secs(0.5) {
+            let input = bot.think(&arena, nav, &t, &me, Some(&target), tick);
+            step_mech(&arena, &t, &mut me, &input);
+        }
+        let next = bot.path.first().map(|&n| nav.node(n));
+        assert!(next.is_some_and(|n| n.y - me.pos.y < 4.0), "at {} after 0.5 s, heading for {next:?}", me.pos);
     }
 
     #[test]
