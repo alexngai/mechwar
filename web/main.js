@@ -603,7 +603,12 @@ let eliminated = null, callout = null, capture = null, blipAt = 0, reactorHitAt 
 let calledEarly = { at: -Infinity, scrap: 0 };
 // Co-op building: the tower being placed (-1: not building), the last one picked, what the panel
 // says of it (or of the tower aimed at), and where the last arc pylon jump left from.
-let building = -1, lastTower = 0, buildHint = '', zapFrom = null, shellFrom = null;
+let building = -1, lastTower = 0, zapFrom = null, shellFrom = null;
+// Co-op's part of the glass (`drawBuild` fills it, `drawGlass` places it on screen): the command
+// chips, the break's countdown, the build bar and the ghost's verdict, and the panel of the tower
+// aimed at; world points (`at`) are projected as the glass draws.
+let coopHud = null, panelSince = -Infinity, panelOwner = -1;
+const FIRST_BREAK = 60, BREAK = 30; // defense.rs
 const coop = () => !!net && net.defense().length > 0;
 const CALL_SCRAP = 2; // each pilot's scrap for each second of break called short (defense.rs CALL_SCRAP)
 const sendBuild = (order) => ws?.readyState === WebSocket.OPEN && ws.send(net.build(order));
@@ -1543,7 +1548,7 @@ function topPanel(hudState, myId, zones, siege, clock) {
     state = objectives.stage(team, siege, [blue, red], carried);
   } else if (mode === DEFENSE) {
     // The reactor's hull, and the walkers still to come or standing; between waves, the countdown.
-    const [wave, waves, breakLeft, hull, left, score, ready] = net.defense().length ? net.defense() : [1, 10, -1, REACTOR_HULL, 0, 0, 0];
+    const [wave, waves, , hull, left, score] = net.defense().length ? net.defense() : [1, 10, -1, REACTOR_HULL, 0, 0, 0];
     const scrap = Math.floor(net.scrap()[myId] ?? 0);
     // A boss on the field gets its own bar.
     const list = game.deployables();
@@ -1564,9 +1569,7 @@ function topPanel(hudState, myId, zones, siege, clock) {
       const gates = net.open_gates().length, all = objectives.gates.length;
       more = `NEXT: ${THEMES[next[0]] ? THEMES[next[0]] + ' · ' : ''}${named.join(' · ')}${all > 1 ? ` · ${gates === all ? 'ALL' : `${gates} OF ${all}`} GATES` : ''}`;
     }
-    // In a break: N calls the wave now, for scrap and score (once every human pilot has).
-    const call = breakLeft < 0 ? '' : net.called() ? `CALLED · WAITING ON THE TEAM (${ready})` : `N CALL IT NOW · +${Math.floor(CALL_SCRAP * breakLeft)} SCRAP`;
-    state = [buildHint, breakLeft >= 0 ? `GET READY · WAVE ${wave} IN ${Math.ceil(breakLeft)}s` : '', call].filter(Boolean).join(' · ');
+    state = ''; // (the break, building and the towers are on the glass)
   } else if (mode === CONVOY) {
     // The hauler on its track from our base (left) to theirs, the middle marked, in the color of
     // whoever walks it (blinking while both sides are at it); a word on a stall or a standoff.
@@ -1778,7 +1781,7 @@ const towerTiers = new Map();
 function drawBuild(now, alive, myId) {
   if (!coop()) {
     building = -1;
-    buildHint = '';
+    coopHud = null;
     $('draft').hidden = $('towers').hidden = true;
     return;
   }
@@ -1798,13 +1801,26 @@ function drawBuild(now, alive, myId) {
   const spot = building >= 0 ? net.build_spot() : [];
   objectives.drawBuild(net.lanes(), building, spot, now);
   const scrap = net.scrap()[myId] ?? 0;
+  const [wave, , breakLeft, , , , ready] = net.defense();
+  coopHud = { chips: [], wave: null, build: null, ghost: null, panel: null };
+  // The break: its countdown, and N to call the wave (or, called, who's still to).
+  if (breakLeft >= 0) coopHud.wave = { n: wave, left: breakLeft, of: wave === 1 ? FIRST_BREAK : BREAK };
+  if (!alive) return;
+  if (breakLeft >= 0) {
+    coopHud.chips.push(net.called() ? { label: `CALLED · ${ready} READY`, dim: true } : { key: 'N', label: 'CALL WAVE NOW', note: `+${Math.floor(CALL_SCRAP * breakLeft)}`, hot: true });
+  }
   if (building >= 0) {
-    const [name, price] = [TOWER_NAMES[building].toUpperCase(), TOWER_PRICES[building]];
-    const why = spot.length === 4 && spot[3] >= 0 ? REFUSALS[spot[3]] : scrap < price ? 'NOT ENOUGH SCRAP' : '';
-    buildHint = `${building + 1} ${name} · ${price} SCRAP · ${why || 'CLICK TO BUILD'} · 1-4 TOWER · B DONE`;
+    // The bar of towers to pick from, and the ghost's verdict under it.
+    coopHud.build = { selected: building, scrap, items: TOWER_NAMES.map((name, k) => ({ name, price: TOWER_PRICES[k], can: scrap >= TOWER_PRICES[k] })) };
+    if (spot.length === 4) {
+      const why = spot[3] >= 0 ? REFUSALS[spot[3]] : scrap < TOWER_PRICES[building] ? 'NOT ENOUGH SCRAP' : '';
+      coopHud.ghost = { at: new THREE.Vector3(spot[0], spot[1], spot[2]), ok: !why, text: why || `CLICK TO BUILD · ${TOWER_PRICES[building]}` };
+    }
+    coopHud.chips.push({ key: 'B', label: 'DONE' });
     return;
   }
-  // The tower nearest the crosshair, within reach and in sight.
+  coopHud.chips.push({ key: 'B', label: 'BUILD' });
+  // The tower nearest the crosshair, within reach and in sight: its panel, opening as it's found.
   camera.getWorldDirection(heading);
   let best = null, bestAngle = 0.08;
   for (let i = 0; i < list.length; i += 10) {
@@ -1813,16 +1829,20 @@ function drawBuild(now, alive, myId) {
     const at = new THREE.Vector3(list[i + 3], list[i + 4] + 1, list[i + 5]), to = at.clone().sub(camera.position), dist = to.length();
     const angle = heading.angleTo(to);
     if (dist > 30 || angle > bestAngle || game.cast_ray(camera.position.x, camera.position.y, camera.position.z, to.x / dist, to.y / dist, to.z / dist, dist) < dist - 1) continue;
-    [best, bestAngle] = [{ kind: list[i], t }, angle];
+    [best, bestAngle] = [{ kind: list[i], t, at }, angle];
   }
   if (!best) {
-    buildHint = alive ? 'B BUILD' : '';
+    panelOwner = -1;
     return;
   }
-  const [, by, tier, up, refund, hull, whole, mend] = best.t, name = TOWER_NAMES[[2, 3, ARC, PULSE].indexOf(best.kind)] ?? 'Tower';
-  const raise = up > 0 ? `U RAISE ${Math.round(up)}` : 'TOP TIER', sell = by === myId ? ` · X SELL ${Math.round(refund)}` : '';
-  const fix = hull < whole - 0.5 ? ` · H MEND ${Math.ceil(mend)}` : '';
-  buildHint = `${name.toUpperCase()} ${'I'.repeat(tier)} · ${Math.round((100 * hull) / whole)}%${fix} · ${raise}${sell}`;
+  const [owner, by, tier, up, refund, hull, whole, mend] = best.t, kind = [2, 3, ARC, PULSE].indexOf(best.kind);
+  if (owner !== panelOwner) [panelOwner, panelSince] = [owner, now];
+  const actions = [
+    up > 0 ? { key: 'U', label: `RAISE TO ${'I'.repeat(tier + 1)}`, cost: Math.round(up), can: scrap >= up } : { label: 'TOP TIER', dim: true },
+    ...(hull < whole - 0.5 ? [{ key: 'H', label: 'MEND', cost: Math.ceil(mend), can: scrap >= 1, mend: true }] : []),
+    ...(by === myId ? [{ key: 'X', label: 'SELL', cost: Math.round(refund), refund: true, can: true }] : []),
+  ];
+  coopHud.panel = { at: best.at, kind, name: TOWER_NAMES[kind] ?? 'Tower', tier, tiers: 3, share: hull / whole, hull, whole, by: by === myId ? 'YOU' : nameOf(by), actions, open: Math.min((now - panelSince) / 160, 1) };
 }
 
 // Co-op towers as last seen: each one's share of its hull and who built it (`coopTowers`, by
@@ -2082,8 +2102,9 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
       visible = game.cast_ray(eye.x, eye.y, eye.z, to.x, to.y, to.z, dist) >= dist - 0.5 && !smoked(eye, chest);
     }
     // A co-op tower of ours, hurt: tagged through walls, near enough, so it can be found and mended.
+    // Near, its tag too, as one comes up to it (the one aimed at has its panel instead).
     const ours = enemy ? null : coopTowers.get(owner);
-    if (ours && ours.share < 0.999 && dist < 120) visible = true;
+    if (ours && ((ours.share < 0.999 && dist < 120) || dist < 15) && !(coopHud?.panel && owner === panelOwner)) visible = true;
     if (!enemy || visible) contacts.push({ x, z, enemy, turret: true });
     if (!visible) continue;
     ndc.copy(chest).project(camera);
@@ -2154,6 +2175,12 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
     feed: feed.filter((k) => now - k.at < 6000),
     contacts, tags, hits, damage: damageFrom, radarMap: glass.radarMap,
   };
+  // Co-op's world points on the glass: the ghost's verdict under it, the aimed tower's panel by it.
+  const onScreen = (at) => {
+    ndc.copy(at).project(camera);
+    return ndc.z < 1 && Math.abs(ndc.x) < 1 && Math.abs(ndc.y) < 1 ? toScreen(ndc) : null;
+  };
+  f.coop = coopHud && { ...coopHud, ghost: coopHud.ghost && { ...coopHud.ghost, ...onScreen(coopHud.ghost.at) }, panel: coopHud.panel && { ...coopHud.panel, ...onScreen(coopHud.panel.at) } };
   glass.draw(f);
   if (firstPerson) cockpit.instruments(f);
 }
