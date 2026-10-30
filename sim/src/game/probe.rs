@@ -676,13 +676,20 @@ fn piston_match_probe() {
 /// landed, played out and modelled. A check on the model, not a test (`--ignored`). Knobs:
 /// PROBE_KIT (one weapon's rows), PROBE_STILL, PROBE_TURNS=random, PROBE_DEBUG (fire and heat; for a
 /// projectile primary, its releases and where its rounds passed the target).
+/// PROBE_SKILL (the bot's skill, 0.5 by default), PROBE_AIM=flick,flick_deg,settle_s,track_s (the
+/// `Tuning::bot_flick` aim knobs).
 /// PROBE_SECS=<s> PROBE_SEEDS=<n> cargo test -p sim --release --lib threat_probe -- --ignored --nocapture
 #[test]
 #[ignore = "probe"]
 fn threat_probe() {
     let run: f32 = std::env::var("PROBE_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(20.0);
     let seeds: u64 = std::env::var("PROBE_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(4);
-    let t0 = Tuning::default();
+    let mut t0 = Tuning::default();
+    if let Ok(aim) = std::env::var("PROBE_AIM") {
+        let v: Vec<f32> = aim.split(',').map(|x| x.parse().expect("PROBE_AIM: four numbers")).collect();
+        (t0.bot_flick, t0.bot_flick_deg, t0.bot_settle_s, t0.bot_track_s) = (v[0], v[1], v[2], v[3]);
+    }
+    let skill: f32 = std::env::var("PROBE_SKILL").ok().and_then(|s| s.parse().ok()).unwrap_or(0.5);
     let arsenal = crate::Arsenal::new(&t0);
     let ranges = [10.0, 20.0, 30.0, 45.0, 60.0, 80.0];
     let debug = std::env::var("PROBE_DEBUG").is_ok();
@@ -718,6 +725,7 @@ fn threat_probe() {
                 let human = game.join().unwrap();
                 // It holds its fire to cool rather than falling back (pinned, it would only turn away).
                 let mut brain = Bot::new(seed);
+                brain.skill = skill;
                 for a in [crate::brain::Action::FallBackToCool, crate::brain::Action::FallBackToMend] {
                     brain.brain.0.remove(&a);
                 }

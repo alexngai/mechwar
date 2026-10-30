@@ -32,6 +32,10 @@ pub const MAX_PLAYERS: usize = 2 * TEAM_SIZE;
 const _: () = assert!(MAX_PLAYERS <= 16, "Blast hits are a u16 bitmask of player ids");
 const _: () = assert!(MAX_PLAYERS <= deploy::TARGET as usize, "turrets' lock-on ids follow the players'");
 const POST_MATCH_SECONDS: f32 = 10.0;
+/// A pilot's fight, for bots on its side: the enemy it hit within this long (s).
+const HUMAN_FOCUS: f32 = 3.0;
+/// A repair torch bot mends a pilot first, counting it this much (a share of its hull) worse hurt.
+const HUMAN_HEAL: f32 = 0.15;
 /// A team match opens with this long penned in the spawns (`Game::staging_seconds`).
 pub const STAGING_SECONDS: f32 = 10.0;
 /// A kill's worth in points, shared out as kill credit (`progress::KILLER_BONUS`).
@@ -366,6 +370,9 @@ pub struct Game {
     pub bots: bool,
     /// Bots' skill, 0 (raw) to 1 (sharp): each bot's own spreads around it.
     pub bot_skill: f32,
+    /// Each side's bots' skill adjustment for the pilots they face: up as pilots kill them, down
+    /// as they kill pilots, fading back (`Tuning::bot_adapt_*`). Bots take it on as they respawn.
+    adapt: [f32; 2],
     /// Plays on with bots alone and no human connected, for balance runs (`add_bot` seats them).
     pub headless: bool,
     pub mode: Mode,
@@ -444,6 +451,7 @@ impl Game {
             tick: 0,
             bots: true,
             bot_skill: 0.5,
+            adapt: [0.0; 2],
             headless: false,
             score_limit: 20,
             match_seconds: 600.0,
@@ -701,7 +709,21 @@ impl Game {
         // By team (in Deathmatch everyone's alone: no lead, no radio).
         let teams = 0..MAX_PLAYERS as u8;
         let leads: Vec<Option<u8>> = teams.clone().map(lead_of).collect();
-        let engaged: Vec<Vec<u8>> = teams.map(|team| self.players.iter().filter(|p| p.team == team).filter_map(|p| p.bot.as_ref()?.focus()).collect()).collect();
+        // What each player is fighting: a bot's target; for a pilot, the enemy it hit last, within
+        // HUMAN_FOCUS (so bots focus on, back up and flank a pilot's fight as a bot's).
+        let fighting = |p: &Player| match &p.bot {
+            Some(b) => b.focus(),
+            None => self
+                .players
+                .iter()
+                .filter(|e| e.team != p.team)
+                .filter_map(|e| e.ledger.iter().rev().find(|l| l.0 == p.id).map(|l| (e.id, l.2)))
+                .filter(|&(_, at)| self.tick.saturating_sub(at) < secs(HUMAN_FOCUS))
+                .max_by_key(|&(_, at)| at)
+                .map(|(id, _)| id),
+        };
+        let fights: Vec<Option<u8>> = self.players.iter().map(fighting).collect();
+        let engaged: Vec<Vec<u8>> = teams.map(|team| self.players.iter().zip(&fights).filter(|(p, _)| p.team == team).filter_map(|(_, f)| *f).collect()).collect();
         // First every bot looks and listens...
         let mut seen: Vec<(Option<u8>, Vec<(u8, Mech, f32)>)> = Vec::with_capacity(self.players.len());
         let mut radio: Vec<Vec<(u8, u8, Vector)>> = vec![Vec::new(); MAX_PLAYERS]; // (from, enemy, where)
@@ -733,6 +755,16 @@ impl Game {
                 d.orders(&self.players.iter().map(|p| (p.id, p.team, p.bot.is_some() && p.mech.health > 0.0)).collect::<Vec<_>>(), &walkers)
             }),
         };
+        // The bots' skill adjustments fade back to none.
+        let fade = libm::expf(-DT / self.arsenal.get(MechClass::B, Loadout::of(MechClass::B)).bot_adapt_s.max(1.0));
+        self.adapt = self.adapt.map(|a| a * fade);
+        // Each side's hull over the other's, in mechs' worth (two sides only; in Deathmatch, none).
+        let hull = |team: u8| self.players.iter().filter(|p| p.team == team && alive(p)).map(|p| p.mech.health / self.arsenal.of(&p.mech).health_max).sum::<f32>();
+        let mut edge = [0.0; MAX_PLAYERS];
+        if self.mode != Mode::Deathmatch {
+            let (a, b) = (hull(0), hull(1));
+            (edge[0], edge[1]) = (a - b, b - a);
+        }
         // Each side's flag carrier's feet (Capture the Flag): a bot ordered there escorts it.
         let mut carriers = [None; MAX_PLAYERS];
         if let Some(c) = &self.ctf {
@@ -803,7 +835,7 @@ impl Game {
                     bot::FoeKit { id: q.id, on_me: curve(&q.mech, &me.mech), mine: curve(&me.mech, &q.mech), hull: theirs.health_max, eye: theirs.eye_height, mid: theirs.mech_height * 0.5, watching }
                 })
                 .collect();
-            let mates: Vec<(Vector, Option<u8>)> = self.players.iter().filter(|q| q.team == me.team && q.id != me.id && up(q)).map(|q| (q.mech.pos, q.bot.as_ref().and_then(Bot::focus))).collect();
+            let mates: Vec<(Vector, Option<u8>)> = self.players.iter().zip(&fights).filter(|(q, _)| q.team == me.team && q.id != me.id && up(q)).map(|(q, f)| (q.mech.pos, *f)).collect();
             let (team, id) = (usize::from(me.team), me.id);
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
@@ -833,7 +865,8 @@ impl Game {
                     mates()
                         .filter(|q| hurt(q) < 0.97)
                         .filter(|q| q.mech.pos.distance(me.mech.pos) < 2.0 * t.alt_beam && bot::sees_at(&self.arena, t, &me.mech, q.mech.pos + Vector::Y * mid(q)))
-                        .min_by(|a, b| hurt(a).total_cmp(&hurt(b)))
+                        // A pilot first, as if a little worse hurt than it is.
+                        .min_by(|a, b| (hurt(a) - if a.bot.is_none() { HUMAN_HEAL } else { 0.0 }).total_cmp(&(hurt(b) - if b.bot.is_none() { HUMAN_HEAL } else { 0.0 })))
                         .map(|q| (q.mech, mid(q)))
                 })
                 .flatten();
@@ -862,6 +895,8 @@ impl Game {
                 }
             }
             bot.lead = lead;
+            bot.edge = edge[team];
+            bot.adapt = self.adapt.get(team).copied().unwrap_or(0.0);
             bot.order = orders.as_ref().and_then(|o| o[i]);
             bot.ward = carriers[team].filter(|&at| bot.order == Some(at));
             // The zone that order is in, if it's one to hold.
@@ -1940,6 +1975,14 @@ impl Game {
         self.players[j].mech.laden = false;
         let Some(a) = attacker else { return };
         let (killer, team) = (self.players[a].id, self.players[a].team);
+        // A pilot's kill of a bot sharpens the bot's side a little; a bot's kill of a pilot eases
+        // its own.
+        let t = self.arsenal.get(MechClass::B, Loadout::of(MechClass::B));
+        let (pilot_killed, pilot_died) = (self.players[a].bot.is_none() && self.players[j].bot.is_some(), self.players[j].bot.is_none() && self.players[a].bot.is_some());
+        if let Some(side) = [(pilot_killed, self.players[j].team), (pilot_died, team)].into_iter().find(|&(hit, s)| hit && s < 2).map(|(_, s)| usize::from(s)) {
+            let step = if pilot_killed { t.bot_adapt_step } else { -t.bot_adapt_step };
+            self.adapt[side] = (self.adapt[side] + step).clamp(-t.bot_adapt_range, t.bot_adapt_range);
+        }
         self.players[a].kills += 1;
         self.events.push(Event::Kill { killer, victim, assists });
         let won = match self.mode {
@@ -5291,6 +5334,42 @@ mod tests {
     }
 
     #[test]
+    fn bots_know_a_pilot_teammates_fight_from_whom_it_hit() {
+        let mut game = Game::new(Tuning::default(), Map::index("blockout").unwrap());
+        game.bots = false;
+        let pilot = game.join().unwrap();
+        let mate = game.add_player(0, Some(Bot::new(4)), MechClass::B).unwrap();
+        let enemy = game.add_player(1, Some(Bot::new(5)), MechClass::B).unwrap();
+        unshield(&mut game);
+        let (p, e) = (game.players.iter().position(|q| q.id == pilot).unwrap(), game.players.iter().position(|q| q.id == enemy).unwrap());
+        game.apply_damage(Some(p), e, 1.0);
+        game.step();
+        let fights = |g: &Game| g.players.iter().find(|q| q.id == mate).unwrap().bot.as_ref().unwrap().mates.iter().find_map(|m| m.1);
+        assert_eq!(fights(&game), Some(enemy), "the pilot's fight isn't known");
+        (0..secs(HUMAN_FOCUS + 0.5)).for_each(|_| game.step());
+        assert_eq!(fights(&game), None, "an old hit still counts");
+    }
+
+    #[test]
+    fn a_pilots_kills_sharpen_the_bots_only_as_they_respawn() {
+        let t = Tuning::default();
+        let mut game = Game::new(t.clone(), Map::index("blockout").unwrap());
+        game.bots = false;
+        let pilot = game.join().unwrap();
+        let enemy = game.add_player(1, Some(Bot::new(5)), MechClass::B).unwrap();
+        let other = game.add_player(1, Some(Bot::new(6)), MechClass::B).unwrap();
+        unshield(&mut game);
+        let skill = |g: &Game, id: u8| g.players.iter().find(|q| q.id == id).unwrap().bot.as_ref().unwrap().skill;
+        let (p, e) = (game.players.iter().position(|q| q.id == pilot).unwrap(), game.players.iter().position(|q| q.id == enemy).unwrap());
+        game.apply_damage(Some(p), e, 10.0 * t.health_max);
+        assert!(game.adapt[1] > 0.0 && game.adapt[0] == 0.0, "adapt {:?}", game.adapt);
+        game.step();
+        assert_eq!(skill(&game, other), 0.5, "a bot alive changed its skill mid-fight");
+        (0..secs(t.respawn_delay + 1.0)).for_each(|_| game.step());
+        assert!(skill(&game, enemy) > 0.5, "the respawned bot didn't take the adjustment: {}", skill(&game, enemy));
+    }
+
+    #[test]
     fn bots_lead_long_lobs_no_further_than_a_strafer_goes() {
         // An Auto-GL's lob 35 m out flies about 0.8 s, and the bot leads its reaction time on top:
         // longer than a strafer keeps going one way. Led the whole way, its grenades all landed
@@ -5303,10 +5382,11 @@ mod tests {
     #[test]
     fn homing_bots_keep_the_target_marked() {
         // A homing rocket homes on what's in the crosshair as it flies: a bot leading the target
-        // took it out of the 3° seek cone. (A sharp bot's: a raw one's aim wanders that far.)
+        // took it out of the 3° seek cone. (A sharp bot's: a raw one's aim wanders that far, and
+        // even a sharp one's wanders off a strafer now and then, `Tuning::bot_track_s`: 0.65.)
         let (_, _, rounds, marks) = duel_strafer("talon", 1.0, 45.0, 12.0);
         let marked = marks.iter().filter(|&&m| m != 0).count() as f32 / marks.len() as f32;
-        assert!(rounds > 8 && marked > 0.7, "marked {marked:.2} of the time, {rounds} rockets");
+        assert!(rounds > 8 && marked > 0.6, "marked {marked:.2} of the time, {rounds} rockets");
     }
 
     #[test]

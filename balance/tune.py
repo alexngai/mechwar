@@ -40,6 +40,16 @@ SPACE = {
     'pursue_reach': (10.0, 80.0),
     'pursue_self': (0.0, 1.0),
     'pursue_alone': (0.0, 60.0),
+    'mend_cover': (0.0, 1.0),
+    'post_burn': (0.0, 2.0),
+    'zone_watch': (0.0, 1.0),
+    'hunch_rate': (0.0, 1.0),
+    'hunch_reach': (10.0, 80.0),
+    'team_edge': (0.0, 3.0),
+    'team_lean': (0.0, 1.0),
+    'trade_flank': (0.0, 1.0),
+    'smoke_fire': (0.0, 5.0),
+    'smoke_exit': (0.0, 1.0),
 }
 # Each mode's own weights, tuned with --space: Capture the Flag's squads and when a carrier falls
 # back; Missile Assault's spread; Siege's crew; Convoy's escort. And when a rocket punch goes in.
