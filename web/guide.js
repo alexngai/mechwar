@@ -330,7 +330,7 @@ async function modes() {
       <h3>${name.toUpperCase()}</h3><ul class="rules">${RULES[id].map((r) => `<li>${r}</li>`).join('')}</ul>${MORE[id] ?? ''}
       <h4>MAPS</h4>${where(fit)}</section>`).join('')}
     <h2>QUICK PLAY AND OPEN GAMES</h2>
-    <p>Quick play puts you in the busiest listed game with a seat and enough time left, or opens one. Its games deal every versus mode on every map that plays it, like a shuffled deck: each pairing plays once before any repeats, never the same map twice running. Co-op Defense isn't in the deck: open a game of your own for it.</p>
+    <p>Quick play puts you in the busiest listed game with a seat and enough time left, or opens one. Its games deal every versus mode on every map that plays it, like a shuffled deck: each pairing plays once before any repeats, never the same map twice running. Co-op Defense is matched on its own: CO-OP DEFENSE on the home page puts you in a co-op run with a seat, or opens one, and quick play never lands you in one.</p>
     <p>From the home page you can also open a game of your own: one mode or every versus mode in turn, one map or the rotation, a score limit, and bots easy, normal, hard or none. Listed games show on the home page; unlisted ones are joined by code or invite link.</p>`;
 }
 

@@ -23,7 +23,7 @@ WASD move · Shift boost · Space hover · Q/E dodge · LMB fire · V chase/cock
 npm run server
 ```
 
-With `npm run dev` running, open tabs at `http://localhost:5173/?server=ws://localhost:9001/ws` to join quick play: team deathmatch (4v4), deathmatch (8 free-for-all, on the smaller maps), Missile Assault and Siege (on the maps with their objectives) in turn, with bots filling empty slots. The server runs any number of games (rooms) at once. To try the lobby page, run `npx vite build` and open `http://localhost:9001/`, which serves the built client: quick play, the listed games, opening a game (listed or by code only) and joining by code or invite link (`/?room=CODE`). Server env vars:
+With `npm run dev` running, open tabs at `http://localhost:5173/?server=ws://localhost:9001/ws` to join quick play: team deathmatch (4v4), deathmatch (8 free-for-all, on the smaller maps), Missile Assault and Siege (on the maps with their objectives) in turn, with bots filling empty slots. The server runs any number of games (rooms) at once. To try the lobby page, run `npx vite build` and open `http://localhost:9001/`, which serves the built client: quick play, co-op (matched apart from quick play), the listed games, opening a game (listed or by code only) and joining by code or invite link (`/?room=CODE`). Server env vars:
 - `LAG_MS=40` adds 40 ms each way (about 80 ms round trip).
 - `PORT` changes the port (default 9001).
 - Quick play's games: `MODE` pins one mode (`tdm`, `dm`, `ma` or `siege`, else every mode in turn), `MAP` pins one map (else the rotation), `SCORE_LIMIT` and `MATCH_SECONDS` shorten matches, and `BOT_SKILL` (`easy`, `normal`, `hard`, or 0 to 1) sets how sharp bots are.
