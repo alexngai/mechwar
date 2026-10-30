@@ -528,6 +528,8 @@ impl Defense {
             cores: Vec::new(),
         };
         d.vary();
+        // Late gates (a burrow inside, say) open last, whatever the run's order.
+        d.gate_order.sort_by_key(|g| spots.late.contains(g));
         Some(d)
     }
 
@@ -1080,7 +1082,7 @@ mod tests {
 
     /// Two gates 100 m out, a straight lane each, to a reactor at the origin (radius 6).
     fn run() -> Defense {
-        let spots = DefenseSpots { reactor: [0.0; 3], radius: 6.0, gates: vec![[0.0, 0.0, -100.0], [100.0, 0.0, 0.0]], lanes: Lanes::default() };
+        let spots = DefenseSpots { reactor: [0.0; 3], radius: 6.0, gates: vec![[0.0, 0.0, -100.0], [100.0, 0.0, 0.0]], lanes: Lanes::default(), late: vec![] };
         Defense::new(&spots, 0, |_, _| Vec::new()).unwrap()
     }
 
@@ -1136,7 +1138,7 @@ mod tests {
             narrow: vec![],
             seals: vec![(3, "the east way".into()), (4, "the west way".into())],
         };
-        let spots = DefenseSpots { reactor: [0.0; 3], radius: 6.0, gates: vec![[0.0, 0.0, -100.0], [50.0, 0.0, -100.0], [-50.0, 0.0, -100.0]], lanes };
+        let spots = DefenseSpots { reactor: [0.0; 3], radius: 6.0, gates: vec![[0.0, 0.0, -100.0], [50.0, 0.0, -100.0], [-50.0, 0.0, -100.0]], lanes, late: vec![] };
         for seed in 0..20 {
             let mut d = Defense::new(&spots, seed, |_, _| Vec::new()).unwrap();
             assert_eq!([1, 3, 6, 10].map(|n| d.open_gates(n).len()), [1, 2, 3, 3]);
@@ -1152,6 +1154,12 @@ mod tests {
             }
             assert_eq!(d.sealed.len(), 1);
             assert!(d.reaches(&d.sealed_edges()));
+        }
+        // A late gate (a burrow) opens last in every run.
+        let late = DefenseSpots { late: vec![0], ..spots.clone() };
+        for seed in 0..20 {
+            let d = Defense::new(&late, seed, |_, _| Vec::new()).unwrap();
+            assert!(!d.open_gates(5).contains(&0) && d.open_gates(6).contains(&0), "seed {seed}");
         }
         // A seal never forces big foes onto a narrow lane: with the hub's east way narrow, the
         // west way is never sealed.
@@ -1171,7 +1179,7 @@ mod tests {
 
     #[test]
     fn runs_differ_by_their_seed_and_a_flanking_wave_comes_mostly_through_one_gate() {
-        let spots = DefenseSpots { reactor: [0.0; 3], radius: 6.0, gates: vec![[0.0, 0.0, -100.0], [100.0, 0.0, 0.0]], lanes: Lanes::default() };
+        let spots = DefenseSpots { reactor: [0.0; 3], radius: 6.0, gates: vec![[0.0, 0.0, -100.0], [100.0, 0.0, 0.0]], lanes: Lanes::default(), late: vec![] };
         let waves = |seed: u32| {
             let mut d = Defense::new(&spots, seed, |_, _| Vec::new()).unwrap();
             (1..=WAVES).map(|n| d.compose(n, 4)).collect::<Vec<_>>()
@@ -1243,7 +1251,7 @@ mod tests {
     fn at_a_fork_walkers_take_each_branch_by_weight() {
         // A gate at the origin forking to two points, 3 to 1, each a dead end away from the reactor.
         let lanes = Lanes { points: vec![[0.0, 0.0, 0.0], [0.0, 0.0, 10.0], [10.0, 0.0, 0.0]], edges: vec![(0, 1, 3.0), (0, 2, 1.0)], narrow: vec![0], seals: vec![] };
-        let spots = DefenseSpots { reactor: [500.0, 0.0, 500.0], radius: 6.0, gates: vec![[0.0; 3]], lanes };
+        let spots = DefenseSpots { reactor: [500.0, 0.0, 500.0], radius: 6.0, gates: vec![[0.0; 3]], lanes, late: vec![] };
         let mut d = Defense::new(&spots, 0, |_, _| Vec::new()).unwrap();
         let picks: Vec<usize> = (0..400).filter_map(|_| d.fork(0, Kind::Walker)).collect();
         let first = picks.iter().filter(|&&e| e == 0).count() as f32 / picks.len() as f32;

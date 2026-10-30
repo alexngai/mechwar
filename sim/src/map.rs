@@ -100,6 +100,9 @@ pub struct DefenseSpots {
     pub gates: Vec<[f32; 3]>,
     #[serde(default)]
     pub lanes: Lanes,
+    /// Gates (by index) that open last in every run.
+    #[serde(default)]
+    pub late: Vec<usize>,
 }
 
 /// Co-op Defense's lanes: points on walkable ground, and edges between them (from, to, weight);

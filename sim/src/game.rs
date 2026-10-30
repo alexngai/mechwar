@@ -4005,6 +4005,87 @@ mod tests {
         }
     }
 
+    /// Co-op's pace on Hivewall, bots at normal skill: per wave its length, how soon the first
+    /// hit lands, the share of it with an enemy near a pilot or a tower (or neither), how many walk at
+    /// once, how fast pilots move, and the towers and how far out they stand; per enemy kind its
+    /// median life and where it fell. COOP_SEEDS runs (4).
+    /// `cargo test --release -p sim --lib coop_pace_probe -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn coop_pace_probe() {
+        let seeds: u32 = std::env::var("COOP_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(4);
+        let out: Vec<String> = std::thread::scope(|scope| {
+            let hs: Vec<_> = (1..=seeds).map(|seed| scope.spawn(move || {
+                let mut game = Game::new(Tuning::default(), Map::index("hivewall").unwrap());
+                (game.mode, game.bots, game.bot_skill) = (Mode::Defense, true, 0.5);
+                game.tick = seed * 977;
+                let id = game.join().unwrap();
+                game.dock(id);
+                let mut lines = Vec::new();
+                let (mut stage_start, mut was_wave, mut wave) = (game.tick, false, 0u8);
+                let (mut contact, mut tower_busy, mut idle, mut first_hit, mut moved, mut pilot_ticks) = (0u32, 0u32, 0u32, None::<u32>, 0f32, 0u32);
+                let mut born: std::collections::HashMap<u8, (u32, f32)> = Default::default();
+                let mut deaths: Vec<(Kind, f32, f32)> = Vec::new(); // kind, life s, dist to reactor at death
+                let mut last_pos: std::collections::HashMap<u8, Vector> = Default::default();
+                let mut alive_sum = 0u64;
+                for _ in 0..secs(2600.0) {
+                    let before: Vec<(u8, Kind, Vector, f32)> = game.deployables.iter().filter(|w| w.kind.lane_enemy()).map(|w| (w.owner, w.kind, w.pos, w.hull)).collect();
+                    game.step();
+                    let Some(d) = game.defense.as_ref() else { continue };
+                    let reactor = d.reactor;
+                    let in_wave = matches!(d.stage, defense::Stage::Wave { .. });
+                    let now: Vec<(u8, Kind, Vector, f32)> = game.deployables.iter().filter(|w| w.kind.lane_enemy() && w.hull > 0.0).map(|w| (w.owner, w.kind, w.pos, w.hull)).collect();
+                    for &(o, _, _, h) in &now { born.entry(o).or_insert((game.tick, h)); }
+                    for &(o, k, pos, _) in &before {
+                        if !now.iter().any(|n| n.0 == o && n.1 == k) {
+                            if let Some((t, _)) = born.remove(&o) { deaths.push((k, (game.tick - t) as f32 / TICK_HZ, (pos - reactor).with_y(0.0).length())); }
+                        }
+                    }
+                    if in_wave {
+                        alive_sum += now.len() as u64;
+                        if first_hit.is_none() && now.iter().any(|n| born.get(&n.0).is_some_and(|b| n.3 < b.1 - 0.01)) { first_hit = Some(game.tick - stage_start); }
+                        let pilots: Vec<Vector> = game.players.iter().filter(|p| p.team == 0 && p.bot.is_some() && p.mech.health > 0.0).map(|p| p.mech.pos).collect();
+                        let near = |r: f32, at: &[Vector]| now.iter().any(|n| at.iter().any(|q| (n.2 - *q).length() < r));
+                        let towers: Vec<Vector> = game.deployables.iter().filter(|t| t.team == 0 && defense::TOWERS.contains(&t.kind)).map(|t| t.pos).collect();
+                        if near(40.0, &pilots) { contact += 1; }
+                        if near(40.0, &towers) { tower_busy += 1; }
+                        if !near(40.0, &pilots) && !near(40.0, &towers) { idle += 1; }
+                        for p in game.players.iter().filter(|p| p.team == 0 && p.bot.is_some() && p.mech.health > 0.0) {
+                            if let Some(l) = last_pos.get(&p.id) { moved += (p.mech.pos - *l).length().min(2.0); }
+                            pilot_ticks += 1;
+                        }
+                    }
+                    for p in &game.players { last_pos.insert(p.id, p.mech.pos); }
+                    if in_wave != was_wave || d.wave != wave {
+                        let len = (game.tick - stage_start) as f32 / TICK_HZ;
+                        if was_wave {
+                            let t = (game.tick - stage_start).max(1) as f32;
+                            let tw: Vec<Vector> = game.deployables.iter().filter(|t| t.team == 0 && defense::TOWERS.contains(&t.kind)).map(|t| t.pos).collect();
+                            let mean_r = tw.iter().map(|p| (*p - reactor).with_y(0.0).length()).sum::<f32>() / tw.len().max(1) as f32;
+                            lines.push(format!("W{wave} wave {len:.0}s first_hit {:.0}s contact {:.0}% towers_busy {:.0}% idle {:.0}% avg_alive {:.1} pilot_speed {:.1}m/s towers {} mean_r {mean_r:.0}m", first_hit.unwrap_or(0) as f32 / TICK_HZ, 100.0 * contact as f32 / t, 100.0 * tower_busy as f32 / t, 100.0 * idle as f32 / t, alive_sum as f32 / t, moved / (pilot_ticks.max(1) as f32 * DT), tw.len()));
+                        } else if stage_start != seed * 977 { lines.push(format!("B{} break {len:.0}s", d.wave)); }
+                        (stage_start, contact, tower_busy, idle, first_hit, moved, pilot_ticks, alive_sum) = (game.tick, 0, 0, 0, None, 0.0, 0, 0);
+                        (was_wave, wave) = (in_wave, d.wave);
+                    }
+                    if game.match_state().ended { break; }
+                }
+                let mins = (game.tick - seed * 977) as f32 / TICK_HZ / 60.0;
+                let mut kinds: Vec<Kind> = deaths.iter().map(|d| d.0).collect(); kinds.sort_by_key(|k| format!("{k:?}")); kinds.dedup();
+                for k in kinds {
+                    let mut l: Vec<&(Kind, f32, f32)> = deaths.iter().filter(|d| d.0 == k).collect();
+                    l.sort_by(|a, b| a.1.total_cmp(&b.1));
+                    let med = l[l.len() / 2];
+                    let far = l.iter().filter(|d| d.2 > 120.0).count();
+                    let near = l.iter().filter(|d| d.2 < 40.0).count();
+                    lines.push(format!("  {k:?}: n {} median life {:.0}s, died >120m out {}%, <40m from reactor {}%", l.len(), med.1, 100 * far / l.len(), 100 * near / l.len()));
+                }
+                format!("SEED {seed} won={} minutes {mins:.1}\n{}", game.match_state().winner == Some(0), lines.join("\n"))
+            })).collect();
+            hs.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        for o in out { println!("{o}"); }
+    }
+
     #[test]
     fn bots_bank_energy_on_their_own() {
         let (mut game, _) = siege(true);
