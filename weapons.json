@@ -76,7 +76,7 @@
       }
     },
     {
-      "id": "mender", "name": "Repair torch", "unlock": 2, "desc": "A beam that mends teammates and burns enemies", "sound": "mender", "recoil": "none", "use": [["RMB", "Hold on a teammate to mend 10 hp/s, out to 28 m"], ["RMB", "Hold on an enemy to burn 6 hp/s"], ["", "It runs warm while held"]],
+      "id": "mender", "name": "Repair torch", "unlock": 2, "desc": "A beam that mends teammates and burns enemies", "sound": "mender", "recoil": "none", "use": [["RMB", "Hold on a teammate to mend 10 hp/s, out to 28 m"], ["RMB", "Hold on an enemy to burn 6 hp/s"], ["", "A teammate it's on deals 25% more damage with its guns"], ["", "It runs warm while held"]],
       "stats": { "alt_beam": 28, "alt_beam_heal": 10, "alt_damage": 6, "alt_heat": 32, "alt_cooldown": 0 }
     },
     {

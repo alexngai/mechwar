@@ -1159,10 +1159,12 @@ impl Bot {
         self.think_with(arena, nav, t, me, target, None, tick)
     }
 
-    /// `think`, with a hurt teammate a repair torch could mend, and how high its middle is off its
-    /// feet: it does when no enemy is in sight.
+    /// `think`, with a teammate a repair torch could hold its beam on (hurt, or in a fight): its
+    /// id, and how high its middle is off its feet. It does when no enemy is in sight, and mid-fight
+    /// while the mate's within the beam's bend of the aim (turning from the fight to mend cost its
+    /// side kills in `torch_probe`).
     #[allow(clippy::too_many_arguments)]
-    pub fn think_with(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: Option<&Mech>, heal: Option<(&Mech, f32)>, tick: u32) -> Input {
+    pub fn think_with(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: Option<&Mech>, heal: Option<(u8, &Mech, f32)>, tick: u32) -> Input {
         self.striking = false;
         let mut input = self.decide(arena, nav, t, me, target, heal, tick);
         // A limpet down goes off once an enemy's in its blast, whatever else the bot is about.
@@ -1178,7 +1180,7 @@ impl Bot {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn decide(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: Option<&Mech>, heal: Option<(&Mech, f32)>, tick: u32) -> Input {
+    fn decide(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: Option<&Mech>, heal: Option<(u8, &Mech, f32)>, tick: u32) -> Input {
         // A pile driver can't strike down off a perch: its carrier goes straight in instead.
         if self.role == Role::Perch && alt_use(t) == AltUse::Melee {
             (self.role, self.vantage, self.path_goal) = (Role::Hunt, None, None);
@@ -1220,9 +1222,11 @@ impl Bot {
                 }
             }
         }
-        if let Some((mate, mid)) = heal.filter(|_| alt_use(t) == AltUse::Beam && !target.is_some_and(|m| m.health > 0.0 && sees_at(arena, t, me, self.chest(t, self.focus, m.pos)))) {
+        if let Some((id, mate, mid)) = heal.filter(|_| alt_use(t) == AltUse::Beam && !target.is_some_and(|m| m.health > 0.0 && sees_at(arena, t, me, self.chest(t, self.focus, m.pos)))) {
             self.mending = true;
-            return mend(t, me, mate, mid, max_turn);
+            let input = mend(t, me, mate, mid, max_turn);
+            // Held on another, the beam stays there (`weapon::beam`): it lets go a tick to switch.
+            return Input { alt_fire: input.alt_fire && me.beam_on.is_none_or(|on| on == id), ..input };
         }
         let Some(target) = target.filter(|m| m.health > 0.0) else {
             // Nothing to fight in view. One that just ducked out of view nearby gets a grenade at
@@ -1486,7 +1490,15 @@ impl Bot {
             // Behind its own side's shield, a charged gun holds what it has: let go, it would fire
             // into it.
             let fire = (blocked && t.charge_time > 0.0) || (shell.is_none() && !self.cooling && reaches && !hidden && if t.charge_time > 0.0 { !(on_target && me.charge >= 0.85 && sure) } else { on_target && !blocked });
-            let alt_fire = alt
+            // A torch also holds its beam on a mate within its bend of the aim (`weapon::beam`),
+            // mending it or amping its guns while the gun's on the target.
+            let aim = crate::aim_ray(t, &Mech { yaw: new_yaw, pitch: new_pitch, ..*me });
+            let pocket = use_ == AltUse::Beam
+                && heal.is_some_and(|(_, m, mid)| {
+                    let to = m.pos + Vector::Y * mid - aim.origin;
+                    to.length() < t.alt_beam && to.normalize_or_zero().dot(aim.dir) > weapon::BEAM_SNAP_COS
+                });
+            let alt_fire = (alt || pocket)
                 && alt_cool
                 && !hidden
                 && !(blocked && t.alt_pierce <= 0.5)
@@ -1494,7 +1506,7 @@ impl Bot {
                     AltUse::Lock => me.lock != 0 && me.lock_time >= t.alt_lock_time,
                     AltUse::Release => on_target && !me.alt_held,
                     AltUse::Melee => !self.striking,
-                    _ => on_target,
+                    _ => on_target || pocket,
                 };
             at.flag(Feature::Fire, fire && !blocked).flag(Feature::AltFire, alt_fire).flag(Feature::Striking, self.striking);
             if Item::of(me.loadout, false) == Item::Emp {
@@ -2580,7 +2592,7 @@ mod tests {
             let mut bot = Bot::new(1);
             let mut mended = false;
             for tick in 0..secs(3.0) {
-                let input = bot.think_with(&arena, nav, t, &me, None, Some((&mate, tm.mech_height * 0.5)), tick);
+                let input = bot.think_with(&arena, nav, t, &me, None, Some((2, &mate, tm.mech_height * 0.5)), tick);
                 step_mech(&arena, t, &mut me, &input);
                 mended |= me.beaming;
             }
@@ -2590,6 +2602,45 @@ mod tests {
             let off = ray.point_at(flat(mate.pos - ray.origin).length() / flat(ray.dir).length()).y - (mate.pos.y + tm.mech_height * 0.5);
             assert!(off.abs() < 0.3, "a {class:?} aimed {off} m off a {of:?}'s middle");
         }
+    }
+
+    #[test]
+    fn repair_torches_let_go_of_another_to_switch() {
+        let blockout = Map::index("blockout").unwrap();
+        let (arena, nav, arsenal) = (Arena::new(&Map::load(blockout)), Nav::for_map(blockout), Arsenal::new(&Tuning::default()));
+        let torch = (0..arsenal.counts().1 as u8).find(|&s| alt_use(build(&arsenal, 0, s)) == AltUse::Beam).expect("a beam secondary");
+        let loadout = with_secondary(&arsenal, torch);
+        let t = arsenal.get(MechClass::B, loadout);
+        // Aimed square at a hurt mate (id 2), the beam held on another (id 9, say just behind it).
+        let mate = Mech { health: 0.4 * t.health_max, ..spawn_mech(t, Vector::new(0.0, 0.1, 30.0)) };
+        let at = Vector::new(0.0, 0.1, 40.0);
+        let (yaw, pitch) = look_at(at + Vector::Y * t.eye_height, mate.pos + Vector::Y * (t.mech_height * 0.5));
+        let me = Mech { loadout, yaw, pitch, beaming: true, beam_on: Some(9), ..spawn_mech(t, at) };
+        let holds = |me: &Mech| Bot::new(1).think_with(&arena, nav, t, me, None, Some((2, &mate, t.mech_height * 0.5)), 0).alt_fire;
+        assert!(!holds(&me), "kept the beam on the other");
+        assert!(holds(&Mech { beam_on: Some(2), ..me }), "let go of the mate it's on");
+    }
+
+    #[test]
+    fn repair_torches_keep_their_beam_on_a_mate_mid_fight() {
+        let blockout = Map::index("blockout").unwrap();
+        let (arena, nav, arsenal) = (Arena::new(&Map::load(blockout)), Nav::for_map(blockout), Arsenal::new(&Tuning::default()));
+        let torch = (0..arsenal.counts().1 as u8).find(|&s| alt_use(build(&arsenal, 0, s)) == AltUse::Beam).expect("a beam secondary");
+        let loadout = with_secondary(&arsenal, torch);
+        let t = arsenal.get(MechClass::B, loadout);
+        // An enemy in sight past the beam's reach, and a mate 12 m on, 3 m off the line to it.
+        let start = Mech { loadout, ..spawn_mech(t, Vector::new(0.0, 0.1, 40.0)) };
+        let (enemy, mate) = (spawn_mech(t, Vector::new(0.0, 0.1, -10.0)), spawn_mech(t, Vector::new(3.0, 0.1, 28.0)));
+        let beams = |heal: Option<(u8, &Mech, f32)>| {
+            let (mut me, mut bot) = (start, Bot::new(1));
+            (0..secs(1.0)).any(|tick| {
+                let input = bot.think_with(&arena, nav, t, &me, Some(&enemy), heal, tick);
+                step_mech(&arena, t, &mut me, &input);
+                input.alt_fire
+            })
+        };
+        assert!(beams(Some((2, &mate, t.mech_height * 0.5))), "let go of its mate to fight");
+        assert!(!beams(None), "held the beam on nothing");
     }
 
     #[test]
