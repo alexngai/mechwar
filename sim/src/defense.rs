@@ -24,9 +24,19 @@ pub const LEAK: f32 = 100.0;
 pub const WAVES: u8 = 10;
 const FIRST_BREAK: f32 = 60.0;
 const BREAK: f32 = 30.0;
+/// A break called short (every human pilot calling the wave): each pilot's scrap, and the run's
+/// score, for each second it had left.
+pub const CALL_SCRAP: f32 = 2.0;
+pub const CALL_SCORE: f32 = 10.0;
+/// The run's score: for each hull point shot off a foe, each wave beaten, and (won) each point
+/// of the reactor's hull left; and CALL_SCORE for each second of break called short.
+const SCORE_PER_HULL: f32 = 0.1;
+const WAVE_SCORE: f32 = 200.0;
 /// The wave director: each wave's threat budget for a full team (SOLO_SHARE of it for one pilot
 /// and evenly between), spent on `CARDS`, a theme leaning it one way from wave 3 (`Theme`). Foes
-/// come through the gates SPAWN_GAP apart, a pack of crawlers CRAWLER_GAP apart.
+/// come through the gates in packs of PACK, PACK_GAP apart (a pack of crawlers CRAWLER_GAP),
+/// PACK_PAUSE between packs. HURRY_AFTER s after its last foe came, a wave's stragglers walk
+/// HURRY times their pace (bosses keep theirs).
 const BUDGETS: [f32; WAVES as usize] = [6.0, 10.0, 14.0, 21.0, 30.0, 48.0, 60.0, 72.0, 82.0, 80.0];
 
 /// What the director buys: a foe (crawlers by the pack), what it costs of the budget, the wave
@@ -98,8 +108,12 @@ pub const CACHE_SCRAP: f32 = 60.0;
 pub const BIG: f32 = 2.5;
 /// A lane enemy rushing (`rush`: a boss burrowing) walks this many times its pace.
 const RUSH: f32 = 3.5;
-const SPAWN_GAP: f32 = 1.2;
+const PACK: u8 = 6;
+const PACK_GAP: f32 = 0.4;
+const PACK_PAUSE: f32 = 5.0;
 const CRAWLER_GAP: f32 = 0.35;
+const HURRY_AFTER: f32 = 20.0;
+const HURRY: f32 = 1.6;
 /// An infested mech that reaches the reactor takes this off it (and is gone).
 pub const ELITE_LEAK: f32 = 200.0;
 /// A plated foe's hits each lose its `armor`, but at least ARMOR_FLOOR of each gets through.
@@ -164,6 +178,8 @@ pub const TOWER_HULL: f32 = 300.0;
 pub const TIERS: u8 = 3;
 pub const UPGRADE: f32 = 1.0;
 const REFUND: f32 = 0.7;
+/// Mending a tower all the way costs REPAIR of what's gone into it (less for less).
+pub const REPAIR: f32 = 0.5;
 /// Each pilot's scrap to start, for each hull point they (or their towers) shoot off a walker, and
 /// for each wave beaten.
 const START_SCRAP: f32 = 250.0;
@@ -180,12 +196,16 @@ const GAP: f32 = 4.0;
 const REACTOR_CLEAR: f32 = 4.0;
 
 /// A pilot's build order: put down `TOWERS[i]` where they aim, raise the tower they aim at a tier,
-/// or sell it.
+/// sell it or mend it; or call the next wave.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Build {
     Place(u8),
     Upgrade,
     Sell,
+    /// Mend the tower aimed at, for scrap.
+    Repair,
+    /// Call the next wave now (in a break; it comes once every human pilot has).
+    Call,
 }
 
 /// Why a build order didn't go through.
@@ -209,6 +229,8 @@ pub enum Refusal {
     Full,
     /// The team has as many towers as there can be (LAST_TOWER - FIRST_TOWER + 1).
     Towers,
+    /// Nothing to repair: the tower's whole.
+    Whole,
 }
 
 /// A pilot's perks for the run, drafted one in three after each wave beaten and from salvage
@@ -321,6 +343,11 @@ pub fn price(kind: Kind) -> f32 {
     TOWERS.iter().position(|&k| k == kind).map_or(0.0, |i| PRICES[i])
 }
 
+/// A tower's full hull at `tier`, its builder holding `plating` Hardened plating.
+pub fn hull_whole(tier: u8, plating: f32) -> f32 {
+    tower_hull(tier) * (1.0 + 0.25 * plating)
+}
+
 /// A tower at `tier`: its hull, its reach (times tier 1's), and its rate of fire (times tier 1's).
 pub fn tower_hull(tier: u8) -> f32 {
     TOWER_HULL * (1.0 + 0.5 * f32::from(tier.max(1) - 1))
@@ -358,6 +385,9 @@ pub struct DefenseNet {
     pub open: Vec<u8>,
     pub sealed: Vec<u8>,
     pub caches: Vec<Vector>,
+    /// The run's score so far; the human pilots who've called the next wave this break.
+    pub score: u32,
+    pub ready: Vec<u8>,
 }
 
 /// What happened in a run.
@@ -379,6 +409,10 @@ pub enum News {
     Salvage { id: u8, rare: bool },
     /// Player `id`'s build order didn't go through.
     Refused { id: u8, why: Refusal },
+    /// The break was called short, with `seconds` left.
+    Called { seconds: u16 },
+    /// The wave's stragglers hurry on.
+    Hurry,
 }
 
 /// Where a run stands.
@@ -452,6 +486,12 @@ pub struct Defense {
     now: u32,
     /// Picks walkers' branches and places, run to run the same (xorshift).
     rng: u32,
+    /// The foes come so far in the pack coming, and the tick the wave's last came (0: still to).
+    pack: u8,
+    last_came: u32,
+    /// The run's score; the human pilots who've called the next wave this break.
+    pub score: f32,
+    pub ready: Vec<u8>,
     /// Each player's scrap, by id; the towers standing.
     pub scrap: [f32; MAX_PLAYERS],
     pub towers: Vec<Tower>,
@@ -519,6 +559,10 @@ impl Defense {
             share: 1.0,
             now: tick,
             rng: (0x9e37_79b9 ^ tick.wrapping_mul(0x85eb_ca6b)) | 1,
+            pack: 0,
+            last_came: 0,
+            score: 0.0,
+            ready: Vec::new(),
             scrap: [START_SCRAP; MAX_PLAYERS],
             towers: Vec::new(),
             shells: Vec::new(),
@@ -677,6 +721,7 @@ impl Defense {
         if let Some(s) = self.scrap.get_mut(usize::from(id)) {
             *s += SCRAP_PER_HULL * hull * more;
         }
+        self.score += SCORE_PER_HULL * hull;
     }
 
     /// How many of `perk` player `id` holds.
@@ -692,7 +737,7 @@ impl Defense {
     /// Tower `owner`'s full hull, its reach and its rate of fire (times tier 1's), by its tier and
     /// its builder's perks (1s for anything not a tower).
     pub fn hull_max(&self, owner: u8) -> f32 {
-        self.tower(owner).map_or(TOWER_HULL, |t| tower_hull(t.tier) * (1.0 + 0.25 * self.perk(t.by, Perk::Plating)))
+        self.tower(owner).map_or(TOWER_HULL, |t| hull_whole(t.tier, self.perk(t.by, Perk::Plating)))
     }
     pub fn reach_of(&self, owner: u8) -> f32 {
         self.tower(owner).map_or(1.0, |t| reach(t.tier) * (1.0 + 0.15 * self.perk(t.by, Perk::Barrels)))
@@ -781,7 +826,7 @@ impl Defense {
         }
         let open = self.open_gates(self.wave).into_iter().map(|g| g as u8).collect();
         let sealed = self.sealed.iter().map(|&k| k as u8).collect();
-        DefenseNet { wave: self.wave, waves: WAVES, break_left, hull: self.hull, left, scrap, towers: self.towers.clone(), offers, waiting, perks, cores: self.cores.clone(), theme: self.theme, next, open, sealed, caches: self.caches.clone() }
+        DefenseNet { wave: self.wave, waves: WAVES, break_left, hull: self.hull, left, scrap, towers: self.towers.clone(), offers, waiting, perks, cores: self.cores.clone(), theme: self.theme, next, open, sealed, caches: self.caches.clone(), score: self.score.round() as u32, ready: self.ready.clone() }
     }
 
     /// Where each mech (its id, its team, whether it's a living bot) should head with lane enemies standing
@@ -899,6 +944,8 @@ impl Defense {
         match self.stage {
             Stage::Break { until } if tick >= until => {
                 self.stage = Stage::Wave { next_at: tick };
+                (self.pack, self.last_came) = (0, 0);
+                self.ready.clear();
                 out.news.push(News::Wave { n: self.wave, count: self.queue.len() as u16 });
             }
             Stage::Wave { next_at } if tick >= next_at && !self.queue.is_empty() => {
@@ -928,12 +975,28 @@ impl Defense {
                 };
                 if came {
                     let foe = self.queue.pop().map(|q| q.0);
-                    let pack = foe == Some(Foe::Lane(Kind::Crawler)) && self.queue.last().map(|q| q.0) == foe;
-                    self.stage = Stage::Wave { next_at: tick + (if pack { CRAWLER_GAP } else { SPAWN_GAP } * TICK_HZ) as u32 };
+                    let crawlers = foe == Some(Foe::Lane(Kind::Crawler)) && self.queue.last().map(|q| q.0) == foe;
+                    // A crawler pack counts as one of its pack.
+                    if !crawlers {
+                        self.pack += 1;
+                    }
+                    let gap = if crawlers {
+                        CRAWLER_GAP
+                    } else if self.pack >= PACK {
+                        self.pack = 0;
+                        PACK_PAUSE
+                    } else {
+                        PACK_GAP
+                    };
+                    self.stage = Stage::Wave { next_at: tick + (gap * TICK_HZ) as u32 };
+                    if self.queue.is_empty() {
+                        self.last_came = tick;
+                    }
                 }
             }
             Stage::Wave { .. } if self.queue.is_empty() && self.walkers.is_empty() && elites == 0 => {
                 out.news.push(News::Cleared(self.wave));
+                self.score += WAVE_SCORE;
                 for &id in pilots {
                     if let Some(s) = self.scrap.get_mut(usize::from(id)) {
                         *s += WAVE_BONUS;
@@ -942,6 +1005,7 @@ impl Defense {
                 }
                 if self.wave >= WAVES {
                     self.stage = Stage::Won;
+                    self.score += self.hull;
                     out.won = true;
                 } else {
                     self.wave += 1;
@@ -955,12 +1019,15 @@ impl Defense {
             }
             _ => {}
         }
+        if self.last_came > 0 && tick == self.last_came + (HURRY_AFTER * TICK_HZ) as u32 && self.walkers.iter().any(|w| !w.kind.boss()) {
+            out.news.push(News::Hurry);
+        }
         // Each walker on along its lanes, at its place across them.
         let mut gone = Vec::new();
         for i in 0..self.walkers.len() {
             let mut w = self.walkers[i];
             if tick >= w.stunned {
-                w.along += species(w.kind).speed * if tick < w.rush { RUSH } else { 1.0 } * DT;
+                w.along += self.pace(&w) * DT;
             }
             loop {
                 let (a, b, _) = self.edges[w.edge];
@@ -1014,7 +1081,41 @@ impl Defense {
         if self.now < w.stunned {
             return Vector::ZERO;
         }
-        self.place(w).1 * species(w.kind).speed * if self.now < w.rush { RUSH } else { 1.0 }
+        self.place(w).1 * self.pace(w)
+    }
+
+    /// How fast walker `w` walks (m/s): its kind's pace, RUSH times it burrowing, HURRY times it
+    /// straggling (not a boss).
+    fn pace(&self, w: &Walker) -> f32 {
+        let hurry = self.last_came > 0 && self.now >= self.last_came + (HURRY_AFTER * TICK_HZ) as u32 && !w.kind.boss();
+        species(w.kind).speed * if self.now < w.rush { RUSH } else if hurry { HURRY } else { 1.0 }
+    }
+
+    /// Human pilot `id` calls the next wave (in a break): once every one of `humans` has, it
+    /// comes now, and each of `pilots` gets CALL_SCRAP, and the run CALL_SCORE, for each second
+    /// the break had left. What came of it, if it came.
+    pub fn call(&mut self, id: u8, humans: &[u8], pilots: &[u8], tick: u32) -> Option<News> {
+        let Stage::Break { until } = self.stage else { return None };
+        if !self.ready.contains(&id) {
+            self.ready.push(id);
+        }
+        if !humans.iter().all(|h| self.ready.contains(h)) {
+            return None;
+        }
+        let left = until.saturating_sub(tick) as f32 * DT;
+        for &p in pilots {
+            if let Some(s) = self.scrap.get_mut(usize::from(p)) {
+                *s += CALL_SCRAP * left;
+            }
+        }
+        self.score += CALL_SCORE * left;
+        self.stage = Stage::Break { until: tick };
+        Some(News::Called { seconds: left.round() as u16 })
+    }
+
+    /// What mending `tower` from `hull` to `max` costs.
+    pub fn repair_cost(tower: &Tower, hull: f32, max: f32) -> f32 {
+        REPAIR * tower.spent * ((max - hull) / max).clamp(0.0, 1.0)
     }
 
     /// Lane enemy `owner` walks RUSH times its pace till tick `until`.
@@ -1094,6 +1195,46 @@ mod tests {
             out.push(d.step(t, &[0, 1, 2, 3], &standing, 0));
         }
         out
+    }
+
+    #[test]
+    fn foes_come_in_packs_and_stragglers_hurry_but_not_bosses() {
+        let mut d = run();
+        steps(&mut d, 0, 0.1);
+        // Seven brutes and the Hive through gate 0 (the queue comes from its end).
+        d.queue = std::iter::once((Foe::Lane(Kind::Hive), 0)).chain(std::iter::repeat_n((Foe::Lane(Kind::Brute), 0), 7)).collect();
+        d.stage = Stage::Break { until: 10 };
+        // (Long enough to hurry, not for the first to reach the reactor.)
+        let out = steps(&mut d, 10, 28.5);
+        let came: Vec<u32> = out.iter().enumerate().filter(|(_, o)| !o.spawn.is_empty()).map(|(t, _)| t as u32).collect();
+        let gaps: Vec<u32> = came.windows(2).map(|w| w[1] - w[0]).collect();
+        let (gap, pause) = ((PACK_GAP * TICK_HZ) as u32, (PACK_PAUSE * TICK_HZ) as u32);
+        assert_eq!(gaps, [gap, gap, gap, gap, gap, pause, gap]);
+        // HURRY_AFTER on from the last, the stragglers hurry, called out, but the Hive keeps its pace.
+        let hurry = (came[7] as f32 + HURRY_AFTER * TICK_HZ) as usize;
+        assert_eq!(out.iter().position(|o| o.news.contains(&News::Hurry)), Some(hurry));
+        let pace = |d: &Defense, k: Kind| d.walkers.iter().find(|w| w.kind == k).map(|w| d.velocity(w.owner).length()).unwrap();
+        assert!((pace(&d, Kind::Brute) - species(Kind::Brute).speed * HURRY).abs() < 1e-3);
+        assert!((pace(&d, Kind::Hive) - species(Kind::Hive).speed).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_break_called_short_by_every_human_pays_each_pilot_and_the_score() {
+        let mut d = run();
+        steps(&mut d, 0, 0.1);
+        let t = 100;
+        let Stage::Break { until } = d.stage else { panic!("not a break") };
+        let left = (until - t) as f32 * DT;
+        let bot = d.scrap[2];
+        // One of two humans isn't enough.
+        assert_eq!(d.call(0, &[0, 1], &[0, 1, 2], t), None);
+        assert_eq!((d.stage, d.ready.clone()), (Stage::Break { until }, vec![0]));
+        assert_eq!(d.call(1, &[0, 1], &[0, 1, 2], t), Some(News::Called { seconds: left.round() as u16 }));
+        assert!((d.scrap[2] - bot - CALL_SCRAP * left).abs() < 1e-3 && (d.score - CALL_SCORE * left).abs() < 1e-3);
+        // The wave comes at once; out of a break, a call does nothing.
+        steps(&mut d, t, 0.1);
+        assert!(matches!(d.stage, Stage::Wave { .. }) && d.ready.is_empty());
+        assert_eq!(d.call(0, &[0], &[0], t + 5), None);
     }
 
     /// What `foes` cost the director (a boss nothing).

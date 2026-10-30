@@ -394,6 +394,9 @@ addEventListener('keydown', (e) => {
   // Co-op: with a draft on offer (and not building), 1-3 pick from it.
   else if (coop() && tower >= 0 && tower < 3 && $('picker').hidden && net.offer().length > tower && ws?.readyState === WebSocket.OPEN) ws.send(net.draft(tower));
   if (coop() && (e.code === 'KeyU' || e.code === 'KeyX')) sendBuild(e.code === 'KeyU' ? 4 : 5);
+  // Co-op: mend the tower aimed at for scrap; call the next wave.
+  if (coop() && e.code === 'KeyH') sendBuild(6);
+  if (coop() && e.code === 'KeyN') sendBuild(7);
   if (e.code === 'KeyK' && sim) { sim.reset(); prev = curr = sim.state(); }
   if (e.code === 'KeyI') $('stats').hidden = !$('stats').hidden;
   if (e.code === 'KeyM') setMuted(!sound.muted);
@@ -596,20 +599,23 @@ const esc = (text) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const feed = [];
 // Our latest kill, named over the aim frame for a moment.
 let eliminated = null, callout = null, capture = null, blipAt = 0, reactorHitAt = null;
+// Co-op: the last break called short (when, and the scrap it paid), for the wave's callout to say.
+let calledEarly = { at: -Infinity, scrap: 0 };
 // Co-op building: the tower being placed (-1: not building), the last one picked, what the panel
 // says of it (or of the tower aimed at), and where the last arc pylon jump left from.
 let building = -1, lastTower = 0, buildHint = '', zapFrom = null, shellFrom = null;
 const coop = () => !!net && net.defense().length > 0;
+const CALL_SCRAP = 2; // each pilot's scrap for each second of break called short (defense.rs CALL_SCRAP)
 const sendBuild = (order) => ws?.readyState === WebSocket.OPEN && ws.send(net.build(order));
 /** How a co-op run ended: held through its last wave, or lost on the wave it fell. */
 const coopResult = (won) => {
-  const [wave, waves] = net.defense();
-  return won ? `REACTOR HELD · ALL ${waves} WAVES BEATEN` : `REACTOR LOST ON WAVE ${wave} OF ${waves}`;
+  const [wave, waves, , , , score] = net.defense();
+  return `${won ? `REACTOR HELD · ALL ${waves} WAVES BEATEN` : `REACTOR LOST ON WAVE ${wave} OF ${waves}`} · SCORE ${Math.round(score)}`;
 };
 /** A co-op wave's theme as the panel calls it (defense.rs `Theme`, in order; mixed says nothing). */
 const THEMES = ['', 'SWARM', 'ARMOR', 'SIEGE', 'SHIELDED', 'FLANKING'];
 /** Why a build order didn't go (defense.rs `Refusal`, in order). */
-const REFUSALS = ['NOTHING IN REACH', 'NO ROOM HERE', 'TOO CLOSE TO A LANE', 'TOO CLOSE TO A TOWER', 'TOO CLOSE TO THE REACTOR', 'NOT ENOUGH SCRAP', 'AIM AT A TOWER (YOUR OWN TO SELL)', 'AS HIGH AS IT GOES', 'THE TEAM HAS ALL THE TOWERS IT CAN'];
+const REFUSALS = ['NOTHING IN REACH', 'NO ROOM HERE', 'TOO CLOSE TO A LANE', 'TOO CLOSE TO A TOWER', 'TOO CLOSE TO THE REACTOR', 'NOT ENOUGH SCRAP', 'AIM AT A TOWER (YOUR OWN TO SELL)', 'AS HIGH AS IT GOES', 'THE TEAM HAS ALL THE TOWERS IT CAN', 'NOTHING TO MEND'];
 /** Siege energy we carried as of the last frame; CARRY_MAX matches siege::CARRY_MAX. */
 let heldBefore = 0, bankBefore = 0;
 const ENERGY_COLOR = 0x5dff9a;
@@ -1020,7 +1026,8 @@ function frame(now) {
     if (kind === 14) {
       // Co-op: wave b coming, x strong (a 0); b cleared (1); a walker into the reactor (2).
       if (a === 0) {
-        callout = { text: `WAVE ${b} · ${x} WALKERS`, color: hex(FOE.accent), at: now };
+        const called = now - calledEarly.at < 2000 ? ` · CALLED EARLY · +${calledEarly.scrap} SCRAP` : '';
+        callout = { text: `WAVE ${b} · ${x} WALKERS${called}`, color: hex(FOE.accent), at: now };
         sound.zone('lost');
       } else if (a === 1) {
         callout = { text: `WAVE ${b} CLEARED`, color: hex(FRIEND.accent), at: now };
@@ -1046,6 +1053,14 @@ function frame(now) {
           callout = { text: x ? 'BLUEPRINT FOUND · PICK ONE' : 'SALVAGE · PICK AN UPGRADE', color: hex(FRIEND.accent), at: now };
           sound.zone('took');
         }
+      } else if (a === 8) {
+        // The break called short, b seconds early: scrap for each (the wave's callout, close behind, says so).
+        calledEarly = { at: now, scrap: Math.floor(CALL_SCRAP * b) };
+        callout = { text: `WAVE CALLED · +${calledEarly.scrap} SCRAP`, color: hex(FRIEND.accent), at: now };
+        sound.zone('took');
+      } else if (a === 9) {
+        callout = { text: 'THE STRAGGLERS HURRY ON', color: hex(FOE.accent), at: now };
+        sound.zone('lost');
       } else if (a === 3) {
         // Our build order refused (b us, x why).
         if (b === myId) {
@@ -1528,7 +1543,7 @@ function topPanel(hudState, myId, zones, siege, clock) {
     state = objectives.stage(team, siege, [blue, red], carried);
   } else if (mode === DEFENSE) {
     // The reactor's hull, and the walkers still to come or standing; between waves, the countdown.
-    const [wave, waves, breakLeft, hull, left] = net.defense().length ? net.defense() : [1, 10, -1, REACTOR_HULL, 0];
+    const [wave, waves, breakLeft, hull, left, score, ready] = net.defense().length ? net.defense() : [1, 10, -1, REACTOR_HULL, 0, 0, 0];
     const scrap = Math.floor(net.scrap()[myId] ?? 0);
     // A boss on the field gets its own bar.
     const list = game.deployables();
@@ -1538,7 +1553,7 @@ function topPanel(hudState, myId, zones, siege, clock) {
       const kind = list[i], hp = list[i + 9];
       boss = `<span class="them"><small>${FOE_NAMES[kind].toUpperCase()}</small>${bar((1000 * hp) / foeHull(kind, wave))}${Math.ceil(hp)}</span>`;
     }
-    main = `<span class="us"><small>WAVE</small> ${wave}/${waves}</span><span class="us"><small>REACTOR</small>${bar((1000 * hull) / REACTOR_HULL)}${Math.ceil(hull)}</span><span class="us"><small>SCRAP</small> ${scrap}</span>${boss}<span class="them">${left} <small>WALKERS</small></span>`;
+    main = `<span class="us"><small>WAVE</small> ${wave}/${waves}</span><span class="us"><small>REACTOR</small>${bar((1000 * hull) / REACTOR_HULL)}${Math.ceil(hull)}</span><span class="us"><small>SCRAP</small> ${scrap}</span><span class="us"><small>SCORE</small> ${Math.round(score)}</span>${boss}<span class="them">${left} <small>WALKERS</small></span>`;
     // In a break, what's coming: the wave's theme and its foes, most first.
     const next = net.next_wave();
     if (next.length) {
@@ -1549,7 +1564,9 @@ function topPanel(hudState, myId, zones, siege, clock) {
       const gates = net.open_gates().length, all = objectives.gates.length;
       more = `NEXT: ${THEMES[next[0]] ? THEMES[next[0]] + ' · ' : ''}${named.join(' · ')}${all > 1 ? ` · ${gates === all ? 'ALL' : `${gates} OF ${all}`} GATES` : ''}`;
     }
-    state = [buildHint, breakLeft >= 0 ? `GET READY · WAVE ${wave} IN ${Math.ceil(breakLeft)}s` : ''].filter(Boolean).join(' · ');
+    // In a break: N calls the wave now, for scrap and score (once every human pilot has).
+    const call = breakLeft < 0 ? '' : net.called() ? `CALLED · WAITING ON THE TEAM (${ready})` : `N CALL IT NOW · +${Math.floor(CALL_SCRAP * breakLeft)} SCRAP`;
+    state = [buildHint, breakLeft >= 0 ? `GET READY · WAVE ${wave} IN ${Math.ceil(breakLeft)}s` : '', call].filter(Boolean).join(' · ');
   } else if (mode === CONVOY) {
     // The hauler on its track from our base (left) to theirs, the middle marked, in the color of
     // whoever walks it (blinking while both sides are at it); a word on a stall or a standoff.
@@ -1762,16 +1779,17 @@ function drawBuild(now, alive, myId) {
   if (!coop()) {
     building = -1;
     buildHint = '';
-    $('draft').hidden = true;
+    $('draft').hidden = $('towers').hidden = true;
     return;
   }
   if (!alive) building = -1;
   const towers = net.towers(), list = game.deployables(), info = new Map();
   towerTiers.clear();
-  for (let i = 0; i < towers.length; i += 5) {
+  for (let i = 0; i < towers.length; i += 8) {
     towerTiers.set(towers[i], towers[i + 2]);
-    info.set(towers[i], towers.subarray(i, i + 5));
+    info.set(towers[i], towers.subarray(i, i + 8));
   }
+  watchTowers(info, list, now, myId);
   objectives.drawPylons(list, towerTiers, FRIEND.accent, now);
   objectives.drawCores(net.cores(), now);
   objectives.drawSeals(net.seals(), now);
@@ -1801,9 +1819,50 @@ function drawBuild(now, alive, myId) {
     buildHint = alive ? 'B BUILD' : '';
     return;
   }
-  const [, by, tier, up, refund] = best.t, name = TOWER_NAMES[[2, 3, ARC, PULSE].indexOf(best.kind)] ?? 'Tower';
+  const [, by, tier, up, refund, hull, whole, mend] = best.t, name = TOWER_NAMES[[2, 3, ARC, PULSE].indexOf(best.kind)] ?? 'Tower';
   const raise = up > 0 ? `U RAISE ${Math.round(up)}` : 'TOP TIER', sell = by === myId ? ` · X SELL ${Math.round(refund)}` : '';
-  buildHint = `${name.toUpperCase()} ${'I'.repeat(tier)} · ${raise}${sell}`;
+  const fix = hull < whole - 0.5 ? ` · H MEND ${Math.ceil(mend)}` : '';
+  buildHint = `${name.toUpperCase()} ${'I'.repeat(tier)} · ${Math.round((100 * hull) / whole)}%${fix} · ${raise}${sell}`;
+}
+
+// Co-op towers as last seen: each one's share of its hull and who built it (`coopTowers`, by
+// owner, for the glass's tags), its hull a frame ago and when it was last hit; and when one was last
+// called out under attack. MAX_TOWERS matches defense.rs (LAST_TOWER - FIRST_TOWER + 1).
+const coopTowers = new Map(), towerHull = new Map(), towerHitAt = new Map();
+let towerCalloutAt = -Infinity, towersHtml = '';
+const MAX_TOWERS = 32, TOWER_SHORT = ['MG', 'ROCKET', 'ARC', 'PULSE'], ARROWS = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
+/**
+ * The team's towers on the HUD: how many, and the hurt ones, worst first, each with its hull and
+ * which way and how far it is, flashing while it's hit; a callout when one comes under attack.
+ */
+function watchTowers(info, list, now, myId) {
+  coopTowers.clear();
+  camera.getWorldDirection(heading);
+  const hurt = [];
+  for (let i = 0; i < list.length; i += 10) {
+    const t = info.get(list[i + 2]);
+    if (!t) continue;
+    const [owner, by, tier, , , hull, whole] = t, kind = [2, 3, ARC, PULSE].indexOf(list[i]);
+    if (hull < (towerHull.get(owner) ?? hull) - 0.01) {
+      if (now - (towerHitAt.get(owner) ?? -Infinity) > 8000 && now - towerCalloutAt > 4000 && (!callout || now - callout.at > 2500)) {
+        callout = { text: `${TOWER_NAMES[kind].toUpperCase()} UNDER ATTACK`, color: hex(FOE.accent), at: now };
+        towerCalloutAt = now;
+      }
+      towerHitAt.set(owner, now);
+    }
+    towerHull.set(owner, hull);
+    coopTowers.set(owner, { by, kind, share: hull / whole });
+    if (hull >= whole - 0.5) continue;
+    const dx = list[i + 3] - camera.position.x, dz = list[i + 5] - camera.position.z;
+    const turn = Math.atan2(heading.x * dz - heading.z * dx, heading.x * dx + heading.z * dz); // (+: to the right)
+    hurt.push({ owner, by, tier, kind, share: hull / whole, dist: Math.hypot(dx, dz), arrow: ARROWS[(Math.round(turn / (Math.PI / 4)) + 8) % 8] });
+  }
+  for (const k of towerHull.keys()) if (!info.has(k)) towerHull.delete(k);
+  hurt.sort((a, b) => a.share - b.share);
+  const rows = hurt.slice(0, 6).map((h) => `<div class="${now - (towerHitAt.get(h.owner) ?? -Infinity) < 1500 ? 'hit' : ''}"><b>${TOWER_SHORT[h.kind]} ${'I'.repeat(h.tier)}${h.by === myId ? '*' : ''}</b><i><u style="width:${Math.round(100 * h.share)}%"></u></i><span>${h.arrow} ${Math.round(h.dist)}m</span></div>`);
+  const html = `<h4>TOWERS ${info.size}/${MAX_TOWERS}${hurt.length ? ` · ${hurt.length} HURT · H TO MEND` : ''}</h4>${rows.join('')}${hurt.length > 6 ? `<small>+${hurt.length - 6} MORE</small>` : ''}`;
+  if (html !== towersHtml) $('towers').innerHTML = towersHtml = html;
+  $('towers').hidden = !info.size;
 }
 
 function drawDeployables(now, myTeam) {
@@ -2022,6 +2081,9 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
       to.subVectors(chest, eye).normalize();
       visible = game.cast_ray(eye.x, eye.y, eye.z, to.x, to.y, to.z, dist) >= dist - 0.5 && !smoked(eye, chest);
     }
+    // A co-op tower of ours, hurt: tagged through walls, near enough, so it can be found and mended.
+    const ours = enemy ? null : coopTowers.get(owner);
+    if (ours && ours.share < 0.999 && dist < 120) visible = true;
     if (!enemy || visible) contacts.push({ x, z, enemy, turret: true });
     if (!visible) continue;
     ndc.copy(chest).project(camera);
@@ -2031,8 +2093,8 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
     const label = ship ? 'Battleship' : sentry ? 'Base gun' : walker ? FOE_NAMES[kind] : kind === 2 ? 'MG turret' : 'Rocket turret';
     const tag = {
       // `unit` is its lock-on id (deploy::target_id), so the lock diamond finds it.
-      ...toScreen(ndc), dist, enemy, unit: 64 + 2 * owner + (kind === 3 ? 1 : 0), name: ship || sentry ? `Enemy ${label.toLowerCase()}` : walker ? label : `${nameOf(owner)}'s ${label}`, bot: false, status: sentry && hull <= 0 ? 'OFFLINE' : '', focus: false,
-      health: Math.max(hull, 0) / hullMax, label,
+      ...toScreen(ndc), dist, enemy, unit: 64 + 2 * owner + (kind === 3 ? 1 : 0), name: ship || sentry ? `Enemy ${label.toLowerCase()}` : walker ? label : ours ? `${nameOf(ours.by)}'s ${TOWER_NAMES[ours.kind]}` : `${nameOf(owner)}'s ${label}`, bot: false, status: sentry && hull <= 0 ? 'OFFLINE' : '', focus: false,
+      health: ours ? ours.share : Math.max(hull, 0) / hullMax, label: ours ? TOWER_NAMES[ours.kind] : label,
     };
     const angle = look.angleTo(to.subVectors(chest, camera.position));
     if (angle < focusAngle) [focusAngle, focus] = [angle, tag];

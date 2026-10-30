@@ -30,6 +30,17 @@
     #score .pip { display: inline-block; min-width: 20px; padding: 0 5px; border: 2px solid currentColor; border-radius: 3px; font-size: 15px; line-height: 20px; }
     #score .pip.contested { animation: blink 0.5s steps(2) infinite; }
     #score .track { position: relative; display: inline-block; width: 240px; height: 6px; background: #ffffff24; }
+    /* Co-op: the team's towers, the hurt ones listed worst first, flashing while hit. */
+    #towers { position: fixed; z-index: 2; left: 16px; top: 34%; width: 250px; padding: 6px 8px; background: #000a; border: 1px solid #ffffff1c; border-radius: 4px; pointer-events: none; font-size: 11px; letter-spacing: 1px; color: #e8edf2; }
+    #towers h4 { margin: 0 0 4px; font-size: 11px; font-weight: normal; opacity: 0.8; }
+    #towers div { display: flex; align-items: center; gap: 6px; margin-top: 3px; padding: 1px 3px; border-radius: 2px; }
+    #towers div.hit { background: #ff3b1f55; animation: towerhit 0.3s steps(2) infinite; }
+    @keyframes towerhit { 50% { background: #ff3b1f22; } }
+    #towers b { width: 64px; font-weight: normal; white-space: nowrap; }
+    #towers i { flex: 1; height: 5px; background: #ffffff22; }
+    #towers u { display: block; height: 100%; background: #6dff9a; text-decoration: none; }
+    #towers span { width: 46px; text-align: right; opacity: 0.85; }
+    #towers small { opacity: 0.6; }
     #draft { position: fixed; z-index: 2; bottom: 210px; left: 50%; transform: translateX(-50%); width: min(720px, calc(100vw - 32px)); padding: 8px 12px 10px; background: #000c; border: 1px solid #ffffff1c; border-radius: 4px; pointer-events: none; color: #e8edf2; }
     #draft .head { font-size: 11px; letter-spacing: 2px; color: #a9b3bd; text-align: center; }
     #draft .cards { display: flex; gap: 8px; margin-top: 6px; }
@@ -243,6 +254,7 @@
   <pre id="debug-log" hidden></pre>
   <div id="score"></div>
   <div id="draft" hidden></div>
+  <div id="towers" hidden></div>
   <div id="board" hidden></div>
   <div id="banner"></div>
   <div id="killcam" hidden></div>

@@ -32,6 +32,7 @@ const SIM = {
 // hulls and plating are `defense::species`', the gates' and flanking's are `GATES_ONE`, `GATES_TWO` and `FLANK`).
 const COOP = {
   REACTOR_HULL: 2000, LEAK: 100, WAVES: 10, FIRST_BREAK: 60, BREAK: 30, START_SCRAP: 250, SCRAP_PER_HULL: 0.35, WAVE_BONUS: 100, CACHES: 2, CACHE_SCRAP: 60,
+  CALL_SCRAP: 2, CALL_SCORE: 10, SCORE_PER_HULL: 0.1, WAVE_SCORE: 200, REPAIR: 0.5, PACK: 6, PACK_PAUSE: 5, HURRY_AFTER: 20, HURRY: 1.6,
   PRICES: [100, 150, 175, 200], TIERS: 3, UPGRADE: 1, REFUND: 0.7, REACH: 30, LANE_CLEAR: 5,
   TOWER_MG_POWER: 2.2, TOWER_ROCKET_POWER: 1.6, ARC_RANGE: 20, ARC_DAMAGE: 40, ARC_HOPS: 3, ARC_FALLOFF: 0.7, ARC_COOLDOWN: 1.5, PULSE_RADIUS: 14, PULSE_STUN: 2.5, PULSE_DAMAGE: 15, PULSE_COOLDOWN: 7,
   WALKER_RANGE: 30, CRAWLER_PACK: 4, CRAWLER_BLAST: 5, CRAWLER_DAMAGE: 60, BRUTE_ARMOR: 5, BRUTE_REACH: 8, BRUTE_SMASH: 150,
@@ -268,7 +269,9 @@ async function modes() {
     ],
     defense: [
       `Up to ${SIM.TEAM_SIZE} pilots, bots filling the team, hold a reactor of ${C.REACTOR_HULL.toLocaleString('en')} hull against ${C.WAVES} waves of infested machines, with ${C.FIRST_BREAK} s to get ready and ${C.BREAK} s between waves. There's no clock: the run ends when the reactor falls or the last wave is beaten.`,
-      `Foes come out of the map's gates and walk its lanes, forking by chance, to the reactor. One that reaches it is gone and takes hull off by its kind (${C.LEAK} for a walker).`,
+      `In a break, N calls the next wave now. Once every human pilot has, it comes, and each pilot gets ${C.CALL_SCRAP} scrap for each second the break had left.`,
+      `A run scores ${C.SCORE_PER_HULL} for each point of hull shot off a foe, ${C.WAVE_SCORE} for each wave beaten, ${C.CALL_SCORE} for each second of break called short, and, held, the reactor's hull left. The panel shows it as it climbs, and the end screen the total.`,
+      `Foes come out of the map's gates in packs of ${C.PACK}, ${C.PACK_PAUSE} s apart, and walk its lanes, forking by chance, to the reactor. One that reaches it is gone and takes hull off by its kind (${C.LEAK} for a walker). ${C.HURRY_AFTER} s after a wave's last foe comes, its stragglers hurry, ${C.HURRY} times their pace; bosses keep theirs.`,
     ],
   };
   // What a mode's card adds below its rules: Co-op Defense has a build menu, scrap, drafts and a roster of foes.
@@ -278,7 +281,9 @@ async function modes() {
       <h4>BUILDING</h4>
       <ul class="rules">
         <li>B opens the build menu, 1–4 pick a tower and the left button puts it down where you aim; a ghost shows green where it fits, or red with the reason. It needs flat ground with headroom, within ${C.REACH} m of you, ${C.LANE_CLEAR} m off any lane, and clear of other towers and the reactor.</li>
-        <li>U raises the tower you aim at a tier, anyone's, up to tier ${C.TIERS}: more hull, reach and fire rate, for ${pct(C.UPGRADE)} of its price at tier 1 and ${pct(2 * C.UPGRADE)} at tier 2. X sells your own for ${pct(C.REFUND)} of what you put into it. The ${link('mender')} mends towers and the reactor.</li>
+        <li>U raises the tower you aim at a tier, anyone's, up to tier ${C.TIERS}: more hull, reach and fire rate, for ${pct(C.UPGRADE)} of its price at tier 1 and ${pct(2 * C.UPGRADE)} at tier 2. X sells your own for ${pct(C.REFUND)} of what you put into it.</li>
+        <li>Towers don't mend on their own. H mends the one you aim at, anyone's, for scrap: all of it for ${pct(C.REPAIR)} of what's gone into the tower, less for less, or as far as your scrap goes. The ${link('mender')} mends towers and the reactor for free.</li>
+        <li>The panel on the left counts the team's towers and lists the hurt ones, worst first, with which way and how far each is; one under fire flashes and is called out, and a hurt tower is tagged through walls.</li>
         <li>High ground matters: a tower 5 m or more above a lane is out of crawlers' and brutes' reach.</li>
       </ul>
       ${table(['TOWER', 'PRICE', 'WHAT IT DOES'], [
