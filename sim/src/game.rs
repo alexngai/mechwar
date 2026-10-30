@@ -92,6 +92,8 @@ const BOT_PLAN: f32 = 1.0;
 const BOT_BUILD_REACH: f32 = 12.0;
 const BOT_SPOTS: [f32; 3] = [7.0, 10.0, 13.0];
 const BOT_MIX: [f32; 4] = [1.0, 1.0, 0.8, 0.5];
+/// Bots mend the team's worst tower first, if it's under this share of its hull.
+const BOT_MEND: f32 = 0.5;
 /// Co-op's bosses (see `bosses_act`).
 const EXCAVATOR_REACH: f32 = 10.0;
 const EXCAVATOR_DRILL: f32 = 60.0;
@@ -2463,14 +2465,23 @@ impl Game {
         }
     }
 
-    /// What bot `id` would build with its scrap: the tower it can afford the team has fewest of
-    /// (for BOT_MIX), on the free spot BOT_SPOTS off a lane's line covered by fewest towers (nearer
-    /// the reactor first); else the team's lowest tower raised a tier, if it can afford that.
-    /// Where it'd stand, and the order.
+    /// What bot `id` would build with its scrap: the team's worst tower mended, if under BOT_MEND
+    /// of its hull and no one's on it; else the tower it can afford the team has fewest of (for
+    /// BOT_MIX), on the free spot BOT_SPOTS off a lane's line covered by fewest towers (nearer the
+    /// reactor first); else the team's lowest tower raised a tier, if it can afford that. Where
+    /// it'd stand, and the order.
     fn plan_build(&self, id: u8) -> Option<(Vector, defense::Build)> {
         let d = self.defense.as_ref()?;
         let scrap = d.scrap[usize::from(id)];
         let towers: Vec<Deployable> = self.deployables.iter().filter(|e| d.tower(e.owner).is_some()).copied().collect();
+        let mending = |t: &Deployable| d.plans.iter().any(|q| q.2 == defense::Build::Repair && q.1.distance(t.pos) < 0.5);
+        let worst = towers.iter().filter(|t| !mending(t)).map(|t| (t, t.hull / d.hull_max(t.owner))).min_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((t, share)) = worst
+            && share < BOT_MEND
+            && scrap >= 1.0
+        {
+            return Some((t.pos, defense::Build::Repair));
+        }
         let count = |kind| towers.iter().filter(|t| t.kind == kind).count() as f32;
         let kind = (0..defense::TOWERS.len()).filter(|&k| d.price_for(id, defense::TOWERS[k]) <= scrap).min_by(|&a, &b| (count(defense::TOWERS[a]) / BOT_MIX[a]).total_cmp(&(count(defense::TOWERS[b]) / BOT_MIX[b])));
         if let Some(k) = kind {
@@ -3923,6 +3934,29 @@ mod tests {
         game.step();
         assert!(game.players.iter().all(|p| p.id != elite));
         assert_eq!(game.defense.as_ref().unwrap().hull, defense::REACTOR_HULL - defense::ELITE_LEAK);
+    }
+
+    #[test]
+    fn bots_mend_the_worst_tower_first() {
+        let (mut game, id) = co_op(true);
+        game.dock(id);
+        for _ in 0..secs(55.0) {
+            game.step();
+        }
+        // A longer break, scrap to spend, and one tower badly hurt: a bot mends it.
+        let k = game.deployables.iter().position(|e| game.defense.as_ref().unwrap().tower(e.owner).is_some()).unwrap();
+        let owner = game.deployables[k].owner;
+        game.deployables[k].hull = 10.0;
+        let tick = game.tick;
+        let d = game.defense.as_mut().unwrap();
+        d.stage = defense::Stage::Break { until: tick + secs(30.0) };
+        d.scrap = [500.0; MAX_PLAYERS];
+        for _ in 0..secs(25.0) {
+            game.step();
+        }
+        let max = game.defense.as_ref().unwrap().hull_max(owner);
+        let hull = game.deployables.iter().find(|e| e.owner == owner).map_or(0.0, |e| e.hull);
+        assert!(hull > 0.5 * max, "mended to {hull} of {max}");
     }
 
     #[test]

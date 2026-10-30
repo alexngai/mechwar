@@ -112,8 +112,8 @@ const PACK: u8 = 6;
 const PACK_GAP: f32 = 0.4;
 const PACK_PAUSE: f32 = 5.0;
 const CRAWLER_GAP: f32 = 0.35;
-const HURRY_AFTER: f32 = 20.0;
-const HURRY: f32 = 1.6;
+const HURRY_AFTER: f32 = 30.0;
+const HURRY: f32 = 1.25;
 /// An infested mech that reaches the reactor takes this off it (and is gone).
 pub const ELITE_LEAK: f32 = 200.0;
 /// A plated foe's hits each lose its `armor`, but at least ARMOR_FLOOR of each gets through.
@@ -1199,13 +1199,15 @@ mod tests {
 
     #[test]
     fn foes_come_in_packs_and_stragglers_hurry_but_not_bosses() {
-        let mut d = run();
+        // A gate 200 m out, so the brutes are still walking when they'd hurry.
+        let spots = DefenseSpots { reactor: [0.0; 3], radius: 6.0, gates: vec![[0.0, 0.0, -200.0]], lanes: Lanes::default(), late: vec![] };
+        let mut d = Defense::new(&spots, 0, |_, _| Vec::new()).unwrap();
         steps(&mut d, 0, 0.1);
         // Seven brutes and the Hive through gate 0 (the queue comes from its end).
         d.queue = std::iter::once((Foe::Lane(Kind::Hive), 0)).chain(std::iter::repeat_n((Foe::Lane(Kind::Brute), 0), 7)).collect();
         d.stage = Stage::Break { until: 10 };
         // (Long enough to hurry, not for the first to reach the reactor.)
-        let out = steps(&mut d, 10, 28.5);
+        let out = steps(&mut d, 10, HURRY_AFTER + 9.0);
         let came: Vec<u32> = out.iter().enumerate().filter(|(_, o)| !o.spawn.is_empty()).map(|(t, _)| t as u32).collect();
         let gaps: Vec<u32> = came.windows(2).map(|w| w[1] - w[0]).collect();
         let (gap, pause) = ((PACK_GAP * TICK_HZ) as u32, (PACK_PAUSE * TICK_HZ) as u32);
