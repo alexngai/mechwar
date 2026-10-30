@@ -32,12 +32,13 @@ const SIM = {
 // hulls and plating are `defense::species`', the gates' and flanking's are `GATES_ONE`, `GATES_TWO` and `FLANK`).
 const COOP = {
   REACTOR_HULL: 2000, LEAK: 100, WAVES: 10, FIRST_BREAK: 60, BREAK: 30, START_SCRAP: 250, SCRAP_PER_HULL: 0.35, WAVE_BONUS: 100, CACHES: 2, CACHE_SCRAP: 60,
+  GRID: [24, 28, 32], GRID_COST: [250, 400], CALL_SCRAP: 2, CALL_SCORE: 10, SCORE_PER_HULL: 0.1, WAVE_SCORE: 200, REPAIR: 0.5, PACK: 6, PACK_PAUSE: 5,
   PRICES: [100, 150, 175, 200], TIERS: 3, UPGRADE: 1, REFUND: 0.7, REACH: 30, LANE_CLEAR: 5,
   TOWER_MG_POWER: 2.2, TOWER_ROCKET_POWER: 1.6, ARC_RANGE: 20, ARC_DAMAGE: 40, ARC_HOPS: 3, ARC_FALLOFF: 0.7, ARC_COOLDOWN: 1.5, PULSE_RADIUS: 14, PULSE_STUN: 2.5, PULSE_DAMAGE: 15, PULSE_COOLDOWN: 7,
   WALKER_RANGE: 30, CRAWLER_PACK: 4, CRAWLER_BLAST: 5, CRAWLER_DAMAGE: 60, BRUTE_ARMOR: 5, BRUTE_REACH: 8, BRUTE_SMASH: 150,
   MORTAR_RANGE: 60, MORTAR_FLIGHT: 2.5, MORTAR_BLAST: 4, MORTAR_DAMAGE: 80, NODE_DOME: 250, NODE_RECHARGE: 8,
-  EXCAVATOR_HULL: 2600, EXCAVATOR_ARMOR: 6, EXCAVATOR_LEAK: 600, EXCAVATOR_REACH: 10, EXCAVATOR_EVERY: 20, EXCAVATOR_UNDER: 4, QUAKE_RADIUS: 12, QUAKE_DAMAGE: 120, QUAKE_STUN: 3,
-  HIVE_HULL: 4500, HIVE_ARMOR: 4, HIVE_LEAK: 1000, HIVE_EVERY: 10, HIVE_BROOD: 3, HIVE_BURST: 8, HIVE_EMP: 25,
+  EXCAVATOR_HULL: 1800, EXCAVATOR_ARMOR: 6, EXCAVATOR_LEAK: 600, EXCAVATOR_REACH: 10, EXCAVATOR_EVERY: 20, EXCAVATOR_UNDER: 4, QUAKE_RADIUS: 12, QUAKE_DAMAGE: 120, QUAKE_STUN: 3,
+  HIVE_HULL: 3200, HIVE_ARMOR: 4, HIVE_LEAK: 1000, HIVE_EVERY: 10, HIVE_BROOD: 3, HIVE_BURST: 8, HIVE_EMP: 25,
   GATES_ONE: 2, GATES_TWO: 5, FLANK: 0.8,
 };
 
@@ -268,7 +269,9 @@ async function modes() {
     ],
     defense: [
       `Up to ${SIM.TEAM_SIZE} pilots, bots filling the team, hold a reactor of ${C.REACTOR_HULL.toLocaleString('en')} hull against ${C.WAVES} waves of infested machines, with ${C.FIRST_BREAK} s to get ready and ${C.BREAK} s between waves. There's no clock: the run ends when the reactor falls or the last wave is beaten.`,
-      `Foes come out of the map's gates and walk its lanes, forking by chance, to the reactor. One that reaches it is gone and takes hull off by its kind (${C.LEAK} for a walker).`,
+      `In a break, N calls the next wave now. Once every human pilot has, it comes, and each pilot gets ${C.CALL_SCRAP} scrap for each second the break had left.`,
+      `A run scores ${C.SCORE_PER_HULL} for each point of hull shot off a foe, ${C.WAVE_SCORE} for each wave beaten, ${C.CALL_SCORE} for each second of break called short, and, held, the reactor's hull left. The panel shows it as it climbs, and the end screen the total.`,
+      `Foes come out of the map's gates in packs of ${C.PACK}, ${C.PACK_PAUSE} s apart, and walk its lanes, forking by chance, to the reactor. One that reaches it is gone and takes hull off by its kind (${C.LEAK} for a walker).`,
     ],
   };
   // What a mode's card adds below its rules: Co-op Defense has a build menu, scrap, drafts and a roster of foes.
@@ -278,7 +281,10 @@ async function modes() {
       <h4>BUILDING</h4>
       <ul class="rules">
         <li>B opens the build menu, 1–4 pick a tower and the left button puts it down where you aim; a ghost shows green where it fits, or red with the reason. It needs flat ground with headroom, within ${C.REACH} m of you, ${C.LANE_CLEAR} m off any lane, and clear of other towers and the reactor.</li>
-        <li>U raises the tower you aim at a tier, anyone's, up to tier ${C.TIERS}: more hull, reach and fire rate, for ${pct(C.UPGRADE)} of its price at tier 1 and ${pct(2 * C.UPGRADE)} at tier 2. X sells your own for ${pct(C.REFUND)} of what you put into it. The ${link('mender')} mends towers and the reactor.</li>
+        <li>U raises the tower you aim at a tier, anyone's, up to tier ${C.TIERS}: more hull, reach and fire rate, for ${pct(C.UPGRADE)} of its price at tier 1 and ${pct(2 * C.UPGRADE)} at tier 2. X sells your own for ${pct(C.REFUND)} of what you put into it.</li>
+        <li>Towers don't mend on their own. H mends the one you aim at, anyone's, for scrap: all of it for ${pct(C.REPAIR)} of what's gone into the tower, less for less, or as far as your scrap goes. The ${link('mender')} mends towers and the reactor for free.</li>
+        <li>The reactor's grid powers the team's towers: ${C.GRID[0]} to start. Aim at the reactor and U raises the grid, to ${C.GRID[1]} towers for ${C.GRID_COST[0]} scrap and to ${C.GRID[2]} for ${C.GRID_COST[1]} more; bots raise it once the team fills it.</li>
+        <li>Left of the view, a cell for each tower the grid takes: the tower's mark and a hull bar, flashing while it's under fire (and called out), then the worst hurt with which way and how far. Aim at a tower or the reactor and a panel opens by it with what U, H and X would do and cost; a hurt tower is tagged through walls.</li>
         <li>High ground matters: a tower 5 m or more above a lane is out of crawlers' and brutes' reach.</li>
       </ul>
       ${table(['TOWER', 'PRICE', 'WHAT IT DOES'], [

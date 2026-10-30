@@ -343,6 +343,8 @@ export class Hud {
     }
     g.globalAlpha = 1;
 
+    if (f.coop) coopLayer(g, f, W, H, u, font);
+
     // --- Radar and hull, in the chase view only (the cockpit's dash carries them otherwise) ----
     if (f.firstPerson) return;
     radar(g, 145 * u, 145 * u, 105 * u, u, f, this.radarMap);
@@ -430,6 +432,286 @@ export function radar(g, rx, ry, rr, u, f, map) {
   g.textAlign = 'center';
   g.textBaseline = 'middle';
   g.fillText('N', rx + Math.cos(north) * (rr + 10 * u), ry + Math.sin(north) * (rr + 10 * u));
+}
+
+// --- Co-op: building and towers on the glass ------------------------------------------------
+const PANEL = 'rgba(8,12,10,0.66)', GOOD = '#6dff9a';
+
+/**
+ * Co-op's layer (`f.coop`, from main.js `drawBuild`): under the aim frame, the command chips (B to
+ * build, N to call the wave) beside the break's countdown ring; while building, the bar of towers
+ * to pick from under them and the ghost's verdict under the ghost; and by the tower aimed at, its
+ * panel: hull, tier, builder and what U, H and X would do and cost, unfolding as it's found.
+ */
+function coopLayer(g, f, W, H, u, font) {
+  const c = f.coop, cx = W / 2, row = H * 0.64;
+  g.save();
+  g.textBaseline = 'middle';
+  // The chips, centered, the countdown ring left of them.
+  g.font = font(12, 'bold');
+  const chipW = (ch) => (ch.key ? 26 * u : 10 * u) + g.measureText(ch.label + (ch.note ? `  ${ch.note}` : '')).width + 12 * u;
+  const ring = c.wave ? 46 * u : 0;
+  let x = cx - (c.chips.reduce((w, ch) => w + chipW(ch) + 8 * u, 0) - 8 * u + ring) / 2;
+  if (c.wave) {
+    const r = 17 * u, rx = x + r, share = Math.max(0, Math.min(1, c.wave.left / c.wave.of));
+    g.fillStyle = PANEL;
+    g.beginPath();
+    g.arc(rx, row, r + 3 * u, 0, TAU);
+    g.fill();
+    g.lineWidth = 3 * u;
+    g.strokeStyle = FAINT;
+    arc(g, rx, row, r, 0, TAU);
+    g.strokeStyle = c.wave.left < 5 ? WARN : AMBER;
+    arc(g, rx, row, r, -Math.PI / 2, -Math.PI / 2 + TAU * share);
+    g.fillStyle = AMBER;
+    g.textAlign = 'center';
+    g.font = font(13, 'bold');
+    g.fillText(String(Math.ceil(c.wave.left)), rx, row);
+    g.font = font(9);
+    g.fillStyle = DIM;
+    g.fillText(`WAVE ${c.wave.n}`, rx, row + r + 10 * u);
+    x += ring;
+  }
+  g.font = font(12, 'bold');
+  for (const ch of c.chips) {
+    const w = chipW(ch), h = 24 * u;
+    g.fillStyle = PANEL;
+    g.fillRect(x, row - h / 2, w, h);
+    g.strokeStyle = ch.hot ? GOOD : FAINT;
+    g.lineWidth = u;
+    g.strokeRect(x, row - h / 2, w, h);
+    let tx = x + 8 * u;
+    if (ch.key) {
+      keycap(g, tx, row, ch.key, u, font, ch.hot ? GOOD : AMBER);
+      tx += 22 * u;
+    }
+    g.textAlign = 'left';
+    g.font = font(12, 'bold');
+    g.fillStyle = ch.dim ? DIM : AMBER;
+    g.fillText(ch.label, tx, row);
+    if (ch.note) {
+      g.fillStyle = GOOD;
+      g.fillText(ch.note, tx + g.measureText(`${ch.label}  `).width, row);
+    }
+    x += w + 8 * u;
+  }
+  // Building: the towers to pick from, under the chips; the ghost's verdict under the ghost.
+  if (c.build) {
+    const n = c.build.items.length, cw = 112 * u, ch = 70 * u, gap = 8 * u, top = row + 22 * u;
+    let bx = cx - (n * cw + (n - 1) * gap) / 2;
+    c.build.items.forEach((it, k) => {
+      const on = k === c.build.selected;
+      g.fillStyle = on ? 'rgba(255,196,106,0.16)' : PANEL;
+      g.fillRect(bx, top, cw, ch);
+      g.strokeStyle = on ? AMBER : FAINT;
+      g.lineWidth = (on ? 2 : 1) * u;
+      g.strokeRect(bx, top, cw, ch);
+      g.globalAlpha = it.can ? 1 : 0.55;
+      keycap(g, bx + 6 * u, top + 13 * u, String(k + 1), u, font, on ? AMBER : DIM);
+      glyph(g, k, bx + cw / 2, top + 24 * u, 11 * u, on ? AMBER : DIM);
+      g.textAlign = 'center';
+      g.fillStyle = on ? AMBER : DIM;
+      g.font = font(10, on ? 'bold' : '');
+      g.fillText(it.name.toUpperCase(), bx + cw / 2, top + 46 * u);
+      g.font = font(12, 'bold');
+      g.fillStyle = it.can ? AMBER : WARN;
+      g.fillText(String(it.price), bx + cw / 2, top + 60 * u);
+      g.globalAlpha = 1;
+      bx += cw + gap;
+    });
+    g.textAlign = 'center';
+    g.font = font(10);
+    g.fillStyle = DIM;
+    g.fillText(`SCRAP ${Math.floor(c.build.scrap)} · LEFT CLICK BUILDS · 1–4 PICKS`, cx, top + ch + 11 * u);
+  }
+  if (c.ghost?.x !== undefined) {
+    g.font = font(12, 'bold');
+    const w = g.measureText(c.ghost.text).width + 16 * u, y = c.ghost.y + 30 * u;
+    g.fillStyle = PANEL;
+    g.fillRect(c.ghost.x - w / 2, y - 11 * u, w, 22 * u);
+    g.fillStyle = c.ghost.ok ? GOOD : WARN;
+    g.textAlign = 'center';
+    g.fillText(c.ghost.text, c.ghost.x, y);
+  }
+  if (c.panel?.x !== undefined) towerPanel(g, c.panel, W, H, u, font);
+  if (c.towers) towerGrid(g, c.towers, H, u, font, f.now);
+  g.restore();
+}
+
+/**
+ * The team's towers, left of the view: a cell for each the grid takes, built ones holding the
+ * tower's mark and a hull bar (green, amber, red as it falls), ours outlined, flashing while hit;
+ * then the worst hurt, with which way and how far.
+ */
+function towerGrid(g, t, H, u, font, now) {
+  const x0 = 16 * u, y0 = H * 0.3, cols = 4, cw = 56 * u, ch = 16 * u, gap = 4 * u;
+  const rows = Math.ceil(t.cap / cols), w = cols * cw + (cols - 1) * gap;
+  g.fillStyle = PANEL;
+  g.fillRect(x0 - 6 * u, y0 - 22 * u, w + 12 * u, rows * (ch + gap) + 28 * u + t.hurt.length * 16 * u);
+  g.textAlign = 'left';
+  g.font = font(11, 'bold');
+  g.fillStyle = AMBER;
+  g.fillText(`TOWERS ${t.cells.length}/${t.cap}`, x0, y0 - 11 * u);
+  if (t.hurtCount) {
+    g.textAlign = 'right';
+    g.fillStyle = WARN;
+    g.fillText(`${t.hurtCount} HURT · H MENDS`, x0 + w, y0 - 11 * u);
+  }
+  const blink = Math.floor(now / 150) % 2 === 0;
+  for (let k = 0; k < t.cap; k++) {
+    const x = x0 + (k % cols) * (cw + gap), y = y0 + Math.floor(k / cols) * (ch + gap), cell = t.cells[k];
+    if (!cell) {
+      g.strokeStyle = FAINT;
+      g.lineWidth = u;
+      g.strokeRect(x, y, cw, ch);
+      continue;
+    }
+    const color = cell.share > 0.6 ? GOOD : cell.share > 0.3 ? AMBER : WARN;
+    g.fillStyle = cell.hit && blink ? 'rgba(255,74,58,0.45)' : 'rgba(255,196,106,0.08)';
+    g.fillRect(x, y, cw, ch);
+    if (cell.mine) {
+      g.strokeStyle = DIM;
+      g.lineWidth = u;
+      g.strokeRect(x, y, cw, ch);
+    }
+    glyph(g, cell.kind, x + 8 * u, y + ch / 2, 5 * u, AMBER);
+    bar(g, x + 17 * u, y + ch / 2 - 2 * u, cw - 22 * u, 4 * u, cell.share, color);
+  }
+  let y = y0 + rows * (ch + gap) + 8 * u;
+  g.font = font(11);
+  for (const h of t.hurt) {
+    g.fillStyle = h.hit && blink ? WARN : AMBER;
+    g.textAlign = 'left';
+    glyph(g, h.kind, x0 + 6 * u, y, 5 * u, g.fillStyle);
+    g.fillText(`${'I'.repeat(h.tier)}  ${Math.round(100 * h.share)}%`, x0 + 16 * u, y);
+    g.textAlign = 'right';
+    g.fillText(`${h.arrow} ${Math.round(h.dist)} m`, x0 + w, y);
+    y += 16 * u;
+  }
+}
+
+/** The aimed tower's panel, off to its upper right with a line back to it, unfolding (`open`). */
+function towerPanel(g, p, W, H, u, font) {
+  const w = 236 * u, rowH = 22 * u, h = 64 * u + p.actions.length * rowH + 6 * u;
+  const px = Math.min(p.x + 56 * u, W - w - 12 * u), py = Math.max(Math.min(p.y - h - 24 * u, H - h - 12 * u), 12 * u);
+  const open = p.open, shown = h * open;
+  g.globalAlpha = 0.4 + 0.6 * open;
+  g.strokeStyle = AMBER;
+  g.lineWidth = u;
+  g.beginPath();
+  g.moveTo(p.x, p.y);
+  g.lineTo(px, py + shown);
+  g.stroke();
+  g.fillStyle = AMBER;
+  g.beginPath();
+  g.arc(p.x, p.y, 3 * u, 0, TAU);
+  g.fill();
+  g.fillStyle = PANEL;
+  g.fillRect(px, py, w, shown);
+  g.fillStyle = AMBER;
+  g.fillRect(px, py, 3 * u, shown);
+  if (open < 1) {
+    g.globalAlpha = 1;
+    return;
+  }
+  const lx = px + 14 * u;
+  // Its kind, tier pips, hull and builder.
+  glyph(g, p.kind, lx + 7 * u, py + 16 * u, 8 * u, AMBER);
+  g.textAlign = 'left';
+  g.font = font(13, 'bold');
+  g.fillStyle = AMBER;
+  g.fillText(p.name.toUpperCase(), lx + 20 * u, py + 16 * u);
+  for (let t = 0; t < p.tiers; t++) {
+    g.beginPath();
+    g.arc(px + w - 16 * u - (p.tiers - 1 - t) * 12 * u, py + 16 * u, 4 * u, 0, TAU);
+    if (t < p.tier) g.fill();
+    else {
+      g.strokeStyle = DIM;
+      g.stroke();
+    }
+  }
+  const color = p.share > 0.6 ? GOOD : p.share > 0.3 ? AMBER : WARN;
+  bar(g, lx, py + 32 * u, w - 28 * u, 6 * u, p.share, color);
+  g.font = font(10);
+  g.fillStyle = DIM;
+  g.fillText(p.line, lx, py + 48 * u);
+  // What the keys would do, and for how much.
+  let y = py + 70 * u;
+  for (const a of p.actions) {
+    g.globalAlpha = a.can === false || a.dim ? 0.55 : 1;
+    if (a.key) keycap(g, lx, y, a.key, u, font, a.mend ? GOOD : AMBER);
+    g.textAlign = 'left';
+    g.font = font(12, 'bold');
+    g.fillStyle = a.dim ? DIM : a.mend ? GOOD : AMBER;
+    g.fillText(a.label, lx + (a.key ? 24 * u : 0), y);
+    if (a.cost !== undefined) {
+      g.textAlign = 'right';
+      g.fillStyle = a.can ? (a.refund ? GOOD : AMBER) : WARN;
+      g.fillText(a.refund ? `+${a.cost}` : String(a.cost), px + w - 14 * u, y);
+    }
+    y += rowH;
+  }
+  g.globalAlpha = 1;
+}
+
+/** A key's cap: its letter in a small box, left edge at x, centered on y. */
+function keycap(g, x, y, key, u, font, color) {
+  const s = 16 * u;
+  g.strokeStyle = color;
+  g.lineWidth = u;
+  g.strokeRect(x, y - s / 2, s, s);
+  g.fillStyle = color;
+  g.textAlign = 'center';
+  g.font = font(11, 'bold');
+  g.fillText(key, x + s / 2, y + u);
+}
+
+/** Tower `kind`'s mark (defense.rs TOWERS order; -1 the reactor), centered at (x, y), about `s` in radius. */
+function glyph(g, kind, x, y, s, color) {
+  g.strokeStyle = g.fillStyle = color;
+  g.lineWidth = Math.max(1, s / 6);
+  g.beginPath();
+  if (kind === -1) {
+    // The reactor: a core in a hexagon.
+    for (let k = 0; k <= 6; k++) g[k ? 'lineTo' : 'moveTo'](x + s * Math.cos((k * TAU) / 6), y + s * Math.sin((k * TAU) / 6));
+    g.stroke();
+    g.beginPath();
+    g.arc(x, y, s * 0.4, 0, TAU);
+    g.fill();
+  } else if (kind === 0) {
+    // MG tower: a squat base, a turret and a long barrel.
+    g.rect(x - s, y + s * 0.3, 2 * s, s * 0.6);
+    g.rect(x - s * 0.5, y - s * 0.3, s, s * 0.6);
+    g.moveTo(x + s * 0.5, y);
+    g.lineTo(x + s * 1.3, y - s * 0.4);
+    g.stroke();
+  } else if (kind === 1) {
+    // Rocket tower: a pod of two tubes on a base.
+    g.rect(x - s, y + s * 0.4, 2 * s, s * 0.5);
+    g.rect(x - s * 0.8, y - s * 0.7, s * 1.6, s * 0.9);
+    g.stroke();
+    g.beginPath();
+    g.arc(x - s * 0.4, y - s * 0.25, s * 0.25, 0, TAU);
+    g.arc(x + s * 0.4, y - s * 0.25, s * 0.25, 0, TAU);
+    g.fill();
+  } else if (kind === 2) {
+    // Arc pylon: a bolt.
+    g.moveTo(x + s * 0.3, y - s);
+    g.lineTo(x - s * 0.4, y + s * 0.1);
+    g.lineTo(x + s * 0.2, y + s * 0.1);
+    g.lineTo(x - s * 0.3, y + s);
+    g.stroke();
+  } else {
+    // Pulse pylon: a core in rings.
+    g.arc(x, y, s * 0.3, 0, TAU);
+    g.fill();
+    g.beginPath();
+    g.arc(x, y, s * 0.65, 0, TAU);
+    g.stroke();
+    g.beginPath();
+    g.arc(x, y, s, 0, TAU);
+    g.stroke();
+  }
 }
 
 function arc(g, x, y, r, a, b) {
