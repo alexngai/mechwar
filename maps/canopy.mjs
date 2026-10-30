@@ -329,6 +329,7 @@ const ridgePoint = (s) => {
   return [p[0], crestY(s), p[1]];
 };
 const joints = []; // where one crest slab meets the next, level with crestY: a sure landing
+const crest = []; // every slab along the crest, its top from ya at a to yb at b
 for (const [from, to] of [[0, TUNNEL - 5], [TUNNEL + 5, LS]]) {
   const n = Math.ceil((to - from) / 12), at = (i) => from + ((to - from) * i) / n;
   // Slabs from joint to joint, their ends on the crest line, each running 0.6 m on past its joints...
@@ -339,8 +340,7 @@ for (const [from, to] of [[0, TUNNEL - 5], [TUNNEL + 5, LS]]) {
   // ...but where the crest rounds over on a slope, the overlap left a lip a Heavy walking up stopped
   // at (nav gave up on the north end). There the two meet at the joint instead, the upper one 2 cm
   // under the lower, as Span's arch does: a step down going up. (Not where the Spine bends, which
-  // would open a crack at the outer edge. The north end's lower joint still stops a Medium or Heavy
-  // setting off from just under it; walking up from the foot, they cross.)
+  // would open a crack at the outer edge.)
   const grade = (i) => (crestY(at(i + 1)) - crestY(at(i))) / (at(i + 1) - at(i));
   const heading = ({ a, b }) => {
     const [p, q] = [station(SPINE, a).at, station(SPINE, b).at];
@@ -352,6 +352,7 @@ for (const [from, to] of [[0, TUNNEL - 5], [TUNNEL + 5, LS]]) {
     if (gp * gq <= 0 || gq >= gp || u[0] * v[0] + u[1] * v[1] < Math.cos(Math.PI / 180)) continue;
     [p.b, p.yb, q.a, q.ya] = [j, crestY(j) - (gp < 0 ? 0.02 : 0), j, crestY(j) - (gp > 0 ? 0.02 : 0)];
   }
+  crest.push(...slabs);
   for (const { a, b, ya, yb } of slabs) {
     stone(lift(station(SPINE, a).at, ya), lift(station(SPINE, b).at, yb), 12, Math.max(crestY((a + b) / 2) - heightAt(...station(SPINE, (a + b) / 2).at) + 5, 4));
   }
@@ -382,6 +383,7 @@ for (const [from, to] of [[0, TUNNEL - 5], [TUNNEL + 5, LS]]) {
   // The tunnel: 10 m wide, 8 m clear under the crest's roof slab.
   const { at: c, right } = station(SPINE, TUNNEL), floor = heightAt(...c);
   stone(ridgePoint(TUNNEL - 6), ridgePoint(TUNNEL + 6), 12, crestY(TUNNEL) - floor - 8);
+  crest.push({ a: TUNNEL - 6, b: TUNNEL + 6, ya: crestY(TUNNEL - 6), yb: crestY(TUNNEL + 6) });
   point(at(...offset(c, right, -11)), at(...c), at(...offset(c, right, 11)));
   for (const k of [-1, 1]) lamp(at(...offset(offset(c, right, k * 8), station(SPINE, TUNNEL).dir, 6)));
   fungus(...offset(offset(c, right, 3), station(SPINE, TUNNEL).dir, -4), 1.6); // and in the dark of it
@@ -406,7 +408,15 @@ const eastRamp = (() => {
 })();
 // The east base's jump pad up onto the crest (laid with the others, below), landing on a joint.
 const SPINE_PAD = [96, -96], spineLanding = joints.reduce((best, j) => (Math.abs(j - 36) < Math.abs(best - 36) ? j : best));
-for (let s = 8; s < LS - 4; s += 14) point(ridgePoint(s));
+// Waypoints on the crest stand on its slabs, not on crestY's curve (up to half a metre off them between
+// joints). Nav walks from waypoints: from one 12 cm under the north end's 23 degree slab, a Medium or
+// Heavy started sunk into it and caught on the next slab's end, 2 cm under the joint. One that's walked
+// there stands clear of it.
+const onCrest = (s) => {
+  const top = Math.max(...crest.filter(({ a, b }) => a <= s && s <= b).map(({ a, b, ya, yb }) => ya + ((yb - ya) * (s - a)) / (b - a)));
+  return lift(station(SPINE, s).at, Math.ceil(top * 100) / 100);
+};
+for (let s = 8; s < LS - 4; s += 14) point(onCrest(s));
 for (const s of [0, LS]) point(at(...station(SPINE, s).at));
 clear(SPINE[0], SPINE[1], 14);
 clear(SPINE[1], SPINE[2], 14);
