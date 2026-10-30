@@ -712,14 +712,6 @@ export class Sound {
     this.tone(out, 'sine', f * 1.5, f * 1.5, 0.003, 0.14, 0.12, 0.08);
   }
 
-  /** A bot's callout on the team radio: a short squelch. */
-  radio() {
-    const out = this.voice(null, 0.2, this.ui);
-    if (!out) return;
-    this.noise(out, 'white', 'bandpass', 1800, 1200, 0.004, 0.08, 0.06, 3);
-    this.tone(out, 'square', 1400, 1400, 0.002, 0.04, 0.03);
-  }
-
   /** Our flag taken: a two-tone klaxon, twice. */
   flagAlarm() {
     const out = this.voice(null, 1.1, this.ui);
