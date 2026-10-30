@@ -2397,9 +2397,19 @@ impl Game {
                 None
             }
             defense::Build::Upgrade | defense::Build::Sell => {
-                // The nearest of the team's towers along the aim, within reach.
+                // The nearest of the team's towers along the aim, within reach; else, raising, the
+                // reactor's grid, aimed at.
                 let k = deploy::first_turret(&self.deployables, items(&self.arsenal), 1, &aim, defense::REACH).map(|(k, _)| k).filter(|&k| d.tower(self.deployables[k].owner).is_some());
+                let core = d.reactor + Vector::Y * REACTOR_MIDDLE;
+                let at_reactor = (aim.origin + aim.dir * (core - aim.origin).dot(aim.dir).clamp(0.0, defense::REACH) - core).length() < REACTOR_BODY;
                 match k {
+                    None if order == defense::Build::Upgrade && at_reactor => match self.defense.as_mut().unwrap().raise_grid(id) {
+                        Ok(news) => {
+                            self.events.push(Event::Defense(news));
+                            None
+                        }
+                        Err(why) => Some(why),
+                    },
                     None => Some(defense::Refusal::Tower),
                     Some(k) => {
                         let e = self.deployables[k];
@@ -2466,10 +2476,11 @@ impl Game {
     }
 
     /// What bot `id` would build with its scrap: the team's worst tower mended, if under BOT_MEND
-    /// of its hull and no one's on it; else the tower it can afford the team has fewest of (for
-    /// BOT_MIX), on the free spot BOT_SPOTS off a lane's line covered by fewest towers (nearer the
-    /// reactor first); else the team's lowest tower raised a tier, if it can afford that. Where
-    /// it'd stand, and the order.
+    /// of its hull and no one's on it; else, the grid full, the grid raised (at the reactor), if
+    /// it can afford that and no one's on it; else the tower it can afford the team has fewest of
+    /// (for BOT_MIX), on the free spot BOT_SPOTS off a lane's line covered by fewest towers (nearer
+    /// the reactor first); else the team's lowest tower raised a tier, if it can afford that.
+    /// Where it'd stand, and the order.
     fn plan_build(&self, id: u8) -> Option<(Vector, defense::Build)> {
         let d = self.defense.as_ref()?;
         let scrap = d.scrap[usize::from(id)];
@@ -2482,8 +2493,16 @@ impl Game {
         {
             return Some((t.pos, defense::Build::Repair));
         }
+        let full = d.free_tower().is_none();
+        let raising = d.plans.iter().any(|q| q.2 == defense::Build::Upgrade && q.1 == d.reactor);
+        if full
+            && !raising
+            && d.grid_cost().is_some_and(|c| scrap >= c)
+        {
+            return Some((d.reactor, defense::Build::Upgrade));
+        }
         let count = |kind| towers.iter().filter(|t| t.kind == kind).count() as f32;
-        let kind = (0..defense::TOWERS.len()).filter(|&k| d.price_for(id, defense::TOWERS[k]) <= scrap).min_by(|&a, &b| (count(defense::TOWERS[a]) / BOT_MIX[a]).total_cmp(&(count(defense::TOWERS[b]) / BOT_MIX[b])));
+        let kind = (0..defense::TOWERS.len()).filter(|&k| !full && d.price_for(id, defense::TOWERS[k]) <= scrap).min_by(|&a, &b| (count(defense::TOWERS[a]) / BOT_MIX[a]).total_cmp(&(count(defense::TOWERS[b]) / BOT_MIX[b])));
         if let Some(k) = kind {
             // Towers and spots already planned crowd a spot alike.
             let taken: Vec<Vector> = towers.iter().map(|t| t.pos).chain(d.plans.iter().filter(|q| matches!(q.2, defense::Build::Place(_))).map(|q| q.1)).collect();
@@ -3934,6 +3953,27 @@ mod tests {
         game.step();
         assert!(game.players.iter().all(|p| p.id != elite));
         assert_eq!(game.defense.as_ref().unwrap().hull, defense::REACTOR_HULL - defense::ELITE_LEAK);
+    }
+
+    #[test]
+    fn a_pilot_raises_the_grid_at_the_reactor_and_bots_do_once_it_s_full() {
+        let (mut game, id) = co_op(false);
+        let reactor = game.defense.as_ref().unwrap().reactor;
+        let i = game.players.iter().position(|p| p.id == id).unwrap();
+        let m = &mut game.players[i].mech;
+        (m.pos, m.yaw, m.pitch) = (reactor + Vector::new(0.0, 0.0, 15.0), 0.0, 0.1);
+        game.defense.as_mut().unwrap().scrap[usize::from(id)] = 1000.0;
+        game.build(id, defense::Build::Upgrade);
+        let d = game.defense.as_ref().unwrap();
+        assert_eq!((d.grid, d.capacity()), (1, defense::GRID[1]));
+        assert!(game.events.iter().any(|e| matches!(e, Event::Defense(defense::News::Grid { level: 1 }))));
+        // A bot, the grid full, goes to raise it.
+        let (mut game, _) = co_op(true);
+        let bot = game.players.iter().find(|p| p.bot.is_some() && p.team == 0).unwrap().id;
+        let d = game.defense.as_mut().unwrap();
+        d.towers = (64..64 + defense::GRID[0] as u8).map(|owner| defense::Tower { owner, by: bot, tier: 1, spent: 100.0, own: 100.0 }).collect();
+        d.scrap[usize::from(bot)] = 1000.0;
+        assert_eq!(game.plan_build(bot), Some((reactor, defense::Build::Upgrade)));
     }
 
     #[test]

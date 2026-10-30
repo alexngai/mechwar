@@ -178,6 +178,10 @@ pub const TOWER_HULL: f32 = 300.0;
 pub const TIERS: u8 = 3;
 pub const UPGRADE: f32 = 1.0;
 const REFUND: f32 = 0.7;
+/// The team's towers at most, by the reactor's grid level (GRID's last is every tower id there is,
+/// LAST_TOWER - FIRST_TOWER + 1), and what raising the grid each level costs whoever does it.
+pub const GRID: [usize; 3] = [24, 28, 32];
+pub const GRID_COST: [f32; 2] = [250.0, 400.0];
 /// Mending a tower all the way costs REPAIR of what's gone into it (less for less).
 pub const REPAIR: f32 = 0.5;
 /// Each pilot's scrap to start, for each hull point they (or their towers) shoot off a walker, and
@@ -227,7 +231,7 @@ pub enum Refusal {
     Tower,
     /// The tower's at its top tier.
     Full,
-    /// The team has as many towers as there can be (LAST_TOWER - FIRST_TOWER + 1).
+    /// The team has as many towers as its grid takes (`GRID`).
     Towers,
     /// Nothing to repair: the tower's whole.
     Whole,
@@ -385,9 +389,12 @@ pub struct DefenseNet {
     pub open: Vec<u8>,
     pub sealed: Vec<u8>,
     pub caches: Vec<Vector>,
-    /// The run's score so far; the human pilots who've called the next wave this break.
+    /// The run's score so far; the human pilots who've called the next wave this break; the
+    /// towers the grid takes, and what raising it costs (0 at the top).
     pub score: u32,
     pub ready: Vec<u8>,
+    pub capacity: u8,
+    pub grid_cost: f32,
 }
 
 /// What happened in a run.
@@ -413,6 +420,8 @@ pub enum News {
     Called { seconds: u16 },
     /// The wave's stragglers hurry on.
     Hurry,
+    /// The reactor's grid raised to `level` (0 the first), taking more towers.
+    Grid { level: u8 },
 }
 
 /// Where a run stands.
@@ -492,6 +501,8 @@ pub struct Defense {
     /// The run's score; the human pilots who've called the next wave this break.
     pub score: f32,
     pub ready: Vec<u8>,
+    /// The reactor's grid level (`GRID`).
+    pub grid: u8,
     /// Each player's scrap, by id; the towers standing.
     pub scrap: [f32; MAX_PLAYERS],
     pub towers: Vec<Tower>,
@@ -563,6 +574,7 @@ impl Defense {
             last_came: 0,
             score: 0.0,
             ready: Vec::new(),
+            grid: 0,
             scrap: [START_SCRAP; MAX_PLAYERS],
             towers: Vec::new(),
             shells: Vec::new(),
@@ -701,9 +713,30 @@ impl Defense {
         self.edges.iter().map(|&(a, b, _)| (self.points[a], self.points[b]))
     }
 
-    /// An owner id for a new tower, if there's room for one.
+    /// An owner id for a new tower, if the grid has room for one.
     pub fn free_tower(&self) -> Option<u8> {
+        (self.towers.len() < self.capacity()).then_some(())?;
         (FIRST_TOWER..=LAST_TOWER).find(|o| !self.towers.iter().any(|t| t.owner == *o))
+    }
+
+    /// How many towers the grid takes, and what raising it costs (none at the top).
+    pub fn capacity(&self) -> usize {
+        GRID[usize::from(self.grid)]
+    }
+    pub fn grid_cost(&self) -> Option<f32> {
+        GRID_COST.get(usize::from(self.grid)).copied()
+    }
+
+    /// Player `id` raises the grid a level, for its cost.
+    pub fn raise_grid(&mut self, id: u8) -> Result<News, Refusal> {
+        let cost = self.grid_cost().ok_or(Refusal::Full)?;
+        let scrap = self.scrap.get_mut(usize::from(id)).ok_or(Refusal::Scrap)?;
+        if *scrap < cost {
+            return Err(Refusal::Scrap);
+        }
+        *scrap -= cost;
+        self.grid += 1;
+        Ok(News::Grid { level: self.grid })
     }
 
     pub fn tower(&self, owner: u8) -> Option<&Tower> {
@@ -826,7 +859,7 @@ impl Defense {
         }
         let open = self.open_gates(self.wave).into_iter().map(|g| g as u8).collect();
         let sealed = self.sealed.iter().map(|&k| k as u8).collect();
-        DefenseNet { wave: self.wave, waves: WAVES, break_left, hull: self.hull, left, scrap, towers: self.towers.clone(), offers, waiting, perks, cores: self.cores.clone(), theme: self.theme, next, open, sealed, caches: self.caches.clone(), score: self.score.round() as u32, ready: self.ready.clone() }
+        DefenseNet { wave: self.wave, waves: WAVES, break_left, hull: self.hull, left, scrap, towers: self.towers.clone(), offers, waiting, perks, cores: self.cores.clone(), theme: self.theme, next, open, sealed, caches: self.caches.clone(), score: self.score.round() as u32, ready: self.ready.clone(), capacity: self.capacity() as u8, grid_cost: self.grid_cost().unwrap_or(0.0) }
     }
 
     /// Where each mech (its id, its team, whether it's a living bot) should head with lane enemies standing
@@ -1195,6 +1228,22 @@ mod tests {
             out.push(d.step(t, &[0, 1, 2, 3], &standing, 0));
         }
         out
+    }
+
+    #[test]
+    fn the_grid_takes_more_towers_raised_a_level_at_a_time() {
+        let mut d = run();
+        assert_eq!(*GRID.last().unwrap(), usize::from(LAST_TOWER - FIRST_TOWER + 1), "the top level takes every tower id");
+        d.towers = (FIRST_TOWER..FIRST_TOWER + GRID[0] as u8).map(|owner| Tower { owner, by: 0, tier: 1, spent: 100.0, own: 100.0 }).collect();
+        assert_eq!(d.free_tower(), None);
+        d.scrap[0] = GRID_COST[0] - 1.0;
+        assert_eq!(d.raise_grid(0), Err(Refusal::Scrap));
+        d.scrap[0] = 1000.0;
+        assert_eq!(d.raise_grid(0), Ok(News::Grid { level: 1 }));
+        assert_eq!((d.capacity(), d.scrap[0]), (GRID[1], 1000.0 - GRID_COST[0]));
+        assert!(d.free_tower().is_some());
+        assert_eq!(d.raise_grid(0), Ok(News::Grid { level: 2 }));
+        assert_eq!(d.raise_grid(0), Err(Refusal::Full));
     }
 
     #[test]

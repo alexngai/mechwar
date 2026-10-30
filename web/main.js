@@ -609,6 +609,8 @@ let building = -1, lastTower = 0, zapFrom = null, shellFrom = null;
 // aimed at; world points (`at`) are projected as the glass draws.
 let coopHud = null, panelSince = -Infinity, panelOwner = -1;
 const FIRST_BREAK = 60, BREAK = 30; // defense.rs
+const GRID = [24, 28, 32]; // the towers the reactor's grid takes, by level (defense.rs GRID)
+const REACTOR_MIDDLE = 6, REACTOR_BODY = 6; // its core over its foot, and its round (game.rs)
 const coop = () => !!net && net.defense().length > 0;
 const CALL_SCRAP = 2; // each pilot's scrap for each second of break called short (defense.rs CALL_SCRAP)
 const sendBuild = (order) => ws?.readyState === WebSocket.OPEN && ws.send(net.build(order));
@@ -620,7 +622,7 @@ const coopResult = (won) => {
 /** A co-op wave's theme as the panel calls it (defense.rs `Theme`, in order; mixed says nothing). */
 const THEMES = ['', 'SWARM', 'ARMOR', 'SIEGE', 'SHIELDED', 'FLANKING'];
 /** Why a build order didn't go (defense.rs `Refusal`, in order). */
-const REFUSALS = ['NOTHING IN REACH', 'NO ROOM HERE', 'TOO CLOSE TO A LANE', 'TOO CLOSE TO A TOWER', 'TOO CLOSE TO THE REACTOR', 'NOT ENOUGH SCRAP', 'AIM AT A TOWER (YOUR OWN TO SELL)', 'AS HIGH AS IT GOES', 'THE TEAM HAS ALL THE TOWERS IT CAN', 'NOTHING TO MEND'];
+const REFUSALS = ['NOTHING IN REACH', 'NO ROOM HERE', 'TOO CLOSE TO A LANE', 'TOO CLOSE TO A TOWER', 'TOO CLOSE TO THE REACTOR', 'NOT ENOUGH SCRAP', 'AIM AT A TOWER (YOUR OWN TO SELL)', 'AS HIGH AS IT GOES', 'THE GRID IS FULL · RAISE IT AT THE REACTOR (U)', 'NOTHING TO MEND'];
 /** Siege energy we carried as of the last frame; CARRY_MAX matches siege::CARRY_MAX. */
 let heldBefore = 0, bankBefore = 0;
 const ENERGY_COLOR = 0x5dff9a;
@@ -1066,6 +1068,10 @@ function frame(now) {
       } else if (a === 9) {
         callout = { text: 'THE STRAGGLERS HURRY ON', color: hex(FOE.accent), at: now };
         sound.zone('lost');
+      } else if (a === 10) {
+        // The reactor's grid raised to level b.
+        callout = { text: `GRID RAISED · ${GRID[b]} TOWERS`, color: hex(FRIEND.accent), at: now };
+        sound.zone('took');
       } else if (a === 3) {
         // Our build order refused (b us, x why).
         if (b === myId) {
@@ -1782,7 +1788,7 @@ function drawBuild(now, alive, myId) {
   if (!coop()) {
     building = -1;
     coopHud = null;
-    $('draft').hidden = $('towers').hidden = true;
+    $('draft').hidden = true;
     return;
   }
   if (!alive) building = -1;
@@ -1792,7 +1798,8 @@ function drawBuild(now, alive, myId) {
     towerTiers.set(towers[i], towers[i + 2]);
     info.set(towers[i], towers.subarray(i, i + 8));
   }
-  watchTowers(info, list, now, myId);
+  const [wave, , breakLeft, reactorHull, , , ready, cap, gridCost] = net.defense();
+  const strip = watchTowers(info, list, now, myId, cap);
   objectives.drawPylons(list, towerTiers, FRIEND.accent, now);
   objectives.drawCores(net.cores(), now);
   objectives.drawSeals(net.seals(), now);
@@ -1801,8 +1808,7 @@ function drawBuild(now, alive, myId) {
   const spot = building >= 0 ? net.build_spot() : [];
   objectives.drawBuild(net.lanes(), building, spot, now);
   const scrap = net.scrap()[myId] ?? 0;
-  const [wave, , breakLeft, , , , ready] = net.defense();
-  coopHud = { chips: [], wave: null, build: null, ghost: null, panel: null };
+  coopHud = { chips: [], wave: null, build: null, ghost: null, panel: null, towers: strip };
   // The break: its countdown, and N to call the wave (or, called, who's still to).
   if (breakLeft >= 0) coopHud.wave = { n: wave, left: breakLeft, of: wave === 1 ? FIRST_BREAK : BREAK };
   if (!alive) return;
@@ -1832,7 +1838,20 @@ function drawBuild(now, alive, myId) {
     [best, bestAngle] = [{ kind: list[i], t, at }, angle];
   }
   if (!best) {
-    panelOwner = -1;
+    // Else the reactor, aimed at in reach: its panel, and U to raise its grid for more towers.
+    const core = objectives.reactor?.at.clone().setY(objectives.reactor.at.y + REACTOR_MIDDLE);
+    const along = core ? core.clone().sub(camera.position).dot(heading) : -1;
+    if (!core || along < 0 || along > 30 || camera.position.clone().addScaledVector(heading, along).distanceTo(core) > REACTOR_BODY) {
+      panelOwner = -1;
+      return;
+    }
+    if (panelOwner !== 'reactor') [panelOwner, panelSince] = ['reactor', now];
+    const level = GRID.indexOf(cap);
+    coopHud.panel = {
+      at: core, kind: -1, name: 'Reactor', tier: level + 1, tiers: GRID.length, share: reactorHull / REACTOR_HULL, hull: reactorHull, whole: REACTOR_HULL, line: `TOWERS ${strip.cells.length}/${cap} · GRID ${'I'.repeat(level + 1)}`,
+      actions: [gridCost > 0 ? { key: 'U', label: `RAISE GRID TO ${GRID[level + 1]}`, cost: Math.round(gridCost), can: scrap >= gridCost } : { label: 'GRID AT ITS LIMIT', dim: true }],
+      open: Math.min((now - panelSince) / 160, 1),
+    };
     return;
   }
   const [owner, by, tier, up, refund, hull, whole, mend] = best.t, kind = [2, 3, ARC, PULSE].indexOf(best.kind);
@@ -1842,23 +1861,24 @@ function drawBuild(now, alive, myId) {
     ...(hull < whole - 0.5 ? [{ key: 'H', label: 'MEND', cost: Math.ceil(mend), can: scrap >= 1, mend: true }] : []),
     ...(by === myId ? [{ key: 'X', label: 'SELL', cost: Math.round(refund), refund: true, can: true }] : []),
   ];
-  coopHud.panel = { at: best.at, kind, name: TOWER_NAMES[kind] ?? 'Tower', tier, tiers: 3, share: hull / whole, hull, whole, by: by === myId ? 'YOU' : nameOf(by), actions, open: Math.min((now - panelSince) / 160, 1) };
+  coopHud.panel = { at: best.at, kind, name: TOWER_NAMES[kind] ?? 'Tower', tier, tiers: 3, share: hull / whole, hull, whole, line: `HULL ${Math.ceil(hull)}/${Math.round(whole)} · BUILT BY ${(by === myId ? 'YOU' : nameOf(by)).toUpperCase()}`, actions, open: Math.min((now - panelSince) / 160, 1) };
 }
 
 // Co-op towers as last seen: each one's share of its hull and who built it (`coopTowers`, by
 // owner, for the glass's tags), its hull a frame ago and when it was last hit; and when one was last
-// called out under attack. MAX_TOWERS matches defense.rs (LAST_TOWER - FIRST_TOWER + 1).
+// called out under attack.
 const coopTowers = new Map(), towerHull = new Map(), towerHitAt = new Map();
-let towerCalloutAt = -Infinity, towersHtml = '';
-const MAX_TOWERS = 32, TOWER_SHORT = ['MG', 'ROCKET', 'ARC', 'PULSE'], ARROWS = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
+let towerCalloutAt = -Infinity;
+const ARROWS = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
 /**
- * The team's towers on the HUD: how many, and the hurt ones, worst first, each with its hull and
- * which way and how far it is, flashing while it's hit; a callout when one comes under attack.
+ * The team's towers for the glass (`coopHud.towers`): a cell each, in the order built, with its
+ * kind, hull and tier, flashing while it's hit, out of the `cap` the grid takes; and the worst hurt
+ * with which way and how far each is. A callout when one comes under attack.
  */
-function watchTowers(info, list, now, myId) {
+function watchTowers(info, list, now, myId, cap) {
   coopTowers.clear();
   camera.getWorldDirection(heading);
-  const hurt = [];
+  const cells = [], hurt = [];
   for (let i = 0; i < list.length; i += 10) {
     const t = info.get(list[i + 2]);
     if (!t) continue;
@@ -1872,17 +1892,16 @@ function watchTowers(info, list, now, myId) {
     }
     towerHull.set(owner, hull);
     coopTowers.set(owner, { by, kind, share: hull / whole });
+    cells.push({ owner, kind, tier, share: hull / whole, hit: now - (towerHitAt.get(owner) ?? -Infinity) < 1500, mine: by === myId });
     if (hull >= whole - 0.5) continue;
     const dx = list[i + 3] - camera.position.x, dz = list[i + 5] - camera.position.z;
     const turn = Math.atan2(heading.x * dz - heading.z * dx, heading.x * dx + heading.z * dz); // (+: to the right)
     hurt.push({ owner, by, tier, kind, share: hull / whole, dist: Math.hypot(dx, dz), arrow: ARROWS[(Math.round(turn / (Math.PI / 4)) + 8) % 8] });
   }
   for (const k of towerHull.keys()) if (!info.has(k)) towerHull.delete(k);
+  cells.sort((a, b) => a.owner - b.owner);
   hurt.sort((a, b) => a.share - b.share);
-  const rows = hurt.slice(0, 6).map((h) => `<div class="${now - (towerHitAt.get(h.owner) ?? -Infinity) < 1500 ? 'hit' : ''}"><b>${TOWER_SHORT[h.kind]} ${'I'.repeat(h.tier)}${h.by === myId ? '*' : ''}</b><i><u style="width:${Math.round(100 * h.share)}%"></u></i><span>${h.arrow} ${Math.round(h.dist)}m</span></div>`);
-  const html = `<h4>TOWERS ${info.size}/${MAX_TOWERS}${hurt.length ? ` · ${hurt.length} HURT · H TO MEND` : ''}</h4>${rows.join('')}${hurt.length > 6 ? `<small>+${hurt.length - 6} MORE</small>` : ''}`;
-  if (html !== towersHtml) $('towers').innerHTML = towersHtml = html;
-  $('towers').hidden = !info.size;
+  return { cap, cells, hurt: hurt.slice(0, 3).map((h) => ({ ...h, hit: now - (towerHitAt.get(h.owner) ?? -Infinity) < 1500 })), hurtCount: hurt.length };
 }
 
 function drawDeployables(now, myTeam) {

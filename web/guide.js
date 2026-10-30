@@ -32,7 +32,7 @@ const SIM = {
 // hulls and plating are `defense::species`', the gates' and flanking's are `GATES_ONE`, `GATES_TWO` and `FLANK`).
 const COOP = {
   REACTOR_HULL: 2000, LEAK: 100, WAVES: 10, FIRST_BREAK: 60, BREAK: 30, START_SCRAP: 250, SCRAP_PER_HULL: 0.35, WAVE_BONUS: 100, CACHES: 2, CACHE_SCRAP: 60,
-  CALL_SCRAP: 2, CALL_SCORE: 10, SCORE_PER_HULL: 0.1, WAVE_SCORE: 200, REPAIR: 0.5, PACK: 6, PACK_PAUSE: 5, HURRY_AFTER: 30, HURRY: 1.25,
+  GRID: [24, 28, 32], GRID_COST: [250, 400], CALL_SCRAP: 2, CALL_SCORE: 10, SCORE_PER_HULL: 0.1, WAVE_SCORE: 200, REPAIR: 0.5, PACK: 6, PACK_PAUSE: 5, HURRY_AFTER: 30, HURRY: 1.25,
   PRICES: [100, 150, 175, 200], TIERS: 3, UPGRADE: 1, REFUND: 0.7, REACH: 30, LANE_CLEAR: 5,
   TOWER_MG_POWER: 2.2, TOWER_ROCKET_POWER: 1.6, ARC_RANGE: 20, ARC_DAMAGE: 40, ARC_HOPS: 3, ARC_FALLOFF: 0.7, ARC_COOLDOWN: 1.5, PULSE_RADIUS: 14, PULSE_STUN: 2.5, PULSE_DAMAGE: 15, PULSE_COOLDOWN: 7,
   WALKER_RANGE: 30, CRAWLER_PACK: 4, CRAWLER_BLAST: 5, CRAWLER_DAMAGE: 60, BRUTE_ARMOR: 5, BRUTE_REACH: 8, BRUTE_SMASH: 150,
@@ -283,7 +283,8 @@ async function modes() {
         <li>B opens the build menu, 1–4 pick a tower and the left button puts it down where you aim; a ghost shows green where it fits, or red with the reason. It needs flat ground with headroom, within ${C.REACH} m of you, ${C.LANE_CLEAR} m off any lane, and clear of other towers and the reactor.</li>
         <li>U raises the tower you aim at a tier, anyone's, up to tier ${C.TIERS}: more hull, reach and fire rate, for ${pct(C.UPGRADE)} of its price at tier 1 and ${pct(2 * C.UPGRADE)} at tier 2. X sells your own for ${pct(C.REFUND)} of what you put into it.</li>
         <li>Towers don't mend on their own. H mends the one you aim at, anyone's, for scrap: all of it for ${pct(C.REPAIR)} of what's gone into the tower, less for less, or as far as your scrap goes. The ${link('mender')} mends towers and the reactor for free.</li>
-        <li>The panel on the left counts the team's towers and lists the hurt ones, worst first, with which way and how far each is; one under fire flashes and is called out, and a hurt tower is tagged through walls.</li>
+        <li>The reactor's grid powers the team's towers: ${C.GRID[0]} to start. Aim at the reactor and U raises the grid, to ${C.GRID[1]} towers for ${C.GRID_COST[0]} scrap and to ${C.GRID[2]} for ${C.GRID_COST[1]} more; bots raise it once the team fills it.</li>
+        <li>Left of the view, a cell for each tower the grid takes: the tower's mark and a hull bar, flashing while it's under fire (and called out), then the worst hurt with which way and how far. Aim at a tower or the reactor and a panel opens by it with what U, H and X would do and cost; a hurt tower is tagged through walls.</li>
         <li>High ground matters: a tower 5 m or more above a lane is out of crawlers' and brutes' reach.</li>
       </ul>
       ${table(['TOWER', 'PRICE', 'WHAT IT DOES'], [

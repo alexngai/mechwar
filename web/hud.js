@@ -534,7 +534,60 @@ function coopLayer(g, f, W, H, u, font) {
     g.fillText(c.ghost.text, c.ghost.x, y);
   }
   if (c.panel?.x !== undefined) towerPanel(g, c.panel, W, H, u, font);
+  if (c.towers) towerGrid(g, c.towers, H, u, font, f.now);
   g.restore();
+}
+
+/**
+ * The team's towers, left of the view: a cell for each the grid takes, built ones holding the
+ * tower's mark and a hull bar (green, amber, red as it falls), ours outlined, flashing while hit;
+ * then the worst hurt, with which way and how far.
+ */
+function towerGrid(g, t, H, u, font, now) {
+  const x0 = 16 * u, y0 = H * 0.3, cols = 4, cw = 56 * u, ch = 16 * u, gap = 4 * u;
+  const rows = Math.ceil(t.cap / cols), w = cols * cw + (cols - 1) * gap;
+  g.fillStyle = PANEL;
+  g.fillRect(x0 - 6 * u, y0 - 22 * u, w + 12 * u, rows * (ch + gap) + 28 * u + t.hurt.length * 16 * u);
+  g.textAlign = 'left';
+  g.font = font(11, 'bold');
+  g.fillStyle = AMBER;
+  g.fillText(`TOWERS ${t.cells.length}/${t.cap}`, x0, y0 - 11 * u);
+  if (t.hurtCount) {
+    g.textAlign = 'right';
+    g.fillStyle = WARN;
+    g.fillText(`${t.hurtCount} HURT · H MENDS`, x0 + w, y0 - 11 * u);
+  }
+  const blink = Math.floor(now / 150) % 2 === 0;
+  for (let k = 0; k < t.cap; k++) {
+    const x = x0 + (k % cols) * (cw + gap), y = y0 + Math.floor(k / cols) * (ch + gap), cell = t.cells[k];
+    if (!cell) {
+      g.strokeStyle = FAINT;
+      g.lineWidth = u;
+      g.strokeRect(x, y, cw, ch);
+      continue;
+    }
+    const color = cell.share > 0.6 ? GOOD : cell.share > 0.3 ? AMBER : WARN;
+    g.fillStyle = cell.hit && blink ? 'rgba(255,74,58,0.45)' : 'rgba(255,196,106,0.08)';
+    g.fillRect(x, y, cw, ch);
+    if (cell.mine) {
+      g.strokeStyle = DIM;
+      g.lineWidth = u;
+      g.strokeRect(x, y, cw, ch);
+    }
+    glyph(g, cell.kind, x + 8 * u, y + ch / 2, 5 * u, AMBER);
+    bar(g, x + 17 * u, y + ch / 2 - 2 * u, cw - 22 * u, 4 * u, cell.share, color);
+  }
+  let y = y0 + rows * (ch + gap) + 8 * u;
+  g.font = font(11);
+  for (const h of t.hurt) {
+    g.fillStyle = h.hit && blink ? WARN : AMBER;
+    g.textAlign = 'left';
+    glyph(g, h.kind, x0 + 6 * u, y, 5 * u, g.fillStyle);
+    g.fillText(`${'I'.repeat(h.tier)}  ${Math.round(100 * h.share)}%`, x0 + 16 * u, y);
+    g.textAlign = 'right';
+    g.fillText(`${h.arrow} ${Math.round(h.dist)} m`, x0 + w, y);
+    y += 16 * u;
+  }
 }
 
 /** The aimed tower's panel, off to its upper right with a line back to it, unfolding (`open`). */
@@ -581,7 +634,7 @@ function towerPanel(g, p, W, H, u, font) {
   bar(g, lx, py + 32 * u, w - 28 * u, 6 * u, p.share, color);
   g.font = font(10);
   g.fillStyle = DIM;
-  g.fillText(`HULL ${Math.ceil(p.hull)}/${Math.round(p.whole)} · BUILT BY ${p.by.toUpperCase()}`, lx, py + 48 * u);
+  g.fillText(p.line, lx, py + 48 * u);
   // What the keys would do, and for how much.
   let y = py + 70 * u;
   for (const a of p.actions) {
@@ -613,12 +666,19 @@ function keycap(g, x, y, key, u, font, color) {
   g.fillText(key, x + s / 2, y + u);
 }
 
-/** Tower `kind`'s mark (defense.rs TOWERS order), centered at (x, y), about `s` in radius. */
+/** Tower `kind`'s mark (defense.rs TOWERS order; -1 the reactor), centered at (x, y), about `s` in radius. */
 function glyph(g, kind, x, y, s, color) {
   g.strokeStyle = g.fillStyle = color;
   g.lineWidth = Math.max(1, s / 6);
   g.beginPath();
-  if (kind === 0) {
+  if (kind === -1) {
+    // The reactor: a core in a hexagon.
+    for (let k = 0; k <= 6; k++) g[k ? 'lineTo' : 'moveTo'](x + s * Math.cos((k * TAU) / 6), y + s * Math.sin((k * TAU) / 6));
+    g.stroke();
+    g.beginPath();
+    g.arc(x, y, s * 0.4, 0, TAU);
+    g.fill();
+  } else if (kind === 0) {
     // MG tower: a squat base, a turret and a long barrel.
     g.rect(x - s, y + s * 0.3, 2 * s, s * 0.6);
     g.rect(x - s * 0.5, y - s * 0.3, s, s * 0.6);

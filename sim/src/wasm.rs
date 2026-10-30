@@ -326,10 +326,12 @@ impl WasmNetClient {
 
     /// A co-op run as of the latest snapshot: the wave (on, or next), the waves in all, the seconds
     /// left of the break before it (-1 while it's on), the reactor's hull, and the walkers still
-    /// to come or standing, the run's score, and how many human pilots have called the next wave.
-    /// Empty outside Co-op Defense.
+    /// to come or standing, the run's score, how many human pilots have called the next wave, the
+    /// towers the grid takes, and what raising it costs (0 at the top). Empty outside Co-op Defense.
     pub fn defense(&self) -> Vec<f32> {
-        self.0.defense().map_or_else(Vec::new, |d| vec![f32::from(d.wave), f32::from(d.waves), d.break_left.unwrap_or(-1.0), d.hull, f32::from(d.left), d.score as f32, d.ready.len() as f32])
+        self.0.defense().map_or_else(Vec::new, |d| {
+            vec![f32::from(d.wave), f32::from(d.waves), d.break_left.unwrap_or(-1.0), d.hull, f32::from(d.left), d.score as f32, d.ready.len() as f32, f32::from(d.capacity), d.grid_cost]
+        })
     }
 
     /// Co-op: whether this player has called the next wave this break.
@@ -564,6 +566,7 @@ impl WasmNetClient {
                         News::Cache { id } => [14.0, 7.0, f32::from(id), 0.0, 0.0, 0.0],
                         News::Called { seconds } => [14.0, 8.0, f32::from(seconds), 0.0, 0.0, 0.0],
                         News::Hurry => [14.0, 9.0, 0.0, 0.0, 0.0, 0.0],
+                        News::Grid { level } => [14.0, 10.0, f32::from(level), 0.0, 0.0, 0.0],
                     });
                 }
                 Event::Zap { from, to } => {
