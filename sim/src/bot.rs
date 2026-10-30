@@ -60,10 +60,11 @@ impl Default for Nav {
 }
 
 /// Each map's edges as `bake_nav` (in the tests below) walked them, with a hash of the map they
-/// came from. Walking takes seconds per map (more on terrain): too long for a server waking up
-/// to a visitor, or a page starting offline practice. The deploy bakes it fresh (see the
-/// Dockerfile); a map changed since the committed bake just walks here, slower, until it's
-/// re-baked: `cargo test -p sim --release --lib bake_nav -- --ignored`.
+/// came from and of how the Heavy that walked them moves (`nav_source`). Walking takes seconds
+/// per map (more on terrain): too long for a server waking up to a visitor, or a page starting
+/// offline practice. The deploy bakes it fresh (see the Dockerfile); a map or Heavy changed since
+/// the committed bake just walks here, slower, until it's re-baked:
+/// `cargo test -p sim --release --lib bake_nav -- --ignored`.
 const BAKED: &str = include_str!("../../maps/nav.json");
 
 #[derive(Serialize, Deserialize)]
@@ -79,8 +80,23 @@ pub(crate) fn source_hash(json: &str) -> String {
     format!("{:016x}", json.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)))
 }
 
+/// What a map's nav is walked from: its JSON, and the tuning `walkable` and `hoverable` move the
+/// Heavy by, so a class change re-walks too (not its weapons: a balance pass would re-walk for
+/// nothing).
+fn nav_source(json: &str, t: &Tuning) -> String {
+    let moves = [t.walk_speed, t.ground_accel, t.ground_decel, t.air_control, t.gravity, t.max_slope_deg, t.step_height, t.snap_distance, t.skin];
+    let hover = [t.hover_rise_speed, t.hover_rise_time, t.hover_sink_speed, t.hover_response, t.hover_drain, t.hover_min_fuel];
+    let body = [t.mech_radius, t.mech_height, t.fuel_max, t.fuel_regen, t.fuel_regen_delay];
+    source_hash(&format!("{json}{moves:?}{hover:?}{body:?}"))
+}
+
+/// Who nav walks as: a Heavy, the widest class.
+fn walker() -> Tuning {
+    Tuning::default().for_class(MechClass::C)
+}
+
 impl Nav {
-    /// Baked for each compiled-in map (walked here if the map has changed since), and cached.
+    /// Baked for each compiled-in map (walked here if the map or Heavy has changed since), and cached.
     pub fn for_map(index: usize) -> &'static Nav {
         static CACHE: [OnceLock<Nav>; MAPS.len()] = [const { OnceLock::new() }; MAPS.len()];
         CACHE[index].get_or_init(|| {
@@ -104,12 +120,12 @@ impl Nav {
     fn baked(bakes: &str, index: usize) -> Option<(Vec<(usize, usize)>, Vec<(usize, usize)>)> {
         let (name, json) = MAPS[index];
         let mut bakes: BTreeMap<String, Baked> = serde_json::from_str(bakes).expect("maps/nav.json is valid");
-        bakes.remove(name).filter(|b| b.source == source_hash(json)).map(|b| (b.edges, b.hover))
+        bakes.remove(name).filter(|b| b.source == nav_source(json, &walker())).map(|b| (b.edges, b.hover))
     }
 
     fn walk_map(index: usize) -> Nav {
         let map = Map::load(index);
-        Nav::generate(&Arena::new(&map), &map.nav, &Tuning::default().for_class(MechClass::C))
+        Nav::generate(&Arena::new(&map), &map.nav, &walker())
     }
 
     pub fn generate(arena: &Arena, points: &[[f32; 3]], t: &Tuning) -> Nav {
@@ -2205,7 +2221,7 @@ mod tests {
     /// maps/nav.json's contents for maps `indices`, walked as they are now.
     fn bake(indices: impl IntoIterator<Item = usize>) -> String {
         let bakes: BTreeMap<&str, Baked> =
-            indices.into_iter().map(|i| (MAPS[i].0, { let Nav { edges, hover, .. } = Nav::walk_map(i); Baked { source: source_hash(MAPS[i].1), edges, hover } })).collect();
+            indices.into_iter().map(|i| (MAPS[i].0, { let Nav { edges, hover, .. } = Nav::walk_map(i); Baked { source: nav_source(MAPS[i].1, &walker()), edges, hover } })).collect();
         serde_json::to_string(&bakes).unwrap()
     }
 
@@ -2226,8 +2242,10 @@ mod tests {
         let Nav { edges, hover, .. } = Nav::walk_map(blockout);
         assert_eq!(Nav::baked(&bakes, blockout), Some((edges, hover)));
         assert_eq!(Nav::baked(&bakes, isotope), None);
-        let edited = bakes.replace(&source_hash(MAPS[blockout].1), "0000000000000000");
+        let edited = bakes.replace(&nav_source(MAPS[blockout].1, &walker()), "0000000000000000");
         assert_eq!(Nav::baked(&edited, blockout), None, "a bake of an older blockout");
+        let slower = Tuning { walk_speed: walker().walk_speed - 0.5, ..walker() };
+        assert_ne!(nav_source(MAPS[blockout].1, &slower), nav_source(MAPS[blockout].1, &walker()), "a bake by an older Heavy");
     }
 
     #[test]
