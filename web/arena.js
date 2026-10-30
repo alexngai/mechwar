@@ -4,6 +4,7 @@
 // collide (the sim reads the same file); everything added here is visual.
 import * as THREE from 'three';
 import { halo, hot } from './fx.js';
+import { neonBoard, neonMaterial } from './neon.js';
 import { heightAt } from '../maps/ground.js';
 
 // Camera layers for quality-specific extras: halos stand in for bloom when it's off; High has light shafts.
@@ -345,6 +346,11 @@ function decorParts(d, parts, glow, lamp) {
     // none at all).
     glow.push(paint(turnedBox(d), d.color, 1, true));
     if (d.light !== 0) glow.signs.push({ at: new THREE.Vector3(...d.at), color: d.color, ...(d.light && { radius: d.light[0], power: d.light[1] }) });
+  } else if (d.kind === 'neon') {
+    // A neon sign board (see neon.js), lighting the street round it only if `light` ([radius, power]) says so.
+    const { geometry, color: c } = neonBoard(d);
+    glow.neon.push(geometry);
+    if (d.light) glow.signs.push({ at: new THREE.Vector3(...d.at), color: c, radius: d.light[0], power: d.light[1] });
   } else if (d.kind === 'furnace') {
     // A furnace mouth: a glowing slab set into a wall (`from`/`to` corners), lit from `at`.
     const a = new THREE.Vector3(...d.from), b = new THREE.Vector3(...d.to), at = new THREE.Vector3(...d.at);
@@ -780,6 +786,7 @@ export function buildArena(scene, map) {
   glow.lamps = [];
   glow.furnaces = [];
   glow.signs = [];
+  glow.neon = [];
   glow.shafts = [];
   glow.sparkers = [];
   glow.steam = [];
@@ -902,6 +909,7 @@ export function buildArena(scene, map) {
     h.layers.set(LOW_ONLY);
     meshes.push(h);
   }
+  if (glow.neon.length) meshes.push(new THREE.Mesh(mergeGeometries(glow.neon), hot(neonMaterial())));
   if (map.night && glow.shafts.length) {
     const shafts = new THREE.Mesh(mergeGeometries(glow.shafts), shaftMaterial());
     shafts.layers.set(HIGH_ONLY);

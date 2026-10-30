@@ -1477,6 +1477,120 @@ fn objective_probe() {
     }
 }
 
+/// Map probe: bot-only matches on a map, per mode: how soon a bot meets the enemy (seconds from
+/// launching to first taking damage), kills a minute, where bots spend their time and die (by 12 m
+/// storey, and in the chasm, |x| < 32 m), the height they cross the middle at (a bot's side flips
+/// between x < -32 and x > 32: the height it last stood at near x = 0), pad launches and drops of
+/// 10 m or more a bot-minute, and how the objective went.
+/// PROBE_MAP=<name> PROBE_MODE=<key> PROBE_SECS=<s> PROBE_SEEDS=<n> cargo test -p sim --release --lib map_probe -- --ignored --nocapture
+#[test]
+#[ignore = "probe"]
+fn map_probe() {
+    let only = std::env::var("PROBE_MAP").ok();
+    let run: f32 = std::env::var("PROBE_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(300.0);
+    let seeds: u64 = std::env::var("PROBE_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(6);
+    let modes: Vec<Mode> = std::env::var("PROBE_MODE").ok().and_then(|m| Mode::from_key(&m)).map_or(Mode::ALL.to_vec(), |m| vec![m]);
+    for mode in modes {
+        for (index, (name, _)) in crate::map::MAPS.iter().enumerate() {
+            if only.as_deref().is_some_and(|m| m != *name) || !mode.fits(&Map::load(index)) {
+                continue;
+            }
+            let (mut alive, mut chasm, mut deaths, mut chasm_deaths, mut pads, mut drops) = (0u64, 0u64, 0u32, 0u32, 0u32, 0u32);
+            let (mut storey, mut died_on) = ([0u64; 10], [0u32; 10]);
+            let (mut contact, mut crossings, mut objective) = (Vec::new(), BTreeMap::<i32, u32>::new(), Vec::new());
+            for seed in 0..seeds {
+                let mut game = Game::new(Tuning::default(), index);
+                game.mode = mode;
+                (game.score_limit, game.match_seconds, game.tick) = (u16::MAX, 1e7, seed as u32 * 7919);
+                let human = game.join().unwrap();
+                game.dock(human);
+                // Per bot: alive last tick, launched at, met yet, health, where, side of the chasm,
+                // height near the middle, on a pad's arc, height it left the ground from.
+                #[derive(Default)]
+                struct Seen { alive: bool, from: u32, met: bool, health: f32, pos: Vector, side: i8, mid: f32, arc: bool, padded: bool, air: Option<f32> }
+                let mut seen: BTreeMap<u8, Seen> = BTreeMap::new();
+                for _ in 0..secs(run) {
+                    game.step();
+                    for p in &game.players {
+                        if p.bot.is_none() {
+                            continue;
+                        }
+                        let s = seen.entry(p.id).or_default();
+                        let up = p.mech.health > 0.0 && p.respawn_at.is_none();
+                        if up && !s.alive {
+                            *s = Seen { alive: true, from: game.tick, health: p.mech.health, pos: p.mech.pos, ..Seen::default() };
+                        }
+                        if !up {
+                            if s.alive {
+                                deaths += 1;
+                                died_on[((s.pos.y / 12.0).max(0.0) as usize).min(9)] += 1;
+                                chasm_deaths += u32::from(s.pos.x.abs() < 32.0);
+                            }
+                            s.alive = false;
+                            continue;
+                        }
+                        let m = &p.mech;
+                        alive += 1;
+                        storey[((m.pos.y / 12.0).max(0.0) as usize).min(9)] += 1;
+                        chasm += u64::from(m.pos.x.abs() < 32.0);
+                        if !s.met && m.health < s.health {
+                            contact.push((game.tick - s.from) as f32 / TICK_HZ);
+                            s.met = true;
+                        }
+                        if m.pos.x.abs() < 4.0 {
+                            s.mid = m.pos.y;
+                        }
+                        let side = if m.pos.x < -32.0 { -1 } else if m.pos.x > 32.0 { 1 } else { s.side };
+                        if s.side != 0 && side != s.side {
+                            *crossings.entry((s.mid / 12.0).round() as i32 * 12).or_insert(0) += 1;
+                        }
+                        s.side = side;
+                        pads += u32::from(m.pad_arc && !s.arc);
+                        s.padded |= m.pad_arc;
+                        match (s.air, m.grounded) {
+                            (None, false) => (s.air, s.padded) = (Some(m.pos.y), m.pad_arc),
+                            (Some(y), true) => {
+                                drops += u32::from(!s.padded && y - m.pos.y >= 10.0);
+                                s.air = None;
+                            }
+                            _ => {}
+                        }
+                        (s.arc, s.health, s.pos) = (m.pad_arc, m.health, m.pos);
+                    }
+                }
+                objective.push(match mode {
+                    Mode::Convoy => game.convoy.as_ref().map_or(String::new(), |c| format!("{:+.0}m", c.along - c.start)),
+                    Mode::CaptureTheFlag => game.ctf.as_ref().map_or(String::new(), |c| format!("{}-{}", c.captures[0], c.captures[1])),
+                    Mode::MissileAssault => game.assault.as_ref().map_or(String::new(), |a| format!("{:.0}/{:.0}", a.hull[0], a.hull[1])),
+                    _ => game.players.iter().map(|p| p.kills as u32).sum::<u32>().to_string(),
+                });
+            }
+            contact.sort_by(f32::total_cmp);
+            let bot_min = alive as f32 * DT / 60.0;
+            let pct = |n: u64| 100.0 * n as f32 / alive.max(1) as f32;
+            let storeys: Vec<String> = storey.iter().enumerate().filter(|(_, n)| **n > 0).map(|(k, &n)| format!("{}m {:.0}%", k * 12, pct(n))).collect();
+            let deaths_at: Vec<String> = died_on.iter().enumerate().filter(|(_, n)| **n > 0).map(|(k, &n)| format!("{}m {}", k * 12, n)).collect();
+            println!(
+                "== {} {name}: kills {:.2}/bot-min; first contact median {:.1}s (p25 {:.1}, p75 {:.1}, n {}); pads {:.2}/bot-min, drops {:.2}/bot-min\n   time by storey [{}], in the chasm {:.0}%\n   deaths by storey [{}], in the chasm {:.0}%\n   crossings by height {:?} ({:.2}/bot-min)\n   objective by seed {objective:?}",
+                mode.key(),
+                deaths as f32 / bot_min,
+                contact.get(contact.len() / 2).copied().unwrap_or(f32::NAN),
+                contact.get(contact.len() / 4).copied().unwrap_or(f32::NAN),
+                contact.get(3 * contact.len() / 4).copied().unwrap_or(f32::NAN),
+                contact.len(),
+                pads as f32 / bot_min,
+                drops as f32 / bot_min,
+                storeys.join(", "),
+                pct(chasm),
+                deaths_at.join(", "),
+                100.0 * chasm_deaths as f32 / deaths.max(1) as f32,
+                crossings,
+                crossings.values().sum::<u32>() as f32 / bot_min,
+            );
+        }
+    }
+}
+
 /// CTF probe: bot-only Capture the Flag on every map that plays it. Each carry (a flag in a
 /// raider's hands, off its stand or off the ground, until it falls or scores): the share that
 /// score, how much of the way home it got, how long it lasted, what the carrier was about, how

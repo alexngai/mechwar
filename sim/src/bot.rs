@@ -44,6 +44,19 @@ pub struct Nav {
     edges: Vec<(usize, usize)>,
     /// The edges climbed by hovering, also in `edges`.
     hover: Vec<(usize, usize)>,
+    /// The way across its lanes, which flankers go out along: X, square to the line between the
+    /// teams' spawns where they face each other along Z (most maps), or Z where they face along X.
+    across: Vector,
+    /// Under this is low ground, which sneaks take: below ground level, or a storey's half under
+    /// the spawns' floor where that's higher (a city whose streets stand on others).
+    low: f32,
+}
+
+impl Default for Nav {
+    /// No waypoints; lanes across X and low ground under ground level, as on most maps.
+    fn default() -> Nav {
+        Nav { index: None, nodes: Vec::new(), edges: Vec::new(), hover: Vec::new(), across: Vector::X, low: -1.0 }
+    }
 }
 
 /// Each map's edges as `bake_nav` (in the tests below) walked them, with a hash of the map they
@@ -70,10 +83,21 @@ impl Nav {
     /// Baked for each compiled-in map (walked here if the map has changed since), and cached.
     pub fn for_map(index: usize) -> &'static Nav {
         static CACHE: [OnceLock<Nav>; MAPS.len()] = [const { OnceLock::new() }; MAPS.len()];
-        CACHE[index].get_or_init(|| match Nav::baked(BAKED, index) {
-            Some((edges, hover)) => Nav { index: Some(index), nodes: Map::load(index).nav.iter().map(|p| Vector::from_array(*p)).collect(), edges, hover },
-            None => Nav { index: Some(index), ..Nav::walk_map(index) },
+        CACHE[index].get_or_init(|| {
+            let map = Map::load(index);
+            let nav = match Nav::baked(BAKED, index) {
+                Some((edges, hover)) => Nav { nodes: map.nav.iter().map(|p| Vector::from_array(*p)).collect(), edges, hover, ..Nav::default() },
+                None => Nav::walk_map(index),
+            };
+            Nav { index: Some(index), ..nav.laid_out(&map) }
         })
+    }
+
+    /// Its lanes and low ground, from where `map`'s teams spawn.
+    fn laid_out(self, map: &Map) -> Nav {
+        let [a, b] = map.spawns.each_ref().map(|team| team.iter().map(|p| Vector::from_array(*p)).sum::<Vector>() / team.len().max(1) as f32);
+        let d = b - a;
+        Nav { across: if d.x.abs() > 2.0 * d.z.abs() { Vector::Z } else { Vector::X }, low: ((a.y + b.y) / 2.0 - 6.0).max(-1.0), ..self }
     }
 
     /// Map `index`'s edges from `bakes` (maps/nav.json's form), if baked from the map as it is.
@@ -109,7 +133,7 @@ impl Nav {
                 }
             }
         }
-        Nav { index: None, nodes, edges, hover }
+        Nav { nodes, edges, hover, ..Nav::default() }
     }
 
     /// Whether the edge from waypoint `a` to `b` is climbed by hovering.
@@ -234,9 +258,19 @@ impl Nav {
         self.nodes[i].distance(chest) < VANTAGE_RANGE && sees_at(arena, t, &Mech { pos: self.nodes[i], ..Mech::default() }, chest)
     }
 
-    /// Side lanes run this far out along x: the maps put their bases at ±z.
-    fn lane_x(&self) -> f32 {
-        0.6 * self.nodes.iter().fold(0.0, |m, n| n.x.abs().max(m))
+    /// Side lanes run this far out across the map (along `across`).
+    fn lane(&self) -> f32 {
+        0.6 * self.nodes.iter().fold(0.0, |m, &n| self.out(n).abs().max(m))
+    }
+
+    /// How far out across the map `p` is.
+    fn out(&self, p: Vector) -> f32 {
+        p.dot(self.across)
+    }
+
+    /// How far along the map `p` is (square to `out`).
+    fn along(&self, p: Vector) -> f32 {
+        p.dot(Vector::Y.cross(self.across))
     }
 }
 
@@ -288,6 +322,8 @@ fn hover_up(rise: f32, left: f32, hovering: bool) -> bool {
 
 /// Waypoint counts as reached within this horizontal distance.
 const ARRIVE: f32 = 2.5;
+/// Fallen below its route: the waypoint it last reached and its next both this far overhead.
+const FELL: f32 = 4.0;
 /// How near its own side's dome or barrier a bot in a fight goes to cool under or behind it (m).
 const HAVEN: f32 = 20.0;
 /// Bots boost toward a waypoint at least this far away.
@@ -1411,10 +1447,12 @@ impl Bot {
         self.think_with(arena, nav, t, me, target, None, tick)
     }
 
-    /// `think`, with a hurt teammate a repair torch could mend, and how high its middle is off its
-    /// feet: it does when no enemy is in sight (and, beam bent onto it, as it fights).
+    /// `think`, with a teammate a repair torch could hold its beam on (hurt, or in a fight): its
+    /// id, and how high its middle is off its feet. It does when no enemy is in sight, and mid-fight
+    /// while the mate's within the beam's bend of the aim (turning from the fight to mend cost its
+    /// side kills in `torch_probe`).
     #[allow(clippy::too_many_arguments)]
-    pub fn think_with(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: Option<&Mech>, heal: Option<(&Mech, f32)>, tick: u32) -> Input {
+    pub fn think_with(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: Option<&Mech>, heal: Option<(u8, &Mech, f32)>, tick: u32) -> Input {
         self.striking = false;
         let mut input = self.decide(arena, nav, t, me, target, heal, tick);
         // A limpet down goes off once an enemy's in its blast, whatever else the bot is about.
@@ -1430,7 +1468,7 @@ impl Bot {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn decide(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: Option<&Mech>, heal: Option<(&Mech, f32)>, tick: u32) -> Input {
+    fn decide(&mut self, arena: &Arena, nav: &Nav, t: &Tuning, me: &Mech, target: Option<&Mech>, heal: Option<(u8, &Mech, f32)>, tick: u32) -> Input {
         // A pile driver can't strike down off a perch: its carrier goes straight in instead.
         if self.role == Role::Perch && alt_use(t) == AltUse::Melee {
             (self.role, self.vantage, self.path_goal) = (Role::Hunt, None, None);
@@ -1473,10 +1511,12 @@ impl Bot {
                 }
             }
         }
-        if let Some((mate, mid)) = heal.filter(|_| alt_use(t) == AltUse::Beam && !target.is_some_and(|m| m.health > 0.0 && sees_at(arena, t, me, self.chest(t, self.focus, m.pos)))) {
+        if let Some((id, mate, mid)) = heal.filter(|_| alt_use(t) == AltUse::Beam && !target.is_some_and(|m| m.health > 0.0 && sees_at(arena, t, me, self.chest(t, self.focus, m.pos)))) {
             self.mending = true;
             let cooling = self.cool(t, me);
-            return mend(t, me, mate, mid, max_turn, cooling);
+            let input = mend(t, me, mate, mid, max_turn, cooling);
+            // Held on another, the beam stays there (`weapon::beam`): it lets go a tick to switch.
+            return Input { alt_fire: input.alt_fire && me.beam_on.is_none_or(|on| on == id), ..input };
         }
         let Some(target) = target.filter(|m| m.health > 0.0) else {
             // Nothing to fight in view. One that just ducked out of view nearby gets a grenade at
@@ -1779,8 +1819,9 @@ impl Bot {
             // Behind its own side's shield, a charged gun holds what it has: let go, it would fire
             // into it.
             let fire = (blocked && t.charge_time > 0.0) || (shell.is_none() && !self.cooling && reaches && !hidden && if t.charge_time > 0.0 { !(on_target && me.charge >= 0.85 && sure) } else { on_target && !blocked });
-            // A hurt teammate in reach just off the aim: the beam bends onto it as the gun fires on.
-            let bend = use_ == AltUse::Beam && heal.is_some_and(|(mate, mid)| bends_to(t, eye, new_yaw, new_pitch, mate.pos + Vector::Y * mid));
+            // A torch also holds its beam on a teammate within its bend of the aim (`weapon::beam`),
+            // mending it or amping its guns as the gun fires on.
+            let bend = use_ == AltUse::Beam && heal.is_some_and(|(_, mate, mid)| bends_to(t, eye, new_yaw, new_pitch, mate.pos + Vector::Y * mid));
             let alt_fire = (alt || bend)
                 && alt_cool
                 && !hidden
@@ -2168,8 +2209,14 @@ impl Bot {
         // An order is a spot to stand on, not one to overlook from a perch or come at side-on: no
         // vantage on the way to it (nor one kept from before it came).
         let ordered = self.order.is_some();
-        if self.path_goal.is_none() || moved || blind || (ordered && self.vantage.is_some()) {
-            let (role, lane, far) = (self.role, nav.lane_x(), me.pos.distance(target.pos) > DETOUR_MIN);
+        // Fallen below its route (off a ledge, down a hole beside it): plan again from where it landed.
+        let above = |i: usize| nav.node(i).y - me.pos.y > FELL;
+        let fell = me.grounded && self.reached.is_some_and(above) && self.path.first().is_some_and(|&n| above(n));
+        if fell {
+            self.reached = None;
+        }
+        if self.path_goal.is_none() || moved || blind || fell || (ordered && self.vantage.is_some()) {
+            let (role, lane, far) = (self.role, nav.lane(), me.pos.distance(target.pos) > DETOUR_MIN);
             let (at, from_target) = (|i| nav.node(i), |i| nav.node(i).distance(target.pos));
             let mut vantage = None;
             self.path = nav.path(nav.nearest(arena, me.pos), |cost| {
@@ -2177,10 +2224,10 @@ impl Bot {
                     _ if blind || ordered => None,
                     // A perch in view of the target, near both, each metre up worth 4 of walking;
                     // the spot out in the side lane level with it, to come at it side-on; the
-                    // channel spot nearest it.
+                    // low spot nearest it.
                     Role::Perch => nav.vantage(cost, |i, c| (at(i).y > 2.0 && nav.overlooks(arena, t, i, chest)).then(|| c + from_target(i) - 4.0 * at(i).y)),
-                    Role::Flank(side) if far => nav.vantage(cost, |i, _| (at(i).x * side > lane).then(|| (at(i).z - target.pos.z).abs())),
-                    Role::Sneak if far => nav.vantage(cost, |i, _| (at(i).y < -1.0).then(|| from_target(i))),
+                    Role::Flank(side) if far => nav.vantage(cost, |i, _| (nav.out(at(i)) * side > lane).then(|| (nav.along(at(i)) - nav.along(target.pos)).abs())),
+                    Role::Sneak if far => nav.vantage(cost, |i, _| (at(i).y < nav.low).then(|| from_target(i))),
                     _ => None,
                 };
                 vantage.unwrap_or(goal)
@@ -2487,6 +2534,52 @@ mod tests {
             });
             assert!(out, "{map}: still at {} after 15 s", me.pos);
         }
+    }
+
+    #[test]
+    fn flankers_and_sneaks_find_walled_citys_lanes_and_low_ground() {
+        // Walled City's teams face each other along X, on streets 48 m up: its side lanes run along
+        // X, out either side in Z (its monorail's bridges), and its low road and canal run under the
+        // streets. A flanker from the west spawn hall after a mech in the east's goes out to its side
+        // lane, not off into a base (as when every map's lanes ran along Z); a sneak goes low.
+        let walled = Map::index("walled").unwrap();
+        let (arena, nav, t) = (Arena::new(&Map::load(walled)), Nav::for_map(walled), Tuning::default());
+        let (me, target) = (spawn_mech(&t, Vector::new(-136.0, 48.1, -8.0)), spawn_mech(&t, Vector::new(136.0, 48.1, 8.0)));
+        let vantage = |role| {
+            let mut bot = Bot { role, ..Bot::new(1) };
+            (0..secs(1.0)).find_map(|tick| {
+                bot.think(&arena, nav, &t, &me, Some(&target), tick);
+                bot.vantage.map(|v| nav.node(v))
+            })
+        };
+        for side in [-1.0, 1.0] {
+            let v = vantage(Role::Flank(side)).expect("a flanker's vantage");
+            assert!(v.z * side > nav.lane(), "flanking to {side}: vantage at {v}, not out past {} m", nav.lane());
+        }
+        let v = vantage(Role::Sneak).expect("a sneak's vantage");
+        assert!(v.y < nav.low, "sneaking: vantage at {v}");
+    }
+
+    #[test]
+    fn a_bot_that_falls_below_its_route_plans_again() {
+        // Down onto Walled City's low road under its west gate, on the way from the plaza through
+        // the gate to a perch past it: a bot swung to and fro there under the gate's waypoint, 24 m
+        // overhead, for half a minute, each swing just past ARRIVE, so it never counted as stuck.
+        // Landed, it plans again from where it is at once, not after being stuck.
+        let walled = Map::index("walled").unwrap();
+        let (arena, nav, t) = (Arena::new(&Map::load(walled)), Nav::for_map(walled), Tuning::default());
+        let from = Vector::new(-42.5, 24.05, -9.2);
+        let (mut me, target) = (Mech { vel: Vector::new(10.8, 0.0, 5.3), ..spawn_mech(&t, from) }, spawn_mech(&t, Vector::new(40.0, 48.1, 8.0)));
+        let node = |p| nav.nearest(&arena, p);
+        let (plaza, gate, perch) = (node(Vector::new(-24.0, 48.1, -8.0)), node(Vector::new(-40.0, 48.1, -8.0)), node(Vector::new(-56.0, 48.1, 8.0)));
+        let mut bot = Bot { role: Role::Perch, ..Bot::new(1) };
+        (bot.reached, bot.path, bot.vantage, bot.path_goal) = (Some(plaza), vec![gate, perch], Some(perch), Some(node(target.pos)));
+        for tick in 0..secs(0.5) {
+            let input = bot.think(&arena, nav, &t, &me, Some(&target), tick);
+            step_mech(&arena, &t, &mut me, &input);
+        }
+        let next = bot.path.first().map(|&n| nav.node(n));
+        assert!(next.is_some_and(|n| n.y - me.pos.y < 4.0), "at {} after 0.5 s, heading for {next:?}", me.pos);
     }
 
     #[test]
@@ -3049,7 +3142,7 @@ mod tests {
             let mut bot = Bot::new(1);
             let mut mended = false;
             for tick in 0..secs(3.0) {
-                let input = bot.think_with(&arena, nav, t, &me, None, Some((&mate, tm.mech_height * 0.5)), tick);
+                let input = bot.think_with(&arena, nav, t, &me, None, Some((2, &mate, tm.mech_height * 0.5)), tick);
                 step_mech(&arena, t, &mut me, &input);
                 mended |= me.beaming;
             }
@@ -3059,6 +3152,45 @@ mod tests {
             let off = ray.point_at(flat(mate.pos - ray.origin).length() / flat(ray.dir).length()).y - (mate.pos.y + tm.mech_height * 0.5);
             assert!(off.abs() < 0.3, "a {class:?} aimed {off} m off a {of:?}'s middle");
         }
+    }
+
+    #[test]
+    fn repair_torches_let_go_of_another_to_switch() {
+        let blockout = Map::index("blockout").unwrap();
+        let (arena, nav, arsenal) = (Arena::new(&Map::load(blockout)), Nav::for_map(blockout), Arsenal::new(&Tuning::default()));
+        let torch = (0..arsenal.counts().1 as u8).find(|&s| alt_use(build(&arsenal, 0, s)) == AltUse::Beam).expect("a beam secondary");
+        let loadout = with_secondary(&arsenal, torch);
+        let t = arsenal.get(MechClass::B, loadout);
+        // Aimed square at a hurt mate (id 2), the beam held on another (id 9, say just behind it).
+        let mate = Mech { health: 0.4 * t.health_max, ..spawn_mech(t, Vector::new(0.0, 0.1, 30.0)) };
+        let at = Vector::new(0.0, 0.1, 40.0);
+        let (yaw, pitch) = look_at(at + Vector::Y * t.eye_height, mate.pos + Vector::Y * (t.mech_height * 0.5));
+        let me = Mech { loadout, yaw, pitch, beaming: true, beam_on: Some(9), ..spawn_mech(t, at) };
+        let holds = |me: &Mech| Bot::new(1).think_with(&arena, nav, t, me, None, Some((2, &mate, t.mech_height * 0.5)), 0).alt_fire;
+        assert!(!holds(&me), "kept the beam on the other");
+        assert!(holds(&Mech { beam_on: Some(2), ..me }), "let go of the mate it's on");
+    }
+
+    #[test]
+    fn repair_torches_keep_their_beam_on_a_mate_mid_fight() {
+        let blockout = Map::index("blockout").unwrap();
+        let (arena, nav, arsenal) = (Arena::new(&Map::load(blockout)), Nav::for_map(blockout), Arsenal::new(&Tuning::default()));
+        let torch = (0..arsenal.counts().1 as u8).find(|&s| alt_use(build(&arsenal, 0, s)) == AltUse::Beam).expect("a beam secondary");
+        let loadout = with_secondary(&arsenal, torch);
+        let t = arsenal.get(MechClass::B, loadout);
+        // An enemy in sight past the beam's reach, and a mate 12 m on, 3 m off the line to it.
+        let start = Mech { loadout, ..spawn_mech(t, Vector::new(0.0, 0.1, 40.0)) };
+        let (enemy, mate) = (spawn_mech(t, Vector::new(0.0, 0.1, -10.0)), spawn_mech(t, Vector::new(3.0, 0.1, 28.0)));
+        let beams = |heal: Option<(u8, &Mech, f32)>| {
+            let (mut me, mut bot) = (start, Bot::new(1));
+            (0..secs(1.0)).any(|tick| {
+                let input = bot.think_with(&arena, nav, t, &me, Some(&enemy), heal, tick);
+                step_mech(&arena, t, &mut me, &input);
+                input.alt_fire
+            })
+        };
+        assert!(beams(Some((2, &mate, t.mech_height * 0.5))), "let go of its mate to fight");
+        assert!(!beams(None), "held the beam on nothing");
     }
 
     #[test]
