@@ -158,6 +158,40 @@ export class Hud {
       }
     }
 
+    // --- Pings and bots' marks: a diamond on the spot (a ping's opening out of a ring), its label
+    // over it and distance under it. A bot's mark on an enemy it sees is a small solid one -----
+    g.textAlign = 'center';
+    for (const p of f.pings) {
+      g.globalAlpha = p.alpha;
+      g.strokeStyle = g.fillStyle = p.foe ? f.enemyColor : f.friendColor;
+      g.lineWidth = 1.5 * u;
+      if (p.kind === 'mark') {
+        diamond(g, p.x, p.y, 4 * u);
+        continue;
+      }
+      const s = 8 * u;
+      g.beginPath();
+      g.moveTo(p.x, p.y - s);
+      g.lineTo(p.x + s, p.y);
+      g.lineTo(p.x, p.y + s);
+      g.lineTo(p.x - s, p.y);
+      g.closePath();
+      g.stroke();
+      g.fillRect(p.x - 1.5 * u, p.y - 1.5 * u, 3 * u, 3 * u);
+      if (p.age < 600) {
+        g.globalAlpha = p.alpha * (1 - p.age / 600);
+        arc(g, p.x, p.y, s + (p.age / 600) * 30 * u, 0, TAU);
+        g.globalAlpha = p.alpha;
+      }
+      g.font = font(11, 'bold');
+      g.textBaseline = 'bottom';
+      g.fillText(p.label, p.x, p.y - s - 3 * u);
+      g.font = font(10);
+      g.textBaseline = 'top';
+      g.fillText(`${Math.round(p.dist)} m`, p.x, p.y + s + 3 * u);
+    }
+    g.globalAlpha = 1;
+
     // --- Kill feed, top right -------------------------------------------------------------
     g.textAlign = 'right';
     g.textBaseline = 'top';
@@ -172,6 +206,15 @@ export class Hud {
       g.fillText(' ▸ ', x - vw, y);
       g.fillStyle = k.killerColor;
       g.fillText(k.killer, x - vw - g.measureText(' ▸ ').width, y);
+    });
+    // Bots' callouts on the team radio, under it.
+    f.radio.forEach((r, i) => {
+      const age = (f.now - r.at) / 1000, y = 32 * u + (f.feed.length + i) * 20 * u, x = W - 24 * u;
+      g.globalAlpha = Math.min(1, 6 - age);
+      g.fillStyle = AMBER;
+      g.fillText(r.text, x, y);
+      g.fillStyle = f.friendColor;
+      g.fillText(`${r.name}: `, x - g.measureText(r.text).width, y);
     });
     g.globalAlpha = 1;
 
@@ -410,6 +453,11 @@ export function radar(g, rx, ry, rr, u, f, map) {
       g.textBaseline = 'middle';
       g.fillText(c.objective, px, py);
     } else if (c.orb) g.fillRect(px - 2.5 * u, py - 2.5 * u, 5 * u, 5 * u); // health orb
+    else if (c.ping) {
+      // A ping, an enemy sighted, or a bot's call for help: a ring.
+      g.lineWidth = 1.5 * u;
+      arc(g, px, py, 4.5 * u, 0, TAU);
+    }
     else if (c.turret) {
       // A turret: an open square.
       g.lineWidth = 1.5 * u;

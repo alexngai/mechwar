@@ -27,6 +27,10 @@ pub enum ClientMsg {
     Build(crate::defense::Build),
     /// A pick (0-2) from the player's co-op draft on offer.
     Draft(u8),
+    /// Ping what we aim at for our team: the enemy under the crosshair, else the spot, as one to
+    /// go to or (`sighted`) as an enemy seen there (`Game::ping`, which works it out from where
+    /// the server has us looking).
+    Ping { sighted: bool },
 }
 
 /// One per client tick. `view_tick` is the fractional server tick the client was rendering
@@ -217,6 +221,36 @@ pub enum Event {
     Shell { from: Vector, to: Vector, flight: f32 },
     /// A co-op pulse pylon's EMP going off at `at`, `radius` round.
     Stun { at: Vector, radius: f32 },
+    /// Player `from` pinged `at` for its team (`Game::ping`). Only its team gets it.
+    Ping { from: u8, mark: Mark, at: Vector },
+    /// Bot `from` called `call` out at `at` to its team (`game/squad.rs`). Only its team gets it.
+    Callout { from: u8, call: Call, at: Vector },
+}
+
+/// What a ping marks.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Mark {
+    /// A spot to go to.
+    Spot,
+    /// Enemy `0`, under the crosshair.
+    Enemy(u8),
+    /// A spot an enemy was seen at.
+    Sighted,
+}
+
+/// What a bot tells its human teammates.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Call {
+    /// Enemy `0` seen there: a mark on the spot, no words.
+    Spotted(u8),
+    /// Enemy `0` seen there, after none of the team had seen it for a while.
+    Contact(u8),
+    /// Falling back hurt with an enemy on it.
+    Help,
+    /// A flag carrier went down there: ours, or theirs.
+    CarrierDown { ours: bool },
+    /// Sent by a ping: heading there.
+    OnMyWay,
 }
 
 pub fn encode<T: Serialize>(msg: &T) -> Vec<u8> {

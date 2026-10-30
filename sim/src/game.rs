@@ -421,6 +421,8 @@ pub struct Game {
     phase: Phase,
     /// Bumped whenever a player joins, leaves or renames; the server sends a Roster on change.
     roster_version: u32,
+    /// Pings, and what bots tell their human teammates (`game/squad.rs`).
+    squad: squad::Squad,
 }
 
 impl Game {
@@ -470,6 +472,7 @@ impl Game {
             scores: [0; 2],
             phase: Phase::Playing { started_at: 0 },
             roster_version: 0,
+            squad: squad::Squad::default(),
         }
     }
 
@@ -730,8 +733,11 @@ impl Game {
         let fights: Vec<Option<u8>> = self.players.iter().map(fighting).collect();
         // By team: what its players are fighting, and what only its bots are (for a bot not
         // minding its pilots this life, `Policy::pilot_mind`).
-        let engaged: Vec<Vec<u8>> = teams.clone().map(|team| self.players.iter().zip(&fights).filter(|(p, _)| p.team == team).filter_map(|(_, f)| *f).collect()).collect();
-        let engaged_bots: Vec<Vec<u8>> = teams.map(|team| self.players.iter().zip(&fights).filter(|(p, _)| p.team == team && p.bot.is_some()).filter_map(|(_, f)| *f).collect()).collect();
+        let mut engaged: Vec<Vec<u8>> = teams.clone().map(|team| self.players.iter().zip(&fights).filter(|(p, _)| p.team == team).filter_map(|(_, f)| *f).collect()).collect();
+        let mut engaged_bots: Vec<Vec<u8>> = teams.map(|team| self.players.iter().zip(&fights).filter(|(p, _)| p.team == team && p.bot.is_some()).filter_map(|(_, f)| *f).collect()).collect();
+        // Pinged enemies, every bot of the pinging side goes for.
+        self.squad.favour(&mut engaged);
+        self.squad.favour(&mut engaged_bots);
         // First every bot looks and listens...
         let mut seen: Vec<(Option<u8>, Vec<(u8, Mech, f32)>)> = Vec::with_capacity(self.players.len());
         let mut radio: Vec<Vec<(u8, u8, Vector)>> = vec![Vec::new(); MAX_PLAYERS]; // (from, enemy, where)
@@ -780,6 +786,7 @@ impl Game {
                 carriers[usize::from(p.team)] = Some(p.mech.pos);
             }
         }
+        self.dispatch_pings(orders.as_deref());
         let mut matchups = std::mem::take(&mut self.matchups);
         // Which enemies have a clear line to which players (eye to middle, within their weapons'
         // reach): for bots weighing how an enemy's fire is split.
@@ -897,6 +904,8 @@ impl Game {
                     self.players.iter().any(|q| q.team != me.team && q.mech.health > 0.0 && (q.mech.pos + Vector::Y * (self.arsenal.of(&q.mech).mech_height * 0.5)).distance(f.p.pos) < reach)
                 });
             let mates_near = self.players.iter().filter(|q| q.team == me.team && q.id != me.id && alive(q) && q.mech.pos.distance(me.mech.pos) < bot::MATES_NEAR).count() as u8;
+            // An objective job comes first; then a spot a teammate's ping sent it to.
+            let pinged = self.squad.order(me.id);
             let p = &mut self.players[i];
             let bot = p.bot.as_mut().expect("checked above");
             bot.mates_near = mates_near;
@@ -908,7 +917,7 @@ impl Game {
             bot.lead = lead;
             bot.edge = edge[team];
             bot.adapt = self.adapt.get(team).copied().unwrap_or(0.0);
-            bot.order = orders.as_ref().and_then(|o| o[i]);
+            bot.order = orders.as_ref().and_then(|o| o[i]).or(pinged);
             bot.ward = carriers[team].filter(|&at| bot.order == Some(at));
             // The zone that order is in, if it's one to hold.
             let zones = self.assault.iter().flat_map(|a| a.silos.iter()).chain(self.siege.iter().flat_map(|s| std::iter::once(&s.aa).chain(s.stations.iter().map(|(z, _)| z))));
@@ -1160,6 +1169,7 @@ impl Game {
         // Objectives are set out from the opening (nobody can reach them from the pens).
         if !matches!(self.phase, Phase::Ended { .. }) {
             self.step_objectives();
+            self.step_squad();
         }
 
         for p in &mut self.players {
@@ -1175,6 +1185,7 @@ impl Game {
     /// game's first match opens this way once it's set up (a team match's staging with it).
     pub fn start_match(&mut self) {
         self.scores = [0; 2];
+        self.squad = squad::Squad::default();
         self.assault = None;
         self.siege = None;
         self.ctf = None;
@@ -2090,7 +2101,7 @@ impl Game {
                     view: MechView::from(&p.mech),
                 })
                 .collect(),
-            events: self.events.clone(),
+            events: self.events.iter().filter(|e| self.hears(e, me.map(|p| p.team))).copied().collect(),
             orbs: self.orbs.clone(),
             clouds: self.clouds.clone(),
             deployables: self.deployables.clone(),
@@ -2926,6 +2937,8 @@ fn rewind(history: &VecDeque<(u32, Vector, bool)>, at: f32) -> Option<Vector> {
     let f = (at - a.0 as f32) / (b.0 - a.0) as f32;
     (a.2 && b.2).then(|| a.1.lerp(b.1, f))
 }
+
+mod squad;
 
 #[cfg(test)]
 mod probe;

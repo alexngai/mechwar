@@ -289,6 +289,11 @@ impl NetClient {
         net::encode(&ClientMsg::Unlock { class, slot, index })
     }
 
+    /// Message pinging what we aim at for our team; `sighted`, as an enemy seen there.
+    pub fn ping_msg(&self, sighted: bool) -> Vec<u8> {
+        net::encode(&ClientMsg::Ping { sighted })
+    }
+
     /// Message handing the server our signed progression record ("" for none yet).
     pub fn progress_msg(&self, record: &str) -> Vec<u8> {
         net::encode(&ClientMsg::Progress(record.into()))
@@ -453,7 +458,7 @@ impl NetClient {
                         }
                     }
                 }
-                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } | Event::TurretShot { .. } | Event::TurretHit { .. } | Event::Strike { .. } | Event::Captured { .. } | Event::Missile { .. } | Event::Ship { .. } | Event::Flag { .. } | Event::Convoy(_) | Event::Defense(_) | Event::Zap { .. } | Event::Stun { .. } | Event::Shell { .. } => self.events.push(*e),
+                Event::Shot { .. } | Event::Kill { .. } | Event::Pulse { .. } | Event::Beam { .. } | Event::TurretShot { .. } | Event::TurretHit { .. } | Event::Strike { .. } | Event::Captured { .. } | Event::Missile { .. } | Event::Ship { .. } | Event::Flag { .. } | Event::Convoy(_) | Event::Defense(_) | Event::Zap { .. } | Event::Stun { .. } | Event::Shell { .. } | Event::Ping { .. } | Event::Callout { .. } => self.events.push(*e),
             }
         }
         self.snapshots.push_back(s);

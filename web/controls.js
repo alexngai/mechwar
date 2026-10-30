@@ -35,6 +35,8 @@ function bindings({ primary, secondary, offensive, support, ability }, offline) 
     [['E'], 'kit', `${support.name}: ${step(support, 'E', support.desc)}`],
     [['F'], 'kit', `${ability.name}: ${ability.desc}`],
     [['R'], 'kit', 'Hold to shut down and repair'],
+    [['Z'], 'game', 'Ping the enemy you aim at, or a spot to send bots to'],
+    [['X'], 'game', 'Enemy sighted: mark where you aim for your team'],
     [['Tab'], 'game', 'Scores, while held'],
     [['C'], 'game', 'Hangar: change your build for the next launch'],
     [['M'], 'game', 'Mute'],

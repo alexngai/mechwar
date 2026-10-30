@@ -397,6 +397,10 @@ addEventListener('keydown', (e) => {
   // Co-op: mend the tower aimed at for scrap; call the next wave.
   if (coop() && e.code === 'KeyH') sendBuild(6);
   if (coop() && e.code === 'KeyN') sendBuild(7);
+  // Z pings (the enemy under the reticle, else a spot to go to); X calls an enemy sighted there
+  // (in co-op X sells the tower aimed at instead).
+  const sighted = e.code === 'KeyX' && !coop();
+  if ((e.code === 'KeyZ' || sighted) && ws?.readyState === WebSocket.OPEN) ws.send(net.ping(sighted));
   if (e.code === 'KeyK' && sim) { sim.reset(); prev = curr = sim.state(); }
   if (e.code === 'KeyI') $('stats').hidden = !$('stats').hidden;
   if (e.code === 'KeyM') setMuted(!sound.muted);
@@ -597,6 +601,22 @@ let summary = null, wasEnded = false, splashed = false;
 const esc = (text) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 // Recent kills for the feed: names and team colors when they happened.
 const feed = [];
+// Pings (one per teammate), and bots' marks on enemies they see and calls for help, by key: what
+// kind, where, the enemy it follows if any, since when, and its label. And bots' callouts, for the radio feed.
+const signs = new Map(), radio = [];
+const SIGN_LIFE = { ping: 8000, enemy: 6000, sighted: 8000, mark: 3000, help: 4000 }; // ms
+/** Where world (x, z) is, for callouts: by our base or theirs, mid-map, or a compass point off the middle. */
+function placeName(x, z, team) {
+  const map = MAPS[map_name(arenaMap)];
+  const near = (t) => {
+    const s = map.spawns[t];
+    return Math.hypot(x - s.reduce((a, p) => a + p[0], 0) / s.length, z - s.reduce((a, p) => a + p[2], 0) / s.length) < 30;
+  };
+  if (team >= 0 && near(team)) return 'our base';
+  if (team >= 0 && near(1 - team)) return 'their base';
+  if (Math.hypot(x, z) < 0.15 * Math.min(...(map.size ?? [100, 100]))) return 'mid';
+  return ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'][Math.round(Math.atan2(x, -z) / (Math.PI / 4) + 8) % 8];
+}
 // Our latest kill, named over the aim frame for a moment.
 let eliminated = null, callout = null, capture = null, blipAt = 0, reactorHitAt = null;
 // Co-op: the last break called short (when, and the scrap it paid), for the wave's callout to say.
@@ -1174,6 +1194,24 @@ function frame(now) {
       // A remote's held beam; our own is drawn from our prediction.
       const e = remotes.get(a);
       if (e) (e.beamTo ??= new THREE.Vector3()).set(x, y, z), (e.beamAt = now);
+    }
+    if (kind === 18) {
+      // A ping by a (us, or a teammate): on enemy b, followed; on an enemy sighted at the spot (b
+      // -2); or on a spot to go to (-1). Each pilot has one spot to go to and one enemy up.
+      const sort = b >= 0 ? 'enemy' : b === -2 ? 'sighted' : 'ping';
+      const label = { enemy: 'TARGET', sighted: 'ENEMY', ping: a === myId ? 'PING' : nameOf(a) }[sort];
+      signs.set(`${sort === 'ping' ? 'p' : 'e'}${a}`, { kind: sort, at: new THREE.Vector3(x, y, z), follow: b >= 0 ? b : null, born: now, label });
+      sound.ping(sort !== 'ping');
+    }
+    // A bot's mark on enemy a, where it turned up.
+    if (kind === 20) signs.set(`m${a}`, { kind: 'mark', at: new THREE.Vector3(x, y, z), follow: null, born: now, label: '', enemy: a });
+    if (kind === 19) {
+      // Bot a's callout b, on the radio; a call for help also marks where it is.
+      const text = [`Contact, ${placeName(x, z, myTeam)}`, 'Need help!', 'Our flag carrier is down', 'Enemy flag carrier down', 'On my way'][b];
+      radio.push({ at: now, name: nameOf(a), text });
+      if (radio.length > 3) radio.shift();
+      if (b === 1) signs.set(`h${a}`, { kind: 'help', at: new THREE.Vector3(x, y, z), follow: null, born: now, label: 'HELP' });
+      sound.radio();
     }
   }
 
@@ -2073,7 +2111,7 @@ const refireTime = () => {
 function drawGlass(now, myTeam, ctf, top, convoy) {
   const W = glass.canvas.width, H = glass.canvas.height;
   const toScreen = (p) => ({ x: ((p.x + 1) / 2) * W, y: ((1 - p.y) / 2) * H });
-  const tags = [], contacts = [];
+  const tags = [], contacts = [], inSight = new Set();
   for (let k = 0; k < orbs.length / 5; k++) if (orbHeals(k, myTeam)) contacts.push({ x: orbs[5 * k], z: orbs[5 * k + 2], orb: true });
   let focus = null, focusAngle = THREE.MathUtils.degToRad(4);
   camera.getWorldDirection(look);
@@ -2088,6 +2126,7 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
       to.subVectors(chest, eye).normalize();
       visible = game.cast_ray(eye.x, eye.y, eye.z, to.x, to.y, to.z, dist) >= dist - 0.5 && !smoked(eye, chest);
     }
+    if (enemy && visible) inSight.add(id);
     if (!enemy || visible || now - (lastFired.get(id) ?? -Infinity) < 2000) contacts.push({ x: e.pos.x, z: e.pos.z, enemy });
     if (!visible || (!enemy && dist > 150)) continue;
     ndc.copy(e.pos).y += enemy ? h * 0.5 : h + 0.8;
@@ -2150,6 +2189,35 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
     marks.push({ ...toScreen(ndc), label: o.label, color, contested: o.contested, dist: o.at.distanceTo(eye) });
   }
 
+  // Pings and bots' marks: over the spot on the glass (a ping out of view on the edge toward it),
+  // and on the radar. A ping on an enemy follows it, while it's alive and not camouflaged.
+  const pings = [];
+  for (const [key, s] of signs) {
+    const age = now - s.born, life = SIGN_LIFE[s.kind], followed = s.follow === null ? null : remotes.get(s.follow);
+    if (age > life || (s.follow !== null && !followed?.mech.alive)) {
+      signs.delete(key);
+      continue;
+    }
+    if (followed && !followed.hidden) s.at.copy(followed.pos);
+    // A bot's mark on an enemy we can see ourselves says nothing its tag doesn't.
+    if (s.kind === 'mark' && inSight.has(s.enemy)) continue;
+    const foe = s.kind === 'enemy' || s.kind === 'sighted' || s.kind === 'mark';
+    contacts.push({ x: s.at.x, z: s.at.z, ping: s.kind !== 'mark', enemy: foe });
+    // Over a mech (an enemy's, or a bot calling for help), on a pinged spot.
+    ndc.copy(s.at).y += s.kind === 'ping' || s.kind === 'sighted' ? 0 : 5;
+    ndc.project(camera);
+    // Behind us it projects mirrored: flipped back, the edge points the way to turn.
+    const behind = ndc.z > 1;
+    if (behind) ndc.set(-ndc.x, -ndc.y, 0);
+    const out = Math.max(Math.abs(ndc.x), Math.abs(ndc.y)) / 0.94;
+    if (behind || out > 1) {
+      if (s.kind === 'mark') continue;
+      if (out < 1e-3) ndc.set(0, -0.94, 0); // dead behind
+      else ndc.set(ndc.x / out, ndc.y / out, 0);
+    }
+    pings.push({ ...toScreen(ndc), kind: s.kind, foe, label: s.label, dist: s.at.distanceTo(eye), age, alpha: Math.min(1, (life - age) / 1000) });
+  }
+
   aim.set(curr[S.AIM], curr[S.AIM + 1], curr[S.AIM + 2]).project(camera);
   const c = classes[CLASS_KEYS[classIdx]];
   glass.resize(renderer.getPixelRatio());
@@ -2188,7 +2256,7 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
       return { key, id: it.id, armed, charges: curr[charges], max: T(`${it.id}_charges`), recharge: 1 - curr[wait] / Math.max(T(`${it.id}_recharge`), 1e-6), wait: curr[wait] };
     }),
     jammed: curr[S.JAMMED] > 0,
-    feed: feed.filter((k) => now - k.at < 6000),
+    feed: feed.filter((k) => now - k.at < 6000), radio: radio.filter((r) => now - r.at < 6000), pings,
     contacts, tags, hits, damage: damageFrom, radarMap: glass.radarMap,
   };
   // Co-op's world points on the glass: the ghost's verdict under it, the aimed tower's panel by it.
