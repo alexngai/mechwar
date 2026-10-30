@@ -621,12 +621,12 @@
     ]
   },
   "walled": {
-    "blurb": "A walled city stacked 100 m deep on both sides of a chasm at dusk, crossed at five heights, chiefly by a bridge in the middle whose top is a plaza. Old money lives in warm plaster and lantern light on the west side; the east is tenements, neon and fluorescent tubes. Both grow darker and damper the lower you go.",
+    "blurb": "A walled city stacked 100 m deep on both sides of a chasm at dusk, its streets on five floors 24 m apart, every one of them crossing the chasm, chiefly by a bridge in the middle whose top is a plaza. Old money lives in warm plaster and lantern light on the west side; the east is tenements, neon and fluorescent tubes, and low in the chasm, over the canal and the plaza, neon signs in no particular script crowd out from both faces. Both grow darker and damper the lower you go.",
     "hero": {
       "eye": [
-        -20,
-        165,
-        -122
+        -10,
+        150,
+        -104
       ],
       "look": [
         0,
@@ -638,91 +638,106 @@
       {
         "id": "the-plaza",
         "name": "The Bridge and its Plaza",
-        "text": "The main crossing, in the middle: a plaza 64 m square on a bridge of solid city, level with the spawns, open to the sky and overlooked by balconies on both faces. A street runs to it from each flag stand. Stalls and low walls give cover, and in Missile Assault silo B is in its middle. A hall runs through the bridge under it at level 2.",
+        "text": "The main crossing, in the middle: a plaza 64 m square on a bridge of solid city, level with the spawns, open to the sky. A gate two storeys tall opens onto it from each side, the stairs look down on it from their landings, and neon signs crowd out over it from both faces, red and gold on the west, pink and cyan on the east. A shrine before each gate breaks the line from one to the other; in Missile Assault silo B is in its middle, out on the open street, while A and C are down in the city, at the foot of each side's well on the low road. A hall runs through the bridge under it, on the low road.",
         "eye": [
-          -44,
+          -46,
           55,
           -12
         ],
         "look": [
           20,
-          46,
+          48,
           6
         ]
       },
       {
         "id": "the-chasm",
         "name": "The Chasm",
-        "text": "64 m wide and 100 m deep, with balconies on both faces at every level. It's crossed at five heights: the canal on its floor, the hall through the Bridge at level 2, the plaza at level 4, the monorail's enclosed bridges at its ends at level 5, and two open high bridges at level 7.",
+        "text": "64 m wide and 100 m deep, and every floor crosses it: the canal along its floor, the hall through the Bridge on the low road, the plaza on the spawns' floor, and near each end a monorail bridge, sloping from one side's roofs down to the other side's rail, the two leaning opposite ways.",
         "eye": [
           0,
-          105,
-          -126
+          100,
+          -108
         ],
         "look": [
           0,
-          35,
-          0
+          40,
+          20
+        ]
+      },
+      {
+        "id": "the-ways-up",
+        "name": "The Ways Up",
+        "text": "The quick ways between floors are on the chasm's faces. On each side a switchback stair climbs one face from the canal to the roofs, landing on every floor, and a ladder of pads throws you up the other a floor at a time, each landing beside the next pad. Anything open drops you down: the face, the courtyard, the well, the holes either side of each gate.",
+        "eye": [
+          0,
+          60,
+          -104
+        ],
+        "look": [
+          -40,
+          44,
+          -40
         ]
       },
       {
         "id": "the-canal",
         "name": "The Canal",
-        "text": "Black water on the chasm floor, running under the Bridge, with boats moored as cover. Dock stairs climb both faces to landings at level 1, and a pad mid-canal on each side throws you up onto the face at level 2.",
+        "text": "Black water on the chasm floor, running under the Bridge, with boats moored as cover, under the thickest of the neon: long boards, tall ones and round ones crowding out from both faces and the Bridge's sides. Each side's stair starts on the docks, and so does its ladder of pads.",
         "eye": [
           1,
           7,
           -95
         ],
         "look": [
-          -2,
-          13,
+          -4,
+          22,
           0
         ]
       },
       {
         "id": "the-monorail",
         "name": "The Monorail",
-        "text": "A ring at level 5 round the whole city, jogging out to its outer wall and back so no stretch runs long, and crossing the chasm in enclosed bridges at both ends. Each base is on it, and in Convoy the hauler runs along its south side.",
+        "text": "One loop through both bases, snaking round each half and over the chasm, climbing as it goes. On the south side it runs level through the buildings at 72 m, past the courtyard's open sides; on the north it wraps the well, climbing beside it in a tunnel open to the drop and then up a cutting through the roofs into the open at 96 m. Each bridge slopes from one side's roofs down to the other's rail. In Convoy the hauler starts mid-bridge and rides it down to one base, or up and round to the other.",
         "eye": [
-          -120,
-          65,
-          -118
+          -104,
+          76,
+          42
         ],
         "look": [
-          -60,
-          61,
-          -120
+          -104,
+          84,
+          90
         ]
       },
       {
         "id": "spawn-halls",
         "name": "The Spawn Halls",
-        "text": "Each team spawns at level 4 in a hall of pillars, red lacquer in the west and rusted in the east, under the monorail, with its base guns covering it. In Capture the Flag its flag stand is 60 m on toward the chasm, where the hall's ways out meet, and a street runs on from it to the plaza.",
+        "text": "Each team spawns at 48 m in a hall deep in its half, under its base on the monorail, with its base guns covering it; a pad in its back corner throws you up onto the ring. Its doors open onto a square two storeys tall, neon signs high on its walls, where its flag stand is in Capture the Flag, by the gate onto the plaza.",
         "eye": [
-          -150,
-          52,
-          -20
+          -154,
+          54,
+          -26
         ],
         "look": [
           -100,
           50,
-          30
+          20
         ]
       },
       {
         "id": "the-roofs",
         "name": "The Roofs",
-        "text": "Walkable roofs at level 8 between towers rising to 128 m, cluttered with sheds, tanks, poles and cables: lantern strings in the west, washing and neon billboards in the east. Low parapets give cover from one roof to the next.",
+        "text": "Open roofs at 96 m between the towers, lanes round the courtyard and the well with rails along the drops: lantern strings in the west, washing and neon billboards in the east. The monorail comes up through them in a cutting and runs out onto its bridge's high end; each side's stair and ladder top out by the bridges.",
         "eye": [
-          -104,
+          -56,
           104,
-          36
+          -80
         ],
         "look": [
-          -40,
-          94,
-          70
+          -70,
+          96,
+          20
         ]
       }
     ]
