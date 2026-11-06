@@ -1206,12 +1206,12 @@ function frame(now) {
     // A bot's mark on enemy a, where it turned up.
     if (kind === 20) signs.set(`m${a}`, { kind: 'mark', at: new THREE.Vector3(x, y, z), follow: null, born: now, label: '', enemy: a });
     if (kind === 19) {
-      // Bot a's callout b, on the radio; a call for help also marks where it is.
+      // Bot a's callout b, on the radio (silent: only pilots' pings make a sound); a call for help
+      // also marks where it is.
       const text = [`Contact, ${placeName(x, z, myTeam)}`, 'Need help!', 'Our flag carrier is down', 'Enemy flag carrier down', 'On my way'][b];
       radio.push({ at: now, name: nameOf(a), text });
       if (radio.length > 3) radio.shift();
       if (b === 1) signs.set(`h${a}`, { kind: 'help', at: new THREE.Vector3(x, y, z), follow: null, born: now, label: 'HELP' });
-      sound.radio();
     }
   }
 
