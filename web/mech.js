@@ -703,6 +703,12 @@ export class Mech {
     this.shutdown = 0;
     this.facing = null; // the heading drawn: the view's, except held while shut down
     this.held = false;
+    // This frame's footfall (the planted foot's side, -1 left or 1 right; 0 for none) and landing
+    // (s spent in the air; 0 for none), and how far into its gait it walks (0-1), for the cockpit's
+    // ride (ride.js).
+    this.footfall = 0;
+    this.landed = 0;
+    this.pace = 0;
 
     const root = (this.root = new THREE.Group());
     const body = (this.body = new THREE.Group());
@@ -843,6 +849,7 @@ export class Mech {
    */
   update(dt, s) {
     this.t += dt;
+    this.footfall = this.landed = 0;
     const { root, body, spec } = this;
     root.position.copy(s.pos);
     root.scale.setScalar(s.scale);
@@ -881,6 +888,7 @@ export class Mech {
     moveDir.set(local.x, 0, local.z).normalize();
 
     if (grounded && !this.grounded && this.airTime > 0.3) {
+      this.landed = this.airTime;
       this.squash = Math.min(0.5, this.airTime * 0.3);
       Mech.audio?.land(this.cls, this.own ? null : s.pos, this.airTime);
     }
@@ -894,7 +902,8 @@ export class Mech {
 
     // Body bobs with the gait, leans into motion, sinks on landing and slumps when destroyed.
     // Lowest when the feet are spread, highest as they pass: as a walker does, and it lends reach.
-    const bob = moving ? spec.bob * (1 + Math.cos(2 * this.phase)) * Math.min(speed / 6, 1) : 0;
+    this.pace = moving ? Math.min(speed / 6, 1) : 0;
+    const bob = spec.bob * (1 + Math.cos(2 * this.phase)) * this.pace;
     const sway = alive && s.hovering ? 0.06 * Math.sin(this.t * 5) : 0;
     // The bulwark sinks the Heavy into a lower stance.
     this.brace = damp(this.brace, alive && s.ability && this.weapons.ability.id === 'brace' ? 1 : 0, 8, dt);
@@ -931,6 +940,7 @@ export class Mech {
         z += moveDir.z * reach;
         y = lift * spec.lift * Math.min(speed / 4, 1);
         if (leg.lifted && lift === 0) {
+          this.footfall = leg.side;
           for (let n = 0; n < spec.dust; n++) this.fx.dust(leg.foot.getWorldPosition(world));
           Mech.audio?.step(this.cls, this.own ? null : world);
         }

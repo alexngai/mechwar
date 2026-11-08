@@ -416,10 +416,27 @@ export class Cockpit {
     this.accent.color.setHex((TEAMS[team] ?? TEAMS[-1]).accent);
   }
 
+  /**
+   * Seats the pilot's head `head` m (view space) off its rest in the cabin, the cabin rolled `tilt`
+   * and pitched `nod` rad about it (see ride.js): the cockpit's camera is the head, so the cabin is
+   * drawn moving round it. Muzzles and lights here are placed in the cabin's own space; `toWorld`
+   * takes them out.
+   */
+  ride(head, tilt, nod) {
+    this.camera.position.copy(head);
+    this.camera.rotation.set(-nod, 0, -tilt);
+    this.camera.updateMatrixWorld();
+  }
+
+  /** Point `p` in the cabin's space, in the world, given the world camera this cockpit rides with. */
+  toWorld(worldCamera, p) {
+    return worldCamera.localToWorld(this.camera.worldToLocal(p));
+  }
+
   /** Where the launcher's muzzle is in the world, without firing it (a held beam starts there). */
   launcherTip(worldCamera, out) {
     this.scene.updateMatrixWorld();
-    return worldCamera.localToWorld(this.weapons.launcher.tip.getWorldPosition(out));
+    return this.toWorld(worldCamera, this.weapons.launcher.tip.getWorldPosition(out));
   }
 
   /**
@@ -434,7 +451,7 @@ export class Cockpit {
     gun.tip.getWorldPosition(out);
     this.flash.position.copy(out);
     this.flashLife = FLASH_LIFE;
-    return worldCamera.localToWorld(out);
+    return this.toWorld(worldCamera, out);
   }
 
   /**
@@ -455,7 +472,7 @@ export class Cockpit {
       if (!clear(l.at)) continue;
       // Irradiance pi * k here makes Lambert metal glow k times its color, as the arena's baked light does.
       const light = this.locals[n++];
-      worldCamera.worldToLocal(light.position.copy(l.at));
+      this.camera.localToWorld(worldCamera.worldToLocal(light.position.copy(l.at)));
       light.color.copy(l.rgb);
       light.intensity = Math.PI * k * d * d;
     }
@@ -476,8 +493,8 @@ export class Cockpit {
       this.aspect = 0; // force a relayout for the new lens
     }
     this.layout(c.aspect);
-    // The sun in camera space, so the canopy shades as the view turns.
-    this.sun.position.copy(sunDir).applyQuaternion(q.copy(worldCamera.quaternion).invert());
+    // The sun in the cabin's space, so the canopy shades as the view turns (and as the cabin rolls).
+    this.sun.position.copy(sunDir).applyQuaternion(q.copy(worldCamera.quaternion).invert()).applyQuaternion(this.camera.quaternion);
     this.shade += ((shaded ? 1 : 0) - this.shade) * (1 - Math.exp(-6 * dt));
     this.sun.intensity = this.sunBase * (1 - 0.8 * this.shade);
     this.flashLife = Math.max(0, this.flashLife - dt);

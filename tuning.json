@@ -218,5 +218,8 @@
   "mouse_sensitivity": { "value": 0.0022, "min": 0.0002,"max": 0.01,  "step": 0.0001, "unit": "rad/px",  "group": "camera", "source": "own tuning" },
   "fov":               { "value": 80,     "min": 40,    "max": 120,   "step": 1,      "unit": "deg",     "group": "camera", "source": "own tuning" },
   "chase_distance":    { "value": 9,      "min": 0,     "max": 30,    "step": 0.5,    "unit": "m",       "group": "camera", "source": "own tuning" },
-  "chase_height":      { "value": 1.5,    "min": -2,    "max": 10,    "step": 0.1,    "unit": "m",       "group": "camera", "source": "own tuning" }
+  "chase_height":      { "value": 1.5,    "min": -2,    "max": 10,    "step": 0.1,    "unit": "m",       "group": "camera", "source": "own tuning" },
+  "ride_bounce":       { "value": 1,      "min": 0,     "max": 3,     "step": 0.05,   "unit": "x",       "group": "camera", "source": "own tuning: the cockpit's jolts at footfalls, landings, shots, hits and blasts (web/ride.js); 0 for none" },
+  "ride_sway":         { "value": 1,      "min": 0,     "max": 3,     "step": 0.05,   "unit": "x",       "group": "camera", "source": "own tuning: the cockpit rocking onto each planted foot (web/ride.js); 0 for none" },
+  "eye_adapt":         { "value": 0.5,    "min": 0,     "max": 1,     "step": 0.05,   "unit": "share",   "group": "camera", "source": "own tuning: how much of a change in light the eyes make up (web/eyes.js); 0 for none" }
 }

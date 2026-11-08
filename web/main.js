@@ -37,6 +37,8 @@ import { Sound } from './audio.js';
 import { Hud, hex } from './hud.js';
 import { createSky } from './sky.js';
 import { heatShimmer } from './heat.js';
+import { Ride } from './ride.js';
+import { Eyes } from './eyes.js';
 import { STORE, fits, levelAt, levelXp, owns, pointsLeft, readRecord } from './progress.js';
 import { splash } from './splash.js';
 
@@ -203,6 +205,9 @@ const output = new OutputPass();
 output.needsSwap = false; // so every frame renders into the same target
 composer.addPass(output);
 const shimmer = heatShimmer(output); // a scorching map's heat shimmer, in the output pass
+// How the cockpit rides the mech (ride.js), and the pilot's eyes adjusting to the light (eyes.js).
+const ride = new Ride();
+const eyes = new Eyes((...ray) => game.cast_ray(...ray));
 
 
 const fx = new Effects(scene);
@@ -237,7 +242,7 @@ const ensureArena = (index) => {
   sky.fit(map);
   sound.setAmbience(map.palette?.ambience);
   shimmer.setMap(map);
-  renderer.toneMappingExposure = map.palette?.exposure ?? EXPOSURE;
+  eyes.setMap(map.palette?.exposure ?? EXPOSURE, light, map.palette?.cover ?? 1, !!map.night, arena.lights);
   glass.setMap(map);
   objectives.setMap(map);
   hemi.color.set(light.sky);
@@ -255,6 +260,7 @@ function applyQuality() {
   const high = quality === 'high', bloomed = high && gfx.bloom;
   renderer.setPixelRatio(Math.min(devicePixelRatio, high ? 2 : 1));
   renderer.shadowMap.enabled = sun.castShadow = high;
+  eyes.setShadows(high);
   fx.setQuality(high);
   bloom.enabled = bloomed;
   HOT.value = bloomed ? 2 : 1;
@@ -281,7 +287,7 @@ const shots = []; // own predicted shots, drawn once this frame's pose is set
 // Projectiles seen so far by id, with the launcher position each is drawn leaving from.
 const launches = new Map(), blastAt = new THREE.Vector3();
 const LAUNCH_BLEND = 0.15; // s
-let hurt = 0, shake = 0, boostKick = 0, zoomKick = 0, message = '', messageUntil = 0;
+let hurt = 0, boostKick = 0, zoomKick = 0, message = '', messageUntil = 0;
 let burstable = false; // an own shell is armed in flight
 let incoming = null; // m to the nearest missile locked on us, or null
 let missAt = -Infinity, auxWas = false; // when an MMB press last found nothing to lock; last tick's MMB
@@ -320,7 +326,9 @@ const RECOIL_RISE = 30, RECOIL_SETTLE = 6;
 let recoilKick = 0, recoilLift = 0;
 /** Kicks the aim for a shot from `weapon` (a weapons.json entry) firing `rate` times a second. */
 function recoil(weapon, rate) {
-  recoilKick += THREE.MathUtils.degToRad(RECOIL[weapon.recoil] ?? 0) / Math.sqrt(Math.max(rate, 1));
+  const kick = (RECOIL[weapon.recoil] ?? 0) / Math.sqrt(Math.max(rate, 1));
+  recoilKick += THREE.MathUtils.degToRad(kick);
+  ride.shot(kick);
 }
 addEventListener('mousemove', (e) => {
   if (!locked()) return;
@@ -1144,6 +1152,7 @@ function frame(now) {
       debug.blast(blastAt, b);
       fx.explosion(blastAt, b / 5);
       sound.blast(b, blastAt, a);
+      feelBlast(blastAt, b);
       fx.muzzleLight(blastAt);
     }
     if (kind === 4) {
@@ -1290,7 +1299,10 @@ function frame(now) {
   drawBuild(now, alive, myId);
 
   // Look is applied at render rate for responsiveness; position is interpolated. In the cockpit
-  // the view bobs with the gait and shakes when hit, but stays level (no roll).
+  // the eye rides the mech (ride.js): it bobs with the gait, sways as the weight shifts and jolts
+  // at footfalls, landings, shots and hits, but never turns or rolls, so the reticle stays where
+  // shots go. The cabin round it is what rocks and kicks.
+  ride.update(dt, me, T('ride_bounce'), T('ride_sway'));
   eye.copy(pos).y += T('eye_height');
   camera.position.copy(eye);
   const killer = remotes.get(killcam);
@@ -1311,7 +1323,7 @@ function frame(now) {
   } else if (firstPerson) {
     camera.rotation.set(pitch, yaw, 0);
     camera.position.y += (me.body.position.y - me.spec.hipY) * 0.6;
-    if (shake > 0.01) camera.translateX((Math.random() - 0.5) * 0.14 * shake).translateY((Math.random() - 0.5) * 0.14 * shake);
+    camera.translateX(ride.eye.x).translateY(ride.eye.y).translateZ(ride.eye.z);
   } else {
     camera.rotation.set(pitch, yaw, 0);
     // Pull the chase camera in front of any wall behind the mech.
@@ -1324,7 +1336,6 @@ function frame(now) {
     camera.position.set(...remote.view.eye);
     camera.lookAt(...remote.view.look);
   }
-  shake *= Math.exp(-6 * dt);
   // A small FOV kick while boosting sells the speed.
   boostKick += ((curr[S.BOOSTING] ? 1 : 0) - boostKick) * (1 - Math.exp(-6 * dt));
   // A scoped secondary (weapons.json `zoom`) narrows the view while toggled on with the middle button.
@@ -1332,9 +1343,12 @@ function frame(now) {
   const fov = (T('fov') + BOOST_FOV * boostKick) / (1 + (zoomOf() - 1) * zoomKick);
   if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }
   camera.updateMatrixWorld();
+  // The eyes adjust to what's in view; the guide's capture views stay at the map's own exposure.
+  renderer.toneMappingExposure = eyes.update(dt, camera, SUN_DIR, remote?.view ? 0 : T('eye_adapt'));
   cockpit.setTeam(paint(myTeam));
   // Shade the cockpit when anything stands between the eye and the sun.
   const shaded = firstPerson && game.cast_ray(eye.x, eye.y, eye.z, SUN_DIR.x, SUN_DIR.y, SUN_DIR.z, 150) < 150;
+  cockpit.ride(ride.cabin, ride.tilt, ride.nod);
   cockpit.update(dt, camera, SUN_DIR, T('fov'), shaded);
   cockpit.windUp(curr[S.SPIN], curr[S.CHARGE], curr[S.ALT_WAIT] <= 0, dt);
   cockpit.cloak(myCloak && CLOAK_GUNS, now);
@@ -1495,15 +1509,21 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
-/** We were hit by `attacker`: shake, flash, and a damage arc toward where they stood. */
+/** We were hit by `attacker`: a knock, a flash, and a damage arc toward where they stood. */
 /** Hit by player `attacker`, or by something of theirs at `from` (a camouflaged attacker's own spot stays unknown). */
 function tookHit(attacker, now, from = remotes.get(attacker)?.hidden ? null : remotes.get(attacker)?.pos) {
   me.hit();
   sound.hurt();
   hurt = 1;
-  shake = Math.min(shake + 0.5, 1);
+  ride.shove(from, 1, camera);
   if (from) damageFrom.push({ x: from.x, z: from.z, at: now });
   if (damageFrom.length > 4) damageFrom.shift();
+}
+
+/** A blast of `radius` m at `at`: its flash in the pilot's eyes and its shove on the cabin. */
+function feelBlast(at, radius) {
+  eyes.flash(at, radius, camera);
+  ride.blast(at, radius, camera);
 }
 
 /** What a remote mech is doing that's worth a word on its tag. */
@@ -2010,6 +2030,7 @@ function drawDeployables(now, myTeam) {
       if (d.left > 0.5 && d.hull < classValue(1, 'turret_hull')) {
         fx.explosion(wreck, 0.6);
         sound.blast(3, wreck);
+        feelBlast(wreck, 3);
       }
       continue;
     }
