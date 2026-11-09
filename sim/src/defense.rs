@@ -35,7 +35,8 @@ const WAVE_SCORE: f32 = 200.0;
 /// The wave director: each wave's threat budget for a full team (SOLO_SHARE of it for one pilot
 /// and evenly between), spent on `CARDS`, a theme leaning it one way from wave 3 (`Theme`). Foes
 /// come through the gates in packs of PACK, PACK_GAP apart (a pack of crawlers CRAWLER_GAP),
-/// PACK_PAUSE between packs.
+/// PACK_PAUSE between packs. A map can harden its bosses and hurry its stragglers
+/// (`DefenseSpots::bosses`, `hurry`).
 const BUDGETS: [f32; WAVES as usize] = [6.0, 10.0, 14.0, 21.0, 30.0, 48.0, 60.0, 72.0, 82.0, 80.0];
 
 /// What the director buys: a foe (crawlers by the pack), what it costs of the budget, the wave
@@ -415,6 +416,8 @@ pub enum News {
     Refused { id: u8, why: Refusal },
     /// The break was called short, with `seconds` left.
     Called { seconds: u16 },
+    /// The wave's stragglers hurry on (`DefenseSpots::hurry`).
+    Hurry,
     /// The reactor's grid raised to `level` (0 the first), taking more towers.
     Grid { level: u8 },
 }
@@ -484,14 +487,17 @@ pub struct Defense {
     queue: Vec<(Foe, usize)>,
     walkers: Vec<Walker>,
     elites: usize,
-    /// The share of a full team's foes this wave (for bosses' hull).
+    /// The share of a full team's foes this wave (for bosses' hull); the map's pace (`DefenseSpots`).
     share: f32,
+    bosses: f32,
+    hurry: Option<(f32, f32)>,
     /// The tick last stepped.
     now: u32,
     /// Picks walkers' branches and places, run to run the same (xorshift).
     rng: u32,
-    /// The foes come so far in the pack coming.
+    /// The foes come so far in the pack coming, and the tick the wave's last came (0: still to).
     pack: u8,
+    last_came: u32,
     /// The run's score; the human pilots who've called the next wave this break.
     pub score: f32,
     pub ready: Vec<u8>,
@@ -562,9 +568,12 @@ impl Defense {
             walkers: Vec::new(),
             elites: 0,
             share: 1.0,
+            bosses: spots.bosses.unwrap_or(1.0),
+            hurry: spots.hurry,
             now: tick,
             rng: (0x9e37_79b9 ^ tick.wrapping_mul(0x85eb_ca6b)) | 1,
             pack: 0,
+            last_came: 0,
             score: 0.0,
             ready: Vec::new(),
             grid: 0,
@@ -970,7 +979,7 @@ impl Defense {
         match self.stage {
             Stage::Break { until } if tick >= until => {
                 self.stage = Stage::Wave { next_at: tick };
-                self.pack = 0;
+                (self.pack, self.last_came) = (0, 0);
                 self.ready.clear();
                 out.news.push(News::Wave { n: self.wave, count: self.queue.len() as u16 });
             }
@@ -1015,6 +1024,9 @@ impl Defense {
                         PACK_GAP
                     };
                     self.stage = Stage::Wave { next_at: tick + (gap * TICK_HZ) as u32 };
+                    if self.queue.is_empty() {
+                        self.last_came = tick;
+                    }
                 }
             }
             Stage::Wave { .. } if self.queue.is_empty() && self.walkers.is_empty() && elites == 0 => {
@@ -1041,6 +1053,9 @@ impl Defense {
                 }
             }
             _ => {}
+        }
+        if self.hurry.is_some_and(|(after, _)| self.last_came > 0 && tick == self.last_came + (after * TICK_HZ) as u32) && self.walkers.iter().any(|w| !w.kind.boss()) {
+            out.news.push(News::Hurry);
         }
         // Each walker on along its lanes, at its place across them.
         let mut gone = Vec::new();
@@ -1091,7 +1106,7 @@ impl Defense {
 
     /// A lane enemy of `kind`'s full hull this wave (a boss's, as many pilots meet it).
     pub fn hull_of(&self, kind: Kind) -> f32 {
-        hull(kind, self.wave) * if kind.boss() { self.share } else { 1.0 }
+        hull(kind, self.wave) * if kind.boss() { self.share * self.bosses } else { 1.0 }
     }
 
     /// Lane enemy `owner`'s velocity as of the last tick (zero stunned, or for anything else): for
@@ -1104,9 +1119,11 @@ impl Defense {
         self.place(w).1 * self.pace(w)
     }
 
-    /// How fast walker `w` walks (m/s): its kind's pace, RUSH times it burrowing.
+    /// How fast walker `w` walks (m/s): its kind's pace, RUSH times it burrowing, the map's hurry
+    /// times it straggling (not a boss).
     fn pace(&self, w: &Walker) -> f32 {
-        species(w.kind).speed * if self.now < w.rush { RUSH } else { 1.0 }
+        let hurry = self.hurry.filter(|&(after, _)| self.last_came > 0 && self.now >= self.last_came + (after * TICK_HZ) as u32 && !w.kind.boss());
+        species(w.kind).speed * if self.now < w.rush { RUSH } else { hurry.map_or(1.0, |(_, how)| how) }
     }
 
     /// Human pilot `id` calls the next wave (in a break): once every one of `humans` has, it
@@ -1201,7 +1218,7 @@ mod tests {
 
     /// Two gates 100 m out, a straight lane each, to a reactor at the origin (radius 6).
     fn run() -> Defense {
-        let spots = DefenseSpots { reactor: [0.0; 3], radius: 6.0, gates: vec![[0.0, 0.0, -100.0], [100.0, 0.0, 0.0]], lanes: Lanes::default(), late: vec![] };
+        let spots = DefenseSpots { reactor: [0.0; 3], radius: 6.0, gates: vec![[0.0, 0.0, -100.0], [100.0, 0.0, 0.0]], lanes: Lanes::default(), ..Default::default() };
         Defense::new(&spots, 0, |_, _| Vec::new()).unwrap()
     }
 
@@ -1232,17 +1249,34 @@ mod tests {
     }
 
     #[test]
-    fn foes_come_in_packs() {
-        let mut d = run();
-        steps(&mut d, 0, 0.1);
-        // Seven brutes and the Hive through gate 0 (the queue comes from its end).
-        d.queue = std::iter::once((Foe::Lane(Kind::Hive), 0)).chain(std::iter::repeat_n((Foe::Lane(Kind::Brute), 0), 7)).collect();
-        d.stage = Stage::Break { until: 10 };
-        let out = steps(&mut d, 10, 10.0);
-        let came: Vec<u32> = out.iter().enumerate().filter(|(_, o)| !o.spawn.is_empty()).map(|(t, _)| t as u32).collect();
-        let gaps: Vec<u32> = came.windows(2).map(|w| w[1] - w[0]).collect();
-        let (gap, pause) = ((PACK_GAP * TICK_HZ) as u32, (PACK_PAUSE * TICK_HZ) as u32);
-        assert_eq!(gaps, [gap, gap, gap, gap, gap, pause, gap]);
+    fn foes_come_in_packs_and_a_map_can_harden_bosses_and_hurry_stragglers() {
+        // A gate 200 m out, so the brutes are still walking when they'd hurry.
+        let (after, how) = (30.0, 1.25);
+        let plain = DefenseSpots { reactor: [0.0; 3], radius: 6.0, gates: vec![[0.0, 0.0, -200.0]], ..Default::default() };
+        let paced = DefenseSpots { bosses: Some(1.5), hurry: Some((after, how)), ..plain.clone() };
+        for spots in [plain, paced] {
+            let mut d = Defense::new(&spots, 0, |_, _| Vec::new()).unwrap();
+            steps(&mut d, 0, 0.1);
+            // Seven brutes and the Hive through gate 0 (the queue comes from its end).
+            d.queue = std::iter::once((Foe::Lane(Kind::Hive), 0)).chain(std::iter::repeat_n((Foe::Lane(Kind::Brute), 0), 7)).collect();
+            d.stage = Stage::Break { until: 10 };
+            // (Long enough to hurry, not for the first to reach the reactor.)
+            let out = steps(&mut d, 10, after + 9.0);
+            let came: Vec<u32> = out.iter().enumerate().filter(|(_, o)| !o.spawn.is_empty()).map(|(t, _)| t as u32).collect();
+            let gaps: Vec<u32> = came.windows(2).map(|w| w[1] - w[0]).collect();
+            let (gap, pause) = ((PACK_GAP * TICK_HZ) as u32, (PACK_PAUSE * TICK_HZ) as u32);
+            assert_eq!(gaps, [gap, gap, gap, gap, gap, pause, gap]);
+            // Paced, the Hive comes half again as tough, and `after` s on from it the
+            // stragglers hurry, called out, but the Hive keeps its pace.
+            let (bosses, hurry) = if spots.hurry.is_some() { (1.5, how) } else { (1.0, 1.0) };
+            let hive = out[came[7] as usize].spawn[0].3;
+            assert!((hive - hull(Kind::Hive, d.wave) * d.share * bosses).abs() < 1e-3, "{hive}");
+            let hurried = spots.hurry.map(|_| (came[7] as f32 + after * TICK_HZ) as usize);
+            assert_eq!(out.iter().position(|o| o.news.contains(&News::Hurry)), hurried);
+            let pace = |d: &Defense, k: Kind| d.walkers.iter().find(|w| w.kind == k).map(|w| d.velocity(w.owner).length()).unwrap();
+            assert!((pace(&d, Kind::Brute) - species(Kind::Brute).speed * hurry).abs() < 1e-3);
+            assert!((pace(&d, Kind::Hive) - species(Kind::Hive).speed).abs() < 1e-3);
+        }
     }
 
     #[test]
@@ -1306,7 +1340,7 @@ mod tests {
             narrow: vec![],
             seals: vec![(3, "the east way".into()), (4, "the west way".into())],
         };
-        let spots = DefenseSpots { reactor: [0.0; 3], radius: 6.0, gates: vec![[0.0, 0.0, -100.0], [50.0, 0.0, -100.0], [-50.0, 0.0, -100.0]], lanes, late: vec![] };
+        let spots = DefenseSpots { reactor: [0.0; 3], radius: 6.0, gates: vec![[0.0, 0.0, -100.0], [50.0, 0.0, -100.0], [-50.0, 0.0, -100.0]], lanes, ..Default::default() };
         for seed in 0..20 {
             let mut d = Defense::new(&spots, seed, |_, _| Vec::new()).unwrap();
             assert_eq!([1, 3, 6, 10].map(|n| d.open_gates(n).len()), [1, 2, 3, 3]);
@@ -1347,7 +1381,7 @@ mod tests {
 
     #[test]
     fn runs_differ_by_their_seed_and_a_flanking_wave_comes_mostly_through_one_gate() {
-        let spots = DefenseSpots { reactor: [0.0; 3], radius: 6.0, gates: vec![[0.0, 0.0, -100.0], [100.0, 0.0, 0.0]], lanes: Lanes::default(), late: vec![] };
+        let spots = DefenseSpots { reactor: [0.0; 3], radius: 6.0, gates: vec![[0.0, 0.0, -100.0], [100.0, 0.0, 0.0]], lanes: Lanes::default(), ..Default::default() };
         let waves = |seed: u32| {
             let mut d = Defense::new(&spots, seed, |_, _| Vec::new()).unwrap();
             (1..=WAVES).map(|n| d.compose(n, 4)).collect::<Vec<_>>()
@@ -1419,7 +1453,7 @@ mod tests {
     fn at_a_fork_walkers_take_each_branch_by_weight() {
         // A gate at the origin forking to two points, 3 to 1, each a dead end away from the reactor.
         let lanes = Lanes { points: vec![[0.0, 0.0, 0.0], [0.0, 0.0, 10.0], [10.0, 0.0, 0.0]], edges: vec![(0, 1, 3.0), (0, 2, 1.0)], narrow: vec![0], seals: vec![] };
-        let spots = DefenseSpots { reactor: [500.0, 0.0, 500.0], radius: 6.0, gates: vec![[0.0; 3]], lanes, late: vec![] };
+        let spots = DefenseSpots { reactor: [500.0, 0.0, 500.0], radius: 6.0, gates: vec![[0.0; 3]], lanes, ..Default::default() };
         let mut d = Defense::new(&spots, 0, |_, _| Vec::new()).unwrap();
         let picks: Vec<usize> = (0..400).filter_map(|_| d.fork(0, Kind::Walker)).collect();
         let first = picks.iter().filter(|&&e| e == 0).count() as f32 / picks.len() as f32;

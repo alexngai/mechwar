@@ -291,8 +291,8 @@ fn open_to_the_sky(name: &str, what: &str, arena: &Arena, spot: &sim::map::ZoneS
     assert!(arena.cast_ray(&rapier3d::prelude::Ray::new(pad + Vector::Y * 0.5, Vector::Y), 80.0).is_none(), "{name}: {what} at {pad} is roofed");
 }
 
-/// Asymmetric by design: blockout (a test map), canopy, crashsite and hivewall (co-op's).
-const ASYMMETRIC: [&str; 4] = ["blockout", "canopy", "crashsite", "hivewall"];
+/// Asymmetric by design: blockout (a test map), canopy, crashsite, hivewall and hivecanyon (co-op's).
+const ASYMMETRIC: [&str; 5] = ["blockout", "canopy", "crashsite", "hivewall", "hivecanyon"];
 
 #[test]
 fn maps_are_rotationally_symmetric() {
