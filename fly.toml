@@ -11,6 +11,8 @@ primary_region = 'sjc'
 [build]
 [env]
   PORT = '8080'
+  # The site's one name: pages asked for at webhawk.fly.dev (or any other) redirect there.
+  CANONICAL_HOST = 'mechwar.online'
 
 [http_service]
   internal_port = 8080

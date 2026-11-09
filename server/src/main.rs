@@ -4,7 +4,8 @@
 //! for testing), and quick play's room settings: `MODE` (`tdm`, `dm`, `ma`, `siege`, `ctf`, `convoy` or `defense`; else every versus mode in turn),
 //! `MAP` (one map; else the rotation), `SCORE_LIMIT`, `MATCH_SECONDS`, `BOT_SKILL` (`easy`,
 //! `normal`, `hard`, or 0 to 1). And
-//! `PROGRESS_KEY`, the secret that signs progression records (a dev key stands in without it).
+//! `PROGRESS_KEY`, the secret that signs progression records (a dev key stands in without it), and
+//! `CANONICAL_HOST`, the site's one name (`mechwar.online`), which pages asked for by any other move to.
 //!
 //! Lobby API: `GET /api/rooms` lists the public rooms, the modes and the maps; `POST /api/rooms` opens one
 //! from JSON settings; `POST /api/quick` picks a quick-play room (opening one if none fits), or
@@ -21,15 +22,17 @@
 
 use std::collections::HashMap;
 use std::future::IntoFuture;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::env;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::extract::{Path, Query, Request, State};
+use axum::http::{Method, StatusCode, header};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::serve::ListenerExt;
 use axum::{Json, Router};
@@ -227,13 +230,18 @@ async fn main() {
     let app = App { rooms: Rooms::default(), lag, quick: Arc::new(quick), seed: Arc::new(AtomicU64::new(seed)), signer };
     // Any other path gets the game page too, but as a 404, so search engines don't index it as one more copy.
     let client = ServeDir::new(&static_dir).not_found_service(ServeFile::new(format!("{static_dir}/index.html")));
-    // The guide is one page for all its sections and pages (/guide/ itself is ServeDir's guide/index.html).
-    let guide = ServeFile::new(format!("{static_dir}/guide/index.html"));
-    let router = Router::new()
-        .route_service("/guide/{section}", guide.clone())
-        .route_service("/guide/{section}/", guide.clone())
-        .route_service("/guide/{section}/{page}", guide.clone())
-        .route_service("/guide/{section}/{page}/", guide)
+    // The guide: /guide/ is ServeDir's guide/index.html, and each of its other pages the copy the build
+    // wrote for it, with its own title, description and canonical (/guide/mechs is guide/mechs.html,
+    // /guide/maps/foundry guide/maps/foundry.html). Each has one address: /guide and any page's address
+    // with a slash on the end move there for good, and a guide page that doesn't exist is a 404.
+    let mut router = Router::new().route("/guide", get(|| async { Redirect::permanent("/guide/") }));
+    let mut pages = Vec::new();
+    guide_pages(&PathBuf::from(format!("{static_dir}/guide")), "/guide", &mut pages);
+    for (at, file) in pages {
+        let to = at.clone();
+        router = router.route_service(&at, ServeFile::new(file)).route(&format!("{at}/"), get(move || async move { Redirect::permanent(&to) }));
+    }
+    let router = router
         .route("/ws", get(upgrade))
         .route("/api/rooms", get(list).post(create))
         .route("/api/rooms/{code}", get(lookup))
@@ -241,6 +249,10 @@ async fn main() {
         .route("/api/progress", post(check_progress))
         .fallback_service(client)
         .with_state(app);
+    let router = match env::var("CANONICAL_HOST") {
+        Ok(host) if !host.is_empty() => router.layer(middleware::from_fn_with_state(Arc::<str>::from(host), one_host)),
+        _ => router,
+    };
 
     // Snapshots are small and go out 30 times a second: send each at once, not held back until
     // the last one is acknowledged (Nagle's algorithm, on by default).
@@ -253,6 +265,33 @@ async fn main() {
     let served = axum::serve(listener, router).into_future().await;
     eprintln!("server stopped: {served:?}");
     std::process::exit(1);
+}
+
+/// The guide's pages the build wrote under `dir` (all but index.html), each as its address under
+/// `at` and its file: ("/guide/mechs", "dist/guide/mechs.html"), ("/guide/maps/foundry", ...).
+fn guide_pages(dir: &std::path::Path, at: &str, pages: &mut Vec<(String, PathBuf)>) {
+    for file in std::fs::read_dir(dir).into_iter().flatten().flatten().map(|entry| entry.path()) {
+        let Some(name) = file.file_name().and_then(|name| name.to_str()) else { continue };
+        if file.is_dir() {
+            guide_pages(&file, &format!("{at}/{name}"), pages);
+        } else if let Some(page) = name.strip_suffix(".html").filter(|&page| page != "index") {
+            pages.push((format!("{at}/{page}"), file));
+        }
+    }
+}
+
+/// With `CANONICAL_HOST` set (mechwar.online), a page asked for by any other name (the app's fly.dev
+/// address, www.) moves there for good, so search engines index one copy of the site. The WebSocket
+/// and the API answer by any name: a redirect would only break them.
+async fn one_host(State(host): State<Arc<str>>, req: Request, next: Next) -> Response {
+    let asked = req.headers().get(header::HOST).and_then(|h| h.to_str().ok()).or_else(|| req.uri().host());
+    let elsewhere = asked.is_some_and(|asked| !asked.split(':').next().unwrap_or(asked).eq_ignore_ascii_case(&host));
+    let path = req.uri().path();
+    if elsewhere && matches!(*req.method(), Method::GET | Method::HEAD) && path != "/ws" && !path.starts_with("/api/") {
+        let to = req.uri().path_and_query().map_or("/", |p| p.as_str());
+        return Redirect::permanent(&format!("https://{host}{to}")).into_response();
+    }
+    next.run(req).await
 }
 
 /// The lobby's view: public rooms, busiest first, and the modes and maps a room can be pinned
