@@ -772,12 +772,12 @@ mod tests {
     #[test]
     fn rooms_deal_the_modes_and_maps_their_settings_allow() {
         let settings = |mode, map: Option<&str>| Settings { name: String::new(), public: true, mode, map: map.map(|m| Map::index(m).unwrap()), score_limit: 20, match_seconds: 600.0, bots: true, bot_skill: 0.5 };
-        // Every map but the co-op one, which comes round only in co-op rooms.
+        // Every map but the co-op ones, which come round only in co-op rooms.
         let every = deck(&settings(None, None));
-        assert_eq!(every.iter().filter(|(m, _)| *m == Mode::TeamDeathmatch).count(), ROTATION.len() - 1);
-        assert!(every.iter().all(|&(_, map)| MAPS[map].0 != "hivewall"));
+        assert_eq!(every.iter().filter(|(m, _)| *m == Mode::TeamDeathmatch).count(), ROTATION.len() - 2);
+        assert!(every.iter().all(|&(_, map)| !MAPS[map].0.starts_with("hive")));
         let coop: Vec<&str> = deck(&settings(Some(Mode::Defense), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
-        assert_eq!(coop, ["hivewall"]);
+        assert_eq!(coop, ["hivewall", "hivecanyon"]);
         // Deathmatch only on the smaller maps.
         let dm: Vec<&str> = deck(&settings(Some(Mode::Deathmatch), None)).iter().map(|&(_, map)| MAPS[map].0).collect();
         assert_eq!(dm, ["isotope", "verdigris", "sump", "sinkhole", "ziggurat"]);

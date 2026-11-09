@@ -30,6 +30,7 @@ import ziggurat from '../maps/ziggurat.json';
 import span from '../maps/span.json';
 import walled from '../maps/walled.json';
 import hivewall from '../maps/hivewall.json';
+import hivecanyon from '../maps/hivecanyon.json';
 import { CROUCH, LISTS, Mech, TEAMS, armament, ownLoadout, showRound, stoke, windUp } from './mech.js';
 import { Debug } from './debug.js';
 import { Cockpit } from './cockpit.js';
@@ -65,7 +66,7 @@ const sameOrigin = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${locatio
 const server = params.get('server') ?? (import.meta.env.PROD && !params.has('offline') ? sameOrigin : null);
 const net = server ? new WasmNetClient() : null;
 // Maps by name; the sim's compiled-in list gives the index. Offline, ?map=<name> picks one.
-const MAPS = { isotope, blockout, foundry, verdigris, riftline, sump, sinkhole, canopy, crashsite, ziggurat, span, walled, hivewall };
+const MAPS = { isotope, blockout, foundry, verdigris, riftline, sump, sinkhole, canopy, crashsite, ziggurat, span, walled, hivewall, hivecanyon };
 const mapIndex = (name) => {
   for (let i = 0; map_name(i); i++) if (map_name(i) === name) return i;
   return 0;
@@ -1085,6 +1086,9 @@ function frame(now) {
         calledEarly = { at: now, scrap: Math.floor(CALL_SCRAP * b) };
         callout = { text: `WAVE CALLED · +${calledEarly.scrap} SCRAP`, color: hex(FRIEND.accent), at: now };
         sound.zone('took');
+      } else if (a === 9) {
+        callout = { text: 'THE STRAGGLERS HURRY ON', color: hex(FOE.accent), at: now };
+        sound.zone('lost');
       } else if (a === 10) {
         // The reactor's grid raised to level b.
         callout = { text: `GRID RAISED · ${GRID[b]} TOWERS`, color: hex(FRIEND.accent), at: now };

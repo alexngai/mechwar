@@ -6,7 +6,7 @@ use rapier3d::prelude::{ColliderBuilder, Rotation, Vector};
 use serde::Deserialize;
 
 /// Compiled-in maps. The index is what goes over the wire.
-pub const MAPS: [(&str, &str); 13] = [
+pub const MAPS: [(&str, &str); 14] = [
     ("isotope", include_str!("../../maps/isotope.json")),
     ("blockout", include_str!("../../maps/blockout.json")),
     ("foundry", include_str!("../../maps/foundry.json")),
@@ -20,12 +20,13 @@ pub const MAPS: [(&str, &str); 13] = [
     ("span", include_str!("../../maps/span.json")),
     ("walled", include_str!("../../maps/walled.json")),
     ("hivewall", include_str!("../../maps/hivewall.json")),
+    ("hivecanyon", include_str!("../../maps/hivecanyon.json")),
 ];
 /// Foundry.
 pub const DEFAULT: usize = 2;
 /// Maps the server rotates through between matches (blockout is a test map; the modes a map plays
 /// pick from these, so a co-op map only comes round in co-op).
-pub const ROTATION: [&str; 12] = ["foundry", "isotope", "verdigris", "riftline", "sump", "sinkhole", "canopy", "crashsite", "ziggurat", "span", "walled", "hivewall"];
+pub const ROTATION: [&str; 13] = ["foundry", "isotope", "verdigris", "riftline", "sump", "sinkhole", "canopy", "crashsite", "ziggurat", "span", "walled", "hivewall", "hivecanyon"];
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct Solid {
@@ -93,7 +94,7 @@ pub struct Route {
 /// to hit it), the gates enemies come through, and the lanes they walk: a network of paths toward
 /// the reactor (points, and edges from, to and weight, so a fork splits the walkers by weight), or
 /// none, for each gate's lane to be the bots' route from it.
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug, Default)]
 pub struct DefenseSpots {
     pub reactor: [f32; 3],
     pub radius: f32,
@@ -103,6 +104,13 @@ pub struct DefenseSpots {
     /// Gates (by index) that open last in every run.
     #[serde(default)]
     pub late: Vec<usize>,
+    /// The map's own pace, for longer climbs: bosses' hull times `bosses`, and `hurry` (after, how
+    /// much): that many seconds after a wave's last foe came, its stragglers (not bosses) walk that
+    /// many times their pace.
+    #[serde(default)]
+    pub bosses: Option<f32>,
+    #[serde(default)]
+    pub hurry: Option<(f32, f32)>,
 }
 
 /// Co-op Defense's lanes: points on walkable ground, and edges between them (from, to, weight);
