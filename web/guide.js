@@ -363,7 +363,6 @@ async function mapPage(id) {
   const maps = await loadMaps(), i = maps.findIndex((m) => m.id === id);
   if (i < 0) return mapList();
   const m = maps[i], g = GUIDE_MAPS[id] ?? {}, prev = maps[(i + maps.length - 1) % maps.length], next = maps[(i + 1) % maps.length];
-  document.title = `${m.name} · MECHWAR guide`;
   return `
     <p class="crumbs"><a href="/guide/maps">MAPS</a> /</p>
     <h1>${m.name.toUpperCase()}</h1>
@@ -493,24 +492,22 @@ function mechanics() {
 // --- The page ----------------------------------------------------------------
 
 const SECTIONS = [
-  ['', 'OVERVIEW', overview],
-  ['mechs', 'MECHS', mechs, turnMechs],
-  ['weapons', 'WEAPONS', weaponsSection, drawWeapons],
-  ['items', 'ITEMS', itemsSection],
-  ['modes', 'MODES', modes],
-  ['maps', 'MAPS', (map) => (map ? mapPage(map) : mapList())],
-  ['mechanics', 'MECHANICS', mechanics],
+  ['', overview],
+  ['mechs', mechs, turnMechs],
+  ['weapons', weaponsSection, drawWeapons],
+  ['items', itemsSection],
+  ['modes', modes],
+  ['maps', (map) => (map ? mapPage(map) : mapList())],
+  ['mechanics', mechanics],
 ];
-// /guide/<section>[/<page>]: a map has a page of its own.
+// /guide/<section>[/<page>]: a map has a page of its own. Each page's title, description and canonical
+// address are in its HTML already (vite.config.js writes them in), for search engines that don't run this.
 const [path, page] = location.pathname.replace(/^\/guide\/?/, '').replace(/\/$/, '').split('/');
-const [here, title, draw, after] = SECTIONS.find(([p]) => p === path) ?? SECTIONS[0];
+const [here, draw, after] = SECTIONS.find(([p]) => p === path) ?? SECTIONS[0];
 // The nav's links are in the page itself (guide/index.html), for search engines to follow: mark this one's.
 const on = document.querySelector(`#nav a[href="/guide/${here}"]`);
 on.className = 'on';
 on.setAttribute('aria-current', 'page');
-document.title = here ? `${title[0]}${title.slice(1).toLowerCase()} · MECHWAR guide` : 'Guide · MECHWAR';
-// One address per page for search engines, whatever host, slash or hash it was reached by.
-document.head.insertAdjacentHTML('beforeend', `<link rel="canonical" href="https://mechwar.online/guide/${[here, page].filter(Boolean).join('/')}">`);
 $('page').innerHTML = await draw(page);
 // The section's own target (a weapon, a map, a heading), marked and scrolled to once it's drawn.
 const mark = () => {
