@@ -247,6 +247,12 @@
     #touch .stick.on { opacity: 1; }
     #touch .stick i { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px; border-radius: 50%; background: #ffffff40; }
     @media (orientation: portrait) { #touch::after { content: 'TURN YOUR DEVICE SIDEWAYS'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #0a0d10e8; letter-spacing: 2px; } }
+    /* Short screens (phones held sideways): smaller panels and lighter, smaller touch buttons, for more view. */
+    @media (max-height: 500px) {
+      #score, #board, #banner, #summary, #killcam { zoom: 0.7; }
+      #hud { font-size: 10px; }
+      #touch button { scale: 0.85; background: #0a0d1040; border-color: #ffffff40; }
+    }
     #touch-row { display: none; flex-wrap: wrap; justify-content: center; gap: 6px 14px; align-items: center; letter-spacing: 2px; opacity: 0.9; }
     body.touch #touch-row { display: flex; }
     #touch-row input { accent-color: #ffc46a; }

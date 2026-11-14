@@ -139,6 +139,8 @@ const stored = (key) => { try { return localStorage.getItem(key); } catch { retu
 // High drops to Low if it can't hold 45 fps.
 // Phones and tablets start on Low without anti-aliasing.
 const coarse = matchMedia('(pointer: coarse)').matches;
+// A short screen (a phone held sideways, as index.html's matching rules): the cockpit and panels draw smaller.
+const small = matchMedia('(max-height: 500px)');
 const gfx = { quality: coarse ? 'low' : 'high', bloom: true, shafts: true, haze: true, aa: !coarse };
 try { Object.assign(gfx, JSON.parse(stored('mechwar.graphics'))); } catch { /* corrupt: defaults */ }
 let quality = (params.get('quality') ?? gfx.quality) === 'low' ? 'low' : 'high';
@@ -1388,7 +1390,7 @@ function frame(now) {
   cockpit.setTeam(paint(myTeam));
   // Shade the cockpit when anything stands between the eye and the sun.
   const shaded = firstPerson && game.cast_ray(eye.x, eye.y, eye.z, SUN_DIR.x, SUN_DIR.y, SUN_DIR.z, 150) < 150;
-  cockpit.update(dt, camera, SUN_DIR, T('fov'), shaded);
+  cockpit.update(dt, camera, SUN_DIR, T('fov'), shaded, small.matches ? T('small_cockpit_fov') : 0);
   cockpit.windUp(curr[S.SPIN], curr[S.CHARGE], curr[S.ALT_WAIT] <= 0, dt);
   cockpit.cloak(myCloak && CLOAK_GUNS, now);
   windUp(me.guns[0].pod, curr[S.SPIN], curr[S.CHARGE], dt);
