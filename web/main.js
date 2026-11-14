@@ -426,7 +426,7 @@ addEventListener('keydown', (e) => {
   const tower = ['Digit1', 'Digit2', 'Digit3', 'Digit4'].indexOf(e.code);
   if (building >= 0 && tower >= 0) building = lastTower = tower;
   // Co-op: with a draft on offer (and not building), 1-3 pick from it.
-  else if (coop() && tower >= 0 && tower < 3 && $('picker').hidden && net.offer().length > tower && ws?.readyState === WebSocket.OPEN) ws.send(net.draft(tower));
+  else if (tower >= 0 && tower < 3) pickDraft(tower);
   if (coop() && (e.code === 'KeyU' || e.code === 'KeyX')) sendBuild(e.code === 'KeyU' ? 4 : 5);
   // Co-op: mend the tower aimed at for scrap; call the next wave.
   if (coop() && e.code === 'KeyH') sendBuild(6);
@@ -668,6 +668,13 @@ const REACTOR_MIDDLE = 6, REACTOR_BODY = 6; // its core over its foot, and its r
 const coop = () => !!net && net.defense().length > 0;
 const CALL_SCRAP = 2; // each pilot's scrap for each second of break called short (defense.rs CALL_SCRAP)
 const sendBuild = (order) => ws?.readyState === WebSocket.OPEN && ws.send(net.build(order));
+/** Picks perk `k` of the draft on offer, if there's one and it has that many. */
+const pickDraft = (k) => coop() && $('picker').hidden && net.offer().length > k && ws?.readyState === WebSocket.OPEN && ws.send(net.draft(k));
+// A tap on a draft card picks it (on touch, where the panel takes taps).
+$('draft').addEventListener('click', (e) => {
+  const card = e.target.closest('.card');
+  if (card) pickDraft(+card.dataset.k);
+});
 /** How a co-op run ended: held through its last wave, or lost on the wave it fell. */
 const coopResult = (won) => {
   const [wave, waves, , , , score] = net.defense();
@@ -1332,6 +1339,8 @@ function frame(now) {
   objectives.drawDefense(net ? net.defense() : [], now, net ? [...net.open_gates()] : []);
   objectives.drawShells(now);
   drawBuild(now, alive, myId);
+  // Touch: co-op's buttons for what the glass offers, by its chips' and the aimed tower's keys.
+  if (pad.on) pad.offer(!coopHud || !alive ? '' : building >= 0 ? 'building' : ['build', ...coopHud.chips.map((c) => c.key), ...(coopHud.panel?.actions ?? []).map((a) => a.key)].filter(Boolean).join(' '));
 
   // Look is applied at render rate for responsiveness; position is interpolated. In the cockpit
   // the view bobs with the gait and shakes when hit, but stays level (no roll).
@@ -1847,7 +1856,7 @@ function drawDraft() {
     ? `<div class="head">PICK ONE · 1-${offer.length}${net.drafts_waiting() ? ` · ${net.drafts_waiting()} MORE WAITING` : ''}</div><div class="cards">${[...offer]
         .map((p, k) => {
           const [name, text] = info(p);
-          return `<div class="card${name.startsWith('Blueprint') ? ' rare' : ''}"><b>${k + 1} ${esc(name.toUpperCase())}</b><span>${esc(text)}</span></div>`;
+          return `<div class="card${name.startsWith('Blueprint') ? ' rare' : ''}" data-k="${k}"><b>${k + 1} ${esc(name.toUpperCase())}</b><span>${esc(text)}</span></div>`;
         })
         .join('')}</div>${mine ? `<div class="mine">YOURS: ${esc(mine)}</div>` : ''}`
     : '';

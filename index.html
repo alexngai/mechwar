@@ -240,6 +240,8 @@
     body:has(#picker:not([hidden])) #touch, body:has(#menu:not([hidden])) #touch, body.touch #help { display: none; }
     #touch button { position: absolute; padding: 0; border: 2px solid #ffffff59; border-radius: 50%; background: #0a0d1066; color: #e8edf2; font: inherit; font-size: 11px; letter-spacing: 1px; touch-action: none; }
     #touch button.on { border-color: #7fe0ff; background: #7fe0ff40; }
+    #touch [data-when] { font-size: 9px; letter-spacing: 0; }
+    body.touch #draft { pointer-events: auto; left: 64px; right: 266px; width: auto; transform: none; bottom: auto; top: 156px; } /* cards take taps; clear of the buttons */
     body.target-lock #touch [data-press=target] { border-color: #ff8a5c; background: #ff8a5c40; color: #ff8a5c; }
     #touch .stick { position: absolute; left: 40px; bottom: 40px; width: 112px; height: 112px; border: 2px solid #ffffff33; border-radius: 50%; opacity: 0.5; pointer-events: none; }
     #touch .stick.on { opacity: 1; }

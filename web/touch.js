@@ -3,7 +3,12 @@
 // press the same keys and mouse buttons the keyboard and mouse do: main.js takes them as typed or
 // clicked. They come on with the first touch (or ?touch) and show in the arena, not the hangar or menu.
 
-// [label, what it presses (a KeyboardEvent code, a mouse button) or does ('dash', 'target'), where, size in px]
+import { TOWER_NAMES } from './objectives.js';
+
+/** Co-op's row of buttons, under the score panel and right of the glass's tower grid, `k` places in. */
+const slot = (k) => `left:${110 + 54 * k}px;top:104px`;
+// [label, what it presses (a KeyboardEvent code, a mouse button) or does ('dash', 'target'), where,
+// size in px, and for co-op's, what has to be on offer to show it (see `offer`)]
 const BUTTONS = [
   ['FIRE', 0, 'right:28px;bottom:28px', 92],
   ['ALT', 2, 'right:142px;bottom:42px', 64],
@@ -18,6 +23,15 @@ const BUTTONS = [
   ['☰', 'Escape', 'left:12px;top:12px', 44],
   ['SCORE', 'Tab', 'left:12px;top:62px', 44],
   ['PING', 'KeyZ', 'left:12px;top:112px', 44],
+  // Co-op: building (the towers 1-4 to pick from, FIRE puts one down and ALT puts the menu away),
+  // and the break's call and the aimed tower's actions, as the glass offers their keys.
+  ['BUILD', 'KeyB', slot(0), 46, 'build'],
+  ['WAVE', 'KeyN', slot(1), 46, 'N'],
+  ['RAISE', 'KeyU', slot(2), 46, 'U'],
+  ['MEND', 'KeyH', slot(3), 46, 'H'],
+  ['SELL', 'KeyX', slot(4), 46, 'X'],
+  ['DONE', 'KeyB', slot(0), 46, 'building'],
+  ...TOWER_NAMES.map((name, k) => [name.split(' ')[0].toUpperCase(), `Digit${k + 1}`, slot(k + 1), 46, 'building']),
 ];
 const DEG = Math.PI / 180;
 const PREFS = 'mechwar.touch';
@@ -45,7 +59,7 @@ export function touchControls({ look, target, tune }) {
   const root = document.createElement('div');
   root.id = 'touch';
   root.innerHTML = '<div class="stick"><i></i></div>'
-    + BUTTONS.map(([label, what, at, size], i) => `<button data-i="${i}" data-press="${what}" style="${at};width:${size}px;height:${size}px">${label}</button>`).join('');
+    + BUTTONS.map(([label, what, at, size, when], i) => `<button data-i="${i}" data-press="${what}"${when ? ` data-when="${when}" hidden` : ''} style="${at};width:${size}px;height:${size}px">${label}</button>`).join('');
   document.body.append(root);
   const base = root.firstChild, knob = base.firstChild;
 
@@ -136,6 +150,14 @@ export function touchControls({ look, target, tune }) {
     const k = DEG * tune('touch_gyro') * dt, b = r.beta * k, g = r.gamma * k;
     look(b * s + g * c, g * s - b * c);
   });
+
+  /** Shows the co-op buttons for what's on offer: `tokens`, space-separated, their fifth field. */
+  let offered = '';
+  pad.offer = (tokens) => {
+    if (tokens === offered) return;
+    const on = new Set((offered = tokens).split(' '));
+    for (const b of root.querySelectorAll('[data-when]')) b.hidden = !on.has(b.dataset.when);
+  };
 
   // The options, on the hangar's and menu's settings (shown once touch is on).
   const save = () => { try { localStorage.setItem(PREFS, JSON.stringify({ assist: pad.assist, gyro: pad.gyro, speed: pad.speed })); } catch { /* private mode */ } };
