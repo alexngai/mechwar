@@ -181,6 +181,14 @@ export class Cockpit {
     this.scene.add(...this.locals);
     this.sunBase = this.sun.intensity;
     this.shade = 0; // 0 in the open, 1 under cover from the sun
+    this.lens = 1; // how much smaller a wider cockpit lens draws things than the world's (see update)
+  }
+
+  /** Cockpit-space point `p` to world space, where the world camera draws it on the same pixel. */
+  toWorld(worldCamera, p) {
+    p.x *= this.lens;
+    p.y *= this.lens;
+    return worldCamera.localToWorld(p);
   }
 
   /** Rebuilds the canopy to span the view at `aspect`; pillars stay just inside the screen edges. */
@@ -419,7 +427,7 @@ export class Cockpit {
   /** Where the launcher's muzzle is in the world, without firing it (a held beam starts there). */
   launcherTip(worldCamera, out) {
     this.scene.updateMatrixWorld();
-    return worldCamera.localToWorld(this.weapons.launcher.tip.getWorldPosition(out));
+    return this.toWorld(worldCamera, this.weapons.launcher.tip.getWorldPosition(out));
   }
 
   /**
@@ -434,7 +442,7 @@ export class Cockpit {
     gun.tip.getWorldPosition(out);
     this.flash.position.copy(out);
     this.flashLife = FLASH_LIFE;
-    return worldCamera.localToWorld(out);
+    return this.toWorld(worldCamera, out);
   }
 
   /**
@@ -465,12 +473,14 @@ export class Cockpit {
   /**
    * Follows the world camera's aspect and the sun, eases into shade when `shaded` (the sun blocked),
    * and eases recoil and the last shot's flash back. `fov` is the base field of view: the canopy
-   * ignores the boost kick so it doesn't rebuild while it eases.
+   * ignores the boost kick so it doesn't rebuild while it eases. `wider` (deg) draws the cockpit
+   * through a wider lens than that, so the dash and guns take less of a small screen.
    */
-  update(dt, worldCamera, sunDir, fov, shaded) {
+  update(dt, worldCamera, sunDir, fov, shaded, wider = 0) {
     const c = this.camera;
-    if (c.fov !== fov || c.aspect !== worldCamera.aspect) {
-      c.fov = fov;
+    if (c.fov !== fov + wider || c.aspect !== worldCamera.aspect) {
+      c.fov = fov + wider;
+      this.lens = Math.tan(THREE.MathUtils.degToRad(fov / 2)) / Math.tan(THREE.MathUtils.degToRad(c.fov / 2));
       c.aspect = worldCamera.aspect;
       c.updateProjectionMatrix();
       this.aspect = 0; // force a relayout for the new lens
