@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>MECHWAR · Multiplayer mech shooter in your browser</title>
   <meta name="description" content="A free multiplayer mech shooter that runs in your browser: three mech classes, a hangar of weapons and items, six game modes, and bots in every empty seat. No download, no sign-up.">
   <link rel="canonical" href="https://mechwar.online/">
@@ -13,7 +13,7 @@
   <meta property="og:image" content="https://mechwar.online/og.webp">
   <meta name="twitter:card" content="summary_large_image">
   <style>
-    html, body { margin: 0; height: 100%; overflow: hidden; background: #1c2026; font: 12px/1.4 ui-monospace, Menlo, monospace; color: #e8e4d8; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #1c2026; font: 12px/1.4 ui-monospace, Menlo, monospace; color: #e8e4d8; -webkit-text-size-adjust: 100%; touch-action: manipulation; }
     canvas { display: block; }
     #hud { position: fixed; left: 16px; top: 16px; pointer-events: none; }
     #glass { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
@@ -233,6 +233,21 @@
     @keyframes wait { to { transform: scaleX(0); } }
     @media (prefers-reduced-motion: reduce) { #splash img { animation: none; } }
     body.locked #help { display: none; }
+    /* Touch controls (web/touch.js): over the arena, inside the notch and home bar; not in the hangar or menu. */
+    #touch { position: fixed; z-index: 1; top: env(safe-area-inset-top); right: env(safe-area-inset-right); bottom: env(safe-area-inset-bottom); left: env(safe-area-inset-left); display: none; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+    body.touch #touch { display: block; }
+    body.touch #hud { top: calc(166px + env(safe-area-inset-top)); } /* under the menu, score and ping buttons */
+    body:has(#picker:not([hidden])) #touch, body:has(#menu:not([hidden])) #touch, body.touch #help { display: none; }
+    #touch button { position: absolute; padding: 0; border: 2px solid #ffffff59; border-radius: 50%; background: #0a0d1066; color: #e8edf2; font: inherit; font-size: 11px; letter-spacing: 1px; touch-action: none; }
+    #touch button.on { border-color: #7fe0ff; background: #7fe0ff40; }
+    body.target-lock #touch [data-press=target] { border-color: #ff8a5c; background: #ff8a5c40; color: #ff8a5c; }
+    #touch .stick { position: absolute; left: 40px; bottom: 40px; width: 112px; height: 112px; border: 2px solid #ffffff33; border-radius: 50%; opacity: 0.5; pointer-events: none; }
+    #touch .stick.on { opacity: 1; }
+    #touch .stick i { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px; border-radius: 50%; background: #ffffff40; }
+    @media (orientation: portrait) { #touch::after { content: 'TURN YOUR DEVICE SIDEWAYS'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #0a0d10e8; letter-spacing: 2px; } }
+    #touch-row { display: none; flex-wrap: wrap; justify-content: center; gap: 6px 14px; align-items: center; letter-spacing: 2px; opacity: 0.9; }
+    body.touch #touch-row { display: flex; }
+    #touch-row input { accent-color: #ffc46a; }
   </style>
 </head>
 <body>
@@ -259,6 +274,7 @@
       </fieldset>
       <label><input type="checkbox" id="haze">HAZE</label>
     </div>
+    <div id="touch-row">TOUCH <label><input type="checkbox" id="assist">AIM ASSIST</label><label><input type="checkbox" id="gyro">GYRO AIM</label><label>LOOK SPEED <input id="look-speed" type="range" min="0.25" max="3" step="0.05"></label></div>
     </div>
     <h2>HANGAR</h2>
     <div id="room-row" hidden>GAME <b id="room-code"></b><button id="invite">COPY INVITE LINK</button><a href="/">LEAVE TO LOBBY</a></div>

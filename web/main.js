@@ -17,6 +17,7 @@ import { ARC, BOSSES, FOE_NAMES, FOES, HAULER, Objectives, foeHull, foeMiddle, P
 import { Preview, weaponThumbs } from './hangar.js';
 import { GLYPHS, STATS, facts as cardFacts, shown } from './cards.js';
 import { controlsHtml } from './controls.js';
+import { touchControls } from './touch.js';
 import isotope from '../maps/isotope.json';
 import foundry from '../maps/foundry.json';
 import verdigris from '../maps/verdigris.json';
@@ -136,7 +137,9 @@ const ARM = 0.2;
 const stored = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
 // Graphics are set on the picker and remembered; ?quality=low|high overrides the stored quality.
 // High drops to Low if it can't hold 45 fps.
-const gfx = { quality: 'high', bloom: true, shafts: true, haze: true, aa: true };
+// Phones and tablets start on Low without anti-aliasing.
+const coarse = matchMedia('(pointer: coarse)').matches;
+const gfx = { quality: coarse ? 'low' : 'high', bloom: true, shafts: true, haze: true, aa: !coarse };
 try { Object.assign(gfx, JSON.parse(stored('mechwar.graphics'))); } catch { /* corrupt: defaults */ }
 let quality = (params.get('quality') ?? gfx.quality) === 'low' ? 'low' : 'high';
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -213,6 +216,7 @@ const objectives = new Objectives(scene, fx, sound, (...ray) => game.cast_ray(..
 const objectiveName = (label) => (label === 'AA' ? 'THE AA GUN' : `SILO ${label}`);
 Mech.audio = sound;
 addEventListener('pointerdown', () => sound.unlock());
+addEventListener('pointerup', () => sound.unlock()); // a touch only counts as a tap on lifting
 addEventListener('keydown', () => sound.unlock());
 let me = new Mech(scene, fx, 'B'), meKit = '1:' + JSON.stringify(ownLoadout('B'));
 me.own = true;
@@ -299,8 +303,12 @@ let auxHeld = false, aux = false, scoped = false;
 // and returns once it has stood back up. `chase` eases from 0 (cockpit) to 1 (full chase distance).
 let firstPerson = true, chase = 0;
 const locked = () => document.pointerLockElement === renderer.domElement;
+/** Takes the mouse for play or, on touch, the whole screen (turned sideways, where the browser lets it). */
+const grab = () => (pad.on
+  ? document.fullscreenElement || document.documentElement.requestFullscreen?.().then(() => screen.orientation.lock('landscape')).catch(() => {})
+  : renderer.domElement.requestPointerLock()?.catch?.(() => {}));
 // Chrome rejects a re-lock right after Esc; the next click simply tries again.
-renderer.domElement.addEventListener('click', () => renderer.domElement.requestPointerLock()?.catch?.(() => {}));
+renderer.domElement.addEventListener('click', grab);
 document.addEventListener('pointerlockchange', () => {
   document.body.classList.toggle('locked', locked());
   if (!locked()) firing = altFiring = auxHeld = false;
@@ -322,16 +330,42 @@ let recoilKick = 0, recoilLift = 0;
 function recoil(weapon, rate) {
   recoilKick += THREE.MathUtils.degToRad(RECOIL[weapon.recoil] ?? 0) / Math.sqrt(Math.max(rate, 1));
 }
-addEventListener('mousemove', (e) => {
-  if (!locked()) return;
+// Touch aim assist: over the enemy under the reticle (the glass's focus, `assistAt` its chest),
+// touch and gyro aim turn slower (by assist_slow), and while firing the aim eases onto it (at
+// assist_pull per s). Mouse aim gets none.
+const assistAt = new THREE.Vector3();
+let assisting = false;
+// Touch lock-on (TARGET, like Z-targeting): the aim follows (at lock_track per s) the enemy in
+// sight nearest the reticle (within lock_cone) until it dies or is out of sight for lock_lost,
+// TARGET is tapped again, or a flick of touch or gyro aim (lock_break rad in about a third of a
+// second) breaks away.
+const lockAt = new THREE.Vector3();
+let lockOn = -1, lockPick = -1, lockSeen = 0, breakAway = 0; // locked enemy's id, the one TARGET would pick
+/** Turns the view by `dYaw` (left) and `dPitch` (up), rad: slower zoomed in, and over a target if `assisted`. */
+function turn(dYaw, dPitch, assisted = false) {
+  if (assisted && lockOn >= 0) {
+    if ((breakAway += Math.hypot(dYaw, dPitch)) < T('lock_break')) return;
+    lockOn = -1;
+  }
   const limit = THREE.MathUtils.degToRad(T('pitch_limit_deg'));
-  // Zoomed in, the view turns slower to match.
-  const sens = T('mouse_sensitivity') / (1 + (zoomOf() - 1) * zoomKick);
-  yaw -= e.movementX * sens;
-  pitch = THREE.MathUtils.clamp(pitch - e.movementY * sens, -limit, limit);
+  const k = (assisted && assisting ? T('assist_slow') : 1) / (1 + (zoomOf() - 1) * zoomKick);
+  yaw += dYaw * k;
+  pitch = THREE.MathUtils.clamp(pitch + dPitch * k, -limit, limit);
+}
+const pad = touchControls({
+  look: (dYaw, dPitch) => turn(dYaw, dPitch, true),
+  tune: T,
+  target: () => {
+    lockOn = lockOn >= 0 ? -1 : lockPick;
+    lockSeen = performance.now();
+    breakAway = 0;
+  },
+});
+addEventListener('mousemove', (e) => {
+  if (locked()) turn(-e.movementX * T('mouse_sensitivity'), -e.movementY * T('mouse_sensitivity'));
 });
 addEventListener('mousedown', (e) => {
-  if (!locked()) return;
+  if (!locked() && e.isTrusted) return; // (the touch buttons' presses aren't trusted, and count)
   // Building in co-op, the left button puts the tower down and the right puts the menu away.
   if (building >= 0 && (e.button === 0 || e.button === 2)) {
     if (e.button === 0) sendBuild(building);
@@ -452,9 +486,9 @@ const push = () => {
 const weaponFor = (group) => (group === 'primary' || group === 'secondary' ? armament(loadout)[group] : null);
 const lancers = (w) => Object.values(classes.B.weapons).includes(w.id);
 for (const [name, p] of Object.entries(tuning)) {
-  // Online the sim runs on compiled-in tuning.json on both ends, so only camera values are live.
-  // Bot values only matter to the server.
-  if ((net && p.group !== 'camera') || p.group === 'bot') continue;
+  // Online the sim runs on compiled-in tuning.json on both ends, so only camera and touch values
+  // (the client's own) are live. Bot values only matter to the server.
+  if ((net && p.group !== 'camera' && p.group !== 'touch') || p.group === 'bot') continue;
   Object.defineProperty(values, name, {
     get: () => T(name),
     set: (v) => {
@@ -546,7 +580,7 @@ function setMenu(open) {
 }
 $('resume').addEventListener('click', () => {
   setMenu(false);
-  if (!pickerOpen) renderer.domElement.requestPointerLock()?.catch?.(() => {});
+  if (!pickerOpen) grab();
 });
 $('to-hangar').addEventListener('click', () => {
   setMenu(false);
@@ -756,7 +790,7 @@ $('slots').addEventListener('click', (e) => {
 });
 $('launch').addEventListener('click', () => {
   launch(bay);
-  renderer.domElement.requestPointerLock()?.catch?.(() => {});
+  grab();
 });
 showBay(bay);
 /** Turns the view toward the middle of the map, where a fresh launch is headed. */
@@ -824,6 +858,16 @@ function frame(now) {
   const lift = recoilLift + (recoilKick - recoilLift) * (1 - Math.exp(-RECOIL_RISE * dt)), limit = THREE.MathUtils.degToRad(T('pitch_limit_deg'));
   pitch = THREE.MathUtils.clamp(pitch + lift - recoilLift, -limit, limit);
   recoilLift = lift;
+  if (lockOn >= 0 && (pickerOpen || !remotes.get(lockOn)?.mech.alive || now - lockSeen > T('lock_lost') * 1000)) lockOn = -1;
+  breakAway *= Math.exp(-3 * dt);
+  document.body.classList.toggle('target-lock', lockOn >= 0);
+  const pullTo = lockOn >= 0 ? lockAt : assisting && firing ? assistAt : null;
+  if (pullTo) {
+    to.subVectors(pullTo, eye);
+    const k = 1 - Math.exp(-T(lockOn >= 0 ? 'lock_track' : 'assist_pull') * dt), off = Math.atan2(-to.x, -to.z) - yaw;
+    yaw += Math.atan2(Math.sin(off), Math.cos(off)) * k;
+    pitch += (Math.atan2(to.y, Math.hypot(to.x, to.z)) - pitch) * k;
+  }
   while (acc >= DT) {
     if (net && picked === null) {
       prev = curr = net.state();
@@ -832,7 +876,7 @@ function frame(now) {
     }
     // Shift+W boosts (the sim only boosts forward); with Shift held, S is the turn, not a step back.
     const forward = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') && !shift() ? 1 : 0);
-    const input = [axis('KeyD', 'KeyA'), forward, yaw, pitch,
+    const input = [axis('KeyD', 'KeyA') + pad.x, forward + pad.z, yaw, pitch,
       shift(), keys.has('Space'), dodge, firing, altFiring, ability, keys.has('KeyR'), grenade, emp, aux];
     if (net) {
       const bytes = net.tick(...input, now);
@@ -2113,7 +2157,9 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
   const toScreen = (p) => ({ x: ((p.x + 1) / 2) * W, y: ((1 - p.y) / 2) * H });
   const tags = [], contacts = [], inSight = new Set();
   for (let k = 0; k < orbs.length / 5; k++) if (orbHeals(k, myTeam)) contacts.push({ x: orbs[5 * k], z: orbs[5 * k + 2], orb: true });
-  let focus = null, focusAngle = THREE.MathUtils.degToRad(4);
+  let focus = null, focusAngle = THREE.MathUtils.degToRad(4), pickAngle = THREE.MathUtils.degToRad(T('lock_cone'));
+  assisting = false;
+  lockPick = -1;
   camera.getWorldDirection(look);
   for (const [id, e] of remotes) {
     if (!e.mech.alive) continue;
@@ -2138,7 +2184,16 @@ function drawGlass(now, myTeam, ctf, top, convoy) {
       health: e.health / healthMax, label: classes[CLASS_KEYS[e.cls]].name, weapons: [e.mech.weapons.primary.name, e.mech.weapons.secondary.name],
     };
     const angle = enemy ? look.angleTo(to.subVectors(chest, camera.position)) : Infinity;
-    if (angle < focusAngle) [focusAngle, focus] = [angle, tag];
+    if (angle < focusAngle) {
+      [focusAngle, focus] = [angle, tag];
+      assisting = pad.on && pad.assist;
+      assistAt.copy(chest);
+    }
+    if (angle < pickAngle) [pickAngle, lockPick] = [angle, id];
+    if (id === lockOn) {
+      lockSeen = now;
+      lockAt.copy(chest);
+    }
     tags.push(tag);
   }
   // Turrets: the other side's in sight get tags (a hull bar, and the card under the crosshair) and radar
