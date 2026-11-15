@@ -72,7 +72,7 @@ lobby.innerHTML = `
     <div class="row"><select id="practice-map"></select><button id="practice">PRACTICE</button></div>
     <p class="hint">On your own, without a server: try out a map, with every weapon unlocked.</p>
   </section>
-  <footer>© 2026 Alex Ngai · <a href="/guide/">Guide</a> · <a href="https://github.com/alexngai" target="_blank" rel="noopener">GitHub</a>${
+  <footer>© 2026 Alex Ngai · <a href="/guide/">Guide</a> · <a href="https://github.com/alexngai/mechwar" target="_blank" rel="noopener">Source</a> · <a href="https://github.com/alexngai/mechwar/issues/new/choose" target="_blank" rel="noopener">Feedback</a>${
     COFFEE ? ` · <a href="${COFFEE}" target="_blank" rel="noopener">Buy me a coffee</a>` : ''
   }</footer>`;
 

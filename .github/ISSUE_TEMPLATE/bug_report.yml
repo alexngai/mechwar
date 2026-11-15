@@ -1,0 +1,31 @@
+name: Bug report
+description: Something in the game is broken or behaves wrong.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you saw, and what you expected instead. A screenshot or clip helps a lot.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can we see it?
+      description: The steps that lead to it, as far as you know them.
+      placeholder: |
+        1. Quick play, Siege on Riftline
+        2. ...
+  - type: input
+    id: where
+    attributes:
+      label: Mode and map
+      placeholder: Siege on Riftline, or practice offline on Sump
+  - type: input
+    id: device
+    attributes:
+      label: Browser and device
+      placeholder: Chrome on Windows, or Safari on an iPhone
+    validations:
+      required: true

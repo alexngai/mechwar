@@ -1,0 +1,26 @@
+name: Suggestion
+description: An idea for a weapon, a map, a mode, a balance change, or anything else.
+labels: [enhancement]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: What's it about?
+      options:
+        - Weapons, items or abilities
+        - Maps
+        - Modes
+        - Balance
+        - Bots
+        - Controls (keyboard, mouse or touch)
+        - HUD and menus
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What you'd like, and what it would make better or more fun.
+    validations:
+      required: true
