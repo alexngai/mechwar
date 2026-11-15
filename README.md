@@ -77,6 +77,10 @@ fly logs
 export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk
 ```
 
+## Contributing
+
+Issues and pull requests are welcome. Every pull request runs `cargo test --workspace` in CI; run `npm test` before you push.
+
 ## License
 
 [AGPL-3.0](LICENSE). You may run, change and share it; if you host a changed version for others to play, offer them its source too.

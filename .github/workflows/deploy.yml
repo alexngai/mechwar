@@ -1,10 +1,16 @@
-# Deploys to Fly.io on every push to main, once the Rust tests pass.
-# Needs the FLY_API_TOKEN repo secret: a deploy token from `fly tokens create deploy -a webhawk`.
-name: Deploy
+# Tests every pull request, and deploys to Fly.io on every push to main once the Rust tests pass.
+# The deploy needs the FLY_API_TOKEN repo secret: a deploy token from `fly tokens create deploy -a webhawk`.
+# Pull requests (forks' too) run only the tests, which never see the secret.
+name: Test and deploy
 on:
   push:
     branches: [main]
-concurrency: deploy
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -15,6 +21,7 @@ jobs:
 
   deploy:
     needs: test
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
